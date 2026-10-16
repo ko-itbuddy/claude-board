@@ -158,6 +158,8 @@ Claude Board 는 Claude Code 세션 상태를 한눈에 보여 주는 보드 창
   변경 내용 을 누르면 브라우저에서 버전별 변경 내역(GitHub 의 CHANGELOG.md)이 열립니다.
   업데이트 를 누르면 새 버전을 받아 바꿔 끼우고 보드가 다시 열립니다. hook 등록은 다시 묻지 않습니다.
   터미널 설치 명령을 다시 실행해도 같습니다. 실패하면 ~/.claude/notifier/update.log 에 기록이 남습니다.
+  바로 확인하려면 윗줄의 업데이트 확인 단추(⟳)나 메뉴 막대의 Claude Board > 업데이트 확인… 을 누릅니다.
+  새 버전이 없으면 "최신 버전입니다" 가 잠깐 보입니다.
 - 제거: dmg 의 Uninstall.command 를 실행합니다. (터미널에서는
   bash "/Volumes/Claude Board/Uninstall.command")
   앱, 설치된 파일, settings.json 의 hook 과 환경변수, 자동 실행 등록, ~/.zshrc 에 추가한 줄,

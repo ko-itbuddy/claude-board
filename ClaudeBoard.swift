@@ -3519,6 +3519,7 @@ struct BoardView: View {
     @AppStorage("pinned") private var pinned = true
     @AppStorage("usageCompact") private var usageCompact = false
     @State private var foldHover = false
+    @State private var checkHover = false
     @State private var pinHover = false
     // 요약 칩: 걸러 보는 상태·스크롤 요청
     @State private var filter: String?
@@ -3613,6 +3614,20 @@ struct BoardView: View {
             }
             Spacer(minLength: 6)
             AllMuteButton(muted: store.allMuted) { store.setAllMuted(!store.allMuted) }
+            // 업데이트 확인 — 새 버전이 있으면 아래 알림 줄에 업데이트 단추가, 없으면 "최신 버전입니다" 가 잠깐 뜬다
+            Button { updater.check(manual: true) } label: {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(checkHover ? .primary : .secondary)
+                    .opacity(updater.checking ? 0.4 : 1)
+                    .padding(.horizontal, 8)
+                    .frame(minWidth: 28, minHeight: 24)
+                    .background(Capsule().fill(Color.white.opacity(checkHover ? 0.12 : 0.07)))
+            }
+            .buttonStyle(.plain)
+            .clickable($checkHover)
+            .disabled(updater.checking)
+            .help("업데이트 확인 — GitHub 에 새 버전이 있는지 확인합니다")
             // 모두 접기 = 경로 카드를 다 접고 사용 한도를 간략(한 줄)으로, 모두 펼치기 = 다 펴고 상세로.
             // 중간 화면은 이미 카드가 접힌 한 줄·사용 한도가 한 줄이라 숨긴다
             let all = usageCompact && store.groups.allSatisfy { store.collapsed.contains($0.id) }
@@ -3688,7 +3703,7 @@ struct BoardView: View {
             }
             .padding(.top, 6)
 
-            if updater.latest != nil {
+            if updater.latest != nil || updater.notice != nil {
                 UpdateBanner(updater: updater).transition(.move(edge: .top).combined(with: .opacity))
             }
 
@@ -3825,27 +3840,55 @@ final class Updater: ObservableObject {
     @Published var latest: String?   // 이 앱보다 새 버전이 나왔으면 그 버전
     @Published var running = false
     @Published var failed = false
+    @Published var checking = false   // 손으로 누른 확인이 도는 중
+    @Published var notice: (icon: String, text: String)?   // 손으로 확인한 결과 — 새 버전이 없을 때 알림 줄에 잠깐 뜬다
     private let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
     private let logPath = NSHomeDirectory() + "/.claude/notifier/update.log"
     private var timer: Timer?
+    private var noticeHide: DispatchWorkItem?
+    // build-board.sh 로 만든 개발용 빌드(1.0)는 배포판으로 덮어쓰지 않게 확인하지 않는다
+    private var eligible: Bool { !current.isEmpty && current != "1.0" }
 
     private init() {
-        // build-board.sh 로 만든 개발용 빌드(1.0)는 배포판으로 덮어쓰지 않게 확인하지 않는다
-        guard !current.isEmpty, current != "1.0" else { return }
+        guard eligible else { return }
         check()
         timer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in self?.check() }
     }
 
-    func check() {
+    // manual — 업데이트 확인 단추·메뉴에서 불렀을 때. 새 버전이 없거나 확인하지 못해도 결과를 알림 줄에 보인다
+    func check(manual: Bool = false) {
+        if manual {
+            guard !checking else { return }
+            guard eligible else { show("hammer.fill", "개발용 빌드(\(current))는 업데이트를 확인하지 않습니다"); return }
+            checking = true
+        }
         let req = URLRequest(url: URL(string: releaseBase + "/VERSION")!, cachePolicy: .reloadIgnoringLocalCacheData,
                              timeoutInterval: 15)
         URLSession.shared.dataTask(with: req) { [weak self] data, resp, _ in
-            guard let self, (resp as? HTTPURLResponse)?.statusCode == 200, let data,
-                  let v = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  v.range(of: "^[0-9]+(\\.[0-9]+)*$", options: .regularExpression) != nil else { return }
-            let newer = v.compare(self.current, options: .numeric) == .orderedDescending
-            DispatchQueue.main.async { withAnimation(.easeOut(duration: 0.2)) { self.latest = newer ? v : nil } }
+            guard let self else { return }
+            var v: String?
+            if (resp as? HTTPURLResponse)?.statusCode == 200, let data,
+               let s = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               s.range(of: "^[0-9]+(\\.[0-9]+)*$", options: .regularExpression) != nil { v = s }
+            DispatchQueue.main.async {
+                if let v {
+                    let newer = v.compare(self.current, options: .numeric) == .orderedDescending
+                    withAnimation(.easeOut(duration: 0.2)) { self.latest = newer ? v : nil }
+                }
+                guard manual else { return }
+                self.checking = false
+                if v == nil { self.show("exclamationmark.triangle.fill", "업데이트를 확인하지 못했습니다") }
+                else if self.latest == nil { self.show("checkmark.circle.fill", "최신 버전입니다 (\(self.current))") }
+            }
         }.resume()
+    }
+
+    private func show(_ icon: String, _ text: String) {
+        withAnimation(.easeOut(duration: 0.2)) { notice = (icon, text) }
+        noticeHide?.cancel()
+        let hide = DispatchWorkItem { [weak self] in withAnimation(.easeOut(duration: 0.2)) { self?.notice = nil } }
+        noticeHide = hide
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: hide)
     }
 
     func run() {
@@ -3881,17 +3924,19 @@ struct UpdateBanner: View {
 
     var body: some View {
         let tint = updater.failed ? Palette.color("waiting") : Palette.accent
+        // 새 버전이 없으면 손으로 확인한 결과(최신·확인 실패)만 단추 없이 보인다
+        let notice = updater.latest == nil ? updater.notice : nil
         HStack(spacing: 6) {
-            Image(systemName: updater.failed ? "exclamationmark.triangle.fill" : "arrow.down.circle.fill")
+            Image(systemName: notice?.icon ?? (updater.failed ? "exclamationmark.triangle.fill" : "arrow.down.circle.fill"))
                 .font(.system(size: 12)).foregroundStyle(tint)
-            Text(updater.failed ? "업데이트하지 못했습니다 · ~/.claude/notifier/update.log"
+            Text(notice?.text ?? (updater.failed ? "업데이트하지 못했습니다 · ~/.claude/notifier/update.log"
                  : updater.running ? "업데이트 중… 끝나면 보드가 다시 열립니다"
-                 : "새 버전 \(updater.latest ?? "") 이 나왔습니다")
+                 : "새 버전 \(updater.latest ?? "") 이 나왔습니다"))
                 .font(.system(size: 12, weight: .semibold)).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 6)
             if updater.running {
                 ProgressView().controlSize(.small)
-            } else {
+            } else if notice == nil {
                 // 무엇이 바뀌었는지 — 브라우저에서 GitHub 의 CHANGELOG.md 를 연다
                 Button("변경 내용") { NSWorkspace.shared.open(changelogURL) }
                     .buttonStyle(.plain).font(.system(size: 12, weight: .semibold))
@@ -4726,6 +4771,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             mascotMenu.addItem(withTitle: m.name, action: #selector(pickMascot(_:)), keyEquivalent: "").representedObject = m.rawValue
         }
         appMenu.addItem(withTitle: "캐릭터", action: nil, keyEquivalent: "").submenu = mascotMenu
+        appMenu.addItem(withTitle: "업데이트 확인…", action: #selector(checkForUpdates), keyEquivalent: "")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Claude Board 가리기", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(withTitle: "Claude Board 종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -4791,6 +4837,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc func togglePin() { setPinned(!UserDefaults.standard.bool(forKey: "pinned")) }
 
     @objc func pickMascot(_ item: NSMenuItem) { UserDefaults.standard.set(item.representedObject as? String, forKey: "mascot") }
+
+    // 결과는 보드의 알림 줄에 뜨므로 보드를 먼저 연다
+    @objc func checkForUpdates() {
+        showBoard()
+        Updater.shared.check(manual: true)
+    }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(togglePin) { item.state = UserDefaults.standard.bool(forKey: "pinned") ? .on : .off }
