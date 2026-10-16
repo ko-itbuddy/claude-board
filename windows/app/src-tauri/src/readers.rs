@@ -241,6 +241,8 @@ mod tests {
         // 3초 안에는 바뀐 파일도 다시 읽지 않는다
         let mut f = fs::OpenOptions::new().append(true).open(&t).unwrap();
         writeln!(f, r#"{{"type":"assistant","effort":"low","message":{{"model":"claude-haiku-5-5"}}}}"#).unwrap();
+        // Windows 는 수정 시각이 타이머 틱(약 15ms) 단위라 방금 쓴 파일과 같은 값이 될 수 있다 — 바뀐 것으로 보이게 확실히 옮긴다
+        f.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(2)).unwrap();
         drop(f);
         assert_eq!(r.read(&t, "", 101.0).unwrap().model, "claude-opus-5-5");
         assert_eq!(r.read(&t, "", 104.0).unwrap().model, "claude-haiku-5-5");
