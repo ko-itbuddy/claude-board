@@ -119,11 +119,17 @@ def main():
 
     if not os.path.exists(BIN):
         return
+    # 보드 메뉴 Claude Board > 알림 위치 에서 모서리를 고르면 ~/.claude/notifier/notify-position 이 생긴다 — 없으면 가운데
+    try:
+        with open(os.path.join(os.path.dirname(SESSIONS), "notify-position")) as f:
+            position = f.read().strip() or "center"
+    except OSError:
+        position = "center"
     subprocess.Popen(
         [BIN, "--title", title, "--subtitle", project, "--body", first_sentence(body),
          "--summary", session_summary(data.get("session_id"), "waiting" if accent == "wait" else "idle"),
          "--sound", sound, "--kind", accent, "--duration", "10",
-         "--activate", "com.claude.board"],
+         "--activate", "com.claude.board", "--position", position],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         start_new_session=True,
     )

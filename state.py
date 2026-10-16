@@ -9,6 +9,7 @@ import json
 import ctypes
 import fcntl
 import os
+import re
 import shlex
 import struct
 import subprocess
@@ -249,6 +250,16 @@ def update(path, sid, state, data, sub_event):
             os.remove(os.path.join(SESSIONS, f"{sid}.paused"))
         except OSError:
             pass
+    # 사용 한도에 걸려 응답이 끊긴 세션 — 보드가 계정을 자동 전환한 뒤 이어서 진행시킨다.
+    # rate_limit 은 서버의 일시적인 요청 제한일 수도 있어 "You've hit your weekly limit · resets 4pm" 같은 한도 문구일 때만 남긴다.
+    # 새 요청·도구 사용·응답 완료·다시 열기가 오면 세션이 다시 움직인 것이므로 지운다(Claude Code 가 한도가 풀린 뒤 스스로 이어 간 경우 포함)
+    event = data.get("hook_event_name")
+    if event == "StopFailure" and data.get("error") == "rate_limit":
+        msg = " ".join((data.get("last_assistant_message") or "").split())
+        if re.search(r"hit your|usage limit", msg, re.I):
+            rec["limit_hit"] = {"at": now, "message": msg[:200]}
+    elif not sub_event and event in ("UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionStart"):
+        rec.pop("limit_hit", None)
     changed = rec.get("state") != state
     if changed:
         rec.update(state=state, since=now)

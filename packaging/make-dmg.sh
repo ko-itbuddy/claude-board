@@ -34,6 +34,7 @@ build "$N/ClaudeBoard.swift" "$APP/Contents/MacOS/ClaudeBoard"
 build "$N/ClaudeNotifier.swift" "$APP/Contents/Resources/notifier/claude-notifier"
 cp "$N/notify.py" "$N/state.py" "$N/board-tui.py" "$P/hooks.py" "$APP/Contents/Resources/notifier/"
 cp "$N/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+cp "$N/LICENSE" "$APP/Contents/Resources/LICENSE"
 # install.sh(curl 설치·업데이트)가 앱을 바꿔 끼운 뒤 실행하는 사용자 설정 — 서명 전에 넣어야 앱 서명에 포함된다
 cp "$P/pkg/scripts/user-setup.sh" "$APP/Contents/Resources/"
 cat > "$APP/Contents/Info.plist" <<PLIST

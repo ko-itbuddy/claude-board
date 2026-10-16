@@ -1,6 +1,7 @@
 // Claude Code 작업 완료·승인 대기 알림 패널
 // 사용법: claude-notifier --title T --subtitle S --body B [--kind done|wait] [--summary waiting=1,working=2,idle=3]
 //        [--sound Glass] [--duration 10] [--activate <bundle id>]
+//        [--position center|top-left|top-right|bottom-left|bottom-right]
 import AppKit
 
 struct Options {
@@ -12,6 +13,7 @@ struct Options {
     var activate = ""
     var kind = "done"
     var summary: [String: Int] = [:]
+    var position = "center"
 
     var accent: NSColor {
         kind == "wait"
@@ -36,6 +38,7 @@ func parseOptions() -> Options {
         case "--duration": o.duration = TimeInterval(value) ?? o.duration
         case "--activate": o.activate = value
         case "--kind": o.kind = value
+        case "--position": o.position = value
         case "--summary":   // 예: waiting=1,working=2,idle=3
             for pair in value.split(separator: ",") {
                 let kv = pair.split(separator: "=")
@@ -47,13 +50,15 @@ func parseOptions() -> Options {
     return o
 }
 
-// 여러 세션이 동시에 알림을 띄우면 슬롯 파일로 순번을 나눠 가로로 반씩 겹쳐 놓는다
+// 여러 세션이 동시에 알림을 띄우면 슬롯 파일로 순번을 나눠 가운데에서는 가로로 반씩 겹쳐 놓는다.
+// 모서리에서는 슬롯 파일에 패널이 차지한 세로 범위를 적어 두고, 새 패널은 같은 모서리의 빈자리에 쌓는다
 final class Slot {
+    static let dir = NSTemporaryDirectory() + "claude-notifier-slots"
     let index: Int
     private let path: String
 
     init() {
-        let dir = NSTemporaryDirectory() + "claude-notifier-slots"
+        let dir = Slot.dir
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         for i in 0..<5 {
             let p = "\(dir)/\(i)"
@@ -76,6 +81,25 @@ final class Slot {
 
     // 슬롯 순번별 가로 위치(패널 너비 배수) — 가운데를 기준으로 오른쪽·왼쪽 번갈아 반씩 비켜 놓는다
     var horizontalShift: CGFloat { [0, 0.5, -0.5, 1, -1][index] }
+
+    // 모서리에 둔 이 패널의 세로 범위 — 예: "top-right 900.0 1013.0"
+    func record(_ position: String, _ minY: CGFloat, _ maxY: CGFloat) {
+        if !path.isEmpty { try? "\(position) \(minY) \(maxY)".write(toFile: path, atomically: false, encoding: .utf8) }
+    }
+
+    // 같은 모서리에 떠 있는 다른 패널들의 세로 범위 — 낡은 슬롯(120초 넘게 갱신 없음)은 뺀다
+    func taken(_ position: String) -> [(minY: CGFloat, maxY: CGFloat)] {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: Slot.dir)) ?? []
+        return names.compactMap { name in
+            let p = "\(Slot.dir)/\(name)"
+            guard p != path,
+                  let date = (try? FileManager.default.attributesOfItem(atPath: p))?[.modificationDate] as? Date,
+                  Date().timeIntervalSince(date) <= 120,
+                  let f = (try? String(contentsOfFile: p, encoding: .utf8))?.split(separator: " "),
+                  f.count == 3, f[0] == position, let a = Double(f[1]), let b = Double(f[2]) else { return nil }
+            return (CGFloat(a), CGFloat(b))
+        }
+    }
 
     // 마우스를 올려 오래 머무는 동안 다른 알림이 이 슬롯을 낡은 것으로 보고 가져가지 않도록 수정 시각을 갱신한다
     func touch() {
@@ -183,6 +207,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let slot = Slot()
     let width: CGFloat = 440
     let pad: CGFloat = 16
+    let margin: CGFloat = 12   // 모서리에 둘 때 화면 가장자리와의 간격
+    let gap: CGFloat = 8       // 모서리에 쌓인 패널 사이 간격
 
     var panel: NSPanel!
     var progressFill: NSView!
@@ -200,9 +226,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens[0]
         let frame = screen.visibleFrame
-        let x = frame.midX - width / 2 + slot.horizontalShift * width
+        var x = frame.midX - width / 2 + slot.horizontalShift * width
+        var y = frame.midY - height / 2
+        // 모서리: 가로로 비켜 놓지 않고 화면 안쪽(위 모서리는 아래로, 아래 모서리는 위로) 쌓는다.
+        // 패널 높이가 본문 길이에 따라 달라 순번으로 자리를 정하지 않고, 가장자리에서 가까운 패널부터 보며 겹치면 그 너머로 옮긴다
+        if ["top-left", "top-right", "bottom-left", "bottom-right"].contains(opts.position) {
+            let top = opts.position.hasPrefix("top")
+            x = opts.position.hasSuffix("left") ? frame.minX + margin : frame.maxX - width - margin
+            y = top ? frame.maxY - margin - height : frame.minY + margin
+            // 동시에 뜬 패널이 서로의 기록을 못 보고 같은 자리를 고르지 않도록, 범위를 읽고 적는 동안 잠근다
+            let lock = open(Slot.dir + "/lock", O_CREAT | O_RDWR, 0o600)
+            flock(lock, LOCK_EX)
+            for r in slot.taken(opts.position).sorted(by: { top ? $0.maxY > $1.maxY : $0.minY < $1.minY })
+            where y < r.maxY + gap && y + height > r.minY - gap {
+                y = top ? r.minY - gap - height : r.maxY + gap
+            }
+            slot.record(opts.position, y, y + height)
+            close(lock)
+        }
         let target = NSRect(x: min(max(x, frame.minX + 8), frame.maxX - width - 8),
-                            y: frame.midY - height / 2,
+                            y: y,
                             width: width, height: height)
 
         panel = NSPanel(contentRect: target.offsetBy(dx: 0, dy: -14),
