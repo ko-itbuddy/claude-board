@@ -1,5 +1,6 @@
 //! Windows 전용 도구 — 창 앞으로 가져오기·비활성 표시·패널 창 스타일·소리·DPAPI·Windows Terminal 탭 고르기.
-//! **모두 Windows 실기 미확인.** 다른 OS 에서는 아무것도 하지 않는다(금고만 평문 그대로 — 개발용).
+//! DPAPI 는 이 파일의 Windows 시험, 패널 창 스타일은 CI 의 화면 확인으로 실기 확인했다. 창 앞으로 가져오기·소리·Windows Terminal 탭 고르기는 **Windows 실기 미확인**.
+//! 다른 OS 에서는 아무것도 하지 않는다(금고만 평문 그대로 — 개발용).
 
 /// 계정 금고에 넣을 바이트를 암호화한다(Windows: DPAPI 현재 사용자, 그 밖: 그대로).
 pub fn protect(plain: &[u8]) -> Option<Vec<u8>> {

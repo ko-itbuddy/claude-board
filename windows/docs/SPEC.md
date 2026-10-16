@@ -51,7 +51,8 @@ windows/
 
 | 경로 | 내용 |
 |---|---|
-| `%LOCALAPPDATA%\Programs\Claude Board\` | `ClaudeBoard.exe`, `claude-board-hook.exe`(원본), `LICENSE` |
+| `%LOCALAPPDATA%\Programs\Claude Board\` | `ClaudeBoard.exe`, `claude-board-hook.exe`(원본), `LICENSE` — install.ps1 로 설치한 경우 |
+| `%LOCALAPPDATA%\Claude Board\` | setup.exe(NSIS, 사용자 단위)로 설치한 경우 — 위 파일과 `uninstall.exe`, `HKCU\Software\claude\Claude Board`·설정 > 앱 항목. install.ps1 업데이트는 `app-path` 를 따라 이 자리를 바꿔 끼운다 |
 | `%USERPROFILE%\.claude\notifier\` | macOS 와 같은 폴더. `claude-board-hook.exe`(hook 이 실행하는 사본), `app-path`(ClaudeBoard.exe 전체 경로 한 줄), `sessions\`, `mute-all`, `notify-position`, `accounts.json`, `accounts\`, `update.log`, `auto-switch.log`, `board.log`, `board-theme`, `context\`(사용자 상태줄이 씀), `context-windows.json` |
 | `%USERPROFILE%\.local\bin\` | `claude-board.cmd`(보드 열기), `claude-board-tui.cmd`(TUI) — Claude Code 네이티브 설치가 이 폴더를 PATH 에 넣는다 |
 | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 값 `ClaudeBoard` | `"<설치 경로>\ClaudeBoard.exe" --background` — 로그인 자동 실행(macOS LaunchAgent 대응) |
@@ -151,7 +152,7 @@ stdin JSON 하나를 읽는다. 어떤 오류도 Claude Code 를 막지 않게 *
    - 상태가 바뀌면 `state`·`since=now`. idle 이고 `last_assistant_message` 가 있으면 last_message(공백 정리, 200). waiting 이고 `message` 가 있으면 last_message = message 앞 200.
    - `resume_cmd` 를 만든다(§3.3). 원자적으로 쓴다.
    - 상태가 바뀌었거나 topic 이 바뀌었고 `headless == false` 면 터미널 제목을 `"<아이콘> <project> · <topic 앞 20자>…"` 로 바꾼다(아이콘 working 🔵, waiting 🟠, idle 🟢, ended ⚫; topic 이 20자 이하면 `…` 없이, 없으면 ` · ` 부분 없음).
-     Windows: `FreeConsole` → `AttachConsole(pid)` → `SetConsoleTitleW` → `FreeConsole`. 실패는 무시. **(Windows 미확인)**
+     Windows: `FreeConsole` → `AttachConsole(pid)` → `SetConsoleTitleW` → `FreeConsole`. 실패는 무시. Windows Terminal(ConPTY) 탭 제목도 이것으로 바뀐다(실기 확인, §11.1).
 
 근거: REA 프로세스 캡처 `ev_23674ebbd76cceea4252d166b60c1ad66648ee3f2a951ba5d4c669d1c07d3368` — `state.py` 에 이벤트 14개를 차례로 넣은 결과(테스트 기준 데이터, §12).
 
@@ -164,7 +165,8 @@ stdin JSON 하나를 읽는다. 어떤 오류도 Claude Code 를 막지 않게 *
 
 - 조상 따라가기: `CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS)` 한 번으로 pid→(ppid, exe 이름) 표를 만들고, hook 의 부모부터 최대 8단계 올라간다. exe 이름이 `claude.exe` 면 그 프로세스. `node.exe`·`bun.exe` 는 명령줄에 `claude` 가 들어 있을 때만 인정.
 - `alive(pid)`: `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` + `GetExitCodeProcess == STILL_ACTIVE`. `pid_ctime` 이 있으면 `GetProcessTimes` 생성 시각도 같아야 산 것으로 본다. 열 권한이 없으면(ACCESS_DENIED) 산 것으로 본다.
-- `headless`(macOS 는 tty 가 없으면 headless): 다음 중 하나면 true — 실행 인자에 `-p`/`--print` 가 있다 / `AttachConsole(pid)` 실패(콘솔 없음) / 콘솔 창(`GetConsoleWindow`)도 그 창의 소유 창(`GetWindow(GW_OWNER)`, ConPTY 의 가짜 창은 터미널 창을 소유자로 둔다)도 보이지 않고, 조상 가운데 보이는 최상위 창을 가진 프로세스도 없다. **(Windows 미확인 — 추정 규칙)**
+- `headless`(macOS 는 tty 가 없으면 headless): 다음 중 하나면 true — 실행 인자에 `-p`/`--print` 가 있다 / `AttachConsole(pid)` 실패(콘솔 없음) / 콘솔 창(`GetConsoleWindow`)도 그 창의 소유 창(`GetWindow(GW_OWNER)`, ConPTY 의 가짜 창은 터미널 창을 소유자로 둔다)도 보이지 않고, 조상 가운데 보이는 최상위 창을 가진 프로세스도 없다.
+  실기 확인(§11.1): Windows Terminal 탭으로 열린 새 콘솔은 콘솔 창이 숨은 `PseudoConsoleWindow`(OpenConsole.exe)이고 그 소유 창이 보이는 WT 창(`CASCADIA_HOSTING_WINDOW_CLASS`)이라 false. 콘솔 없는 프로세스(`DETACHED_PROCESS`)·`-p` 는 true. 창 없는 콘솔(`CREATE_NO_WINDOW`)은 조상에 보이는 창이 없으면 true.
 
 ### 3.5 prune — `state.py:113-135`
 
@@ -194,7 +196,7 @@ crossterm 으로 같은 화면: 경로별 카드(테두리 색 = 가장 급한 �
 
 - 인자: `--title --subtitle --body --kind done|wait --summary waiting=1,working=2,idle=3 --sound done|wait|none --duration 10 --position center|top-left|top-right|bottom-left|bottom-right`. 같은 키를 다시 주면 뒤의 값.
 - 이 모드는 단일 실행 잠금을 잡지 않는 별도 프로세스다. 패널 하나를 보이고 닫히면 프로세스가 끝난다.
-- 창: 테두리 없음, 투명 배경 위 둥근 카드(반경 14), 폭 440, 높이는 내용에 맞춤. **포커스를 가져가지 않는다** — `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST`, 보일 때 `SW_SHOWNOACTIVATE`. 작업 표시줄에 나타나지 않는다. **(Windows 미확인)**
+- 창: 테두리 없음, 투명 배경 위 둥근 카드(반경 14), 폭 440, 높이는 내용에 맞춤. **포커스를 가져가지 않는다** — `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST`, 보일 때 `SW_SHOWNOACTIVATE`. 작업 표시줄에 나타나지 않는다. 실기 확인(§11.1): 띄우기 전후 포그라운드 창이 같고, 확장 스타일에 NOACTIVATE·TOOLWINDOW·TOPMOST 가 켜지고 APPWINDOW 는 꺼져 있다.
 - 위치: 마우스가 있는 모니터의 작업 영역. 가운데: 슬롯 0~4 의 가로 이동 `[0, 0.5, -0.5, 1, -1] × 폭`. 모서리: 여백 12, 같은 모서리에 떠 있는 패널의 세로 범위를 피해 간격 8 로 쌓는다(위 모서리는 아래로, 아래 모서리는 위로). 슬롯 파일 `%TEMP%\claude-notifier-slots\<0..4>`(`CreateNew` 로 잡음, 120초 넘게 갱신 없는 것은 버림, 내용 `"<position> <top> <bottom>"`), 범위를 읽고 쓰는 동안 `lock` 파일 잠금, 1초마다 수정 시각 갱신, 닫을 때 지움(`ClaudeNotifier.swift:54-118, 223-250`).
 - 내용(`ClaudeNotifier.swift:280-420`, 스크린샷 `docs/images/notify-wait.png`·`notify-done.png`): 1줄 = 색 배지(30×30, 아이콘 wait ✋ / done ✓) · `<subtitle>` 흰 굵게 + `<title>` 강조색 · 오른쪽 `HH:mm`. 2줄 = 본문(최대 2줄, 흰 82%). 3줄 = 상태별 개수(색 점 + "승인 대기 n"·"작업 중 n"·"대기 n", 0 은 숨김). 맨 아래 2px 진행 막대(남은 시간).
   강조색 wait `rgb(255,168,64)`, done `rgb(77,217,140)`. 바탕은 보드와 같은 남색 그라데이션 + 왼쪽 위 강조색 빛 + 강조색 35% 테두리.
@@ -251,7 +253,9 @@ macOS 키체인 대신:
 
 같은 규칙(3초 주기, settle 40초, recent 6시간, 찬 계정 기록과 풀리는 시각, 다음 계정 고르기, 이어 가기 요청 문구, `auto-switch.log`). 이어 가기는 Ghostty 대신 §5.7 의 콘솔 입력으로 `Esc → 0.5초 → 문구 → 0.2초 → Enter`. `canDrive` 가 아니면 직접 이어 달라고 안내.
 
-### 5.7 터미널 제어 (Windows) — Ghostty AppleScript 대체 **(모두 Windows 미확인)**
+### 5.7 터미널 제어 (Windows) — Ghostty AppleScript 대체
+
+실기 확인(§11.1): 콘솔 붙기·제목·입력 넣기(줄 단위·raw 모드 모두, Windows Terminal 탭 포함), 세션의 터미널 창 찾기, 이어 열기·계정 추가의 새 콘솔 실행(인자·환경·작업 폴더가 그대로 도착). **Windows 미확인**: Windows Terminal 탭 고르기(UI Automation), 창 앞으로 가져오기, 실제 Claude Code 에서의 일시중지·재개·중단.
 
 - 콘솔 입력: 보드 프로세스가 `FreeConsole` → `AttachConsole(pid)` → `CreateFileW("CONIN$")` → `WriteConsoleInputW` 로 KEY_EVENT(누름·뗌) 를 넣고 → `FreeConsole`. Esc = VK_ESCAPE/0x1B, Enter = VK_RETURN/`\r`, 글자는 UTF-16 단위마다 `wVirtualKeyCode=0` 에 문자. 붙어 있는 동안 `SetConsoleCtrlHandler(NULL, TRUE)`. 한 번에 한 세션씩(전역 잠금). `canDrive(s)` = headless 아님 + ended 아님 + 콘솔에 붙을 수 있음.
 - 일시중지 = Esc 후 `<sid>.paused` 기록. 재개 = 살아 있으면 `carryOnPrompt` 입력 + Enter 후 표지 삭제, 아니면 이어 열기(carryOn). 중단 = 확인 대화상자 → 표지 삭제 → canDrive 면 `Esc → 0.4초 → /exit → 0.2초 → Enter`, 아니면 프로세스 종료(`TerminateProcess` 대신 먼저 `GenerateConsoleCtrlEvent(CTRL_BREAK)` 를 시도하지 말고 macOS SIGTERM 처럼 바로 종료해도 된다 — 대화 기록은 남는다).
@@ -268,7 +272,7 @@ macOS 키체인 대신:
 - 현재 버전 = 빌드 때 `windows/VERSION`. 개발 빌드(`VERSION` 을 못 읽었거나 환경변수로 dev 표시)는 확인하지 않고 제목 옆에 `dev`.
 - 켤 때와 1시간마다 `GET https://api.github.com/repos/suhojang/claude-board/releases?per_page=30`(헤더 `User-Agent: ClaudeBoard-Windows`, `Accept: application/vnd.github+json`) → draft·prerelease 가 아니고 `tag_name` 이 `windows-v` 로 시작하는 첫 릴리스 → 버전 = 태그에서 `windows-v` 를 뺀 것(숫자 비교). 더 새로우면 알림 줄. **`/releases/latest` 를 쓰지 않는다.**
 - 알림 줄: "새 버전 <v> 이 나왔습니다" · **변경 내용**(`https://github.com/suhojang/claude-board/blob/main/windows/CHANGELOG.md`) · **업데이트**. 손으로 확인했는데 없으면 "최신 버전입니다 (<v>)" 4초, 실패하면 "업데이트를 확인하지 못했습니다".
-- 업데이트 실행: `https://raw.githubusercontent.com/suhojang/claude-board/windows-v<v>/windows/packaging/install.ps1`(태그 기준 원본 — 릴리스 자산과 달리 UTF-8 로 내려와 update.log 의 한글이 깨지지 않는다)로 `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { $s = irm '<url>'; & ([scriptblock]::Create($s)) -Version '<v>' -Update }"` 를 창 없이 분리 실행, 출력은 `notifier\update.log`. 성공하면 스크립트가 보드를 끄고 새 보드를 띄우므로 돌아오지 않는다. 프로세스가 끝나 돌아오면 실패 — "업데이트하지 못했습니다 · ~/.claude/notifier/update.log" + 다시 시도.
+- 업데이트 실행: `https://raw.githubusercontent.com/suhojang/claude-board/windows-v<v>/windows/packaging/install.ps1`(태그 기준 원본 — 릴리스 자산과 달리 UTF-8 로 내려와 update.log 의 한글이 깨지지 않는다)로 `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { $s = irm '<url>'; & ([scriptblock]::Create($s)) -Version '<v>' -Update }"` 를 창 없이 분리 실행, 출력은 `notifier\update.log`. 이때 환경변수 `PSModulePath` 를 넘기지 않는다 — PowerShell 7 에서 띄운 보드는 PowerShell 7 의 모듈 경로를 물려받고, 그것을 받은 5.1 은 `Get-FileHash` 를 찾지 못해 install.ps1 이 멈춘다(실기 확인). 성공하면 스크립트가 보드를 끄고 새 보드를 띄우므로 돌아오지 않는다. 프로세스가 끝나 돌아오면 실패 — "업데이트하지 못했습니다 · ~/.claude/notifier/update.log" + 다시 시도.
 
 ### 5.9 보드 설정 저장 (macOS UserDefaults 대응)
 
@@ -373,6 +377,8 @@ props `{ groups: Group[]; limits: Limit[]; now: number; compact?: boolean; masco
 | `install.ps1`, `uninstall.ps1` | 설치·업데이트·제거 스크립트 |
 | `VERSION` | 버전 한 줄 |
 
+setup.exe 메모(실기 확인): `/S` 로 같은 버전을 다시 설치하면 Tauri NSIS 는 옛 제거 프로그램을 부르지 않는다 — PREUNINSTALL 의 제자리 건너뛰기(`$EXEDIR == $INSTDIR`)는 GUI 업그레이드에서 쓰인다(제자리 제거 `uninstall.exe /S _?=<폴더>` 는 금고·hook·자동 실행 값을 남김을 확인). NSIS 제거 프로그램이 스스로 지우는 Run 값 이름은 `Claude Board` 이고 setup 이 쓰는 값은 `ClaudeBoard` 라, 자동 실행 값은 PREUNINSTALL 의 `uninstall` 이 지운다.
+
 ### 8.2 `install.ps1`
 
 `irm https://raw.githubusercontent.com/suhojang/claude-board/main/windows/packaging/install.ps1 | iex` (처음 설치·업데이트 같은 명령). 인자 `-Version <v>`(없으면 API 로 최신 `windows-v*`), `-Update`(묻지 않음).
@@ -383,7 +389,10 @@ props `{ groups: Group[]; limits: Limit[]; now: number; compact?: boolean; masco
 
 - 계기: `windows/**`·워크플로 파일이 바뀐 push(모든 브랜치)·pull_request, workflow_dispatch.
 - build 작업(windows-latest): Rust stable, Node 22, `cargo test`(windows 워크스페이스), `cargo build --release -p claude-board-hook`, 앱 `npm ci` → `npx tauri build`(NSIS), 자산 묶기(§8.1), `actions/upload-artifact` 로 올리기.
-- release 작업: main 의 push 일 때만, build 뒤. `windows/VERSION` 을 읽어 태그 `windows-v<버전>` 이 아직 없고 `windows/CHANGELOG.md` 에 `## <버전>` 항목이 있으면 그 항목을 설명으로 `gh release create windows-v<버전> … --latest=false --title "Claude Board for Windows <버전>"`. 항목이 없으면 실패로 끝낸다(macOS release.sh 와 같은 규칙).
+- smoke 작업(windows-latest, build 뒤): 아티팩트로 실제 설치·화면을 확인한다. 러너는 화면 세션이 있는 Windows Server 2025 이고 기본 터미널이 Windows Terminal 이다.
+  `windows/ci/install-checks.ps1`(설치 확인 — 실패하면 작업 실패): setup.exe `/S` 설치 → 등록된 hook 을 가짜 Claude Code(node.exe 를 `claude.exe` 로 복사) 아래에서 그대로 실행 → 같은 버전 재설치·제자리 제거 → `/S` 제거, install.ps1·uninstall.ps1 을 Windows PowerShell 5.1 에서 웹 호출을 같은 이름의 함수로 가로채 실행(처음 설치 거부·`-Update` 설치·틀린 sha256 거부).
+  `windows/ci/screen-checks.ps1`(화면 확인 — 정보용, `continue-on-error`): 보드 창·단일 실행·알림 패널의 포커스·확장 스타일·스스로 닫힘, 스크린샷. 결과표·로그·스크린샷은 `smoke-results` 아티팩트.
+- release 작업: main 의 push 일 때만, build·smoke 뒤(설치 확인이 실패하면 릴리스하지 않는다). `windows/VERSION` 을 읽어 태그 `windows-v<버전>` 이 아직 없고 `windows/CHANGELOG.md` 에 `## <버전>` 항목이 있으면 그 항목을 설명으로 `gh release create windows-v<버전> … --latest=false --title "Claude Board for Windows <버전>"`. 항목이 없으면 실패로 끝낸다(macOS release.sh 와 같은 규칙).
 - 배포 순서(관리자): `windows/CHANGELOG.md` 맨 위에 항목 → `windows/VERSION` 올리기 → main 에 push → CI 가 빌드·릴리스.
 
 ## 9. 문서 의무
@@ -395,7 +404,8 @@ props `{ groups: Group[]; limits: Limit[]; now: number; compact?: boolean; masco
 ## 10. 이 Mac 에서 확인할 수 있는 것과 없는 것
 
 확인 가능: core·hook 단위 테스트(macOS 에서 `cargo test`), Windows 대상 `cargo check`(링크 전까지), 프론트엔드 빌드, Tauri 앱을 macOS 에서 띄워 가짜 세션 파일로 화면 확인.
-확인 불가(Windows CI 빌드·테스트만 가능, 실제 동작은 사람이 Windows 에서 확인해야 함): 콘솔 제목·입력 넣기, Windows Terminal 탭 찾기, 패널 비활성 표시, 트레이·전역 단축키, DPAPI, `.credentials.json` 형식, hook 의 실제 프로세스 트리, 설치 스크립트.
+Windows CI 러너에서 실기로 확인: `#[cfg(windows)]` 시험(콘솔 제목·입력·터미널 창 찾기·headless, 프로세스 표·생성 시각·명령줄·종료, hook 이 `claude.exe` 를 조상으로 찾기, DPAPI, 새 콘솔 실행의 인자 전달)과 smoke 작업(§8.3)의 설치·화면 확인.
+사람이 Windows 에서 확인해야 함: Windows Terminal 탭 고르기, 세션 창 앞으로 가져오기, 트레이·전역 단축키·Mica, 소리, 실제 Claude Code 의 `.credentials.json` 형식·계정 전환, 실제 Claude Code 세션의 일시중지·재개·중단, 로그인 자동 실행, 배율이 큰 모니터의 패널 위치.
 
 ## 11. 재구현 의무 대응표
 
@@ -405,22 +415,22 @@ props `{ groups: Group[]; limits: Limit[]; now: number; compact?: boolean; masco
 | H2 | 서브에이전트 기록 | state.py:146-174 | crates/core `state` | 기준 데이터 테스트 |
 | H3 | carry_args·resume_cmd(Windows 인용) | state.py:57-97 | crates/core `state` | 단위 테스트 |
 | H4 | prune | state.py:113-135 | crates/core | 단위 테스트 |
-| H5 | 프로세스 찾기·alive·headless·제목 | state.py:24-110 | crates/core `win` | Windows CI 컴파일, 동작 미확인 |
+| H5 | 프로세스 찾기·alive·headless·제목 | state.py:24-110 | crates/core `proc`·`console` | Windows 실기 시험(CI) |
 | N1 | 알림 거르기·본문 다듬기·요약 | notify.py | crates/core `notify` | 단위 테스트 |
-| N2 | 패널 띄우기(분리 프로세스) | notify.py:126-136 | crates/hook | Windows CI 컴파일 |
-| N3 | 알림 패널 화면·위치·슬롯·소리·클릭 | ClaudeNotifier.swift | app `--notify` + notify.html | macOS 실행 화면 확인(위치·비활성은 미확인) |
+| N2 | 패널 띄우기(분리 프로세스) | notify.py:126-136 | crates/hook | smoke 화면 확인 |
+| N3 | 알림 패널 화면·위치·슬롯·소리·클릭 | ClaudeNotifier.swift | app `--notify` + notify.html | macOS 실행 화면, smoke 화면 확인(비활성·스타일) |
 | I1 | hook 등록·제거(exec form, 표시, 백업) | hooks.py | crates/core `hooks` | 단위 테스트 |
-| I2 | setup·uninstall | user-setup.sh, Uninstall.command | crates/hook | Windows CI 컴파일 |
-| I3 | install.ps1·uninstall.ps1·해시 확인 | install.sh | windows/packaging | 문법 검사(가능하면 pwsh) |
+| I2 | setup·uninstall | user-setup.sh, Uninstall.command | crates/hook | smoke 설치 확인 |
+| I3 | install.ps1·uninstall.ps1·해시 확인 | install.sh | windows/packaging | smoke 설치 확인(Windows PowerShell 5.1) |
 | B1 | 세션 읽기·정렬·보정 | ClaudeBoard.swift:941-1207 | src-tauri `store` | 단위 테스트(가짜 세션 폴더) |
 | B2 | 모델·effort·컨텍스트 | 97-246 | src-tauri `readers` | 단위 테스트 |
 | B3 | 사용 한도 | 262-354 | src-tauri `usage` | 응답 파싱 테스트 |
 | B4 | 계정 전환·추가·지우기 | 369-789 | src-tauri `accounts` | 파일 조작 테스트(DPAPI 는 Windows) |
 | B5 | 한도 자동 전환 | 791-918 | src-tauri `autoswitch` | 선택 규칙 테스트 |
-| B6 | 터미널 제어 | 4525-4910 | src-tauri `terminal` | Windows CI 컴파일, 동작 미확인 |
+| B6 | 터미널 제어 | 4525-4910 | src-tauri `terminal` | Windows 실기 시험(콘솔 입력·창 찾기·새 콘솔), 탭 고르기 미확인 |
 | B7 | 업데이트(Latest 금지) | 4097-4184 | src-tauri `updater` | 릴리스 목록 파싱 테스트 |
 | B8 | 설정 저장 | UserDefaults 키 | src-tauri `settings` | 단위 테스트 |
-| B9 | 창·트레이·단축키·단일 실행·자동 실행 | 4226-5204 | src-tauri `main` | macOS 실행(트레이), Windows 동작 미확인 |
+| B9 | 창·트레이·단축키·단일 실행·자동 실행 | 4226-5204 | src-tauri `main` | macOS 실행(트레이), smoke 화면 확인(창·단일 실행) |
 | U1 | 보드 화면 전체(단계 3개) | 1247-4460 | app/src | macOS 실행 스크린샷 |
 | U2 | 캐릭터 8종·말풍선 | 2643-3388 | app/src/lib/mascot | 스크린샷 |
 | T1 | TUI | board-tui.py | crates/hook `tui` | macOS 실행 |
@@ -428,6 +438,8 @@ props `{ groups: Group[]; limits: Limit[]; now: number; compact?: boolean; masco
 | D1 | 문서 | README.md, packaging/README.txt | windows/*.md, 최상위 README·CLAUDE.md | 검토 |
 
 ### 11.1 검증 결과 (2026-10-16, 첫 판 2.12)
+
+Windows 실기 확인은 GitHub Actions windows-latest 러너(Windows Server 2025, 화면 세션 있음, 기본 터미널 Windows Terminal)에서 했다 — `#[cfg(windows)]` 시험은 실행 38913340492, 설치·화면 확인(smoke)은 실행 38916177014.
 
 REA 의 `evaluate-reconstruction-coverage`·`build-reconstruction-obligation-ledger` 는 REA 가 배포 바이너리에서 뽑은 인증 근거와 원본·재구현 양쪽의 실행 사례를 입력으로 요구한다.
 원본은 소스가 모두 있고(REA 지침상 소스 저장소 분석에는 REA 를 쓰지 않는다) 재구현은 Windows 에서만 돌므로 그 도구는 돌리지 않았다. 아래 표가 그 대신이다.
@@ -438,13 +450,13 @@ REA 를 쓴 곳: `import-reference-source`(원본 소스 목록), `capture-proce
 |---|---|---|
 | H1·H2 | 확인 | REA 캡처 14단계와 같은 결과(환경 의존 필드는 가림). macOS·Windows CI 에서 시험 통과 |
 | H3·H4 | 확인 | 단위 시험(적대적 모델 이름이 인자 하나로 남는지 포함). `resume_args` 로 셸을 거치지 않음 |
-| H5 | 컴파일·검토 | Windows CI 컴파일·시험 통과, Win32 API 계약 검토. **실제 Windows 동작 미확인** |
+| H5 | 확인 | Windows 실기 시험: 프로세스 표·부모·생성 시각·명령줄(공백·따옴표·한글)·종료, 콘솔 제목 왕복·붙기, 터미널 창 찾기·headless(§3.4). hook 이 새 콘솔의 가짜 `claude.exe` 를 부모로 찾아 pid·생성 시각·`resume_args`(적대적 모델 이름이 원소 하나)를 남기고 제목을 바꾸며, `-p` 는 headless·제목 그대로 |
 | N1 | 확인 | notify.py 와 같은 출력 단위 시험 |
-| N2·N3 | 부분 | macOS 에서 패널 실행·자리·자동 종료 확인. 포커스를 가져가지 않는지·소리는 **Windows 미확인** |
+| N2·N3 | 확인(소리 제외) | 설치된 notify hook 이 패널을 기다리지 않고 30ms 안에 끝나고, 패널이 뜨되 포그라운드 창이 그대로, 확장 스타일 NOACTIVATE·TOOLWINDOW·TOPMOST·APPWINDOW 없음, 스스로 닫힘. 소리는 **Windows 미확인** |
 | I1 | 확인 | 등록·제거 왕복·백업·깨진 JSON 거부 시험 |
-| I2·I3 | 부분 | setup·uninstall 은 가짜 홈에서 실행 확인(레지스트리 제외). install.ps1 은 PS 5.1/7 파서·PSScriptAnalyzer·웹 호출 흉내 실행. **실제 Windows 설치 미확인** |
-| B1~B5·B7·B8 | 확인 | src-tauri 단위 시험(Windows CI 에서도 통과). DPAPI 는 **Windows 미확인** |
-| B6·B9 | 컴파일·검토 | Windows CI 빌드, Win32 API 계약 검토. 콘솔 입력·탭 선택·트레이·단축키·Mica 는 **Windows 미확인** |
+| I2·I3 | 확인 | setup.exe `/S` 설치(설치 폴더·hook 13개 명령·env·백업·다른 설정 보존·hook 사본·app-path·Run 값·명령 두 개) → 등록된 hook 을 가짜 Claude Code 아래에서 실행 → 재설치·제자리 제거(금고 보존) → `/S` 제거(원래 settings.json 으로 돌아감, 로그인 파일 그대로). install.ps1 을 Windows PowerShell 5.1 에서: 처음 설치 리디렉션 거부, `-Update` 설치(macOS Latest·draft·prerelease 를 건너뛰고 windows-v 고름), 틀린 sha256 거부(기존 설치 그대로), uninstall.ps1. 여기서 업데이트 단추의 PSModulePath 버그를 찾아 고쳤다(§5.8) |
+| B1~B5·B7·B8 | 확인 | src-tauri 단위 시험(Windows CI 에서도 통과). DPAPI 왕복·망가진 봉인 거부·금고 파일에 토큰 평문 없음을 Windows 실기 시험으로 확인. 실제 Claude Code 계정으로 전환은 **Windows 미확인** |
+| B6·B9 | 부분 | 콘솔 입력(줄 단위·raw 모드, WT 탭 포함)·새 콘솔 실행(인자·환경·작업 폴더 그대로)·보드 창·단일 실행을 실기로 확인. 탭 고르기·창 앞으로·트레이·단축키·Mica 는 **Windows 미확인** |
 | U1 | 확인 | macOS 에서 Tauri 창을 가짜 세션으로 띄워 스크린샷, 브라우저에서 세 단계·알림 패널을 원본 스크린샷과 비교 |
 | U2 | 확인 | Swift 그림 코드를 macOS 에서 렌더링한 기준 그림과 픽셀 비교(가장자리 차이 0.7% 미만) |
 | T1 | 확인 | board-tui.py 와 화면 바이트 비교 |

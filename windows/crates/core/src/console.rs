@@ -1,5 +1,5 @@
 //! 콘솔 도구 (Windows) — 다른 프로세스의 콘솔에 붙어 제목 바꾸기·입력 넣기·터미널 창 찾기
-//! (SPEC §3.2 제목, §3.4 headless, §5.7 터미널 제어). **모두 Windows 실기 미확인.**
+//! (SPEC §3.2 제목, §3.4 headless, §5.7 터미널 제어). Windows 실기 확인은 `tests/windows_console.rs`(CI 의 windows-latest 러너).
 //!
 //! 한 프로세스는 콘솔 하나에만 붙을 수 있으므로 모든 함수가 전역 잠금 아래에서
 //! `FreeConsole → AttachConsole(pid) → 일 → FreeConsole` 로 붙었다 뗀다(한 번에 한 세션씩).
