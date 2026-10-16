@@ -1,6 +1,8 @@
 # 소스만 올린다 — 이 폴더는 실행 중 상태(sessions·context·accounts 등)도 함께 쓰므로 기본은 모두 빼고 소스만 고른다
 /*
 !/.gitignore
+!/README.md
+!/CHANGELOG.md
 !/ClaudeBoard.swift
 !/ClaudeNotifier.swift
 !/ClaudeStatus.swift
