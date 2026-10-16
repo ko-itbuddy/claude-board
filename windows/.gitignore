@@ -1,0 +1,9 @@
+# 빌드 결과·의존성은 올리지 않는다
+/target/
+/app/node_modules/
+/app/build/
+/app/.svelte-kit/
+/app/src-tauri/target/
+/app/src-tauri/gen/schemas/
+/dist/
+.DS_Store
