@@ -192,14 +192,14 @@ mod sys {
     use windows_sys::Wdk::System::Threading::NtQueryInformationProcess;
     use windows_sys::Win32::Foundation::{
         CloseHandle, GetLastError, LocalFree, ERROR_ACCESS_DENIED, FILETIME, HANDLE, INVALID_HANDLE_VALUE, STILL_ACTIVE,
-        UNICODE_STRING,
+        UNICODE_STRING, WAIT_OBJECT_0, WAIT_TIMEOUT,
     };
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
     };
     use windows_sys::Win32::System::Threading::{
-        GetCurrentProcessId, GetExitCodeProcess, GetProcessTimes, OpenProcess, TerminateProcess,
-        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+        GetCurrentProcessId, GetExitCodeProcess, GetProcessTimes, OpenProcess, TerminateProcess, WaitForSingleObject,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
     };
     use windows_sys::Win32::UI::Shell::CommandLineToArgvW;
 
@@ -259,17 +259,27 @@ mod sys {
     }
 
     pub fn alive(pid: u32, ctime: Option<f64>) -> bool {
-        let h = match open(pid, PROCESS_QUERY_LIMITED_INFORMATION) {
+        // 끝났는지는 대기 가능 여부로 본다 — 종료 코드 259(STILL_ACTIVE)로 끝난 프로세스를 산 것으로 잘못 보지 않게.
+        // SYNCHRONIZE 를 못 받으면(다른 사용자·높은 권한) 조회 권한만으로 종료 코드를 본다
+        let h = match open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE) {
             Ok(h) => h,
-            Err(e) => return e == ERROR_ACCESS_DENIED,
+            Err(ERROR_ACCESS_DENIED) => match open(pid, PROCESS_QUERY_LIMITED_INFORMATION) {
+                Ok(h) => h,
+                Err(e) => return e == ERROR_ACCESS_DENIED,
+            },
+            Err(_) => return false,
         };
-        let mut code = 0u32;
-        // SAFETY: 연 핸들로 종료 코드만 읽는다
-        if unsafe { GetExitCodeProcess(h.0, &mut code) } == 0 {
-            return true;
-        }
-        if code != STILL_ACTIVE as u32 {
-            return false;
+        // SAFETY: 연 핸들로 상태만 읽는다(0ms 대기는 막지 않는다)
+        match unsafe { WaitForSingleObject(h.0, 0) } {
+            WAIT_OBJECT_0 => return false,
+            WAIT_TIMEOUT => {}
+            _ => {
+                let mut code = 0u32;
+                // SAFETY: 연 핸들로 종료 코드만 읽는다
+                if unsafe { GetExitCodeProcess(h.0, &mut code) } != 0 && code != STILL_ACTIVE as u32 {
+                    return false;
+                }
+            }
         }
         match (ctime, created(&h)) {
             (Some(want), Some(got)) => (want - got).abs() < 0.001,

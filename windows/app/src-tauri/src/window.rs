@@ -104,12 +104,18 @@ pub fn main_window(app: &AppHandle) -> Option<WebviewWindow> {
 }
 
 /// 포커스를 가져가지 않고 보인다 — `--background`·전역 단축키·Windows Terminal 실행 때.
+///
+/// Windows: 창 자체(tao)의 보이기 상태를 거쳐야 한다. Win32 `ShowWindow` 로 직접 보이면 tao 는 숨은 창으로 알고 있어
+/// 그 뒤 `hide()` 가 아무 일도 하지 않고(트레이·닫기 단추로 못 숨김) 항상 위·최소화를 바꿀 때 창을 숨겨 버린다.
+/// 그래서 잠깐 활성화되지 않는 창(WS_EX_NOACTIVATE)으로 바꿔 `show()` 한 뒤 되돌린다. 세 호출은 주 스레드에서 차례로 돈다.
 pub fn show_inactive(win: &WebviewWindow) {
     #[cfg(windows)]
-    if let Ok(h) = win.hwnd() {
-        crate::win::show_no_activate(h.0 as isize);
-        return;
+    {
+        let _ = win.set_focusable(false);
+        let _ = win.show();
+        let _ = win.set_focusable(true);
     }
+    #[cfg(not(windows))]
     let _ = win.show();
 }
 

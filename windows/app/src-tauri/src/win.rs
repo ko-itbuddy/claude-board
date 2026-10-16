@@ -40,8 +40,11 @@ mod sys {
         CRYPT_INTEGER_BLOB { cbData: data.len() as u32, pbData: data.as_ptr() as *mut u8 }
     }
 
-    /// DPAPI 결과를 복사하고 LocalFree 로 놓는다.
+    /// DPAPI 결과를 복사하고 LocalFree 로 놓는다(빈 결과는 포인터가 null 일 수 있다).
     unsafe fn take(out: CRYPT_INTEGER_BLOB) -> Vec<u8> {
+        if out.pbData.is_null() {
+            return Vec::new();
+        }
         // SAFETY: DPAPI 가 채운 버퍼와 길이
         let v = unsafe { std::slice::from_raw_parts(out.pbData, out.cbData as usize) }.to_vec();
         unsafe { LocalFree(out.pbData.cast()) };
@@ -147,16 +150,30 @@ mod sys {
     /// Windows Terminal 창 안에서 이름이 `marker` 인 탭을 UI Automation 으로 찾아 고른다.
     pub fn select_wt_tab(hwnd: isize, marker: &str) -> bool {
         use windows::Win32::Foundation::HWND as WHWND;
-        use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
+        use windows::Win32::System::Com::{
+            CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+        };
         use windows::Win32::UI::Accessibility::{
             CUIAutomation, IUIAutomation, IUIAutomationSelectionItemPattern, TreeScope_Descendants, UIA_SelectionItemPatternId,
             UIA_TabItemControlTypeId,
         };
+        /// 이 호출이 연 COM 을 닫는다 — 인터페이스(아래 find 안의 값)가 모두 놓인 뒤에 놓인다
+        struct Com(bool);
+        impl Drop for Com {
+            fn drop(&mut self) {
+                if self.0 {
+                    // SAFETY: 성공한 CoInitializeEx 와 짝을 맞춘다
+                    unsafe { CoUninitialize() };
+                }
+            }
+        }
+        // 보드의 작업 스레드에서 불린다. 이미 다른 방식으로 열려 있으면(RPC_E_CHANGED_MODE) 그대로 쓰고 닫지 않는다
+        // SAFETY: 이 스레드의 COM 초기화
+        let _com = Com(unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok());
         // 탭 항목을 모두 훑어 이름이 표지인 것을 고른다(속성 조건은 VARIANT 를 만들어야 해 직접 거른다)
         let find = || -> windows::core::Result<bool> {
-            // SAFETY: COM 호출 — 이 스레드에서 COM 을 열고(이미 열려 있으면 그대로) 받은 인터페이스만 쓴다
+            // SAFETY: COM 호출 — 받은 인터페이스만 쓰고, 모두 이 클로저 안에서 놓인다
             unsafe {
-                let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
                 let uia: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)?;
                 let root = uia.ElementFromHandle(WHWND(hwnd as *mut _))?;
                 let all = root.FindAll(TreeScope_Descendants, &uia.CreateTrueCondition()?)?;

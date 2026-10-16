@@ -5,7 +5,7 @@
 //! 저장소의 설정 파일에서 올 수 있어 셸 해석을 거치면 명령 주입이 된다.
 
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use claude_board_core::console::{self, Input};
 use claude_board_core::proc::{self, ProcessTable};
-use claude_board_core::{clock, paths};
+use claude_board_core::{clock, paths, quote};
 use serde_json::json;
 
 use crate::board::Board;
@@ -39,18 +39,16 @@ pub fn find_claude() -> Option<PathBuf> {
 
 /// 실행 파일을 인자 배열 그대로 새 콘솔 창에서 띄운다(CREATE_NEW_CONSOLE — Windows 11 에서 기본 터미널이
 /// Windows Terminal 이면 그 안에 열린다). macOS 개발 빌드에서는 띄우지 않고 기록만 남긴다.
+///
+/// Windows 는 std `Command` 대신 `CreateProcessW` 를 직접 부른다. std 는 보드의 표준 핸들 가운데 하나라도 있으면
+/// `STARTF_USESTDHANDLES` 로 그것을 넘기는데, 새 콘솔은 그렇게 받은 핸들을 자기 콘솔 핸들로 바꾸지 않는다 — 알림 패널이
+/// 띄운 보드(표준 핸들이 NUL)나 콘솔에서 띄운 보드에서 claude.exe 의 입출력이 새 창이 아닌 곳으로 간다.
+/// 여기서는 표준 핸들을 넘기지 않고(새 콘솔이 채운다) 핸들도 물려주지 않는다.
 pub fn spawn_console(exe: &Path, args: &[String], cwd: &Path, envs: &[(&str, &OsStr)]) -> std::io::Result<()> {
     let cwd = if cwd.is_dir() { cwd.to_path_buf() } else { paths::home() };
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-        use windows_sys::Win32::System::Threading::CREATE_NEW_CONSOLE;
-        let mut cmd = Command::new(exe);
-        cmd.args(args).current_dir(&cwd).creation_flags(CREATE_NEW_CONSOLE);
-        for (k, v) in envs {
-            cmd.env(k, v);
-        }
-        cmd.spawn().map(|_| ())
+        create_console_process(exe, args, &cwd, envs)
     }
     #[cfg(not(windows))]
     {
@@ -58,6 +56,82 @@ pub fn spawn_console(exe: &Path, args: &[String], cwd: &Path, envs: &[(&str, &Os
         board_log(&format!("(개발 빌드) 새 콘솔 실행 생략: {} {:?} @ {}", exe.display(), args, cwd.display()));
         Ok(())
     }
+}
+
+/// 새 콘솔로 띄울 명령줄 — 실행 파일 경로와 인자를 Windows 인용 규칙(`CommandLineToArgvW`·CRT 가 원래 인자로 되돌리는 꼴)으로 잇는다.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn console_command_line(exe: &Path, args: &[String]) -> String {
+    let exe = exe.to_string_lossy();
+    std::iter::once(quote::windows(&exe))
+        .chain(args.iter().map(|a| quote::windows(a)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// 이 프로세스의 환경에 `extra` 를 덮어쓴 목록 — 이름은 대소문자를 가리지 않고 같게 보고,
+/// 환경 블록 규칙대로 이름(대문자 기준) 순으로 늘어놓는다.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn merged_env(base: impl IntoIterator<Item = (OsString, OsString)>, extra: &[(&str, &OsStr)]) -> Vec<(OsString, OsString)> {
+    let upper = |k: &OsStr| k.to_string_lossy().to_uppercase();
+    let mut out: Vec<(OsString, OsString)> =
+        base.into_iter().filter(|(k, _)| !extra.iter().any(|(e, _)| upper(k) == e.to_uppercase())).collect();
+    out.extend(extra.iter().map(|(k, v)| (OsString::from(k), v.to_os_string())));
+    out.sort_by_cached_key(|(k, _)| upper(k));
+    out
+}
+
+#[cfg(windows)]
+fn create_console_process(exe: &Path, args: &[String], cwd: &Path, envs: &[(&str, &OsStr)]) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr::null;
+    use windows_sys::Win32::Foundation::{CloseHandle, FALSE};
+    use windows_sys::Win32::System::Threading::{
+        CreateProcessW, CREATE_NEW_CONSOLE, CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION, STARTUPINFOW,
+    };
+    let wide = |s: &OsStr| s.encode_wide().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let app = wide(exe.as_os_str());
+    // CreateProcessW 는 명령줄 버퍼를 고쳐 쓸 수 있으므로 우리 버퍼를 넘긴다
+    let mut line = wide(OsStr::new(&console_command_line(exe, args)));
+    let dir = wide(cwd.as_os_str());
+    // 더할 환경변수가 있을 때만 블록을 만든다(없으면 null = 보드의 환경 그대로). "이름=값\0…\0\0"
+    let block: Option<Vec<u16>> = (!envs.is_empty()).then(|| {
+        let mut b = Vec::new();
+        for (k, v) in merged_env(std::env::vars_os(), envs) {
+            b.extend(k.encode_wide());
+            b.push(u16::from(b'='));
+            b.extend(v.encode_wide());
+            b.push(0);
+        }
+        b.push(0);
+        b
+    });
+    // dwFlags 0 — 표준 핸들은 새 콘솔이 채운다
+    let si = STARTUPINFOW { cb: size_of::<STARTUPINFOW>() as u32, ..Default::default() };
+    let mut pi = PROCESS_INFORMATION::default();
+    // SAFETY: 모든 문자열은 NUL 로 끝나고 이 함수 동안 살아 있다. 핸들 상속 없음. 돌려받은 두 핸들은 바로 닫는다
+    let ok = unsafe {
+        CreateProcessW(
+            app.as_ptr(),
+            line.as_mut_ptr(),
+            null(),
+            null(),
+            FALSE,
+            CREATE_NEW_CONSOLE | CREATE_UNICODE_ENVIRONMENT,
+            block.as_ref().map_or(null(), |b| b.as_ptr().cast()),
+            dir.as_ptr(),
+            &si,
+            &mut pi,
+        )
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: CreateProcessW 가 준 핸들을 한 번씩 닫는다(프로세스는 그대로 돈다)
+    unsafe {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+    Ok(())
 }
 
 /// 세션 동작 — 프론트의 session_action 과 `--action` 이 부른다. 오래 걸리는 일이 있어 스레드에서 돈다.
@@ -338,6 +412,26 @@ mod tests {
         }
         assert_eq!(read_claude_version(&home).as_deref(), Some("2.1.301"));
         fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn console_launch_line_and_env() {
+        let exe = Path::new(r"C:\Users\홍 길동\.local\bin\claude.exe");
+        // 공백 없는 끝 \ 는 그대로, 따옴표로 감싸는 인자의 끝 \ 는 두 배로(닫는 따옴표가 글자로 읽히지 않게)
+        let args: Vec<String> =
+            ["--resume", "abc", "이어서 \"진행\" 해 주세요", "", r"C:\dir\", r"C:\my dir\"].map(String::from).to_vec();
+        assert_eq!(
+            console_command_line(exe, &args),
+            r#""C:\Users\홍 길동\.local\bin\claude.exe" --resume abc "이어서 \"진행\" 해 주세요" "" C:\dir\ "C:\my dir\\""#
+        );
+        assert_eq!(console_command_line(Path::new(r"C:\bin\claude.exe"), &[]), r"C:\bin\claude.exe");
+
+        let base = [("Path", "C:\\bin"), ("claude_config_dir", "old"), ("APPDATA", "x"), ("=C:", "C:\\")]
+            .map(|(k, v)| (OsString::from(k), OsString::from(v)));
+        let slot = OsString::from("D:\\slot");
+        let got = merged_env(base, &[("CLAUDE_CONFIG_DIR", slot.as_os_str())]);
+        let keys: Vec<_> = got.iter().map(|(k, v)| format!("{}={}", k.to_string_lossy(), v.to_string_lossy())).collect();
+        assert_eq!(keys, ["=C:=C:\\", "APPDATA=x", "CLAUDE_CONFIG_DIR=D:\\slot", "Path=C:\\bin"]);
     }
 
     #[test]

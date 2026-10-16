@@ -263,6 +263,9 @@ fn notify_ready(app: AppHandle, state: State<'_, PanelState>, height: f64) {
     let pad = PAD * scale;
     let _ = win.set_size(PhysicalSize::new(w.round() as u32, (h + 2.0 * pad).round() as u32));
     let _ = win.set_position(PhysicalPosition::new(x.round() as i32, (y - pad).round() as i32));
+    // Win32 로 직접 스타일을 바꾸고 보이므로 tao 는 이 창을 숨은 창·기본 스타일로 알고 있다. 이 뒤에 tao 의 창 상태를 바꾸는
+    // 호출(항상 위·최소화·크기 조절 가능 등)을 하면 tao 가 확장 스타일을 덮어쓰고 창을 숨기므로, 패널에서는 그런 호출을 하지 않는다.
+    // (win.hwnd() 는 주 스레드를 거쳐 돌아오므로 위의 크기·위치 변경이 먼저 끝난 뒤에 보인다)
     #[cfg(windows)]
     if let Ok(hwnd) = win.hwnd() {
         crate::win::style_notify_panel(hwnd.0 as isize);

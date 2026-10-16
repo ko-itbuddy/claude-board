@@ -112,21 +112,46 @@ pub fn http_get(url: &str, headers: &[(&str, &str)], timeout: Duration) -> Resul
     Ok((status, body))
 }
 
-/// 보드와 상관없이 살아야 하는 프로세스를 띄운다 — 알림 패널의 `--show`, 업데이트 스크립트.
-/// Windows: 작업 개체에서 떼어(CREATE_BREAKAWAY_FROM_JOB) 콘솔 없이 띄우고, 떼기가 거부되면 그 플래그 없이 다시 띄운다.
+/// `CREATE_BREAKAWAY_FROM_JOB` (Win32 상수와 같은 값 — 시험이 다른 OS 에서도 돌게 직접 둔다)
+const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+/// `CREATE_NO_WINDOW`
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// `ERROR_ACCESS_DENIED` — 작업 개체가 떼기를 허락하지 않으면 CreateProcess 가 이것으로 실패한다
+const ERROR_ACCESS_DENIED: i32 = 5;
+
+/// 분리 실행의 생성 플래그 — 처음은 작업 개체에서 떼어(`breakaway`) 창 없는 새 콘솔로.
+/// `DETACHED_PROCESS` 는 쓰지 않는다: `CREATE_NO_WINDOW` 와 함께 주면 `CREATE_NO_WINDOW` 가 무시되어 콘솔이 아예 없고,
+/// 그러면 업데이트 스크립트(powershell)가 띄우는 콘솔 프로그램마다 새 콘솔 창이 뜬다. 숨은 콘솔은 그 자식들이 함께 쓴다.
+/// 또 보드가 잠깐 세션 콘솔에 붙어 있는 동안 띄워도 그 콘솔을 물려받지 않는다.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn detached_flags(breakaway: bool) -> u32 {
+    if breakaway {
+        CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW
+    } else {
+        CREATE_NO_WINDOW
+    }
+}
+
+/// 떼기를 빼고 다시 띄울 실패인지 — 작업 개체가 떼기를 거부한 경우만.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn retry_without_breakaway(e: &std::io::Error) -> bool {
+    e.raw_os_error() == Some(ERROR_ACCESS_DENIED)
+}
+
+/// 보드와 상관없이 살아야 하는 프로세스를 띄운다 — 알림 패널의 `--show`, 터미널 독, 업데이트 스크립트.
+/// Windows: 작업 개체에서 떼어 창 없는 콘솔로 띄우고(`detached_flags`), 떼기가 거부되면 그 플래그 없이 다시 띄운다.
 pub fn spawn_detached(mut cmd: Command) -> std::io::Result<Child> {
     cmd.stdin(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        use windows_sys::Win32::System::Threading::{CREATE_BREAKAWAY_FROM_JOB, CREATE_NO_WINDOW, DETACHED_PROCESS};
-        cmd.creation_flags(CREATE_BREAKAWAY_FROM_JOB | DETACHED_PROCESS | CREATE_NO_WINDOW);
+        cmd.creation_flags(detached_flags(true));
         match cmd.spawn() {
-            Ok(c) => Ok(c),
-            Err(_) => {
-                cmd.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
+            Err(e) if retry_without_breakaway(&e) => {
+                cmd.creation_flags(detached_flags(false));
                 cmd.spawn()
             }
+            r => r,
         }
     }
     #[cfg(not(windows))]
@@ -153,5 +178,16 @@ mod tests {
         assert_eq!(ms(1.2345), 1235);
         assert_ne!(short_id(), short_id());
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn detached_spawn_flags() {
+        // DETACHED_PROCESS(0x8) 는 CREATE_NO_WINDOW 를 무시하게 하므로 섞지 않는다
+        assert_eq!(detached_flags(true), 0x0100_0000 | 0x0800_0000);
+        assert_eq!(detached_flags(false), 0x0800_0000);
+        assert_eq!(detached_flags(true) & 0x8, 0);
+        assert!(retry_without_breakaway(&std::io::Error::from_raw_os_error(5)));
+        assert!(!retry_without_breakaway(&std::io::Error::from_raw_os_error(2)));
+        assert!(!retry_without_breakaway(&std::io::Error::other("x")));
     }
 }
