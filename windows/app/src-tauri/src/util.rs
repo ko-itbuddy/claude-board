@@ -1,0 +1,157 @@
+//! 여러 모듈이 함께 쓰는 작은 도구 — 시각·파일 수정 시각·파일 끝 읽기·로그·HTTP·분리 실행.
+
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::Path;
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use claude_board_core::{clock, Record};
+use serde_json::Value;
+
+/// 유닉스 초를 프론트가 쓰는 유닉스 밀리초로.
+pub fn ms(secs: f64) -> i64 {
+    (secs * 1000.0).round() as i64
+}
+
+/// 파일 수정 시각(유닉스 초). 없으면 None.
+pub fn mtime(path: &Path) -> Option<f64> {
+    let m = fs::metadata(path).ok()?.modified().ok()?;
+    Some(m.duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0))
+}
+
+/// 캐시 비교용 수정 시각 — 없는 파일끼리도 같다고 본다(Swift `mtime ?? .distantPast`).
+pub fn mtime_key(path: &Path) -> Option<SystemTime> {
+    fs::metadata(path).ok()?.modified().ok()
+}
+
+/// 파일 끝 `n` 바이트. 없거나 못 읽으면 빈 값.
+pub fn read_tail(path: &Path, n: u64) -> Vec<u8> {
+    let Ok(mut f) = File::open(path) else { return Vec::new() };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    if len > n && f.seek(SeekFrom::Start(len - n)).is_err() {
+        return Vec::new();
+    }
+    let mut buf = Vec::new();
+    let _ = f.read_to_end(&mut buf);
+    buf
+}
+
+/// `haystack` 안에 `needle` 이 있는지(바이트).
+pub fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// JSON 값을 객체로 — 아니면 None.
+pub fn obj(v: Option<&Value>) -> Option<&Record> {
+    v.and_then(Value::as_object)
+}
+
+/// 숫자 값(정수·소수 모두)을 f64 로.
+pub fn num(v: Option<&Value>) -> Option<f64> {
+    v.and_then(Value::as_f64)
+}
+
+/// `<지역 시각> <내용>` 한 줄을 로그 파일 끝에 붙인다(update.log·auto-switch.log·board.log). 실패는 무시.
+pub fn append_log(path: &Path, text: &str) {
+    let t = clock::local(clock::now());
+    let line = format!(
+        "{:04}-{:02}-{:02} {} {text}\n",
+        t.year,
+        t.month,
+        t.day,
+        t.hms()
+    );
+    if let Some(dir) = path.parent() {
+        let _ = fs::create_dir_all(dir);
+    }
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = f.write_all(line.as_bytes());
+    }
+}
+
+/// `notifier/board.log` 에 남긴다 — 전역 단축키 등록 실패처럼 화면에 띄울 곳이 없는 일.
+pub fn board_log(text: &str) {
+    append_log(&claude_board_core::paths::notifier_dir().join("board.log"), text);
+}
+
+/// 개발 실행 확인용 — 환경변수 `CLAUDE_BOARD_TRACE` 가 있을 때만 표준 오류에 한 줄 남긴다.
+pub fn trace(text: impl FnOnce() -> String) {
+    if std::env::var_os("CLAUDE_BOARD_TRACE").is_some() {
+        eprintln!("[claude-board {:.3}] {}", clock::now(), text());
+    }
+}
+
+/// 짧은 임의 16진수(표지 제목·로그인 자리 이름) — 시각·pid·순번을 섞는다.
+pub fn short_id() -> String {
+    use sha2::{Digest, Sha256};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let seed = format!("{nanos}-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed));
+    let hex: String = Sha256::digest(seed.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+    hex[..8].to_string()
+}
+
+/// HTTP GET — (상태 코드, 본문). OS 의 TLS(native-tls)를 쓴다. 실패하면 Err.
+pub fn http_get(url: &str, headers: &[(&str, &str)], timeout: Duration) -> Result<(u16, Vec<u8>), String> {
+    use ureq::tls::{TlsConfig, TlsProvider};
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(timeout))
+        .http_status_as_error(false)
+        .tls_config(TlsConfig::builder().provider(TlsProvider::NativeTls).build())
+        .build()
+        .into();
+    let mut req = agent.get(url);
+    for (k, v) in headers {
+        req = req.header(*k, *v);
+    }
+    let mut resp = req.call().map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
+    let body = resp.body_mut().read_to_vec().map_err(|e| e.to_string())?;
+    Ok((status, body))
+}
+
+/// 보드와 상관없이 살아야 하는 프로세스를 띄운다 — 알림 패널의 `--show`, 업데이트 스크립트.
+/// Windows: 작업 개체에서 떼어(CREATE_BREAKAWAY_FROM_JOB) 콘솔 없이 띄우고, 떼기가 거부되면 그 플래그 없이 다시 띄운다.
+pub fn spawn_detached(mut cmd: Command) -> std::io::Result<Child> {
+    cmd.stdin(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::{CREATE_BREAKAWAY_FROM_JOB, CREATE_NO_WINDOW, DETACHED_PROCESS};
+        cmd.creation_flags(CREATE_BREAKAWAY_FROM_JOB | DETACHED_PROCESS | CREATE_NO_WINDOW);
+        match cmd.spawn() {
+            Ok(c) => Ok(c),
+            Err(_) => {
+                cmd.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
+                cmd.spawn()
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        cmd.spawn()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tail_and_contains() {
+        let dir = std::env::temp_dir().join(format!("cb-util-{}", short_id()));
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("a.txt");
+        fs::write(&p, b"0123456789").unwrap();
+        assert_eq!(read_tail(&p, 4), b"6789");
+        assert_eq!(read_tail(&p, 100), b"0123456789");
+        assert!(read_tail(&dir.join("none"), 4).is_empty());
+        assert!(contains(b"{\"type\":\"assistant\"}", b"\"assistant\""));
+        assert!(!contains(b"user", b"\"assistant\""));
+        assert_eq!(ms(1.2345), 1235);
+        assert_ne!(short_id(), short_id());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+}

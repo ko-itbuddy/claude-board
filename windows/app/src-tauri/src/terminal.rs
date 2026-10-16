@@ -1,0 +1,350 @@
+//! 터미널 제어 (SPEC §5.7) — Ghostty AppleScript 대신 콘솔 입력·창 찾기·claude.exe 직접 실행.
+//! 터미널 독 목록(§5.11)과 설치된 Claude Code 버전(§5.10)도 여기 둔다. **Windows 실기 미확인.**
+//!
+//! 이어 열기·계정 추가는 셸(cmd.exe·PowerShell·wt.exe 명령줄)을 거치지 않는다 — 모델 이름 같은 값은
+//! 저장소의 설정 파일에서 올 수 있어 셸 해석을 거치면 명령 주입이 된다.
+
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsStr;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::Arc;
+use std::time::Duration;
+
+use claude_board_core::console::{self, Input};
+use claude_board_core::proc::{self, ProcessTable};
+use claude_board_core::{clock, paths};
+use serde_json::json;
+
+use crate::board::Board;
+use crate::model::{Session, TerminalApp};
+use crate::util::board_log;
+
+pub const CARRY_ON_PROMPT: &str = "보드에서 일시중지했던 세션을 재개합니다. 중단된 지점부터 직전 작업을 이어서 진행해 주세요.";
+
+/// claude.exe 위치 — PATH, 없으면 `~/.local/bin/claude.exe`. `claude.cmd`(npm 설치의 shim)는 cmd.exe 가 인자를
+/// 한 줄로 다시 해석하므로 일부러 고르지 않는다.
+pub fn find_claude() -> Option<PathBuf> {
+    let name = if cfg!(windows) { "claude.exe" } else { "claude" };
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    dirs.push(paths::local_bin());
+    if !cfg!(windows) {
+        // macOS 판 findCommand 와 같은 흔한 설치 위치(보드는 로그인 셸의 PATH 를 모르고 뜬다)
+        let home = paths::home();
+        dirs.extend([home.join(".claude/bin"), home.join(".cargo/bin"), home.join("bin"), "/opt/homebrew/bin".into(), "/usr/local/bin".into()]);
+    }
+    dirs.into_iter().map(|d| d.join(name)).find(|p| p.is_file())
+}
+
+/// 실행 파일을 인자 배열 그대로 새 콘솔 창에서 띄운다(CREATE_NEW_CONSOLE — Windows 11 에서 기본 터미널이
+/// Windows Terminal 이면 그 안에 열린다). macOS 개발 빌드에서는 띄우지 않고 기록만 남긴다.
+pub fn spawn_console(exe: &Path, args: &[String], cwd: &Path, envs: &[(&str, &OsStr)]) -> std::io::Result<()> {
+    let cwd = if cwd.is_dir() { cwd.to_path_buf() } else { paths::home() };
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::CREATE_NEW_CONSOLE;
+        let mut cmd = Command::new(exe);
+        cmd.args(args).current_dir(&cwd).creation_flags(CREATE_NEW_CONSOLE);
+        for (k, v) in envs {
+            cmd.env(k, v);
+        }
+        cmd.spawn().map(|_| ())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = envs;
+        board_log(&format!("(개발 빌드) 새 콘솔 실행 생략: {} {:?} @ {}", exe.display(), args, cwd.display()));
+        Ok(())
+    }
+}
+
+/// 세션 동작 — 프론트의 session_action 과 `--action` 이 부른다. 오래 걸리는 일이 있어 스레드에서 돈다.
+pub fn perform(board: &Arc<Board>, action: &str, s: Session, confirm: bool) {
+    let board = board.clone();
+    let action = action.to_string();
+    std::thread::spawn(move || match action.as_str() {
+        "activate" => activate(&s),
+        "focus" => focus(&s),
+        "resume" => resume(&board, &s, false),
+        "reopen" => resume(&board, &s, true),
+        "pause" => pause(&board, &s),
+        "resume_paused" => resume_paused(&board, &s),
+        "stop" => stop(&board, &s, confirm),
+        other => board_log(&format!("모르는 세션 동작: {other}")),
+    });
+}
+
+fn paused_mark(board: &Board, s: &Session) -> PathBuf {
+    board.sessions_dir().join(format!("{}.paused", s.id))
+}
+
+/// 일시중지: Esc 로 지금 응답을 멈춘다. 그때까지 한 작업은 대화 기록에 남아 있으므로 재개하면 바로 이어 간다.
+fn pause(board: &Arc<Board>, s: &Session) {
+    if s.pid == 0 || !console::send_input(s.pid, &[Input::Escape]) {
+        return;
+    }
+    let mark = json!({"paused_at": clock::now(), "topic": s.topic});
+    let _ = fs::write(paused_mark(board, s), serde_json::to_vec(&mark).unwrap_or_default());
+    board.publish();
+}
+
+/// 재개: 살아 있는 세션은 그 콘솔에 이어서 진행하라는 요청을 넣고, 꺼진 세션은 새 창에서 이어 연다.
+fn resume_paused(board: &Arc<Board>, s: &Session) {
+    let inputs = [Input::Text(CARRY_ON_PROMPT), Input::Pause(Duration::from_millis(200)), Input::Enter];
+    if s.pid > 0 && proc::alive(s.pid, s.pid_ctime) && console::send_input(s.pid, &inputs) {
+        let _ = fs::remove_file(paused_mark(board, s));
+        board.publish();
+        return;
+    }
+    resume(board, s, true);
+}
+
+/// 중단: 확인을 받은 뒤 세션을 끝낸다. 콘솔에 붙을 수 있으면 Esc → /exit, 아니면 프로세스를 끝낸다.
+/// 대화 기록은 남으므로 "세션 다시 열기"로 이어 열 수 있다.
+fn stop(board: &Arc<Board>, s: &Session, confirm: bool) {
+    if confirm {
+        let what = if s.topic.is_empty() { s.id.clone() } else { s.topic.clone() };
+        let text = format!("{what}\n\n진행 중인 응답을 멈추고 세션을 끝냅니다. 대화 기록은 남아서 나중에 다시 열 수 있습니다.");
+        if !board.confirm("세션을 중단할까요?", &text, "중단", "취소") {
+            return;
+        }
+    }
+    let _ = fs::remove_file(paused_mark(board, s));
+    let inputs = [Input::Escape, Input::Pause(Duration::from_millis(400)), Input::Text("/exit"), Input::Pause(Duration::from_millis(200)), Input::Enter];
+    if !(s.can_drive && console::send_input(s.pid, &inputs)) && s.pid > 0 {
+        proc::terminate(s.pid);
+    }
+    board.publish();
+}
+
+/// 이어 열기: `claude <resume_args…> [carryOn 문구]` 를 작업 폴더에서 새 콘솔로 띄운다.
+fn resume(board: &Arc<Board>, s: &Session, carry_on: bool) {
+    let mut args = s.resume_args.clone();
+    if carry_on {
+        // 일시중지했던 세션은 첫 요청으로 이어서 진행하라는 문구를 인자 하나로 넘겨 바로 다음 작업을 시작하게 한다
+        args.push(CARRY_ON_PROMPT.to_string());
+        let _ = fs::remove_file(paused_mark(board, s));
+    }
+    let Some(claude) = find_claude() else {
+        board.flash("claude 명령을 찾지 못했습니다", true);
+        return;
+    };
+    if let Err(e) = spawn_console(&claude, &args, Path::new(&s.cwd), &[]) {
+        board.flash(format!("세션을 다시 열지 못했습니다 — {e}"), true);
+    }
+    board.publish();
+}
+
+/// 그 세션의 터미널 창(콘솔 창 → 소유 창 → 조상의 보이는 최상위 창).
+fn session_window(s: &Session) -> Option<isize> {
+    if s.headless || s.state == "ended" || s.pid == 0 {
+        return None;
+    }
+    console::terminal_window(s.pid)
+}
+
+/// 한 번 클릭: 그 세션의 터미널 창만 앞으로. 모르면 Windows Terminal(없으면 아무것도 안 함).
+fn activate(s: &Session) {
+    match session_window(s) {
+        Some(h) => crate::win::bring_to_front(h),
+        None => activate_windows_terminal(),
+    }
+}
+
+fn activate_windows_terminal() {
+    let pids = ProcessTable::capture().pids_named("WindowsTerminal.exe");
+    if let Some(h) = crate::win::process_window(&pids) {
+        crate::win::bring_to_front(h);
+    }
+}
+
+/// 두 번 클릭: 그 세션의 창으로. Windows Terminal 이면 콘솔 제목을 잠깐 표지로 바꿔 UI Automation 으로 그 탭을 고른다.
+fn focus(s: &Session) {
+    let Some(h) = session_window(s) else { return activate_windows_terminal() };
+    let host = ProcessTable::capture().name(crate::win::window_pid(h)).map(str::to_ascii_lowercase);
+    if host.as_deref() == Some("windowsterminal.exe") {
+        let old = console::title(s.pid);
+        let marker = format!("CBFOCUS-{}", crate::util::short_id());
+        if console::set_title(s.pid, &marker) {
+            for _ in 0..10 {
+                std::thread::sleep(Duration::from_millis(50));
+                if crate::win::select_wt_tab(h, &marker) {
+                    break;
+                }
+            }
+            console::set_title(s.pid, &old.unwrap_or_else(|| s.project()));
+        }
+    }
+    crate::win::bring_to_front(h);
+}
+
+// ── 터미널 독 (§5.11) ────────────────────────────────────────
+
+/// (id, 이름, 실행 중으로 볼 프로세스 이름들)
+const DOCK: [(&str, &str, &[&str]); 5] = [
+    ("wt", "Windows Terminal", &["WindowsTerminal.exe"]),
+    ("pwsh", "PowerShell 7", &["pwsh.exe"]),
+    ("powershell", "Windows PowerShell", &["powershell.exe"]),
+    ("cmd", "명령 프롬프트", &["cmd.exe"]),
+    ("git-bash", "Git Bash", &["git-bash.exe", "mintty.exe"]),
+];
+
+#[derive(Default)]
+pub struct Terminals {
+    installed: HashMap<String, PathBuf>,
+    checked_at: f64,
+    running: HashSet<String>,
+}
+
+fn env_dir(key: &str) -> Option<PathBuf> {
+    std::env::var_os(key).filter(|v| !v.is_empty()).map(PathBuf::from)
+}
+
+/// 설치 위치 — PATH 와 알려진 위치. Windows 가 아니면 늘 없음.
+fn locate(id: &str) -> Option<PathBuf> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let exe = match id {
+        "wt" => "wt.exe",
+        "pwsh" => "pwsh.exe",
+        "powershell" => "powershell.exe",
+        "cmd" => "cmd.exe",
+        "git-bash" => "git-bash.exe",
+        _ => return None,
+    };
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    if let Some(d) = env_dir("LOCALAPPDATA") {
+        dirs.push(d.join("Microsoft").join("WindowsApps"));
+    }
+    if let Some(d) = env_dir("ProgramFiles") {
+        dirs.push(d.join("PowerShell").join("7"));
+        dirs.push(d.join("Git"));
+    }
+    if let Some(d) = env_dir("SystemRoot") {
+        dirs.push(d.join("System32"));
+        dirs.push(d.join("System32").join("WindowsPowerShell").join("v1.0"));
+    }
+    dirs.into_iter().map(|d| d.join(exe)).find(|p| p.is_file())
+}
+
+impl Terminals {
+    /// 설치 여부는 1분마다, 실행 여부는 백그라운드 확인(3초)마다.
+    pub fn refresh(&mut self, table: &ProcessTable, now: f64) {
+        if now - self.checked_at >= 60.0 {
+            self.checked_at = now;
+            self.installed = DOCK.iter().filter_map(|(id, _, _)| locate(id).map(|p| (id.to_string(), p))).collect();
+        }
+        self.running = DOCK
+            .iter()
+            .filter(|(_, _, names)| names.iter().any(|n| !table.pids_named(n).is_empty()))
+            .map(|(id, _, _)| id.to_string())
+            .collect();
+    }
+
+    pub fn view(&self) -> Vec<TerminalApp> {
+        DOCK.iter()
+            .map(|(id, name, _)| TerminalApp {
+                id: id.to_string(),
+                name: name.to_string(),
+                installed: self.installed.contains_key(*id),
+                running: self.running.contains(*id),
+            })
+            .collect()
+    }
+
+    fn path(&self, id: &str) -> Option<PathBuf> {
+        self.installed.get(id).cloned().or_else(|| locate(id))
+    }
+}
+
+/// 독 단추: 실행 중이면 그 창으로, 아니면 새로 연다(셸 명령줄 없이 실행 파일만).
+pub fn open_terminal(board: &Arc<Board>, id: String) {
+    let exe = board.terminals.lock().unwrap().path(&id);
+    let Some(exe) = exe else { return };
+    std::thread::spawn(move || {
+        let names = DOCK.iter().find(|(i, _, _)| *i == id).map(|(_, _, n)| *n).unwrap_or(&[]);
+        let table = ProcessTable::capture();
+        let pids: Vec<u32> = names.iter().flat_map(|n| table.pids_named(n)).collect();
+        // 콘솔 셸은 자기 창이 없을 수 있어(ConPTY) 콘솔 창 → 소유 창 순으로 찾는다
+        let window = crate::win::process_window(&pids).or_else(|| pids.iter().find_map(|&p| console::terminal_window(p)));
+        if let Some(h) = window {
+            crate::win::bring_to_front(h);
+            return;
+        }
+        let r = match id.as_str() {
+            "wt" | "git-bash" => {
+                let mut cmd = Command::new(&exe);
+                cmd.current_dir(paths::home());
+                crate::util::spawn_detached(cmd).map(|_| ())
+            }
+            _ => spawn_console(&exe, &[], &paths::home(), &[]),
+        };
+        if let Err(e) = r {
+            board_log(&format!("{} 실행 실패: {e}", exe.display()));
+        }
+    });
+}
+
+// ── 설치된 Claude Code 버전 (§5.10) ─────────────────────────
+
+/// 숫자 비교 — 점으로 나눈 조각을 숫자로(숫자가 아니면 글자로) 비교한다.
+pub fn cmp_version(a: &str, b: &str) -> std::cmp::Ordering {
+    let pa: Vec<&str> = a.split('.').collect();
+    let pb: Vec<&str> = b.split('.').collect();
+    for i in 0..pa.len().max(pb.len()) {
+        let (x, y) = (pa.get(i).copied().unwrap_or("0"), pb.get(i).copied().unwrap_or("0"));
+        let o = match (x.parse::<u64>(), y.parse::<u64>()) {
+            (Ok(x), Ok(y)) => x.cmp(&y),
+            _ => x.cmp(y),
+        };
+        if o != std::cmp::Ordering::Equal {
+            return o;
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+/// `~/.local/share/claude/versions` 안 가장 높은 버전 이름(`.exe` 는 뗀다).
+pub fn read_claude_version(home: &Path) -> Option<String> {
+    let dir = home.join(".local").join("share").join("claude").join("versions");
+    fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .map(|n| n.strip_suffix(".exe").map(str::to_string).unwrap_or(n))
+        .filter(|n| n.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .max_by(|a, b| cmp_version(a, b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cmp::Ordering;
+
+    #[test]
+    fn versions() {
+        assert_eq!(cmp_version("2.1.301", "2.1.30"), Ordering::Greater);
+        assert_eq!(cmp_version("2.12", "2.12.0"), Ordering::Equal);
+        assert_eq!(cmp_version("2.9", "2.12"), Ordering::Less);
+        let home = std::env::temp_dir().join(format!("cb-ver-{}", crate::util::short_id()));
+        let dir = home.join(".local/share/claude/versions");
+        fs::create_dir_all(&dir).unwrap();
+        assert_eq!(read_claude_version(&home), None);
+        for n in ["2.1.30", "2.1.301.exe", "2.1.99", "latest", ".tmp"] {
+            fs::write(dir.join(n), b"").unwrap();
+        }
+        assert_eq!(read_claude_version(&home).as_deref(), Some("2.1.301"));
+        fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn dock_list_shape() {
+        let t = Terminals::default();
+        let v = t.view();
+        assert_eq!(v.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), ["wt", "pwsh", "powershell", "cmd", "git-bash"]);
+        assert!(v.iter().all(|x| !x.installed && !x.running));
+    }
+}

@@ -117,9 +117,11 @@
 
 <style>
   /* 창은 투명 — 카드가 바탕(보드와 같은 남색 그라데이션 + 왼쪽 위 강조색 빛 + 강조색 35% 테두리)을 직접 그린다 */
+  /* 위아래 14px 여백 — 백엔드가 창을 카드보다 그만큼 넓게 잡아 등장·퇴장 움직임이 창 경계에 잘리지 않는다(src-tauri notify.rs PAD) */
   .card {
     position: relative;
     width: 440px;
+    margin: 14px 0;
     border-radius: 14px;
     overflow: hidden;
     cursor: pointer;

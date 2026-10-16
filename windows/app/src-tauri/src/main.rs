@@ -1,4 +1,4 @@
-// Prevents additional console window on Windows in release, DO NOT REMOVE!!
+// 릴리스 빌드에서 콘솔 창이 뜨지 않게 한다(GUI 앱)
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {

@@ -1,10 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main"],
+  "description": "보드 창과 알림 패널 — 명령(invoke)·이벤트 듣기·제목 막대 끌기",
+  "windows": ["main", "notify"],
   "permissions": [
     "core:default",
-    "opener:default"
+    "core:event:allow-listen",
+    "core:window:allow-start-dragging"
   ]
 }

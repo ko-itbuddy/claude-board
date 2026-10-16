@@ -1,14 +1,31 @@
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
+//! Claude Board for Windows — Tauri 백엔드.
+//!
+//! 인자 없음 = 보드(트레이·단일 실행·전역 단축키). `--notify …` = 알림 패널 하나만 띄우고 끝나는 별도 프로세스.
+//! 경로는 모두 `claude_board_core::paths` 를 거친다 — `CLAUDE_BOARD_HOME`·`CLAUDE_BOARD_NOTIFIER_DIR` 로 가짜 홈을 쓸 수 있다.
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
+mod accounts;
+mod autoswitch;
+mod board;
+mod model;
+mod notify;
+mod readers;
+mod settings;
+mod store;
+mod terminal;
+mod tray;
+mod updater;
+mod usage;
+mod util;
+mod win;
+mod window;
+
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+    let argv: Vec<String> = std::env::args().collect();
+    // 앱 자원(프론트 빌드)은 한 번만 넣는다 — 두 모드가 같은 context 를 쓴다
+    let context = tauri::generate_context!();
+    if argv.iter().any(|a| a == "--notify") {
+        notify::run(&argv, context);
+    } else {
+        board::run(argv, context);
+    }
 }

@@ -1,0 +1,875 @@
+//! 보드 — 상태를 모아 1초마다 프론트에 보내고(`board://snapshot`), 명령(SPEC §6.2)을 받는다.
+//!
+//! 1초 틱: 세션 다시 읽기 → 상태 묶음 보내기 → 트레이 갱신. 3초마다: 계정 파일·로그인 확인, 자동 전환,
+//! 백그라운드 프로세스 확인(셸 수·콘솔에 붙을 수 있는지·터미널 실행 여부·Windows Terminal 새 실행).
+//! 30초마다 사용 한도, 1시간마다 업데이트 확인. 오래 걸리는 일은 모두 따로 스레드에서 한다.
+
+use std::collections::HashSet;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use claude_board_core::proc::{self, ProcessTable};
+use claude_board_core::{clock, console, paths};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindowBuilder};
+
+use crate::accounts::{self, AccountPaths, Accounts};
+use crate::autoswitch::{self, AutoSwitch};
+use crate::model::{Counts, Group, Session, Snapshot};
+use crate::settings::{self, set_in, toggle, Settings};
+use crate::store::{Probe, Store};
+use crate::terminal::{self, Terminals};
+use crate::updater::{self, Updater};
+use crate::usage::{self, Next, Usage};
+use crate::util::{board_log, ms};
+use crate::{tray, window};
+
+pub const SNAPSHOT_EVENT: &str = "board://snapshot";
+
+#[derive(Default)]
+pub struct View {
+    pub groups: Vec<Group>,
+    pub all_muted: bool,
+}
+
+pub struct Board {
+    pub app: AppHandle,
+    settings_path: PathBuf,
+    pub settings: Mutex<Settings>,
+    store: Mutex<Store>,
+    view: Mutex<View>,
+    probe: Mutex<Probe>,
+    probe_busy: AtomicBool,
+    pub usage: Mutex<Usage>,
+    pub accounts: Mutex<Accounts>,
+    /// 계정 파일을 고치는 일(전환·추가 확인·지우기)을 한 번에 하나씩 — macOS 의 직렬 큐
+    pub account_io: Mutex<()>,
+    pub account_paths: AccountPaths,
+    pub updater: Mutex<Updater>,
+    pub auto: Mutex<AutoSwitch>,
+    pub terminals: Mutex<Terminals>,
+    claude_version: Mutex<(f64, Option<String>)>,
+    /// 지난 확인 때의 Windows Terminal pid — 새로 생기면 보드를 보인다
+    wt_pids: Mutex<Option<HashSet<u32>>>,
+    /// 보드가 처음 세션을 읽기 전에 받은 `--action`
+    pending_action: Mutex<Option<(String, String)>>,
+    tray: Mutex<Option<tray::Tray>>,
+    /// 트레이에 마지막으로 넣은 상태 — 바뀔 때만 다시 넣는다
+    tray_shown: Mutex<Option<tray::TrayState>>,
+    /// 창 위치·크기가 바뀐 시각 — 움직임이 멎으면 저장한다
+    frame_dirty: Mutex<Option<f64>>,
+}
+
+impl Board {
+    fn new(app: AppHandle) -> Arc<Self> {
+        let settings_path = settings::settings_path(app.path().app_config_dir().ok());
+        let settings = Settings::load(&settings_path);
+        let home = paths::home().to_string_lossy().into_owned();
+        let store = Store::new(paths::sessions_dir(), &paths::notifier_dir(), paths::claude_dir(), home);
+        let account_paths = AccountPaths::system();
+        let mut acc = Accounts::default();
+        acc.load_saved(&account_paths);
+        acc.load_current(&account_paths, true);
+        Arc::new(Board {
+            app,
+            settings_path,
+            settings: Mutex::new(settings),
+            store: Mutex::new(store),
+            view: Mutex::new(View::default()),
+            probe: Mutex::new(Probe::default()),
+            probe_busy: AtomicBool::new(false),
+            usage: Mutex::new(Usage::new(std::env::temp_dir().join(".claude-usage-cache.json"))),
+            accounts: Mutex::new(acc),
+            account_io: Mutex::new(()),
+            account_paths,
+            updater: Mutex::new(Updater::new()),
+            auto: Mutex::new(AutoSwitch::default()),
+            terminals: Mutex::new(Terminals::default()),
+            claude_version: Mutex::new((f64::NEG_INFINITY, None)),
+            wt_pids: Mutex::new(None),
+            pending_action: Mutex::new(None),
+            tray: Mutex::new(None),
+            tray_shown: Mutex::new(None),
+            frame_dirty: Mutex::new(None),
+        })
+    }
+
+    pub fn sessions_dir(&self) -> PathBuf {
+        self.store.lock().unwrap().sessions_dir().to_path_buf()
+    }
+
+    /// 설정을 고치고 저장한다.
+    pub fn update_settings<R>(&self, f: impl FnOnce(&mut Settings) -> R) -> R {
+        let mut s = self.settings.lock().unwrap();
+        let r = f(&mut s);
+        if let Err(e) = s.save(&self.settings_path) {
+            board_log(&format!("보드 설정을 저장하지 못했습니다: {e}"));
+        }
+        r
+    }
+
+    /// 지금 보이는 모든 세션.
+    pub fn sessions(&self) -> Vec<Session> {
+        self.view.lock().unwrap().groups.iter().flat_map(|g| g.sessions.iter().cloned()).collect()
+    }
+
+    pub fn session(&self, id: &str) -> Option<Session> {
+        self.view.lock().unwrap().groups.iter().flat_map(|g| &g.sessions).find(|s| s.id == id).cloned()
+    }
+
+    /// 사용 한도 카드 아래 안내 문구(7초).
+    pub fn flash(&self, text: impl Into<String>, error: bool) {
+        self.accounts.lock().unwrap().flash(text, error);
+    }
+
+    /// 세션 파일을 다시 읽는다.
+    fn reload(&self) {
+        let mut store = self.store.lock().unwrap();
+        let probe = self.probe.lock().unwrap().clone();
+        let mute_all = paths::mute_all_file().exists();
+        let mut st = self.settings.lock().unwrap();
+        let r = store.reload(&mut st, &probe, &proc::record_alive, mute_all, clock::now());
+        if r.settings_changed {
+            if let Err(e) = st.save(&self.settings_path) {
+                board_log(&format!("보드 설정을 저장하지 못했습니다: {e}"));
+            }
+        }
+        drop(st);
+        drop(store);
+        *self.view.lock().unwrap() = View { groups: r.groups, all_muted: r.all_muted };
+    }
+
+    fn claude_version(&self, now: f64) -> Option<String> {
+        let mut c = self.claude_version.lock().unwrap();
+        if now - c.0 > 60.0 {
+            *c = (now, terminal::read_claude_version(&paths::home()));
+        }
+        c.1.clone()
+    }
+
+    pub fn snapshot(&self) -> Snapshot {
+        let now = clock::now();
+        let (groups, all_muted) = {
+            let v = self.view.lock().unwrap();
+            (v.groups.clone(), v.all_muted)
+        };
+        let (settings, auto_switch) = {
+            let s = self.settings.lock().unwrap();
+            (s.view(settings::notify_position()), s.auto_switch)
+        };
+        Snapshot {
+            now: ms(now),
+            counts: Counts::of(&groups),
+            groups,
+            all_muted,
+            usage: self.usage.lock().unwrap().view(),
+            accounts: self.accounts.lock().unwrap().view(auto_switch, now),
+            updater: self.updater.lock().unwrap().view(now),
+            settings,
+            claude_version: self.claude_version(now),
+            terminals: self.terminals.lock().unwrap().view(),
+        }
+    }
+
+    /// 다시 읽고 프론트에 보낸다 — 1초마다, 그리고 상태를 바꾼 명령 뒤에 바로.
+    pub fn publish(&self) {
+        self.reload();
+        let snap = self.snapshot();
+        let _ = self.app.emit(SNAPSHOT_EVENT, &snap);
+        crate::util::trace(|| {
+            let c = &snap.counts;
+            format!("{SNAPSHOT_EVENT} 그룹 {} · 승인 대기 {} 작업 중 {} 대기 {} 일시중지 {} 종료 {}", snap.groups.len(), c.waiting, c.working, c.idle, c.paused, c.ended)
+        });
+        self.refresh_tray_with(&snap.counts, false);
+    }
+
+    pub fn refresh_tray(&self, force: bool) {
+        let counts = Counts::of(&self.view.lock().unwrap().groups);
+        self.refresh_tray_with(&counts, force);
+    }
+
+    /// 트레이는 메인 스레드에서만 고친다 — 다른 스레드에서 고치면 메인 스레드 응답을 기다리는 동안
+    /// 메인 스레드(메뉴 처리)가 같은 잠금을 기다려 서로 멈출 수 있다.
+    fn refresh_tray_with(&self, counts: &Counts, force: bool) {
+        let (pinned, mascot) = {
+            let s = self.settings.lock().unwrap();
+            (s.pinned, s.mascot.clone())
+        };
+        let state = tray::TrayState { counts: counts.clone(), pinned, mascot, position: settings::notify_position() };
+        {
+            let mut shown = self.tray_shown.lock().unwrap();
+            if !force && shown.as_ref() == Some(&state) {
+                return;
+            }
+            *shown = Some(state.clone());
+        }
+        let app = self.app.clone();
+        let _ = self.app.run_on_main_thread(move || {
+            if let Some(board) = app.try_state::<Arc<Board>>() {
+                if let Some(t) = board.tray.lock().unwrap().as_ref() {
+                    t.update(&state);
+                }
+            }
+        });
+    }
+
+    pub fn set_pinned(&self, on: bool) {
+        self.update_settings(|s| s.pinned = on);
+        if let Some(w) = window::main_window(&self.app) {
+            let _ = w.set_always_on_top(on);
+        }
+        self.publish();
+    }
+
+    /// 계정을 바꾼 뒤(손으로·자동) — 앞 계정 값이 든 사용량 캐시를 버리고 새로 받는다. 자동 전환은 이때부터 settle 을 센다.
+    pub fn on_account_switched(self: &Arc<Self>) {
+        self.usage.lock().unwrap().reset(clock::now());
+        self.update_settings(|s| s.auto_switch_last = clock::now());
+        self.auto.lock().unwrap().switched();
+        self.refresh_usage();
+    }
+
+    pub fn refresh_usage(self: &Arc<Self>) {
+        let Next::Fetch(generation) = self.usage.lock().unwrap().refresh(clock::now()) else { return };
+        let board = self.clone();
+        std::thread::spawn(move || {
+            let (data, expired) = usage::fetch(&paths::credentials_file());
+            let current = board.usage.lock().unwrap().finish(generation, data, expired);
+            // 받는 사이 계정을 바꿨으면 앞 계정 값이므로 버리고 다시 받는다
+            if !current {
+                board.refresh_usage();
+            }
+            board.publish();
+        });
+    }
+
+    /// 네이티브 확인 대화상자(보드 창 위). UI 스레드에서 부르지 않는다.
+    pub fn confirm(&self, title: &str, text: &str, ok: &str, cancel: &str) -> bool {
+        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+        let mut d = self
+            .app
+            .dialog()
+            .message(text)
+            .title(title)
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(ok.to_string(), cancel.to_string()));
+        if let Some(w) = window::main_window(&self.app).filter(|w| w.is_visible().unwrap_or(false)) {
+            d = d.parent(&w);
+        }
+        d.blocking_show()
+    }
+
+    /// 세션 동작(`session_action`·`--action`).
+    pub fn perform_action(self: &Arc<Self>, action: &str, id: &str, confirm: bool) {
+        match self.session(id) {
+            Some(s) => terminal::perform(self, action, s, confirm),
+            None => board_log(&format!("세션 동작 {action}: 세션을 찾지 못했습니다 ({id})")),
+        }
+    }
+
+    /// 프로세스 확인 — 3초마다 백그라운드에서. 셸 수·콘솔에 붙을 수 있는 pid·터미널 실행 여부·Windows Terminal 새 실행.
+    fn probe_in_background(self: &Arc<Self>) {
+        if self.probe_busy.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let pids: Vec<(u32, bool)> = self
+            .sessions()
+            .iter()
+            .filter(|s| s.pid > 0 && s.state != "ended")
+            .map(|s| (s.pid, !s.headless))
+            .collect();
+        let board = self.clone();
+        std::thread::spawn(move || {
+            let table = ProcessTable::capture();
+            let mut probe = Probe::default();
+            for &(pid, terminal) in &pids {
+                let n = proc::shell_count(&table, pid);
+                if n > 0 {
+                    probe.shells.insert(pid, n);
+                }
+                if terminal && console::can_attach(pid) {
+                    probe.drivable.insert(pid);
+                }
+            }
+            *board.probe.lock().unwrap() = probe;
+            board.terminals.lock().unwrap().refresh(&table, clock::now());
+            board.watch_windows_terminal(&table);
+            board.probe_busy.store(false, Ordering::SeqCst);
+        });
+    }
+
+    /// Windows Terminal 이 새로 실행되면 보드를 보이게 한다(포커스는 그대로) — macOS 의 Ghostty 연동 대응.
+    fn watch_windows_terminal(&self, table: &ProcessTable) {
+        let now: HashSet<u32> = table.pids_named("WindowsTerminal.exe").into_iter().collect();
+        let mut last = self.wt_pids.lock().unwrap();
+        let started = last.as_ref().is_some_and(|prev| now.iter().any(|p| !prev.contains(p)));
+        *last = Some(now);
+        drop(last);
+        if started {
+            window::show(&self.app, false);
+        }
+    }
+
+    /// 창이 움직임을 멈추면 위치를 저장한다. 미니가 아닌 크기면 ⤢ 로 돌아갈 자리로도 기억한다.
+    fn save_frame_if_settled(&self, now: f64) {
+        let mut dirty = self.frame_dirty.lock().unwrap();
+        if !dirty.is_some_and(|t| now - t > 0.7) {
+            return;
+        }
+        *dirty = None;
+        drop(dirty);
+        let Some(win) = window::main_window(&self.app) else { return };
+        if win.is_minimized().unwrap_or(false) || !win.is_visible().unwrap_or(false) {
+            return;
+        }
+        let (Some(f), Ok(scale)) = (window::frame(&win), win.scale_factor()) else { return };
+        if f.w < 1.0 {
+            return;
+        }
+        self.update_settings(|s| {
+            s.window_frame = Some(f);
+            if !s.board_mini && f.w >= window::BOARD_MIN_WIDTH * scale {
+                s.board_restore_frame = Some(f);
+            }
+        });
+    }
+
+    fn mark_frame_dirty(&self) {
+        *self.frame_dirty.lock().unwrap() = Some(clock::now());
+    }
+
+    fn snap_right(&self) {
+        let Some(win) = window::main_window(&self.app) else { return };
+        let Some(m) = window::monitor_of(&win) else { return };
+        let f = window::snap_frame(&m);
+        window::set_frame(&win, f);
+        self.update_settings(|s| s.board_restore_frame = Some(f));
+    }
+
+    fn enter_mini(&self, rows: usize) {
+        let Some(win) = window::main_window(&self.app) else { return };
+        let (Some(cur), Ok(scale)) = (window::frame(&win), win.scale_factor()) else { return };
+        if cur.w >= window::BOARD_MIN_WIDTH * scale {
+            self.update_settings(|s| s.board_restore_frame = Some(cur));
+        }
+        window::set_frame(&win, window::mini_frame(cur, rows, scale));
+    }
+
+    /// 미니에서 원래 크기로 — 기억한 위치가 없거나 지금 연결된 화면 밖이면 처음 크기로 오른쪽에 붙인다.
+    fn leave_mini(&self) {
+        let Some(win) = window::main_window(&self.app) else { return };
+        let saved = self.settings.lock().unwrap().board_restore_frame;
+        match saved.filter(|f| window::restorable(*f, &window::monitors(&self.app))) {
+            Some(f) => window::set_frame(&win, f),
+            None => self.snap_right(),
+        }
+    }
+}
+
+// ── 명령 (SPEC §6.2 — 인자 이름은 프론트 backend.ts 와 같게) ──
+
+type B<'a> = State<'a, Arc<Board>>;
+
+#[tauri::command(async)]
+fn get_snapshot(board: B<'_>) -> Snapshot {
+    crate::util::trace(|| "get_snapshot".into());
+    board.reload();
+    board.snapshot()
+}
+
+#[tauri::command(async)]
+fn toggle_collapsed(board: B<'_>, cwd: String) {
+    board.update_settings(|s| toggle(&mut s.collapsed, &cwd));
+    board.publish();
+}
+
+#[tauri::command(async)]
+fn set_all_collapsed(board: B<'_>, collapse: bool) {
+    let ids: Vec<String> = board.view.lock().unwrap().groups.iter().map(|g| g.id.clone()).collect();
+    board.update_settings(|s| s.collapsed = if collapse { ids } else { Vec::new() });
+    board.publish();
+}
+
+#[tauri::command(async)]
+fn toggle_ended_open(board: B<'_>, cwd: String) {
+    board.update_settings(|s| toggle(&mut s.ended_open, &cwd));
+    board.publish();
+}
+
+#[tauri::command(async)]
+fn toggle_pin_group(board: B<'_>, cwd: String) {
+    board.update_settings(|s| toggle(&mut s.pinned_groups, &cwd));
+    board.publish();
+}
+
+fn remove_ended_files(board: &Board, cwd: &str) {
+    let view = board.view.lock().unwrap();
+    for s in view.groups.iter().filter(|g| g.id == cwd).flat_map(|g| &g.sessions).filter(|s| s.state == "ended") {
+        let _ = fs::remove_file(&s.file);
+    }
+}
+
+/// 목록에서 지우기 — 종료된 세션 기록은 함께 지우고, 그 뒤에 새 활동이 생기면 다시 나타난다.
+#[tauri::command(async)]
+fn hide_group(board: B<'_>, cwd: String) {
+    remove_ended_files(&board, &cwd);
+    board.update_settings(|s| {
+        s.hidden_groups.insert(cwd.clone(), clock::now());
+        set_in(&mut s.pinned_groups, &cwd, false);
+    });
+    board.publish();
+}
+
+/// 그 작업 경로의 종료된 세션 기록을 한 번에 지운다 — 대화 기록(jsonl)은 남는다.
+#[tauri::command(async)]
+fn remove_ended(board: B<'_>, cwd: String) {
+    remove_ended_files(&board, &cwd);
+    board.publish();
+}
+
+#[tauri::command(async)]
+fn remove_session(board: B<'_>, id: String) {
+    if let Some(s) = board.session(&id) {
+        let _ = fs::remove_file(&s.file);
+    }
+    board.publish();
+}
+
+#[tauri::command(async)]
+fn toggle_kind_collapsed(board: B<'_>, key: String) {
+    board.update_settings(|s| toggle(&mut s.kind_collapsed, &key));
+    board.publish();
+}
+
+#[tauri::command(async)]
+fn toggle_sub_collapsed(board: B<'_>, id: String) {
+    board.update_settings(|s| toggle(&mut s.sub_collapsed, &id));
+    board.publish();
+}
+
+#[tauri::command(async)]
+fn set_usage_compact(board: B<'_>, on: bool) {
+    board.update_settings(|s| s.usage_compact = on);
+    board.publish();
+}
+
+/// 세션 알림 끄기 표지 — 세션 기록이 지워질 때 hook 의 prune 이 함께 치운다.
+#[tauri::command(async)]
+fn set_mute(board: B<'_>, id: String, muted: bool) {
+    let mark = board.sessions_dir().join(format!("{id}.mute"));
+    if muted {
+        let _ = fs::write(&mark, b"");
+    } else {
+        let _ = fs::remove_file(&mark);
+    }
+    board.publish();
+}
+
+/// 세션별 표지는 건드리지 않으므로 다시 켜면 세션마다 정해 둔 상태가 그대로 돌아온다.
+#[tauri::command(async)]
+fn set_all_muted(board: B<'_>, on: bool) {
+    let f = paths::mute_all_file();
+    if on {
+        if let Some(d) = f.parent() {
+            let _ = fs::create_dir_all(d);
+        }
+        let _ = fs::write(&f, b"");
+    } else {
+        let _ = fs::remove_file(&f);
+    }
+    board.publish();
+}
+
+#[tauri::command(async)]
+fn reveal(board: B<'_>, cwd: String) {
+    board.update_settings(|s| s.reveal(&cwd));
+    board.publish();
+}
+
+#[tauri::command(async)]
+fn session_action(board: B<'_>, action: String, id: String) {
+    board.perform_action(&action, &id, true);
+}
+
+/// 작업 중·승인 대기 세션이 있으면 이전 계정으로 일하는 중이라고 알리고 한 번 더 묻는다.
+#[tauri::command(async)]
+fn switch_account(board: B<'_>, id: String) {
+    let board = board.inner().clone();
+    let (target, current) = {
+        let acc = board.accounts.lock().unwrap();
+        (acc.saved.iter().find(|a| a.id == id).cloned(), acc.current.as_ref().map(|a| a.email()))
+    };
+    let Some(target) = target else { return };
+    let busy: Vec<Session> = board.sessions().into_iter().filter(|s| s.state == "working" || s.state == "waiting").collect();
+    if !busy.is_empty() {
+        let names: Vec<String> = busy
+            .iter()
+            .take(5)
+            .map(|s| format!("• {} — {}", s.project(), if s.topic.is_empty() { state_name(&s.state) } else { &s.topic }))
+            .collect();
+        let more = if busy.len() > 5 { format!("\n… 외 {}개", busy.len() - 5) } else { String::new() };
+        let text = format!(
+            "{} 계정으로 작업 중이거나 승인을 기다리는 세션이 {}개 있습니다.\n{}{}\n\n전환하면 모든 세션이 다음 요청부터 {} 계정으로 이어서 동작합니다(30초 안에 반영). 지금 받고 있는 응답은 이전 계정으로 마무리됩니다.\n\n계정을 전환할까요?",
+            current.as_deref().unwrap_or("지금"),
+            busy.len(),
+            names.join("\n"),
+            more,
+            target.email()
+        );
+        if !board.confirm("이전 계정으로 작업 중인 세션이 있습니다", &text, "전환", "취소") {
+            return;
+        }
+    }
+    accounts::switch_to(&board, target, None, None);
+}
+
+fn state_name(state: &str) -> &str {
+    match state {
+        "working" => "작업 중",
+        "waiting" => "승인 대기",
+        "idle" => "대기",
+        "paused" => "일시중지",
+        "ended" => "종료",
+        other => other,
+    }
+}
+
+#[tauri::command(async)]
+fn add_account(board: B<'_>, email: Option<String>) {
+    accounts::begin_add(&board, email);
+}
+
+#[tauri::command(async)]
+fn cancel_add_account(board: B<'_>) {
+    accounts::cancel_add(&board);
+}
+
+#[tauri::command(async)]
+fn remove_account(board: B<'_>, id: String) {
+    accounts::remove_account(&board, id);
+}
+
+#[tauri::command(async)]
+fn set_auto_switch(board: B<'_>, on: bool) {
+    board.update_settings(|s| s.auto_switch = on);
+    board.publish();
+}
+
+#[tauri::command(async)]
+fn check_update(board: B<'_>, manual: bool) {
+    updater::check(&board, manual);
+}
+
+#[tauri::command(async)]
+fn run_update(board: B<'_>) {
+    updater::run(&board);
+}
+
+#[tauri::command(async)]
+fn open_changelog(app: AppHandle) {
+    use tauri_plugin_opener::OpenerExt;
+    if let Err(e) = app.opener().open_url(updater::CHANGELOG_URL, None::<&str>) {
+        board_log(&format!("변경 내용을 열지 못했습니다: {e}"));
+    }
+}
+
+#[tauri::command(async)]
+fn set_pinned(board: B<'_>, on: bool) {
+    board.set_pinned(on);
+}
+
+#[tauri::command(async)]
+fn set_mascot(board: B<'_>, kind: String) {
+    if settings::MASCOTS.contains(&kind.as_str()) {
+        board.update_settings(|s| s.mascot = kind);
+    }
+    board.publish();
+}
+
+#[tauri::command(async)]
+fn set_opacity(board: B<'_>, v: f64) {
+    board.update_settings(|s| s.opacity = settings::clamp_opacity(v));
+    board.publish();
+}
+
+#[tauri::command(async)]
+fn set_notify_position(board: B<'_>, pos: String) {
+    if let Err(e) = settings::set_notify_position(&pos) {
+        board_log(&format!("알림 위치를 저장하지 못했습니다: {e}"));
+    }
+    board.publish();
+}
+
+/// 미니로 둔 채 끄면 다음에도 그 크기로 연다(§5.9 boardMini) — 프론트가 단계가 바뀔 때 알린다.
+#[tauri::command(async)]
+fn set_board_mini(board: B<'_>, on: bool) {
+    board.update_settings(|s| s.board_mini = on);
+    board.publish();
+}
+
+#[tauri::command(async)]
+fn open_terminal(board: B<'_>, id: String) {
+    terminal::open_terminal(&board, id);
+}
+
+#[tauri::command(async)]
+fn enter_mini(board: B<'_>, rows: usize) {
+    board.enter_mini(rows);
+}
+
+#[tauri::command(async)]
+fn leave_mini(board: B<'_>) {
+    board.leave_mini();
+}
+
+#[tauri::command(async)]
+fn snap_right(board: B<'_>) {
+    board.snap_right();
+}
+
+#[tauri::command(async)]
+fn hide_board(app: AppHandle) {
+    if let Some(w) = window::main_window(&app) {
+        let _ = w.hide();
+    }
+}
+
+#[tauri::command(async)]
+fn minimize_board(app: AppHandle) {
+    if let Some(w) = window::main_window(&app) {
+        let _ = w.minimize();
+    }
+}
+
+#[tauri::command(async)]
+fn log(text: String) {
+    board_log(&format!("[화면] {text}"));
+}
+
+// ── 실행 ────────────────────────────────────────────────────
+
+/// 명령줄에서 `--action <동작> <세션 id>` — macOS 판과 같은 이름(pause·resume·stop·reopen·focus)을
+/// 세션 동작 이름으로 바꾼다(명령줄의 resume 은 일시중지한 세션 재개, reopen 은 이어서 다시 열기).
+pub fn action_arg(argv: &[String]) -> Option<(String, String)> {
+    let i = argv.iter().position(|a| a == "--action")?;
+    let action = match argv.get(i + 1)?.as_str() {
+        "resume" => "resume_paused",
+        a @ ("pause" | "stop" | "reopen" | "focus") => a,
+        _ => return None,
+    };
+    Some((action.to_string(), argv.get(i + 2)?.clone()))
+}
+
+/// 두 번째 실행 — 첫 보드를 앞으로(`--show` 와 같음), `--action` 이면 동작을 넘긴다(중단은 확인 없이).
+fn second_instance(app: &AppHandle, argv: Vec<String>) {
+    let Some(board) = app.try_state::<Arc<Board>>().map(|s| s.inner().clone()) else { return };
+    match action_arg(&argv) {
+        Some((action, id)) => queue_action(&board, action, id),
+        None => window::show(app, !argv.iter().any(|a| a == "--background")),
+    }
+}
+
+fn queue_action(board: &Arc<Board>, action: String, id: String) {
+    if board.session(&id).is_some() {
+        board.perform_action(&action, &id, false);
+    } else {
+        *board.pending_action.lock().unwrap() = Some((action, id));
+    }
+}
+
+fn register_shortcut(app: &AppHandle) {
+    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+    let snap = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyB);
+    let plugin = tauri_plugin_global_shortcut::Builder::new()
+        .with_handler(move |app, shortcut, event| {
+            if *shortcut != snap || event.state() != ShortcutState::Pressed {
+                return;
+            }
+            // 처음 크기로 오른쪽에 붙이고 앞으로 — 포커스는 지금 앱에 남긴다
+            if let Some(board) = app.try_state::<Arc<Board>>() {
+                board.snap_right();
+            }
+            window::show(app, false);
+        })
+        .build();
+    if let Err(e) = app.plugin(plugin) {
+        board_log(&format!("전역 단축키 플러그인을 켜지 못했습니다: {e}"));
+        return;
+    }
+    // 다른 앱이 먼저 잡은 단축키면 등록에 실패한다 — 보드는 그대로 동작하고 로그만 남긴다
+    if let Err(e) = app.global_shortcut().register(snap) {
+        board_log(&format!("전역 단축키 Ctrl+Alt+B 등록 실패 ({e})"));
+    }
+}
+
+fn create_window(app: &AppHandle, board: &Arc<Board>, background: bool) -> tauri::Result<()> {
+    let cfg = app.config().app.windows.iter().find(|w| w.label == "main").cloned().ok_or(tauri::Error::WindowNotFound)?;
+    let win = WebviewWindowBuilder::from_config(app, &cfg)?.build()?;
+    let (saved, mini, pinned) = {
+        let s = board.settings.lock().unwrap();
+        (s.window_frame, s.board_mini, s.pinned)
+    };
+    let mons = window::monitors(app);
+    if let Some(f) = window::launch_frame(&mons, saved, mini) {
+        window::set_frame(&win, f);
+        let scale = win.scale_factor().unwrap_or(1.0);
+        if !mini && f.w >= window::BOARD_MIN_WIDTH * scale {
+            board.update_settings(|s| s.board_restore_frame = Some(f));
+        }
+    }
+    let _ = win.set_always_on_top(pinned);
+    window::apply_vibrancy(&win);
+    // 셸 설정·로그인 자동 실행에서 --background 로 띄우면 창만 보이고 포커스는 지금 앱에 남긴다
+    if background {
+        window::show_inactive(&win);
+    } else {
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+    let b = board.clone();
+    win.on_window_event(move |e| match e {
+        // 닫기 = 숨기기(앱은 트레이에 남는다)
+        tauri::WindowEvent::CloseRequested { api, .. } => {
+            api.prevent_close();
+            if let Some(w) = window::main_window(&b.app) {
+                let _ = w.hide();
+            }
+        }
+        tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => b.mark_frame_dirty(),
+        _ => {}
+    });
+    Ok(())
+}
+
+/// 1초 틱.
+fn start_ticker(board: Arc<Board>) {
+    std::thread::spawn(move || {
+        let mut n: u64 = 0;
+        loop {
+            let now = clock::now();
+            if n.is_multiple_of(3) {
+                board.probe_in_background();
+                accounts::tick(&board);
+                autoswitch::tick(&board);
+            }
+            if n.is_multiple_of(30) {
+                board.refresh_usage();
+            }
+            if n > 0 && n.is_multiple_of(3600) {
+                updater::check(&board, false);
+            }
+            board.publish();
+            if let Some((action, id)) = board.pending_action.lock().unwrap().take() {
+                if board.session(&id).is_some() {
+                    board.perform_action(&action, &id, false);
+                } else {
+                    board_log(&format!("--action {action}: 세션을 찾지 못했습니다 ({id})"));
+                }
+            }
+            board.save_frame_if_settled(now);
+            n += 1;
+            // 다음 초 경계까지 잔다 — 경과 시간 표시가 고르게 넘어가게
+            let frac = clock::now().fract();
+            std::thread::sleep(Duration::from_secs_f64((1.0 - frac).clamp(0.05, 1.0)));
+        }
+    });
+}
+
+pub fn run(argv: Vec<String>, context: tauri::Context<tauri::Wry>) {
+    let background = argv.iter().any(|a| a == "--background");
+    let first_action = action_arg(&argv);
+    let result = tauri::Builder::default()
+        // 단일 실행은 맨 먼저 — 두 번째 실행은 여기서 첫 보드에 인자를 넘기고 끝난다
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| second_instance(app, argv)))
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![
+            get_snapshot,
+            toggle_collapsed,
+            set_all_collapsed,
+            toggle_ended_open,
+            toggle_pin_group,
+            hide_group,
+            remove_ended,
+            remove_session,
+            toggle_kind_collapsed,
+            toggle_sub_collapsed,
+            set_usage_compact,
+            set_mute,
+            set_all_muted,
+            reveal,
+            session_action,
+            switch_account,
+            add_account,
+            cancel_add_account,
+            remove_account,
+            set_auto_switch,
+            check_update,
+            run_update,
+            open_changelog,
+            set_pinned,
+            set_mascot,
+            set_opacity,
+            set_notify_position,
+            set_board_mini,
+            open_terminal,
+            enter_mini,
+            leave_mini,
+            snap_right,
+            hide_board,
+            minimize_board,
+            log,
+        ])
+        .setup(move |app| {
+            let handle = app.handle().clone();
+            let board = Board::new(handle.clone());
+            app.manage(board.clone());
+            let paths = board.account_paths.clone();
+            std::thread::spawn(move || accounts::cleanup_slots(&paths));
+            board.reload();
+            create_window(&handle, &board, background)?;
+            match tray::build(&handle) {
+                Ok(t) => *board.tray.lock().unwrap() = Some(t),
+                Err(e) => board_log(&format!("트레이 아이콘을 만들지 못했습니다: {e}")),
+            }
+            register_shortcut(&handle);
+            if let Some((action, id)) = first_action.clone() {
+                *board.pending_action.lock().unwrap() = Some((action, id));
+            }
+            updater::check(&board, false);
+            start_ticker(board);
+            Ok(())
+        })
+        .build(context);
+    match result {
+        Ok(app) => app.run(|app, e| match e {
+            // 창을 닫아도(숨겨도) 앱은 트레이에 남는다 — 종료는 트레이 메뉴의 "종료"(코드가 있는 exit)로만
+            tauri::RunEvent::ExitRequested { code: None, api, .. } => api.prevent_exit(),
+            tauri::RunEvent::Exit => {
+                if let Some(board) = app.try_state::<Arc<Board>>() {
+                    board.save_frame_if_settled(f64::INFINITY);
+                }
+            }
+            _ => {}
+        }),
+        Err(e) => board_log(&format!("보드를 띄우지 못했습니다: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn action_args() {
+        let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(action_arg(&v(&["ClaudeBoard.exe", "--action", "stop", "abc"])), Some(("stop".into(), "abc".into())));
+        assert_eq!(action_arg(&v(&["ClaudeBoard.exe", "--action", "resume", "abc"])), Some(("resume_paused".into(), "abc".into())));
+        assert_eq!(action_arg(&v(&["ClaudeBoard.exe", "--action", "reopen", "abc"])), Some(("reopen".into(), "abc".into())));
+        assert_eq!(action_arg(&v(&["ClaudeBoard.exe", "--action", "activate", "abc"])), None);
+        assert_eq!(action_arg(&v(&["ClaudeBoard.exe", "--action", "stop"])), None);
+        assert_eq!(action_arg(&v(&["ClaudeBoard.exe", "--show"])), None);
+    }
+}

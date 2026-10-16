@@ -1,0 +1,523 @@
+//! 세션 읽기 — `Store.reload` (`ClaudeBoard.swift:941-1207`, SPEC §5.1).
+//! 1초마다 `sessions/*.json` 을 읽어 경로별 그룹으로 묶는다. 프로세스 확인(셸 수·콘솔에 붙을 수 있는지)은
+//! 느리므로 백그라운드에서 3초마다 센 값(`Probe`)을 받아 쓴다.
+
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+use claude_board_core::{fileio, Record};
+use serde_json::Value;
+
+use crate::model::{last_name, Group, Session, Sub};
+use crate::readers::{ContextReader, ModelReader};
+use crate::settings::{set_in, Settings};
+use crate::util::{ms, num, obj};
+
+/// 조용한 카드를 자동으로 접기까지의 시간
+const QUIET_FOLD_AFTER: f64 = 30.0 * 60.0;
+/// 종료된 세션 기록을 지우는 나이
+const ENDED_KEEP: f64 = 2.0 * 86400.0;
+
+/// 백그라운드에서 센 프로세스 정보.
+#[derive(Debug, Clone, Default)]
+pub struct Probe {
+    /// Claude 프로세스 pid → 백그라운드 셸 수
+    pub shells: HashMap<u32, usize>,
+    /// 콘솔에 붙을 수 있는 Claude 프로세스 pid
+    pub drivable: HashSet<u32>,
+}
+
+pub struct Store {
+    dir: PathBuf,
+    claude_dir: PathBuf,
+    home: String,
+    records: HashMap<PathBuf, (SystemTime, Record)>,
+    models: ModelReader,
+    contexts: ContextReader,
+    /// 직전 reload 때 승인 대기였던 세션 — 새로 승인 대기가 된 세션만 골라 그 그룹을 편다
+    waiting_ids: HashSet<String>,
+}
+
+pub struct Reloaded {
+    pub groups: Vec<Group>,
+    pub all_muted: bool,
+    /// 설정(접기·숨김·자동 접기)을 바꿨는지 — 저장해야 한다
+    pub settings_changed: bool,
+}
+
+/// 대화 기록 위치 — hook 이 알려 준 경로가 없으면 `~/.claude/projects/<cwd 의 영숫자 밖 문자를 -로>/<sid>.jsonl`.
+pub fn transcript_path(given: Option<&str>, cwd: &str, sid: &str, claude_dir: &Path) -> PathBuf {
+    if let Some(g) = given.filter(|g| !g.is_empty()) {
+        return PathBuf::from(g);
+    }
+    let slug: String = cwd.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    claude_dir.join("projects").join(slug).join(format!("{sid}.jsonl"))
+}
+
+/// 홈 폴더를 `~` 로 (Windows 는 대소문자를 가리지 않는다).
+pub fn display_path(cwd: &str, home: &str) -> String {
+    if home.is_empty() || cwd.len() < home.len() || !cwd.is_char_boundary(home.len()) {
+        return cwd.to_string();
+    }
+    let (head, rest) = cwd.split_at(home.len());
+    let same = if cfg!(windows) { head.eq_ignore_ascii_case(home) } else { head == home };
+    let boundary = rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\');
+    if same && boundary {
+        format!("~{rest}")
+    } else {
+        cwd.to_string()
+    }
+}
+
+/// topic·last_message 에서 마크다운 기호 `#*\`` 를 지운다.
+fn clean(s: &str) -> String {
+    let s: String = s.chars().filter(|c| !matches!(c, '#' | '*' | '`')).collect();
+    s.trim_matches(|c| c == ' ' || c == '\t').to_string()
+}
+
+fn text(rec: &Record, key: &str) -> String {
+    rec.get(key).and_then(Value::as_str).unwrap_or("").to_string()
+}
+
+/// 세션 기록의 서브에이전트 — 끝난 지 10초 넘은 것은 뺀다. done 이 아닌 것 먼저, 시작 순.
+fn parse_subs(j: Option<&Record>, alive: bool, now: f64) -> Vec<(Sub, f64)> {
+    let Some(j) = j.filter(|_| alive) else { return Vec::new() };
+    let mut out: Vec<(Sub, f64)> = j
+        .iter()
+        .filter_map(|(id, v)| {
+            let v = v.as_object()?;
+            let ended = num(v.get("ended"));
+            if ended.is_some_and(|e| now - e > 10.0) {
+                return None;
+            }
+            let started = num(v.get("started")).unwrap_or(0.0);
+            Some((
+                Sub {
+                    id: id.clone(),
+                    kind: text(v, "type"),
+                    desc: text(v, "description"),
+                    state: v.get("state").and_then(Value::as_str).unwrap_or("running").to_string(),
+                    started: ms(started),
+                    ended: ended.map(ms),
+                    tool: text(v, "tool"),
+                    background: v.get("background").and_then(Value::as_bool).unwrap_or(false),
+                    brain: None,
+                },
+                started,
+            ))
+        })
+        .collect();
+    out.sort_by(|(a, sa), (b, sb)| {
+        ((a.state == "done") as u8, *sa).partial_cmp(&((b.state == "done") as u8, *sb)).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    out
+}
+
+impl Store {
+    /// `sessions` = notifier/sessions, `notifier` = notifier 폴더(context·context-windows.json), `claude_dir` = ~/.claude
+    pub fn new(sessions: PathBuf, notifier: &Path, claude_dir: PathBuf, home: String) -> Self {
+        Store {
+            dir: sessions,
+            claude_dir,
+            home,
+            records: HashMap::new(),
+            models: ModelReader::default(),
+            contexts: ContextReader::new(notifier.join("context"), notifier.join("context-windows.json")),
+            waiting_ids: HashSet::new(),
+        }
+    }
+
+    pub fn sessions_dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// 세션 파일을 읽어 그룹을 만든다. `alive` = 세션 기록의 pid 가 살아 있는지(`proc::record_alive`).
+    pub fn reload(&mut self, settings: &mut Settings, probe: &Probe, alive: &dyn Fn(&Record) -> bool, mute_all: bool, now: f64) -> Reloaded {
+        let mut sessions: Vec<Session> = Vec::new();
+        let mut brain_paths = HashSet::new();
+        let mut seen = HashSet::new();
+        let mut names: Vec<String> = fs::read_dir(&self.dir)
+            .map(|rd| rd.flatten().filter_map(|e| e.file_name().into_string().ok()).filter(|n| n.ends_with(".json")).collect())
+            .unwrap_or_default();
+        names.sort();
+        for name in names {
+            let path = self.dir.join(&name);
+            let Some(m) = fs::metadata(&path).ok().and_then(|md| md.modified().ok()) else { continue };
+            seen.insert(path.clone());
+            let j = match self.records.get(&path) {
+                Some((cm, j)) if *cm == m => j.clone(),
+                _ => {
+                    let Some(parsed) = fileio::read_record(&path) else { continue };
+                    self.records.insert(path.clone(), (m, parsed.clone()));
+                    parsed
+                }
+            };
+            if let Some(s) = self.session(&j, &name, &path, probe, alive, now, &mut brain_paths) {
+                sessions.push(s);
+            }
+        }
+        self.models.prune(&brain_paths);
+        self.records.retain(|k, _| seen.contains(k));
+
+        let mut changed = self.expand_newly_waiting(&sessions, settings);
+
+        // 경로별로 묶고, 그룹 안은 급한 순 → 최근 상태 변화 순
+        let mut by_cwd: HashMap<String, Vec<Session>> = HashMap::new();
+        for s in sessions {
+            by_cwd.entry(s.cwd.clone()).or_default().push(s);
+        }
+        let mut visible: Vec<Group> = Vec::new();
+        for (cwd, mut list) in by_cwd {
+            list.sort_by(|a, b| a.rank().cmp(&b.rank()).then(b.since_s.partial_cmp(&a.since_s).unwrap_or(std::cmp::Ordering::Equal)));
+            let g = Group { name: last_name(&cwd), path: display_path(&cwd, &self.home), id: cwd, sessions: list };
+            // 지운 뒤 새 활동이 없는 작업 경로는 빼고, 새 활동이 생긴 작업 경로는 지운 목록에서 꺼낸다
+            if let Some(&at) = settings.hidden_groups.get(&g.id) {
+                if g.sessions.iter().all(|s| s.updated_s <= at) {
+                    continue;
+                }
+                settings.hidden_groups.remove(&g.id);
+                changed = true;
+            }
+            visible.push(g);
+        }
+        changed |= fold_quiet(&visible, settings, now);
+        let pins = settings.pinned_groups.clone();
+        let pin_at = |id: &str| pins.iter().position(|p| p == id).unwrap_or(usize::MAX);
+        visible.sort_by(|a, b| {
+            pin_at(&a.id)
+                .cmp(&pin_at(&b.id))
+                .then(a.min_rank().cmp(&b.min_rank()))
+                .then(b.last_updated().partial_cmp(&a.last_updated()).unwrap_or(std::cmp::Ordering::Equal))
+                .then(a.id.cmp(&b.id))
+        });
+        Reloaded { groups: visible, all_muted: mute_all, settings_changed: changed }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn session(
+        &mut self,
+        j: &Record,
+        name: &str,
+        path: &Path,
+        probe: &Probe,
+        alive: &dyn Fn(&Record) -> bool,
+        now: f64,
+        brain_paths: &mut HashSet<PathBuf>,
+    ) -> Option<Session> {
+        let mut state = j.get("state").and_then(Value::as_str).unwrap_or("idle").to_string();
+        let updated = num(j.get("updated")).unwrap_or(0.0);
+        if state != "ended" && !alive(j) {
+            state = "ended".into();
+        }
+        let sid = j.get("session_id").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| name.trim_end_matches(".json").to_string());
+        let cwd = j.get("cwd").and_then(Value::as_str).unwrap_or("?").to_string();
+        let transcript = transcript_path(j.get("transcript_path").and_then(Value::as_str), &cwd, &sid, &self.claude_dir);
+        // 질문 없이 끝난 세션은 대화 기록 파일이 없어 이어 열 수 없으므로 목록에서 뺀다
+        if state == "ended" && (now - updated > ENDED_KEEP || !transcript.exists()) {
+            let _ = fs::remove_file(path);
+            return None;
+        }
+        let pid = j.get("pid").and_then(Value::as_u64).filter(|&p| p <= u64::from(u32::MAX)).unwrap_or(0) as u32;
+        // 응답은 끝났어도 서브에이전트나 백그라운드 셸이 돌고 있으면 작업 중으로 보인다
+        let base = transcript.to_string_lossy();
+        let sub_dir = PathBuf::from(base.strip_suffix(".jsonl").unwrap_or(&base)).join("subagents");
+        let subs: Vec<Sub> = parse_subs(obj(j.get("subagents")), state != "ended", now)
+            .into_iter()
+            .map(|(mut sub, _)| {
+                let p = sub_dir.join(format!("agent-{}.jsonl", sub.id));
+                sub.brain = self.models.read(&p, "", now);
+                brain_paths.insert(p);
+                sub
+            })
+            .collect();
+        // 응답 중에 도는 셸은 보통 도구 호출이라 세지 않는다
+        let shells = if state == "idle" { probe.shells.get(&pid).copied().unwrap_or(0) } else { 0 };
+        if state == "idle" && (shells > 0 || subs.iter().any(|s| s.state != "done")) {
+            state = "working".into();
+        }
+        // 일시중지 표지는 보드가 남기고, 새 요청이 들어오면 hook 이 지운다
+        let paused = self.dir.join(format!("{sid}.paused")).exists();
+        if paused && state != "ended" {
+            state = "paused".into();
+        }
+        let muted = self.dir.join(format!("{sid}.mute")).exists();
+        let model = text(j, "model");
+        let mut brain = None;
+        if state != "ended" {
+            brain = self.models.read(&transcript, &model, now);
+            brain_paths.insert(transcript.clone());
+            if let (Some(b), Some(e)) = (brain.as_mut(), self.contexts.live_effort(&sid, &transcript)) {
+                *b = crate::model::Brain::new(&b.model.clone(), &e);
+            }
+        }
+        let ctx = self.contexts.read(&sid, &transcript, &model, now);
+        let topic = clean(&text(j, "topic"));
+        let message = clean(&text(j, "last_message"));
+        let title = if !topic.is_empty() {
+            topic.clone()
+        } else if !message.is_empty() {
+            message.clone()
+        } else {
+            "요청 전".to_string()
+        };
+        let headless = j.get("headless").and_then(Value::as_bool).unwrap_or(false);
+        let since = num(j.get("since")).unwrap_or(0.0);
+        let limit_s = obj(j.get("limit_hit")).and_then(|l| num(l.get("at")));
+        let resume_args = j
+            .get("resume_args")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect::<Vec<_>>())
+            .filter(|a| !a.is_empty())
+            .unwrap_or_else(|| vec!["--resume".to_string(), sid.clone()]);
+        let can_drive = !headless && state != "ended" && pid > 0 && probe.drivable.contains(&pid);
+        Some(Session {
+            id: sid,
+            cwd,
+            since: ms(since),
+            updated: ms(updated),
+            headless,
+            title,
+            topic,
+            message,
+            ctx,
+            brain,
+            subagents: subs,
+            shells,
+            paused,
+            muted,
+            limit_at: limit_s.map(ms),
+            can_drive,
+            pid,
+            pid_ctime: num(j.get("pid_ctime")),
+            file: path.to_path_buf(),
+            resume_args,
+            since_s: since,
+            updated_s: updated,
+            limit_s,
+            state,
+        })
+    }
+
+    /// 새로 승인 대기가 된 세션의 그룹은 접혀 있으면 편다.
+    fn expand_newly_waiting(&mut self, sessions: &[Session], settings: &mut Settings) -> bool {
+        let waiting: Vec<&Session> = sessions.iter().filter(|s| s.state == "waiting").collect();
+        let opened: HashSet<&str> = waiting
+            .iter()
+            .filter(|s| !self.waiting_ids.contains(&s.id))
+            .map(|s| s.cwd.as_str())
+            .filter(|c| settings.collapsed.iter().any(|x| x == c))
+            .collect();
+        self.waiting_ids = waiting.iter().map(|s| s.id.clone()).collect();
+        for c in &opened {
+            set_in(&mut settings.collapsed, c, false);
+        }
+        !opened.is_empty()
+    }
+}
+
+/// 승인 대기·작업 중 세션이 없고 마지막 활동이 30분 넘게 지난 카드를 한 번 접는다.
+/// 그때의 마지막 활동 시각을 적어 두어, 사람이 다시 펴면 새 활동이 생기기 전까지 또 접지 않는다.
+fn fold_quiet(groups: &[Group], settings: &mut Settings, now: f64) -> bool {
+    let mut changed = false;
+    for g in groups {
+        let last = g.last_updated();
+        let quiet = !g.sessions.iter().any(|s| s.state == "waiting" || s.state == "working");
+        if !quiet || now - last <= QUIET_FOLD_AFTER {
+            continue;
+        }
+        if settings.auto_folded.get(&g.id) == Some(&last) {
+            continue;
+        }
+        settings.auto_folded.insert(g.id.clone(), last);
+        set_in(&mut settings.collapsed, &g.id, true);
+        changed = true;
+    }
+    let ids: HashSet<&str> = groups.iter().map(|g| g.id.as_str()).collect();
+    let before = settings.auto_folded.len();
+    settings.auto_folded.retain(|k, _| ids.contains(k.as_str()));
+    changed || settings.auto_folded.len() != before
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    struct Fake {
+        root: PathBuf,
+        sessions: PathBuf,
+        claude: PathBuf,
+    }
+
+    impl Fake {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!("cb-store-{}", crate::util::short_id()));
+            let sessions = root.join("notifier").join("sessions");
+            let claude = root.join(".claude");
+            fs::create_dir_all(&sessions).unwrap();
+            fs::create_dir_all(&claude).unwrap();
+            Fake { root, sessions, claude }
+        }
+
+        fn store(&self) -> Store {
+            Store::new(self.sessions.clone(), &self.root.join("notifier"), self.claude.clone(), self.root.to_string_lossy().into_owned())
+        }
+
+        /// 세션 기록과 (있으면) 대화 기록을 쓴다.
+        fn session(&self, sid: &str, mut rec: serde_json::Value, transcript: bool) -> PathBuf {
+            let t = self.root.join("t").join(format!("{sid}.jsonl"));
+            rec["session_id"] = json!(sid);
+            rec["transcript_path"] = json!(t.to_string_lossy());
+            if transcript {
+                fs::create_dir_all(t.parent().unwrap()).unwrap();
+                fs::write(&t, r#"{"type":"assistant","effort":"high","message":{"model":"claude-opus-5-5","usage":{"input_tokens":100}}}"#).unwrap();
+            }
+            let p = self.sessions.join(format!("{sid}.json"));
+            fs::write(&p, serde_json::to_vec(&rec).unwrap()).unwrap();
+            p
+        }
+    }
+
+    impl Drop for Fake {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    const NOW: f64 = 1_792_000_000.0;
+
+    fn dead_pid(rec: &Record) -> bool {
+        rec.get("pid").and_then(Value::as_u64) != Some(666)
+    }
+
+    fn all(groups: &[Group]) -> Vec<(&str, &str)> {
+        groups.iter().flat_map(|g| g.sessions.iter().map(|s| (s.id.as_str(), s.state.as_str()))).collect()
+    }
+
+    #[test]
+    fn ended_detection_and_pruning() {
+        let f = Fake::new();
+        let cwd = f.root.join("work").join("a").to_string_lossy().into_owned();
+        // pid 가 죽었으면 ended — 대화 기록이 있으면 남는다
+        f.session("dead", json!({"state": "working", "pid": 666, "cwd": cwd, "updated": NOW - 5.0, "since": NOW - 5.0}), true);
+        // 대화 기록이 없는 종료 세션은 지운다
+        let gone = f.session("notranscript", json!({"state": "ended", "cwd": cwd, "updated": NOW - 5.0}), false);
+        // 2일 넘은 종료 세션도 지운다
+        let old = f.session("old", json!({"state": "ended", "cwd": cwd, "updated": NOW - 3.0 * 86400.0}), true);
+        // 대화 기록이 없어도 살아 있는 세션은 남는다
+        f.session("live", json!({"state": "idle", "pid": 1, "cwd": cwd, "updated": NOW - 1.0, "since": NOW - 1.0, "topic": "## **빌드** `고치기`  "}), false);
+        let mut st = f.store();
+        let mut s = Settings::default();
+        let r = st.reload(&mut s, &Probe::default(), &dead_pid, false, NOW);
+        assert_eq!(all(&r.groups), [("live", "idle"), ("dead", "ended")]);
+        assert!(!gone.exists() && !old.exists());
+        let live = &r.groups[0].sessions[0];
+        assert_eq!(live.title, "빌드 고치기");
+        assert_eq!(live.resume_args, ["--resume", "live"]);
+        assert_eq!(live.brain, None); // 대화 기록도 model 도 없다
+        let dead = &r.groups[0].sessions[1];
+        assert_eq!(dead.brain, None); // 종료 세션은 모델을 읽지 않는다
+        assert_eq!(dead.ctx.map(|c| c.used), Some(100)); // 컨텍스트는 읽는다
+        assert_eq!(r.groups[0].name, "a");
+        assert_eq!(r.groups[0].path, format!("~{}work{}a", std::path::MAIN_SEPARATOR, std::path::MAIN_SEPARATOR));
+    }
+
+    #[test]
+    fn subagents_shells_paused_muted() {
+        let f = Fake::new();
+        let cwd = "/w/proj";
+        f.session(
+            "s1",
+            json!({"state": "idle", "pid": 10, "cwd": cwd, "updated": NOW, "since": NOW, "subagents": {
+                "old": {"type": "Explore", "state": "done", "started": NOW - 100.0, "ended": NOW - 11.0},
+                "fresh": {"type": "Plan", "state": "done", "started": NOW - 50.0, "ended": NOW - 3.0},
+                "run": {"type": "general", "description": "찾기", "state": "running", "started": NOW - 60.0, "tool": "Grep", "background": true}
+            }, "resume_args": ["--model", "claude-opus-5-5", "--resume", "s1"], "limit_hit": {"at": NOW - 30.0, "message": "x"}}),
+            true,
+        );
+        f.session("s2", json!({"state": "idle", "pid": 20, "cwd": cwd, "updated": NOW, "since": NOW - 10.0}), true);
+        f.session("s3", json!({"state": "working", "pid": 30, "cwd": cwd, "updated": NOW, "since": NOW - 20.0}), true);
+        fs::write(f.sessions.join("s3.paused"), b"{}").unwrap();
+        fs::write(f.sessions.join("s2.mute"), b"").unwrap();
+        let probe = Probe { shells: HashMap::from([(20, 2), (30, 5)]), drivable: HashSet::from([10, 30]) };
+        let mut st = f.store();
+        let mut s = Settings::default();
+        let r = st.reload(&mut s, &probe, &|_| true, true, NOW);
+        assert!(r.all_muted);
+        let g = &r.groups[0];
+        let by = |id: &str| g.sessions.iter().find(|x| x.id == id).unwrap();
+        // 끝나지 않은 서브에이전트가 있으면 작업 중, 끝난 지 10초 넘은 것은 뺀다, done 이 아닌 것 먼저
+        let s1 = by("s1");
+        assert_eq!(s1.state, "working");
+        assert_eq!(s1.subagents.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), ["run", "fresh"]);
+        assert!(s1.subagents[0].background && s1.subagents[0].tool == "Grep" && s1.subagents[0].desc == "찾기");
+        assert_eq!(s1.resume_args, ["--model", "claude-opus-5-5", "--resume", "s1"]);
+        assert_eq!(s1.limit_at, Some(ms(NOW - 30.0)));
+        assert!(s1.can_drive);
+        assert_eq!(s1.brain.as_ref().map(|b| b.effort.as_str()), Some("high"));
+        // idle 인데 셸이 돌면 작업 중, 셸 수는 idle 일 때만
+        let s2 = by("s2");
+        assert_eq!((s2.state.as_str(), s2.shells, s2.muted, s2.can_drive), ("working", 2, true, false));
+        let s3 = by("s3");
+        assert_eq!((s3.state.as_str(), s3.shells, s3.paused), ("paused", 0, true));
+    }
+
+    #[test]
+    fn sorting_pins_hidden_and_folding() {
+        let f = Fake::new();
+        f.session("a1", json!({"state": "idle", "cwd": "/w/a", "updated": NOW - 10.0, "since": NOW - 10.0}), true);
+        f.session("a2", json!({"state": "waiting", "cwd": "/w/a", "updated": NOW - 20.0, "since": NOW - 20.0}), true);
+        f.session("a3", json!({"state": "idle", "cwd": "/w/a", "updated": NOW - 5.0, "since": NOW - 5.0}), true);
+        f.session("b1", json!({"state": "working", "cwd": "/w/b", "updated": NOW - 1.0, "since": NOW - 1.0}), true);
+        f.session("c1", json!({"state": "idle", "cwd": "/w/c", "updated": NOW - 3600.0, "since": NOW - 3600.0}), true);
+        f.session("d1", json!({"state": "idle", "cwd": "/w/d", "updated": NOW - 100.0, "since": NOW - 100.0}), true);
+        let mut st = f.store();
+        let mut s = Settings { collapsed: vec!["/w/a".into()], hidden_groups: [("/w/d".to_string(), NOW - 50.0)].into(), ..Settings::default() };
+        let r = st.reload(&mut s, &Probe::default(), &|_| true, false, NOW);
+        // 그룹: 가장 급한 상태 → 최근 활동. d 는 숨김(지운 뒤 활동 없음)
+        assert_eq!(r.groups.iter().map(|g| g.id.as_str()).collect::<Vec<_>>(), ["/w/a", "/w/b", "/w/c"]);
+        // 그룹 안: 급한 순 → since 최신 먼저
+        assert_eq!(r.groups[0].sessions.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), ["a2", "a3", "a1"]);
+        // 새로 승인 대기가 된 그룹은 편다, 30분 넘게 조용한 c 는 한 번 접는다
+        assert_eq!(s.collapsed, ["/w/c"]);
+        assert_eq!(s.auto_folded.get("/w/c"), Some(&(NOW - 3600.0)));
+        assert!(r.settings_changed);
+        assert_eq!(crate::model::Counts::of(&r.groups).waiting, 1);
+
+        // 사람이 다시 펴면 새 활동 전에는 또 접지 않는다. 같은 승인 대기로는 다시 펴지 않는다
+        s.collapsed = vec!["/w/a".into()];
+        s.pinned_groups = vec!["/w/c".into()];
+        let r = st.reload(&mut s, &Probe::default(), &|_| true, false, NOW + 1.0);
+        assert_eq!(s.collapsed, ["/w/a"]);
+        assert!(!r.settings_changed);
+        // 고정한 그룹이 맨 위
+        assert_eq!(r.groups.iter().map(|g| g.id.as_str()).collect::<Vec<_>>(), ["/w/c", "/w/a", "/w/b"]);
+
+        // 숨긴 그룹에 새 활동이 생기면 다시 보이고 숨김 목록에서 빠진다
+        f.session("d2", json!({"state": "idle", "cwd": "/w/d", "updated": NOW + 2.0, "since": NOW + 2.0}), true);
+        let r = st.reload(&mut s, &Probe::default(), &|_| true, false, NOW + 3.0);
+        assert!(r.groups.iter().any(|g| g.id == "/w/d"));
+        assert!(s.hidden_groups.is_empty());
+        assert!(r.settings_changed);
+
+        // 사라진 그룹의 자동 접기 기록은 지운다
+        fs::remove_file(f.sessions.join("c1.json")).unwrap();
+        st.reload(&mut s, &Probe::default(), &|_| true, false, NOW + 4.0);
+        assert!(!s.auto_folded.contains_key("/w/c"));
+    }
+
+    #[test]
+    fn transcript_and_display_paths() {
+        let c = Path::new("/h/.claude");
+        assert_eq!(transcript_path(None, "/Users/me/my proj", "id", c), c.join("projects").join("-Users-me-my-proj").join("id.jsonl"));
+        assert_eq!(transcript_path(None, r"C:\work\a.b", "id", c), c.join("projects").join("C--work-a-b").join("id.jsonl"));
+        assert_eq!(transcript_path(Some("/t/x.jsonl"), "/w", "id", c), PathBuf::from("/t/x.jsonl"));
+        assert_eq!(transcript_path(Some(""), "/w", "id", c), c.join("projects").join("-w").join("id.jsonl"));
+        assert_eq!(display_path("/Users/me/work", "/Users/me"), "~/work");
+        assert_eq!(display_path("/Users/me", "/Users/me"), "~");
+        assert_eq!(display_path("/Users/meow/x", "/Users/me"), "/Users/meow/x");
+        assert_eq!(display_path(r"C:\Users\demo\work", r"C:\Users\demo"), r"~\work");
+    }
+}
