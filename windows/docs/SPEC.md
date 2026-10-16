@@ -393,7 +393,7 @@ setup.exe 메모(실기 확인): `/S` 로 같은 버전을 다시 설치하면 T
   `windows/ci/install-checks.ps1`(설치 확인 — 실패하면 작업 실패): setup.exe `/S` 설치 → 등록된 hook 을 가짜 Claude Code(node.exe 를 `claude.exe` 로 복사) 아래에서 그대로 실행 → 같은 버전 재설치·제자리 제거 → `/S` 제거, install.ps1·uninstall.ps1 을 Windows PowerShell 5.1 에서 웹 호출을 같은 이름의 함수로 가로채 실행(처음 설치 거부·`-Update` 설치·틀린 sha256 거부).
   `windows/ci/screen-checks.ps1`(화면 확인 — 정보용, `continue-on-error`): 보드 창·단일 실행·알림 패널의 포커스·확장 스타일·스스로 닫힘, 스크린샷. 결과표·로그·스크린샷은 `smoke-results` 아티팩트.
 - release 작업: main 의 push 일 때만, build·smoke 뒤(설치 확인이 실패하면 릴리스하지 않는다). `windows/VERSION` 을 읽어 태그 `windows-v<버전>` 이 아직 없고 `windows/CHANGELOG.md` 에 `## <버전>` 항목이 있으면 그 항목을 설명으로 `gh release create windows-v<버전> … --latest=false --title "Claude Board for Windows <버전>"`. 항목이 없으면 실패로 끝낸다(macOS release.sh 와 같은 규칙).
-- 배포 순서(관리자): `windows/CHANGELOG.md` 맨 위에 항목 → `windows/VERSION` 올리기 → main 에 push → CI 가 빌드·릴리스.
+- 배포 순서(관리자): `windows/CHANGELOG.md` 맨 위에 항목 → `windows/VERSION` 올리기(`windows/packaging/release.sh <버전>` — README·설치 가이드의 setup.exe·릴리스 링크도 바꾼다) → main 에 push → CI 가 빌드·릴리스.
 
 ## 9. 문서 의무
 
@@ -460,5 +460,5 @@ REA 를 쓴 곳: `import-reference-source`(원본 소스 목록), `capture-proce
 | U1 | 확인 | macOS 에서 Tauri 창을 가짜 세션으로 띄워 스크린샷, 브라우저에서 세 단계·알림 패널을 원본 스크린샷과 비교 |
 | U2 | 확인 | Swift 그림 코드를 macOS 에서 렌더링한 기준 그림과 픽셀 비교(가장자리 차이 0.7% 미만) |
 | T1 | 확인 | board-tui.py 와 화면 바이트 비교 |
-| R1 | 확인 | Windows CI build·release(dry run) 통과(실행 38903798305) — 자산 §8.1 과 같고, 만들 명령에 `--latest=false --target <커밋>`. 실제 게시는 main 병합 때 처음 돈다 |
+| R1 | 확인 | Windows CI build·release(dry run) 통과(실행 38903798305) — 자산 §8.1 과 같고, 만들 명령에 `--latest=false --target <커밋>`. main 병합 뒤 실행 38923609837 이 build·smoke·release 를 통과해 `windows-v2.12` 를 게시했다 — 자산 6개, zip SHA256 일치, Latest 는 macOS `v2.12` 그대로 |
 | D1 | 확인 | 문서 작성·검토 |

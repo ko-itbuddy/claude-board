@@ -23,8 +23,19 @@ if git -C "$W" ls-remote --exit-code --tags origin "refs/tags/windows-v$VERSION"
   exit 1
 fi
 
+OLD="$(tr -d '[:space:]' < "$W/VERSION")"
 printf '%s\n' "$VERSION" > "$W/VERSION"
 echo "windows/VERSION → $VERSION"
+# 문서의 setup.exe·릴리스 링크(windows-v<옛 버전>, ClaudeBoard-<옛 버전>-setup.exe)를 새 버전으로 바꾼다
+if [ -n "$OLD" ] && [ "$OLD" != "$VERSION" ]; then
+  old_re="$(printf '%s' "$OLD" | sed 's/\./\\./g')"
+  for f in "$W/../README.md" "$W/README.md" "$W/docs/설치 가이드.md"; do
+    sed -e "s/windows-v$old_re\([^0-9.]\)/windows-v$VERSION\1/g" \
+        -e "s/ClaudeBoard-$old_re-setup\.exe/ClaudeBoard-$VERSION-setup.exe/g" "$f" > "$f.tmp"
+    mv "$f.tmp" "$f"
+  done
+  echo "문서의 setup.exe·릴리스 링크 → windows-v$VERSION"
+fi
 echo "다음: 변경을 커밋(예: \"Windows $VERSION 릴리스 — <요약>\")하고, 브랜치에서 미리 확인하려면"
 echo "      gh workflow run windows.yml --ref <브랜치> -f dry_run=true   (아무것도 만들지 않음)"
 echo "      main 에 push 하면 CI 가 빌드한 뒤 windows-v$VERSION 릴리스를 Latest 표시 없이 만듭니다."

@@ -48,13 +48,13 @@ irm https://raw.githubusercontent.com/suhojang/claude-board/main/windows/packagi
 
 ### 💿 설치 프로그램(setup.exe)으로 설치
 
-[릴리스 목록](https://github.com/suhojang/claude-board/releases)에서 `windows-v` 로 시작하는 릴리스의 `ClaudeBoard-<버전>-setup.exe` 를 받아 실행해도 됩니다.
-릴리스 목록에서 **Latest** 표시가 붙은 것은 macOS 판입니다.
+설치 프로그램 [ClaudeBoard-2.12-setup.exe](https://github.com/suhojang/claude-board/releases/download/windows-v2.12/ClaudeBoard-2.12-setup.exe) 를 받아 실행해도 됩니다([windows-v2.12 릴리스](https://github.com/suhojang/claude-board/releases/tag/windows-v2.12)).
+다른 버전은 [릴리스 목록](https://github.com/suhojang/claude-board/releases)에서 `windows-v` 로 시작하는 릴리스를 고르세요. **Latest** 표시가 붙은 것은 macOS 판입니다.
 
 - 🛡️ 코드 서명이 없어 SmartScreen 이 "Windows 의 PC 보호" 창을 띄웁니다. **추가 정보 → 실행** 을 누르면 설치됩니다.
 - 사용자 단위로 설치되어 관리자 권한을 묻지 않습니다. 설치가 끝나면 hook 등록 · 명령 · 자동 실행 설정까지 함께 합니다(따로 묻지 않습니다).
 
-설치하면 `%LOCALAPPDATA%\Programs\Claude Board\` 의 앱(setup.exe 로 설치하면 설치 프로그램이 정한 폴더), `%USERPROFILE%\.claude\notifier\` 의 hook 실행 파일,
+설치하면 `%LOCALAPPDATA%\Programs\Claude Board\` 의 앱(setup.exe 로 설치하면 `%LOCALAPPDATA%\Claude Board\`), `%USERPROFILE%\.claude\notifier\` 의 hook 실행 파일,
 로그인 자동 실행(레지스트리 `HKCU\...\Run` 의 `ClaudeBoard` 값), `%USERPROFILE%\.local\bin` 의 `claude-board` · `claude-board-tui` 명령이 생깁니다.
 
 ## 🕹️ 사용법
@@ -132,7 +132,8 @@ setup.exe 로 설치했다면 **설정 > 앱 > 설치된 앱** 에서 Claude Boa
 ## 🛠️ 배포 (관리자)
 
 1. [CHANGELOG.md](CHANGELOG.md) 맨 위에 `## <버전> — <날짜>` 항목을 씁니다.
-2. `windows/packaging/release.sh <버전>` — 그 항목이 있는지 확인하고 `windows/VERSION` 을 그 버전으로 바꿉니다(손으로 바꿔도 됩니다).
+2. `windows/packaging/release.sh <버전>` — 그 항목이 있는지 확인하고 `windows/VERSION` 을 그 버전으로 바꿉니다.
+   README(최상위 · 이 문서) · 설치 가이드의 setup.exe · 릴리스 링크(`windows-v<버전>`, `ClaudeBoard-<버전>-setup.exe`)도 새 버전으로 바꿉니다.
 3. (권장) 브랜치에서 릴리스 과정을 미리 확인합니다 — 아무것도 만들지 않는 dry run 입니다.
 
    ```sh

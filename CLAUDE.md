@@ -110,7 +110,7 @@ cd windows/app && npm ci && npm run tauri dev               # 보드를 띄워 �
 ### 버전과 배포
 
 - 버전은 `windows/VERSION` 한 곳에 둔다(macOS 와 같은 번호, 첫 판 2.12). Tauri 에는 CI 가 semver(2.12 → 2.12.0)로 넘긴다.
-- 배포: `windows/CHANGELOG.md` 맨 위에 `## <버전> — <날짜>` 항목 → `windows/VERSION` 올리기(`windows/packaging/release.sh <버전>` 이 항목 확인 후 바꿔 준다) → main 에 push.
+- 배포: `windows/CHANGELOG.md` 맨 위에 `## <버전> — <날짜>` 항목 → `windows/VERSION` 올리기(`windows/packaging/release.sh <버전>` 이 항목 확인 후 바꾸고, README·설치 가이드의 setup.exe·릴리스 링크도 새 버전으로 바꿔 준다) → main 에 push.
   `.github/workflows/windows.yml` 이 빌드·테스트하고 smoke 작업으로 실제 설치를 확인한 뒤(실패하면 릴리스하지 않음), 태그 `windows-v<버전>` 이 아직 없으면 그 항목을 설명으로 릴리스를 만든다(항목이 없으면 실패).
   push 전에 브랜치에서 `gh workflow run windows.yml --ref <브랜치> -f dry_run=true` 로 릴리스 작업의 모든 확인을 돌려 볼 수 있다(아무것도 만들지 않고 gh 명령만 보여 준다). `dry_run=false` 는 main 에서만 실제 릴리스를 만든다.
 - **Windows 릴리스는 절대 Latest 로 표시하지 않는다**(`--latest=false`). 설치된 macOS 앱이 `releases/latest/download/...` 를 읽기 때문에 Windows 릴리스가 Latest 가 되면 macOS 업데이트가 깨진다.
