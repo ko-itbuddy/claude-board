@@ -3,6 +3,7 @@
 !/.gitignore
 !/README.md
 !/CHANGELOG.md
+!/docs/
 !/ClaudeBoard.swift
 !/ClaudeNotifier.swift
 !/ClaudeStatus.swift

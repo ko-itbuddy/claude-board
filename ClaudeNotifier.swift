@@ -292,7 +292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 3줄: 전체 세션 현황 (색 점 + 개수)
         var parts: [NSView] = []
         let states: [(String, String, NSColor)] = [
-            ("waiting", "대기", NSColor(srgbRed: 1.00, green: 0.66, blue: 0.36, alpha: 1)),
+            ("waiting", "승인 대기", NSColor(srgbRed: 1.00, green: 0.66, blue: 0.36, alpha: 1)),
             ("working", "작업 중", NSColor(srgbRed: 0.45, green: 0.66, blue: 1.00, alpha: 1)),
             ("idle", "대기", NSColor(srgbRed: 0.42, green: 0.85, blue: 0.60, alpha: 1)),
         ]
