@@ -25,5 +25,6 @@ fi
 
 printf '%s\n' "$VERSION" > "$W/VERSION"
 echo "windows/VERSION → $VERSION"
-echo "다음: 변경을 커밋(예: \"Windows $VERSION 릴리스 — <요약>\")하고 main 에 push 하면"
-echo "      CI 가 빌드한 뒤 windows-v$VERSION 릴리스를 Latest 표시 없이 만듭니다."
+echo "다음: 변경을 커밋(예: \"Windows $VERSION 릴리스 — <요약>\")하고, 브랜치에서 미리 확인하려면"
+echo "      gh workflow run windows.yml --ref <브랜치> -f dry_run=true   (아무것도 만들지 않음)"
+echo "      main 에 push 하면 CI 가 빌드한 뒤 windows-v$VERSION 릴리스를 Latest 표시 없이 만듭니다."

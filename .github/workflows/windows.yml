@@ -13,7 +13,14 @@ on:
     paths:
       - 'windows/**'
       - '.github/workflows/windows.yml'
+  # 손으로 돌리기 — 기본은 dry run(릴리스 작업의 모든 확인을 하고 만들 명령만 보여 준다). 실제 릴리스(dry_run=false)는 main 에서만
+  #   gh workflow run windows.yml --ref <브랜치> -f dry_run=true
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '릴리스를 만들지 않고 확인만 한다 (false 는 main 에서만 실제 릴리스)'
+        type: boolean
+        default: true
 
 # 같은 브랜치의 이전 실행은 취소한다 — main 은 릴리스 도중 끊기지 않게 취소하지 않는다
 concurrency:
@@ -65,6 +72,19 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "semver=$semver" >> "$GITHUB_OUTPUT"
           echo "Claude Board for Windows $v ($semver)"
+
+      # push 마다 릴리스 설명이 될 항목을 미리 확인한다 — release 작업·packaging/release.sh 와 같은 awk 규칙
+      - name: 변경 내역 항목 확인
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          notes="$(awk -v v="$VERSION" '/^## /{p = ($2 == v); next} p' windows/CHANGELOG.md)"
+          if [ -z "$(printf '%s' "$notes" | tr -d '[:space:]')" ]; then
+            echo "::error::windows/CHANGELOG.md 에 '## $VERSION' 항목이 없습니다."
+            exit 1
+          fi
+          echo "----- windows/CHANGELOG.md '## $VERSION' 항목 -----"
+          printf '%s\n' "$notes"
 
       - name: core·hook 테스트
         working-directory: windows
@@ -143,10 +163,11 @@ jobs:
           path: windows/dist/*
           if-no-files-found: error
 
+  # 실제 릴리스: main 의 push, 또는 main 에서 workflow_dispatch(dry_run=false).
+  # dry run(workflow_dispatch 기본값): 아래 확인을 모두 하고 실행할 gh 명령만 보여 준다 — 아무것도 만들지 않는다
   release:
     needs: build
-    # main 의 push 만 — 태그가 이미 있으면(버전을 올리지 않은 push) 건너뛴다
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -158,27 +179,115 @@ jobs:
           name: claude-board-windows
           path: dist
 
-      - name: 릴리스 만들기 (Latest 아님)
+      - name: 릴리스 방식 정하기
+        id: mode
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+        run: |
+          if [ "$EVENT" = push ]; then
+            dry=false
+          elif [ "$DRY_RUN_INPUT" = false ]; then
+            if [ "$REF" != refs/heads/main ]; then
+              echo "::error::실제 릴리스(dry_run=false)는 main 에서만 할 수 있습니다: $REF"
+              exit 1
+            fi
+            dry=false
+          else
+            dry=true
+          fi
+          echo "dry=$dry" >> "$GITHUB_OUTPUT"
+          echo "event=$EVENT ref=$REF dry_run=$dry"
+
+      - name: 버전·태그 확인
+        id: tag
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.build.outputs.version }}
         run: |
-          tag="windows-v$VERSION"
-          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
-            echo "$tag 태그가 이미 있어 릴리스를 건너뜁니다."
-            exit 0
+          file_version="$(tr -d '[:space:]' < dist/VERSION)"
+          if [ -z "$VERSION" ] || [ "$file_version" != "$VERSION" ]; then
+            echo "::error::빌드 버전($VERSION)과 자산 VERSION($file_version)이 다릅니다."
+            exit 1
           fi
-          # packaging/release.sh 와 같은 규칙 — windows/CHANGELOG.md 의 "## <버전>" 항목을 릴리스 설명으로 쓴다
+          tag="windows-v$VERSION"
+          exists=false
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+             || git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            exists=true
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "exists=$exists" >> "$GITHUB_OUTPUT"
+          echo "버전 $VERSION · 태그 $tag · 이미 있음: $exists"
+
+      # packaging/release.sh 와 같은 규칙 — windows/CHANGELOG.md 의 "## <버전>" 항목을 릴리스 설명으로 쓴다
+      - name: 릴리스 설명(변경 내역 항목)
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
           notes="$RUNNER_TEMP/notes.md"
           awk -v v="$VERSION" '/^## /{p = ($2 == v); next} p' windows/CHANGELOG.md > "$notes"
           if [ -z "$(tr -d '[:space:]' < "$notes")" ]; then
             echo "::error::windows/CHANGELOG.md 에 '## $VERSION' 항목을 먼저 쓰세요."
             exit 1
           fi
-          gh release create "$tag" dist/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "Claude Board for Windows $VERSION" \
-            --notes-file "$notes" \
-            --latest=false \
-            --target "$GITHUB_SHA"
-          echo "released: https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"
+          echo "----- 릴리스 설명 -----"
+          cat "$notes"
+
+      # SPEC 8.1 의 자산과 정확히 같은지, sha256 이 zip 과 맞는지, zip 안의 파일이 맞는지 확인한다
+      - name: 릴리스 자산 확인
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          expected="ClaudeBoard-$VERSION-setup.exe
+          ClaudeBoard-windows-x64.zip
+          ClaudeBoard-windows-x64.zip.sha256
+          VERSION
+          install.ps1
+          uninstall.ps1"
+          expected="$(printf '%s\n' "$expected" | sed 's/^ *//' | LC_ALL=C sort)"
+          actual="$(cd dist && find . -type f | sed 's|^\./||' | LC_ALL=C sort)"
+          if [ "$expected" != "$actual" ]; then
+            echo "::error::릴리스 자산이 SPEC 8.1 과 다릅니다."
+            diff <(echo "$expected") <(echo "$actual") || true
+            exit 1
+          fi
+          (cd dist && sha256sum -c ClaudeBoard-windows-x64.zip.sha256)
+          zip_files="$(unzip -Z1 dist/ClaudeBoard-windows-x64.zip | LC_ALL=C sort)"
+          want_zip="$(printf '%s\n' ClaudeBoard.exe LICENSE README.md claude-board-hook.exe | LC_ALL=C sort)"
+          if [ "$zip_files" != "$want_zip" ]; then
+            echo "::error::zip 안의 파일이 SPEC 8.1 과 다릅니다."
+            printf '%s\n' "$zip_files"
+            exit 1
+          fi
+          ls -l dist
+
+      - name: 릴리스 만들기 (Latest 아님)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          EXISTS: ${{ steps.tag.outputs.exists }}
+          DRY: ${{ steps.mode.outputs.dry }}
+        run: |
+          cmd=(gh release create "$TAG"
+               "dist/ClaudeBoard-windows-x64.zip" "dist/ClaudeBoard-windows-x64.zip.sha256"
+               "dist/ClaudeBoard-$VERSION-setup.exe" "dist/install.ps1" "dist/uninstall.ps1" "dist/VERSION"
+               --repo "$GITHUB_REPOSITORY"
+               --title "Claude Board for Windows $VERSION"
+               --notes-file "$RUNNER_TEMP/notes.md"
+               --latest=false
+               --target "$GITHUB_SHA")
+          echo "실행할 명령:"
+          printf '%q ' "${cmd[@]}"
+          echo
+          if [ "$DRY" = true ]; then
+            [ "$EXISTS" = true ] && echo "(실제 실행이었다면 $TAG 가 이미 있어 건너뛰었습니다)"
+            echo "dry run — 릴리스를 만들지 않았습니다."
+          elif [ "$EXISTS" = true ]; then
+            echo "$TAG 가 이미 있어 릴리스를 건너뜁니다."
+          else
+            "${cmd[@]}"
+            echo "released: https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
+          fi

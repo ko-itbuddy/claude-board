@@ -426,3 +426,27 @@ props `{ groups: Group[]; limits: Limit[]; now: number; compact?: boolean; masco
 | T1 | TUI | board-tui.py | crates/hook `tui` | macOS 실행 |
 | R1 | CI·자동 릴리스(Latest 금지) | release.sh | .github/workflows/windows.yml | 브랜치 push 후 CI |
 | D1 | 문서 | README.md, packaging/README.txt | windows/*.md, 최상위 README·CLAUDE.md | 검토 |
+
+### 11.1 검증 결과 (2026-10-16, 첫 판 2.12)
+
+REA 의 `evaluate-reconstruction-coverage`·`build-reconstruction-obligation-ledger` 는 REA 가 배포 바이너리에서 뽑은 인증 근거와 원본·재구현 양쪽의 실행 사례를 입력으로 요구한다.
+원본은 소스가 모두 있고(REA 지침상 소스 저장소 분석에는 REA 를 쓰지 않는다) 재구현은 Windows 에서만 돌므로 그 도구는 돌리지 않았다. 아래 표가 그 대신이다.
+REA 를 쓴 곳: `import-reference-source`(원본 소스 목록), `capture-process`(state.py 실행 근거 `ev_23674ebbd76cceea4252d166b60c1ad66648ee3f2a951ba5d4c669d1c07d3368` — H1·H2 기준 데이터).
+`observe-native-ui` 는 메뉴 막대 전용 앱의 실행 시각을 읽지 못해 REA 가 거부했다(`process-identity-unavailable`).
+
+| ID | 상태 | 근거 |
+|---|---|---|
+| H1·H2 | 확인 | REA 캡처 14단계와 같은 결과(환경 의존 필드는 가림). macOS·Windows CI 에서 시험 통과 |
+| H3·H4 | 확인 | 단위 시험(적대적 모델 이름이 인자 하나로 남는지 포함). `resume_args` 로 셸을 거치지 않음 |
+| H5 | 컴파일·검토 | Windows CI 컴파일·시험 통과, Win32 API 계약 검토. **실제 Windows 동작 미확인** |
+| N1 | 확인 | notify.py 와 같은 출력 단위 시험 |
+| N2·N3 | 부분 | macOS 에서 패널 실행·자리·자동 종료 확인. 포커스를 가져가지 않는지·소리는 **Windows 미확인** |
+| I1 | 확인 | 등록·제거 왕복·백업·깨진 JSON 거부 시험 |
+| I2·I3 | 부분 | setup·uninstall 은 가짜 홈에서 실행 확인(레지스트리 제외). install.ps1 은 PS 5.1/7 파서·PSScriptAnalyzer·웹 호출 흉내 실행. **실제 Windows 설치 미확인** |
+| B1~B5·B7·B8 | 확인 | src-tauri 단위 시험(Windows CI 에서도 통과). DPAPI 는 **Windows 미확인** |
+| B6·B9 | 컴파일·검토 | Windows CI 빌드, Win32 API 계약 검토. 콘솔 입력·탭 선택·트레이·단축키·Mica 는 **Windows 미확인** |
+| U1 | 확인 | macOS 에서 Tauri 창을 가짜 세션으로 띄워 스크린샷, 브라우저에서 세 단계·알림 패널을 원본 스크린샷과 비교 |
+| U2 | 확인 | Swift 그림 코드를 macOS 에서 렌더링한 기준 그림과 픽셀 비교(가장자리 차이 0.7% 미만) |
+| T1 | 확인 | board-tui.py 와 화면 바이트 비교 |
+| R1 | 부분 | build 작업 Windows CI 통과(자산 §8.1 과 같음). release 작업은 게시 없는 시험 실행으로 확인 |
+| D1 | 확인 | 문서 작성·검토 |

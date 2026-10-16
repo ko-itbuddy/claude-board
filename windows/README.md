@@ -133,8 +133,17 @@ setup.exe 로 설치했다면 **설정 > 앱 > 설치된 앱** 에서 Claude Boa
 
 1. [CHANGELOG.md](CHANGELOG.md) 맨 위에 `## <버전> — <날짜>` 항목을 씁니다.
 2. `windows/packaging/release.sh <버전>` — 그 항목이 있는지 확인하고 `windows/VERSION` 을 그 버전으로 바꿉니다(손으로 바꿔도 됩니다).
-3. commit 해 main 에 push 하면 `.github/workflows/windows.yml` 이 빌드 · 테스트한 뒤 `windows-v<버전>` 릴리스를 만듭니다.
+3. (권장) 브랜치에서 릴리스 과정을 미리 확인합니다 — 아무것도 만들지 않는 dry run 입니다.
+
+   ```sh
+   gh workflow run windows.yml --ref <브랜치> -f dry_run=true
+   ```
+
+   빌드 뒤 릴리스 작업이 버전 · 태그 존재 · CHANGELOG 항목 · 자산 목록(zip 안의 파일과 SHA256 포함)을 모두 확인하고, 실행했을 `gh release create … --latest=false --target <커밋>` 명령만 보여 줍니다.
+   push 할 때마다 빌드 작업도 그 버전의 CHANGELOG 항목을 찾아 보여 주고, 없으면 실패합니다.
+4. commit 해 main 에 push 하면 `.github/workflows/windows.yml` 이 빌드 · 테스트한 뒤 `windows-v<버전>` 릴리스를 만듭니다.
    릴리스 설명은 CHANGELOG 의 그 버전 항목이고, 항목이 없으면 실패합니다. 태그가 이미 있으면 건너뜁니다.
+   main 에서 `-f dry_run=false` 로 손으로 돌려도 실제 릴리스를 만듭니다(다른 브랜치에서는 거부합니다).
 
 > ⚠️ Windows 릴리스는 **절대 Latest 로 표시하지 않습니다.** 설치된 macOS 앱이 `releases/latest/download/...` 로 업데이트를 받기 때문에,
 > Windows 릴리스가 Latest 가 되면 macOS 업데이트가 깨집니다. GitHub 화면에서 릴리스를 고칠 때도 "Set as the latest release" 를 켜지 마세요.
