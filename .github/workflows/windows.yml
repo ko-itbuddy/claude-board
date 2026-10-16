@@ -1,0 +1,184 @@
+# Claude Board for Windows — 빌드·테스트와 자동 릴리스 (windows/docs/SPEC.md 8.3)
+# 릴리스는 태그 windows-v<버전> 으로 만들고 절대 Latest 로 표시하지 않는다(--latest=false).
+# 설치된 macOS 앱이 releases/latest/download/... 를 읽으므로 Windows 릴리스가 Latest 가 되면 macOS 업데이트가 깨진다(SPEC 0.1).
+name: windows
+
+on:
+  push:
+    branches: ['**']   # 태그 push 에는 돌지 않는다
+    paths:
+      - 'windows/**'
+      - '.github/workflows/windows.yml'
+  pull_request:
+    paths:
+      - 'windows/**'
+      - '.github/workflows/windows.yml'
+  workflow_dispatch:
+
+# 같은 브랜치의 이전 실행은 취소한다 — main 은 릴리스 도중 끊기지 않게 취소하지 않는다
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            windows -> target
+            windows/app/src-tauri -> target
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: windows/app/package-lock.json
+
+      # windows/VERSION(예: 2.12)이 버전의 단일 출처 — Tauri 는 semver 가 필요하므로 2.12 → 2.12.0
+      - name: 버전 읽기
+        id: ver
+        run: |
+          v="$(tr -d '[:space:]' < windows/VERSION)"
+          if ! printf '%s' "$v" | grep -Eq '^[0-9]+(\.[0-9]+){0,2}$'; then
+            echo "::error::windows/VERSION 이 버전 숫자가 아닙니다: $v"
+            exit 1
+          fi
+          case "$v" in
+            *.*.*) semver="$v" ;;
+            *.*) semver="$v.0" ;;
+            *) semver="$v.0.0" ;;
+          esac
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "semver=$semver" >> "$GITHUB_OUTPUT"
+          echo "Claude Board for Windows $v ($semver)"
+
+      - name: core·hook 테스트
+        working-directory: windows
+        run: cargo test --workspace
+
+      - name: hook 빌드
+        working-directory: windows
+        run: cargo build --release -p claude-board-hook
+
+      # tauri.conf.json 의 externalBin "binaries/claude-board-hook" 은 대상 이름이 붙은 파일을 찾는다.
+      # Tauri 는 설치할 때 이름에서 대상 이름을 떼어 $INSTDIR\claude-board-hook.exe 로 둔다
+      - name: hook 을 sidecar 자리에 두기
+        run: |
+          mkdir -p windows/app/src-tauri/binaries
+          cp windows/target/release/claude-board-hook.exe \
+             windows/app/src-tauri/binaries/claude-board-hook-x86_64-pc-windows-msvc.exe
+
+      - name: 프론트엔드 의존성
+        working-directory: windows/app
+        run: npm ci
+
+      # 버전은 JSON 파일로 넘긴다 — npx 가 Windows 에서 cmd.exe 를 거치므로 따옴표가 든 JSON 문자열은 깨지기 쉽다
+      - name: 앱·설치 프로그램(NSIS) 빌드
+        working-directory: windows/app
+        env:
+          SEMVER: ${{ steps.ver.outputs.semver }}
+        run: |
+          cfg="$(cygpath -m "$RUNNER_TEMP")/tauri-version.json"
+          printf '{"version":"%s"}\n' "$SEMVER" > "$cfg"
+          npx tauri build --bundles nsis --config "$cfg"
+
+      # 백엔드 단위 테스트 — 위 빌드가 만든 프론트엔드 결과(../build)와 sidecar 가 있어야 컴파일된다
+      - name: 백엔드 테스트
+        working-directory: windows/app/src-tauri
+        run: cargo test
+
+      # 릴리스 자산(SPEC 8.1): zip·sha256·setup.exe·install.ps1·uninstall.ps1·VERSION
+      - name: 릴리스 자산 묶기
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = $env:GITHUB_WORKSPACE
+          $dist = Join-Path $ws 'windows\dist'
+          Remove-Item $dist -Recurse -Force -ErrorAction SilentlyContinue
+          $pkg = Join-Path $env:RUNNER_TEMP 'claude-board-pkg'
+          Remove-Item $pkg -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $dist, $pkg | Out-Null
+
+          Copy-Item (Join-Path $ws 'windows\app\src-tauri\target\release\ClaudeBoard.exe') $pkg
+          Copy-Item (Join-Path $ws 'windows\target\release\claude-board-hook.exe') $pkg
+          Copy-Item (Join-Path $ws 'LICENSE') $pkg
+          Copy-Item (Join-Path $ws 'windows\README.md') $pkg
+
+          $zipName = 'ClaudeBoard-windows-x64.zip'
+          $zip = Join-Path $dist $zipName
+          Compress-Archive -Path (Join-Path $pkg '*') -DestinationPath $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          # BOM 없는 UTF-8 한 줄: "<sha256>  ClaudeBoard-windows-x64.zip"
+          [IO.File]::WriteAllText("$zip.sha256", "$hash  $zipName`n", (New-Object System.Text.UTF8Encoding $false))
+
+          # Tauri 가 만드는 이름(<productName>_<semver>_x64-setup.exe)을 릴리스 이름으로 바꾼다
+          $setup = @(Get-ChildItem (Join-Path $ws 'windows\app\src-tauri\target\release\bundle\nsis') -Filter '*-setup.exe')
+          if ($setup.Count -ne 1) { throw "NSIS 설치 프로그램을 하나만 찾아야 하는데 $($setup.Count)개입니다." }
+          Copy-Item $setup[0].FullName (Join-Path $dist "ClaudeBoard-$env:VERSION-setup.exe")
+
+          Copy-Item (Join-Path $ws 'windows\packaging\install.ps1') $dist
+          Copy-Item (Join-Path $ws 'windows\packaging\uninstall.ps1') $dist
+          Copy-Item (Join-Path $ws 'windows\VERSION') $dist
+          Get-ChildItem $dist | Format-Table Name, Length -AutoSize | Out-String | Write-Host
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: claude-board-windows
+          path: windows/dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    # main 의 push 만 — 태그가 이미 있으면(버전을 올리지 않은 push) 건너뛴다
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: claude-board-windows
+          path: dist
+
+      - name: 릴리스 만들기 (Latest 아님)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          tag="windows-v$VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            echo "$tag 태그가 이미 있어 릴리스를 건너뜁니다."
+            exit 0
+          fi
+          # packaging/release.sh 와 같은 규칙 — windows/CHANGELOG.md 의 "## <버전>" 항목을 릴리스 설명으로 쓴다
+          notes="$RUNNER_TEMP/notes.md"
+          awk -v v="$VERSION" '/^## /{p = ($2 == v); next} p' windows/CHANGELOG.md > "$notes"
+          if [ -z "$(tr -d '[:space:]' < "$notes")" ]; then
+            echo "::error::windows/CHANGELOG.md 에 '## $VERSION' 항목을 먼저 쓰세요."
+            exit 1
+          fi
+          gh release create "$tag" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Claude Board for Windows $VERSION" \
+            --notes-file "$notes" \
+            --latest=false \
+            --target "$GITHUB_SHA"
+          echo "released: https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"

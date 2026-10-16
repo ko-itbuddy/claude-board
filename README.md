@@ -8,6 +8,16 @@
 
 버전별 변경은 [CHANGELOG.md](CHANGELOG.md), 모든 기능의 자세한 설명은 [설치 가이드](packaging/README.txt) 를 보세요.
 
+## 🪟 Windows
+
+Windows 10 · 11 판도 있습니다. PowerShell 에서 한 줄로 설치합니다.
+
+```powershell
+irm https://raw.githubusercontent.com/suhojang/claude-board/main/windows/packaging/install.ps1 | iex
+```
+
+필요한 환경 · 사용법 · macOS 판과 다른 점은 [windows/README.md](windows/README.md) 를 보세요.
+
 ## 💡 컨셉
 
 Claude Code 를 여러 프로젝트 · 터미널 탭에서 함께 돌리면, 어느 세션이 승인을 기다리는지, 어느 세션이 응답을 끝냈는지 알려면 탭을 하나씩 돌아봐야 합니다.

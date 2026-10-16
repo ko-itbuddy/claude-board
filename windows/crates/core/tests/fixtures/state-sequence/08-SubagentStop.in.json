@@ -1,0 +1,13 @@
+{
+  "step": "08",
+  "name": "SubagentStop",
+  "state": "subagent",
+  "input": {
+    "session_id": "11111111-2222-3333-4444-555555555555",
+    "transcript_path": "/private/tmp/claude-501/-Users-max-mackbook-pro-local-workspace-claude-board/f540867a-9675-492f-9e92-b463c0235bfc/scratchpad/rea/hookrun/transcript.jsonl",
+    "cwd": "/tmp/demo-proj",
+    "hook_event_name": "SubagentStop",
+    "agent_id": "a1",
+    "last_assistant_message": "찾았습니다.\n  결과   요약"
+  }
+}

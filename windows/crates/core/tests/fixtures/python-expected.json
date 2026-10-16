@@ -1,0 +1,187 @@
+{
+  "source": "저장소 최상위 notify.py·state.py (커밋 68ffed2) 로 만든 기대값 — gen-python-expected.py",
+  "text": [
+    {
+      "text": "작업을 마쳤습니다. 다음 단계는\n테스트입니다.",
+      "plain": "작업을 마쳤습니다. 다음 단계는 테스트입니다.",
+      "first_sentence": "작업을 마쳤습니다."
+    },
+    {
+      "text": "## 요약\n\n```rust\nfn main() {}\n```\n- **굵게** 항목 `code` 입니다\n1. 둘째 줄!",
+      "plain": "요약 굵게 항목 code 입니다 둘째 줄!",
+      "first_sentence": "요약 굵게 항목 code 입니다 둘째 줄!"
+    },
+    {
+      "text": "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가 나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나 다다다다다다다다다다다다다다다다다다다다다다다다다다다다다다다다다다다다다다다다다다다다다다다다다다",
+      "plain": "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가 나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나 다다다다다다다다다다다다다다다다다다다다다다다다다다다…",
+      "first_sentence": "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가 나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나나 다다다다다다다다다다다다다다다다다다다다다다다다다다다…"
+    },
+    {
+      "text": "| 표 | 머리 |\n|---|---|\n| a | b |",
+      "plain": "표 | 머리 | ---|---| a | b |",
+      "first_sentence": "표 | 머리 | ---|---| a | b |"
+    },
+    {
+      "text": "First sentence?Second. Third",
+      "plain": "First sentence?Second. Third",
+      "first_sentence": "First sentence?Second."
+    },
+    {
+      "text": "끝。다음 문장",
+      "plain": "끝。다음 문장",
+      "first_sentence": "끝。다음 문장"
+    },
+    {
+      "text": "",
+      "plain": "",
+      "first_sentence": ""
+    },
+    {
+      "text": "   \n\t  ",
+      "plain": "",
+      "first_sentence": ""
+    },
+    {
+      "text": "v1.2.3 버전을 올렸습니다. 확인해 주세요.",
+      "plain": "v1.2.3 버전을 올렸습니다. 확인해 주세요.",
+      "first_sentence": "v1.2.3 버전을 올렸습니다."
+    },
+    {
+      "text": "Unicode\u001cseparator. 다음",
+      "plain": "Unicode separator. 다음",
+      "first_sentence": "Unicode separator."
+    },
+    {
+      "text": "**bold * star** and `a` `b` ```inline block``` end.",
+      "plain": "*bold * star** and a b end.",
+      "first_sentence": "*bold * star** and a b end."
+    },
+    {
+      "text": "  # 제목\n   * 항목 하나\n  12. 번호 있는 항목. 끝",
+      "plain": "제목 항목 하나 번호 있는 항목. 끝",
+      "first_sentence": "제목 항목 하나 번호 있는 항목."
+    },
+    {
+      "text": "가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 끝.",
+      "plain": "가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사…",
+      "first_sentence": "가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사아자차 가나다라마바사…"
+    },
+    {
+      "text": "Wait... what? ok",
+      "plain": "Wait... what? ok",
+      "first_sentence": "Wait..."
+    },
+    {
+      "text": "a\n-b\n*c\n#d\n|e",
+      "plain": "a b c d e",
+      "first_sentence": "a b c d e"
+    },
+    {
+      "text": "줄 바꿈 없는　공백들!다음",
+      "plain": "줄 바꿈 없는 공백들!다음",
+      "first_sentence": "줄 바꿈 없는 공백들!다음"
+    },
+    {
+      "text": "```\n코드만\n```",
+      "plain": "",
+      "first_sentence": ""
+    },
+    {
+      "text": "**열린 굵게 `열린 코드",
+      "plain": "*열린 굵게 `열린 코드",
+      "first_sentence": "*열린 굵게 `열린 코드"
+    }
+  ],
+  "last_assistant_text": "첫째 줄\n둘째 **줄**.",
+  "resume": [
+    {
+      "argv": [
+        "/x/claude",
+        "--allow-dangerously-skip-permissions"
+      ],
+      "record": {
+        "permission_mode": "default",
+        "model": "claude-opus-5-5"
+      },
+      "carry": [
+        "--allow-dangerously-skip-permissions"
+      ],
+      "resume_posix": "claude --allow-dangerously-skip-permissions --permission-mode default --model claude-opus-5-5 --resume 11111111-2222-3333-4444-555555555555"
+    },
+    {
+      "argv": [
+        "claude",
+        "--model",
+        "opus",
+        "--permission-mode=plan",
+        "--add-dir",
+        "my dir",
+        "그곳",
+        "-c",
+        "--settings",
+        "{\"a\": 1}"
+      ],
+      "record": {
+        "permission_mode": "acceptEdits",
+        "model": "claude-opus-4[1m]"
+      },
+      "carry": [
+        "--model",
+        "opus",
+        "--permission-mode=plan",
+        "--add-dir",
+        "my dir",
+        "그곳",
+        "--settings",
+        "{\"a\": 1}"
+      ],
+      "resume_posix": "claude --add-dir 'my dir' '그곳' --settings '{\"a\": 1}' --permission-mode acceptEdits --model 'claude-opus-4[1m]' --resume 11111111-2222-3333-4444-555555555555"
+    },
+    {
+      "argv": [
+        "claude",
+        "--mcp-config",
+        "a.json",
+        "b's.json",
+        "--verbose",
+        "--print",
+        "--plugin-dir=/p q"
+      ],
+      "record": {},
+      "carry": [
+        "--mcp-config",
+        "a.json",
+        "b's.json",
+        "--verbose",
+        "--plugin-dir=/p q"
+      ],
+      "resume_posix": "claude --mcp-config a.json 'b'\"'\"'s.json' --verbose '--plugin-dir=/p q' --resume 11111111-2222-3333-4444-555555555555"
+    },
+    {
+      "argv": [
+        "claude",
+        "--model"
+      ],
+      "record": {
+        "model": "sonnet"
+      },
+      "carry": [],
+      "resume_posix": "claude --model sonnet --resume 11111111-2222-3333-4444-555555555555"
+    },
+    {
+      "argv": [
+        "claude",
+        "--agent",
+        ""
+      ],
+      "record": {
+        "permission_mode": "bypassPermissions"
+      },
+      "carry": [
+        "--agent",
+        ""
+      ],
+      "resume_posix": "claude --agent '' --permission-mode bypassPermissions --resume 11111111-2222-3333-4444-555555555555"
+    }
+  ]
+}

@@ -5,5 +5,7 @@
 /app/.svelte-kit/
 /app/src-tauri/target/
 /app/src-tauri/gen/schemas/
+# CI 가 tauri build 직전에 빌드한 hook 을 사이드카로 복사해 넣는 자리
+/app/src-tauri/binaries/
 /dist/
 .DS_Store

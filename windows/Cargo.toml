@@ -1,0 +1,14 @@
+# Claude Board for Windows — hook·명령줄 도구 워크스페이스
+# Tauri 앱(app/src-tauri)은 자기 Cargo.lock 을 따로 쓰므로 이 워크스페이스에 넣지 않는다
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/hook"]
+exclude = ["app/src-tauri"]
+
+# hook 은 Claude Code 이벤트마다 새로 뜨므로 작고 빠르게 만든다.
+# state·notify 는 catch_unwind 로 어떤 패닉도 잡아 종료 코드 0 으로 끝내야 하므로 panic = "abort" 를 쓰지 않는다
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

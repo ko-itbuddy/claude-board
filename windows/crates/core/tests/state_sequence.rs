@@ -1,0 +1,140 @@
+//! 기준 데이터 시험 — macOS `state.py` 에 hook 이벤트 14개를 차례로 넣은 REA 캡처와 [`state::apply`] 결과를 맞춘다.
+//! 출처·가린 필드는 `tests/fixtures/state-sequence/README.md` 참고.
+
+use std::fs;
+use std::path::PathBuf;
+
+use claude_board_core::state::{self, ClaudeProcess, Env};
+use claude_board_core::Record;
+use serde_json::{Map, Value};
+
+struct Step {
+    name: String,
+    state: String,
+    input: Record,
+    expected: Record,
+}
+
+fn steps() -> Vec<Step> {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/state-sequence");
+    let mut names: Vec<String> = fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .filter_map(|e| e.file_name().to_str()?.strip_suffix(".in.json").map(str::to_string))
+        .collect();
+    names.sort();
+    assert_eq!(names.len(), 14, "단계 14개");
+    names
+        .into_iter()
+        .map(|n| {
+            let input: Value = serde_json::from_str(&fs::read_to_string(dir.join(format!("{n}.in.json"))).unwrap()).unwrap();
+            let expected: Value = serde_json::from_str(&fs::read_to_string(dir.join(format!("{n}.out.json"))).unwrap()).unwrap();
+            Step {
+                name: n,
+                state: input["state"].as_str().unwrap().to_string(),
+                input: input["input"].as_object().unwrap().clone(),
+                expected: expected.as_object().unwrap().clone(),
+            }
+        })
+        .collect()
+}
+
+/// 가짜 프로세스 정보 — 늘 같은 Claude 프로세스를 찾고, 그 프로세스는 살아 있다.
+struct Fake(ClaudeProcess);
+
+impl Env for Fake {
+    fn find_claude(&self) -> Option<ClaudeProcess> {
+        Some(self.0.clone())
+    }
+    fn alive(&self, pid: u32, _ctime: Option<f64>) -> bool {
+        pid == self.0.pid
+    }
+    fn argv(&self, _pid: u32) -> Vec<String> {
+        self.0.argv.clone()
+    }
+    fn subagent_meta(&self, _transcript: &str, _agent_id: &str) -> Record {
+        Map::new()
+    }
+    fn cwd(&self) -> String {
+        "/somewhere/else".into()
+    }
+}
+
+/// 캡처한 기기의 프로세스·시계에서 온 필드를 지운다(값을 바꾸지 않고 키째 지운다 — pid_ctime 은 macOS 기록에 없다).
+fn mask(rec: &Record) -> Record {
+    let mut r = rec.clone();
+    for k in ["pid", "pid_ctime", "tty", "headless", "args", "resume_cmd", "started", "updated", "since", "transcript_path"] {
+        r.shift_remove(k);
+    }
+    if let Some(Value::Object(subs)) = r.get_mut("subagents") {
+        for sub in subs.values_mut().filter_map(Value::as_object_mut) {
+            for k in ["started", "updated", "ended"] {
+                sub.shift_remove(k);
+            }
+        }
+    }
+    if let Some(Value::Object(hit)) = r.get_mut("limit_hit") {
+        hit.shift_remove("at");
+    }
+    r
+}
+
+#[test]
+fn masked_sequence_matches_state_py() {
+    // Windows 처럼 생성 시각이 있고 tty 가 없는 가짜 프로세스 — 이런 차이는 가린 필드에만 나타나야 한다
+    let env = Fake(ClaudeProcess {
+        pid: 4242,
+        ctime: Some(1_700_000_000.25),
+        tty: None,
+        headless: false,
+        argv: vec!["C:\\Users\\u\\.local\\bin\\claude.exe".into(), "--model".into(), "claude-opus-5-5".into()],
+    });
+    let mut rec = Map::new();
+    for (i, step) in steps().iter().enumerate() {
+        let out = state::apply(rec, &step.state, &step.input, 1000.0 + i as f64, &env);
+        assert_eq!(Value::Object(mask(&out.record)), Value::Object(mask(&step.expected)), "단계 {}", step.name);
+        rec = out.record;
+    }
+}
+
+#[test]
+fn replay_with_captured_clock_and_process_is_exact() {
+    // 캡처한 기기와 같은 프로세스 정보와, 단계마다 캡처의 updated 를 시계로 쓰면 가린 필드까지 모두 같다
+    let env = Fake(ClaudeProcess {
+        pid: 46137,
+        ctime: None,
+        tty: Some("ttys000".into()),
+        headless: false,
+        argv: vec!["claude".into(), "--allow-dangerously-skip-permissions".into()],
+    });
+    let topic_title = " · 윈도우 포팅 작업을 시작해 주세요 아…";
+    let titles = [
+        Some("🟢 demo-proj".to_string()),
+        Some(format!("🔵 demo-proj{topic_title}")),
+        None,
+        None,
+        None,
+        Some(format!("🟠 demo-proj{topic_title}")),
+        Some(format!("🔵 demo-proj{topic_title}")),
+        None,
+        Some(format!("🟠 demo-proj{topic_title}")),
+        Some(format!("🟢 demo-proj{topic_title}")),
+        None,
+        None,
+        Some(format!("🔵 demo-proj{topic_title}")),
+        Some(format!("⚫ demo-proj{topic_title}")),
+    ];
+    let mut rec = Map::new();
+    for (i, step) in steps().iter().enumerate() {
+        let now = step.expected["updated"].as_f64().unwrap();
+        let out = state::apply(rec, &step.state, &step.input, now, &env);
+        assert_eq!(Value::Object(out.record.clone()), Value::Object(step.expected.clone()), "단계 {}", step.name);
+        assert_eq!(out.title, titles[i], "제목 — 단계 {}", step.name);
+        assert_eq!(out.remove_paused, step.input["hook_event_name"] == "UserPromptSubmit", "단계 {}", step.name);
+        // state.py 와 같은 키 순서(json.dump 는 삽입 순서를 지킨다)
+        let keys: Vec<&String> = out.record.keys().collect();
+        let want: Vec<&String> = step.expected.keys().collect();
+        assert_eq!(keys, want, "키 순서 — 단계 {}", step.name);
+        rec = out.record;
+    }
+}

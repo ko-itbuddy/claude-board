@@ -266,7 +266,7 @@ macOS 키체인 대신:
 - 현재 버전 = 빌드 때 `windows/VERSION`. 개발 빌드(`VERSION` 을 못 읽었거나 환경변수로 dev 표시)는 확인하지 않고 제목 옆에 `dev`.
 - 켤 때와 1시간마다 `GET https://api.github.com/repos/suhojang/claude-board/releases?per_page=30`(헤더 `User-Agent: ClaudeBoard-Windows`, `Accept: application/vnd.github+json`) → draft·prerelease 가 아니고 `tag_name` 이 `windows-v` 로 시작하는 첫 릴리스 → 버전 = 태그에서 `windows-v` 를 뺀 것(숫자 비교). 더 새로우면 알림 줄. **`/releases/latest` 를 쓰지 않는다.**
 - 알림 줄: "새 버전 <v> 이 나왔습니다" · **변경 내용**(`https://github.com/suhojang/claude-board/blob/main/windows/CHANGELOG.md`) · **업데이트**. 손으로 확인했는데 없으면 "최신 버전입니다 (<v>)" 4초, 실패하면 "업데이트를 확인하지 못했습니다".
-- 업데이트 실행: 그 릴리스의 `install.ps1` 자산 URL 로 `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { $s = irm '<url>'; & ([scriptblock]::Create($s)) -Version '<v>' -Update }"` 를 창 없이 분리 실행, 출력은 `notifier\update.log`. 성공하면 스크립트가 보드를 끄고 새 보드를 띄우므로 돌아오지 않는다. 프로세스가 끝나 돌아오면 실패 — "업데이트하지 못했습니다 · ~/.claude/notifier/update.log" + 다시 시도.
+- 업데이트 실행: `https://raw.githubusercontent.com/suhojang/claude-board/windows-v<v>/windows/packaging/install.ps1`(태그 기준 원본 — 릴리스 자산과 달리 UTF-8 로 내려와 update.log 의 한글이 깨지지 않는다)로 `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { $s = irm '<url>'; & ([scriptblock]::Create($s)) -Version '<v>' -Update }"` 를 창 없이 분리 실행, 출력은 `notifier\update.log`. 성공하면 스크립트가 보드를 끄고 새 보드를 띄우므로 돌아오지 않는다. 프로세스가 끝나 돌아오면 실패 — "업데이트하지 못했습니다 · ~/.claude/notifier/update.log" + 다시 시도.
 
 ### 5.9 보드 설정 저장 (macOS UserDefaults 대응)
 
@@ -333,7 +333,11 @@ interface Account { id: string; email: string; org: string; plan: string; expire
 `enter_mini(rows)` · `leave_mini` · `snap_right` · `hide_board` · `minimize_board` · `log(text)`.
 확인 대화상자(계정 전환·세션 중단)는 백엔드가 네이티브 대화상자(`tauri-plugin-dialog`)로 띄운다.
 
-### 6.3 알림 패널 — 별도 페이지 `notify.html`, 백엔드가 인자를 `get_notify_options` 로 준다. 클릭 `notify_clicked`, 마우스 `notify_hover(bool)`, 내용 높이 `notify_ready(height)`.
+### 6.3 알림 패널 — 프론트 경로 `/notify`, 백엔드가 인자를 `get_notify_options` 로 준다. 내용 높이 `notify_ready(height)`(백엔드가 그 높이로 자리를 잡고 보인다), 마우스 `notify_hover(inside)`, 클릭 `notify_clicked`(백엔드가 보드를 띄움), 닫힘 애니메이션이 끝나면 `notify_finish`(백엔드가 슬롯을 놓고 프로세스를 끝냄). 카운트다운은 프론트가 한다.
+
+### 6.4 캐릭터 컴포넌트 계약 — `app/src/lib/mascot/Foreman.svelte`
+
+props `{ groups: Group[]; limits: Limit[]; now: number; compact?: boolean; mascot: MascotKind; onPickMascot: (kind) => void }`. 말풍선 문구·시계·그림·오른쪽 클릭 캐릭터 메뉴를 모두 안에서 처리한다. 이름·유행어 목록은 `app/src/lib/mascot/mascots.ts` 의 `MASCOTS`.
 
 ## 7. 보드 화면 (프론트엔드) — `ClaudeBoard.swift:1247-2483, 2584-2930, 3772-4095, 4246-4460` 와 스크린샷 `docs/images/*.png`
 

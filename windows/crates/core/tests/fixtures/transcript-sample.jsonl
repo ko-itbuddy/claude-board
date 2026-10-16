@@ -1,0 +1,7 @@
+{"type": "user", "message": {"role": "user", "content": "안녕"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "이전 답"}]}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "  \n"}, {"type": "text", "text": "첫째 줄"}, {"type": "tool_use", "name": "Bash"}, {"type": "text", "text": "둘째 **줄**."}]}}
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Read"}]}}
+{"type": "assistant", "message": {"model": "x", "content": "문자열 content"}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}}
+{broken json

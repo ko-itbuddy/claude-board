@@ -1,0 +1,12 @@
+{
+  "step": "02",
+  "name": "UserPromptSubmit",
+  "state": "working",
+  "input": {
+    "session_id": "11111111-2222-3333-4444-555555555555",
+    "transcript_path": "/private/tmp/claude-501/-Users-max-mackbook-pro-local-workspace-claude-board/f540867a-9675-492f-9e92-b463c0235bfc/scratchpad/rea/hookrun/transcript.jsonl",
+    "cwd": "/tmp/demo-proj",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "윈도우 포팅   작업을\n시작해 주세요 아주 긴 요청 문장이 이어집니다 마흔 자를 넘깁니다"
+  }
+}

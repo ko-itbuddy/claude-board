@@ -1,0 +1,29 @@
+#!/bin/sh
+# Windows 판 새 버전 준비 — windows/CHANGELOG.md 에 "## <버전>" 항목이 있는지 확인하고 windows/VERSION 을 그 버전으로 바꾼다
+# 빌드·릴리스는 이 스크립트가 하지 않는다. 커밋을 main 에 push 하면 .github/workflows/windows.yml 이
+# 태그 windows-v<버전> 릴리스를 만든다(절대 Latest 로 표시하지 않는다 — windows/docs/SPEC.md 0.1)
+# 사용법: windows/packaging/release.sh <버전>
+set -e
+VERSION="${1:?사용법: release.sh <버전>}"
+W="$(cd "$(dirname "$0")/.." && pwd)"
+
+if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+(\.[0-9]+){0,2}$'; then
+  echo "버전은 2.13 처럼 숫자로 쓰세요: $VERSION" >&2
+  exit 1
+fi
+# CI 와 같은 규칙(packaging/release.sh 와 같은 awk) — 항목이 없으면 CI 의 릴리스 작업이 실패한다
+NOTES="$(awk -v v="$VERSION" '/^## /{p = ($2 == v); next} p' "$W/CHANGELOG.md")"
+if [ -z "$(printf '%s' "$NOTES" | tr -d '[:space:]')" ]; then
+  echo "windows/CHANGELOG.md 맨 위에 '## $VERSION — <날짜>' 항목을 먼저 쓰세요." >&2
+  exit 1
+fi
+# 태그가 이미 있으면 CI 가 릴리스를 건너뛰므로 미리 알린다
+if git -C "$W" ls-remote --exit-code --tags origin "refs/tags/windows-v$VERSION" >/dev/null 2>&1; then
+  echo "windows-v$VERSION 릴리스가 이미 있습니다. 버전을 올리세요." >&2
+  exit 1
+fi
+
+printf '%s\n' "$VERSION" > "$W/VERSION"
+echo "windows/VERSION → $VERSION"
+echo "다음: 변경을 커밋(예: \"Windows $VERSION 릴리스 — <요약>\")하고 main 에 push 하면"
+echo "      CI 가 빌드한 뒤 windows-v$VERSION 릴리스를 Latest 표시 없이 만듭니다."

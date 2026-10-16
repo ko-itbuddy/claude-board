@@ -1,0 +1,13 @@
+{
+  "step": "01",
+  "name": "SessionStart",
+  "state": "idle",
+  "input": {
+    "session_id": "11111111-2222-3333-4444-555555555555",
+    "transcript_path": "/private/tmp/claude-501/-Users-max-mackbook-pro-local-workspace-claude-board/f540867a-9675-492f-9e92-b463c0235bfc/scratchpad/rea/hookrun/transcript.jsonl",
+    "cwd": "/tmp/demo-proj",
+    "hook_event_name": "SessionStart",
+    "model": "claude-opus-5-5",
+    "permission_mode": "default"
+  }
+}

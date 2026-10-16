@@ -1,0 +1,28 @@
+[package]
+name = "claude-board-hook"
+# 실제 버전은 windows/VERSION 을 build.rs 가 읽어 CLAUDE_BOARD_VERSION 으로 넣는다
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Claude Board hook·설치·TUI 명령줄 실행 파일"
+
+[[bin]]
+name = "claude-board-hook"
+path = "src/main.rs"
+
+[dependencies]
+claude-board-core = { path = "../core" }
+serde_json = { version = "1.0.149", features = ["preserve_order"] }
+crossterm = "0.29.0"
+unicode-width = "0.2.2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.186"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+] }
