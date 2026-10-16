@@ -73,7 +73,7 @@ irm https://raw.githubusercontent.com/suhojang/claude-board/main/windows/packagi
 | 하고 싶은 것 | 방법 |
 |---|---|
 | 🧭 그 세션의 터미널로 가기 | 세션 줄을 더블 클릭 — 그 세션의 터미널 창을 앞으로 가져오고, Windows Terminal 이면 그 탭을 고릅니다(최선 노력) |
-| ⏯️ 끝난 세션 이어 열기 | 종료된 세션을 더블 클릭 — Windows Terminal 새 탭(없으면 새 명령 프롬프트 창)에서 `claude --resume` 으로 이어 엽니다 |
+| ⏯️ 끝난 세션 이어 열기 | 종료된 세션을 더블 클릭 — 새 콘솔 창(Windows 의 기본 터미널 — Windows 11 은 보통 Windows Terminal)에서 `claude --resume` 으로 이어 엽니다. claude 가 끝나면 창도 닫힙니다 |
 | ⏸️ 일시중지 · 재개 · 중단 | 세션 줄의 … 메뉴 — 그 세션의 콘솔에 Esc · 이어 가기 문구 · `/exit` 를 넣습니다(최선 노력, 터미널 없이 도는 세션은 안 됨) |
 | 🔍 한 상태만 보기 | 윗줄의 상태 칩(승인 대기 · 작업 중 · 대기)을 누르기, 다시 누르면 모두 보기 |
 | 👤 계정 바꾸기 | 사용 한도 카드 왼쪽 위 계정을 누르고 저장한 계정 고르기 (**계정 추가…** 로 미리 저장) |
@@ -119,7 +119,7 @@ setup.exe 로 설치했다면 **설정 > 앱 > 설치된 앱** 에서 Claude Boa
 | hook | python3 스크립트 | 실행 파일 하나(`claude-board-hook.exe`) — 셸을 거치지 않는 형식(command + args)으로 등록 |
 | 상태 아이콘 | 메뉴 막대 | 작업 표시줄 알림 영역(트레이) |
 | 보드 단축키 | ⌃⌥B | Ctrl+Alt+B |
-| 세션으로 이동 · 이어 열기 | Ghostty 1.3 이상 | 콘솔 창 + Windows Terminal 탭(최선 노력), 이어 열기는 Windows Terminal 새 탭 또는 명령 프롬프트 창 |
+| 세션으로 이동 · 이어 열기 | Ghostty 1.3 이상 | 콘솔 창 + Windows Terminal 탭(최선 노력), 이어 열기는 기본 터미널의 새 창 — 셸 없이 claude 를 바로 띄우므로 끝나면 창이 닫힙니다 |
 | 일시중지 · 재개 · 중단 · 자동 전환 뒤 이어 가기 | Ghostty 에 키 입력 | 세션 콘솔에 키 입력 넣기(최선 노력) |
 | 저장한 계정 토큰 | 키체인 | DPAPI 로 암호화한 파일 — 이 PC 의 이 Windows 사용자만 풀 수 있습니다 |
 | 지금 로그인 | 키체인 | `%USERPROFILE%\.claude\.credentials.json` |
