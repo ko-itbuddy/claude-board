@@ -448,5 +448,5 @@ REA 를 쓴 곳: `import-reference-source`(원본 소스 목록), `capture-proce
 | U1 | 확인 | macOS 에서 Tauri 창을 가짜 세션으로 띄워 스크린샷, 브라우저에서 세 단계·알림 패널을 원본 스크린샷과 비교 |
 | U2 | 확인 | Swift 그림 코드를 macOS 에서 렌더링한 기준 그림과 픽셀 비교(가장자리 차이 0.7% 미만) |
 | T1 | 확인 | board-tui.py 와 화면 바이트 비교 |
-| R1 | 부분 | build 작업 Windows CI 통과(자산 §8.1 과 같음). release 작업은 게시 없는 시험 실행으로 확인 |
+| R1 | 확인 | Windows CI build·release(dry run) 통과(실행 38903798305) — 자산 §8.1 과 같고, 만들 명령에 `--latest=false --target <커밋>`. 실제 게시는 main 병합 때 처음 돈다 |
 | D1 | 확인 | 문서 작성·검토 |
