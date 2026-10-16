@@ -83,7 +83,8 @@ hook 사본을 바꿀 때는 실행 중인 exe 를 덮어쓸 수 없으므로 `c
 | `subagents` | `{agent_id: {type, description?, background?, started, state(running\|waiting\|done), tool?, updated, ended?, last_message?}}` | 같음 |
 | `state_before_sub_wait` | 서브에이전트 승인 대기 전 상태 | 같음 |
 | `limit_hit` | `{at, message}` — 한도에 걸려 끊김 | 같음 |
-| `resume_cmd` | 다시 여는 명령 문자열 | **Windows 명령줄 규칙으로 인용**(공백·특수문자가 있으면 큰따옴표, `"` 는 `\"`). 예: `claude --model claude-opus-5-5 --resume <id>` |
+| `resume_cmd` | 다시 여는 명령 문자열 | **표시용**. Windows 명령줄 규칙으로 인용(예: `claude --model claude-opus-5-5 --resume <id>`). 이 문자열을 셸(cmd·PowerShell)로 실행하지 않는다 |
+| `resume_args` | — | **Windows 전용 추가**: `claude` 뒤에 붙일 인자 배열(`[..., "--resume", "<id>"]`). 보드는 이 배열로 `claude.exe` 를 직접 실행한다 — 모델 이름 같은 값은 저장소의 설정 파일에서 올 수 있어 셸 해석을 거치면 명령 주입이 된다 |
 
 쓰기: 같은 폴더에 `<sid>.<임의>.tmp` 로 쓰고 바꿔 넣는다(Windows 는 `MoveFileExW(REPLACE_EXISTING)`, 공유 위반이면 50ms 간격 5번 다시). 읽고 고쳐 쓰는 동안 `.<sid>.lock` 을 `LockFileEx` 배타 잠금(macOS `flock`).
 
@@ -257,8 +258,9 @@ macOS 키체인 대신:
   문구: `carryOnPrompt` = "보드에서 일시중지했던 세션을 재개합니다. 중단된 지점부터 직전 작업을 이어서 진행해 주세요." 자동 전환 문구 = `ClaudeBoard.swift:801`.
 - 세션으로 이동(더블 클릭): 콘솔에 붙어 `GetConsoleWindow` → 보이면 그 창, 아니면 소유 창(`GW_OWNER`)·조상 프로세스의 보이는 최상위 창 → 최소화면 복원 후 앞으로(`AllowSetForegroundWindow`/`SetForegroundWindow`, 막히면 `AttachThreadInput` 방식). Windows Terminal 이면 탭까지: 그 콘솔 제목을 표지 `CBFOCUS-<8자>` 로 잠깐 바꾸고 UI Automation 으로 이름이 그 표지인 TabItem 을 찾아 `SelectionItemPattern.Select` 한 뒤 제목을 되돌린다(`ClaudeBoard.swift:4831-4875` 와 같은 생각).
 - 한 번 클릭 = 그 세션의 터미널 앱 창만 앞으로(위 창 찾기의 결과), 모르면 Windows Terminal(없으면 아무것도 안 함).
-- 이어 열기(종료 세션 더블 클릭·"세션 다시 열기"): `resume_cmd`(없으면 `claude --resume <id>`), carryOn 이면 뒤에 문구를 큰따옴표로 붙이고 `.paused` 삭제. `wt.exe` 가 있으면 `wt.exe -w 0 new-tab -d "<cwd>" --title "<project>" cmd.exe /k <명령>`(wt 인자에서 `;` 는 `\;`), 없으면 `cmd.exe /c start "<project>" /D "<cwd>" cmd.exe /k <명령>`.
-- 명령을 새 터미널 창에서 실행(`runInTerminal`, 계정 추가 등): wt 가 있으면 `wt.exe -w new cmd.exe /k <명령>`, 없으면 `cmd.exe /c start "" cmd.exe /k <명령>`. 홈 폴더에서 시작.
+- 이어 열기(종료 세션 더블 클릭·"세션 다시 열기"): `resume_args`(없으면 `["--resume", "<id>"]`), carryOn 이면 문구를 인자 하나로 뒤에 붙이고 `.paused` 삭제.
+  **셸(cmd.exe·PowerShell·wt.exe 명령줄)을 거치지 않는다** — `claude.exe`(PATH 또는 `%USERPROFILE%\.local\bin\claude.exe`)를 인자 배열로 `CREATE_NEW_CONSOLE` 로 직접 띄우고 작업 폴더는 cwd. Windows 11 에서 기본 터미널이 Windows Terminal 이면 그 안에 열린다. claude 가 끝나면 창도 닫힌다(macOS 는 셸 pane 이 남는다 — 안전을 위해 다르게 한다).
+- 명령을 새 터미널 창에서 실행(`runInTerminal`, 계정 추가): 같은 방식 — `claude.exe auth login --claudeai [--email <이메일>]` 를 환경변수 `CLAUDE_CONFIG_DIR=<로그인 폴더>` 만 더해 `CREATE_NEW_CONSOLE` 로 직접 띄운다. 홈 폴더에서 시작. 끝난 뒤 안내는 보드의 안내 문구가 맡는다.
 - `--action pause|resume|stop|reopen|focus <id>` 로 실행되면 떠 있는 보드에 넘긴다(단일 실행 플러그인의 인자 전달) — stop 은 확인 없이.
 
 ### 5.8 업데이트 — `Updater` (`ClaudeBoard.swift:4097-4224`)

@@ -16,6 +16,7 @@ Tauri 쪽에서는 `claude-board-core = { path = "../../crates/core" }` 로 넣�
 | `mute_all_file()`, `notify_position_file()`, `board_theme_file()` | `notifier/mute-all`, `notifier/notify-position`, `notifier/board-theme` |
 | `local_bin()` | `~/.local/bin` |
 | `basename(&str)` | 마지막 이름(Windows 는 `\`·`/` 모두 구분자) — 세션의 `project` 규칙 |
+| `claude_exe() -> Option<PathBuf>` | Claude Code 실행 파일 — PATH 의 `claude.exe`(그 밖 `claude`), 없으면 `~/.local/bin/claude.exe` |
 
 환경변수로 가짜 폴더를 쓰면 macOS 에서도 보드를 띄워 볼 수 있다. hook 등록까지 시험할 때는 `CLAUDE_BOARD_HOME` 을 쓴다(명령 경로에 `.claude/notifier/` 표시가 들어가야 한다).
 
@@ -45,6 +46,11 @@ UI 스레드에서 부르지 말고 백그라운드에서 부른다(`Pause` 동�
 
 - `run(sessions, state_arg, stdin_bytes, &SystemEnv)` — `state <상태>` hook 본체(잠금·읽기·쓰기·prune·`.paused` 삭제·제목).
 - `apply(rec, state_arg, input, now, &dyn Env) -> Outcome { record, title, remove_paused }` — 순수 함수(시험용 `Env` 를 넣는다).
+- **세션 다시 열기는 `resume_args` 로만 한다.** 기록의 `resume_args`(또는 `resume_args(&Record)`)는 `claude` 뒤에 붙일 인자 배열이고
+  `"--resume", "<sid>"` 로 끝난다(기록에 없으면 `["--resume", "<sid>"]`). 보드는 `paths::claude_exe()` 를
+  `Command::new(exe).args(resume_args)` + `CREATE_NEW_CONSOLE` + `current_dir(cwd)` 로 직접 띄운다 — cmd.exe·PowerShell·wt.exe 명령줄을 거치지 않는다.
+  모델 이름 같은 값은 저장소의 `.claude/settings.json` 에서 올 수 있어(예: `x" & calc & "`) 셸 문자열로 실행하면 명령 주입이 된다.
+- `resume_cmd` 는 **표시용** 문자열(플랫폼 인용)이다 — 실행하지 않는다.
 - `resume_cmd(&Record)`(플랫폼 인용), `resume_cmd_with(&Record, quote::join_windows)`, `carry_args(&argv)`, `title_text(state, &Record)`, `prune(sessions, now, alive)`, `lock_path(sessions, sid)`.
 - hook 은 세션 파일을 `.<sid>.lock` 배타 잠금 아래에서 읽고 고쳐 쓴다(Windows `LockFileEx`, 그 밖 `flock` — std `File::lock`).
 

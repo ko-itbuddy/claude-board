@@ -96,9 +96,10 @@ pub fn carry_args<S: AsRef<str>>(argv: &[S]) -> Vec<String> {
     out
 }
 
-/// 종료된 세션을 같은 인자와 마지막 권한 모드·모델로 다시 여는 명령 — `state.py:resume_cmd`.
-/// `join` 으로 인용 규칙을 고른다([`quote::join`] 은 플랫폼 규칙).
-pub fn resume_cmd_with(rec: &Record, join: fn(&[String]) -> String) -> String {
+/// 종료된 세션을 다시 열 때 `claude` 뒤에 붙일 인자 배열 — 같은 인자에 마지막 권한 모드·모델을 다시 붙이고
+/// `--resume <sid>` 로 끝난다(`state.py:resume_cmd` 와 같은 규칙). 보드는 이 배열로 claude 를 셸 없이 직접 실행한다 —
+/// 모델 이름 같은 값은 저장소의 설정 파일에서 올 수 있어 셸 문자열로 실행하면 명령 주입이 된다.
+pub fn resume_args(rec: &Record) -> Vec<String> {
     let mut args: Vec<String> = rec
         .get("args")
         .and_then(Value::as_array)
@@ -115,14 +116,20 @@ pub fn resume_cmd_with(rec: &Record, join: fn(&[String]) -> String) -> String {
         args.push(value.to_string());
     }
     let sid = rec.get("session_id").and_then(Value::as_str).unwrap_or_default();
+    args.push("--resume".to_string());
+    args.push(sid.to_string());
+    args
+}
+
+/// 표시용 다시 열기 명령 `claude <resume_args…>` — `join` 으로 인용 규칙을 고른다([`quote::join`] 은 플랫폼 규칙).
+/// 이 문자열을 셸로 실행하지 않는다(실행은 [`resume_args`]).
+pub fn resume_cmd_with(rec: &Record, join: fn(&[String]) -> String) -> String {
     let mut all = vec!["claude".to_string()];
-    all.extend(args);
-    all.push("--resume".to_string());
-    all.push(sid.to_string());
+    all.extend(resume_args(rec));
     join(&all)
 }
 
-/// 이 플랫폼의 인용 규칙으로 만든 `resume_cmd`.
+/// 이 플랫폼의 인용 규칙으로 만든 표시용 `resume_cmd`.
 pub fn resume_cmd(rec: &Record) -> String {
     resume_cmd_with(rec, quote::join)
 }
@@ -326,6 +333,8 @@ pub fn apply(mut rec: Record, state_arg: &str, data: &Record, now: f64, env: &dy
 
     let cmd = resume_cmd(&rec);
     set(&mut rec, "resume_cmd", cmd);
+    let args = resume_args(&rec);
+    set(&mut rec, "resume_args", args);
 
     // 터미널이 있는 세션만 제목을 바꾼다 — macOS 는 tty, Windows 는 headless 가 아닌 콘솔
     let has_terminal = truthy(rec.get("tty")) || rec.get("headless") == Some(&Value::Bool(false));
@@ -549,6 +558,29 @@ mod tests {
         assert_eq!(resume_cmd_with(&rec, quote::join_posix), "claude --model m --resume s");
         let rec = obj(json!({"session_id": "s"}));
         assert_eq!(resume_cmd_with(&rec, quote::join_posix), "claude --resume s");
+    }
+
+    #[test]
+    fn resume_args_keep_hostile_values_whole() {
+        let rec = obj(json!({
+            "session_id": "sid-1",
+            "args": ["--model", "old", "--add-dir", "a b", "c&d", "--settings", "{\"x\": 1}", "--chrome"],
+            "permission_mode": "plan",
+            "model": "x\" & calc & \"",
+        }));
+        assert_eq!(
+            resume_args(&rec),
+            ["--add-dir", "a b", "c&d", "--settings", "{\"x\": 1}", "--chrome", "--permission-mode", "plan", "--model", "x\" & calc & \"", "--resume", "sid-1"]
+        );
+        // apply 가 기록에 resume_cmd 와 같은 내용의 배열을 남긴다 — 위험한 모델 이름도 원소 하나
+        let env = Fake { found: Some(ClaudeProcess { argv: vec!["claude".into(), "--chrome".into()], ..fake().found.unwrap() }), alive: true, meta: Map::new() };
+        let data = obj(json!({"session_id": "s9", "hook_event_name": "SessionStart", "cwd": "/w/p", "model": "x\" & calc & \""}));
+        let out = apply(Map::new(), "idle", &data, 1.0, &env);
+        assert_eq!(out.record["resume_args"], json!(["--chrome", "--model", "x\" & calc & \"", "--resume", "s9"]));
+        let keys: Vec<&String> = out.record.keys().collect();
+        assert_eq!(&keys[keys.len() - 2..], ["resume_cmd", "resume_args"]);
+        // 기록이 비어 있어도 --resume <sid> 로 끝난다
+        assert_eq!(resume_args(&obj(json!({"session_id": "s"}))), ["--resume", "s"]);
     }
 
     #[test]

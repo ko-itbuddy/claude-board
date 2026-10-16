@@ -92,6 +92,25 @@ pub fn local_bin() -> PathBuf {
     home().join(".local").join("bin")
 }
 
+/// Claude Code 실행 파일 이름(Windows 는 `claude.exe`).
+pub const CLAUDE_EXE: &str = if cfg!(windows) { "claude.exe" } else { "claude" };
+
+/// Claude Code 실행 파일 — PATH 에서 먼저 찾고, 없으면 네이티브 설치 위치 `~/.local/bin/claude(.exe)`.
+/// 보드는 이 파일을 [`crate::state::resume_args`] 같은 인자 배열로 직접 실행한다(셸 문자열로 실행하지 않는다).
+pub fn claude_exe() -> Option<PathBuf> {
+    find_claude_exe(env::var_os("PATH").as_deref(), &local_bin())
+}
+
+fn find_claude_exe(path_var: Option<&std::ffi::OsStr>, local_bin: &std::path::Path) -> Option<PathBuf> {
+    let from_path = path_var.into_iter().flat_map(env::split_paths).find_map(|dir| {
+        // Windows PATH 항목은 큰따옴표로 감싸여 있을 수 있다
+        let dir = PathBuf::from(dir.to_string_lossy().trim_matches('"'));
+        let exe = dir.join(CLAUDE_EXE);
+        (!dir.as_os_str().is_empty() && exe.is_file()).then_some(exe)
+    });
+    from_path.or_else(|| Some(local_bin.join(CLAUDE_EXE)).filter(|p| p.is_file()))
+}
+
 /// 경로의 마지막 이름 — Python `os.path.basename` 처럼 끝이 구분자면 빈 문자열.
 /// Windows 는 `\`·`/` 를 모두 구분자로 본다(SPEC §2.1 `project`).
 pub fn basename(path: &str) -> &str {
@@ -102,6 +121,29 @@ pub fn basename(path: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_exe_lookup_order() {
+        let root = std::env::temp_dir().join(format!("cb-claude-exe-{}", std::process::id()));
+        let (a, b, local) = (root.join("a"), root.join("b"), root.join("local"));
+        for d in [&a, &b, &local] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let path = env::join_paths([&a, &b]).unwrap();
+        // 아무 데도 없으면 None
+        assert_eq!(find_claude_exe(Some(&path), &local), None);
+        // ~/.local/bin 에만 있으면 그것
+        std::fs::write(local.join(CLAUDE_EXE), "").unwrap();
+        assert_eq!(find_claude_exe(Some(&path), &local), Some(local.join(CLAUDE_EXE)));
+        assert_eq!(find_claude_exe(None, &local), Some(local.join(CLAUDE_EXE)));
+        // PATH 에 있으면 PATH 가 먼저(앞 항목부터)
+        std::fs::write(b.join(CLAUDE_EXE), "").unwrap();
+        assert_eq!(find_claude_exe(Some(&path), &local), Some(b.join(CLAUDE_EXE)));
+        // 같은 이름의 폴더는 실행 파일이 아니다
+        std::fs::create_dir_all(a.join(CLAUDE_EXE)).unwrap();
+        assert_eq!(find_claude_exe(Some(&path), &local), Some(b.join(CLAUDE_EXE)));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn basename_like_python() {

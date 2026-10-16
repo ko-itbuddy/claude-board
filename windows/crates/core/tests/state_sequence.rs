@@ -63,7 +63,7 @@ impl Env for Fake {
 /// 캡처한 기기의 프로세스·시계에서 온 필드를 지운다(값을 바꾸지 않고 키째 지운다 — pid_ctime 은 macOS 기록에 없다).
 fn mask(rec: &Record) -> Record {
     let mut r = rec.clone();
-    for k in ["pid", "pid_ctime", "tty", "headless", "args", "resume_cmd", "started", "updated", "since", "transcript_path"] {
+    for k in ["pid", "pid_ctime", "tty", "headless", "args", "resume_cmd", "resume_args", "started", "updated", "since", "transcript_path"] {
         r.shift_remove(k);
     }
     if let Some(Value::Object(subs)) = r.get_mut("subagents") {
@@ -128,11 +128,20 @@ fn replay_with_captured_clock_and_process_is_exact() {
     for (i, step) in steps().iter().enumerate() {
         let now = step.expected["updated"].as_f64().unwrap();
         let out = state::apply(rec, &step.state, &step.input, now, &env);
-        assert_eq!(Value::Object(out.record.clone()), Value::Object(step.expected.clone()), "단계 {}", step.name);
+        // resume_args 는 Windows 판이 더한 필드(macOS 기록에 없다) — 내용을 따로 보고 뺀 나머지를 비교한다
+        let mut got = out.record.clone();
+        let args = got.shift_remove("resume_args").expect("resume_args");
+        assert_eq!(
+            args,
+            serde_json::json!(["--allow-dangerously-skip-permissions", "--permission-mode", "default", "--model", "claude-opus-5-5",
+                               "--resume", "11111111-2222-3333-4444-555555555555"]),
+            "resume_args — 단계 {}", step.name
+        );
+        assert_eq!(Value::Object(got.clone()), Value::Object(step.expected.clone()), "단계 {}", step.name);
         assert_eq!(out.title, titles[i], "제목 — 단계 {}", step.name);
         assert_eq!(out.remove_paused, step.input["hook_event_name"] == "UserPromptSubmit", "단계 {}", step.name);
         // state.py 와 같은 키 순서(json.dump 는 삽입 순서를 지킨다)
-        let keys: Vec<&String> = out.record.keys().collect();
+        let keys: Vec<&String> = got.keys().collect();
         let want: Vec<&String> = step.expected.keys().collect();
         assert_eq!(keys, want, "키 순서 — 단계 {}", step.name);
         rec = out.record;
