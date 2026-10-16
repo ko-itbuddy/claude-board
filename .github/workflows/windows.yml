@@ -31,6 +31,59 @@ permissions:
   contents: read
 
 jobs:
+  # 임시 — 러너에 화면 세션이 있는지 살핀다(화면이 필요한 실기 확인을 할지 정하려고). 결과를 읽은 뒤 지운다
+  probe:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - name: 러너 환경 살피기
+        shell: pwsh
+        run: |
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class U {
+            [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+            [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+            [DllImport("user32.dll")] public static extern IntPtr OpenInputDesktop(uint f, bool i, uint a);
+            [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+          }
+          '@
+          $me = Get-Process -Id $PID
+          "OS: $([Environment]::OSVersion.VersionString)  user: $env:USERNAME  session: $($me.SessionId)"
+          "UserInteractive: $([Environment]::UserInteractive)"
+          "my console window: $([U]::GetConsoleWindow())  visible: $([U]::IsWindowVisible([U]::GetConsoleWindow()))"
+          "foreground window: $([U]::GetForegroundWindow())"
+          "OpenInputDesktop: $([U]::OpenInputDesktop(0, $false, 0x0100))"
+          "explorer: $((Get-Process explorer -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Id)/s$($_.SessionId)" }) -join ',')"
+          $wv = Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction SilentlyContinue
+          "WebView2: $($wv.pv)"
+          "wt.exe: $((Get-Command wt.exe -ErrorAction SilentlyContinue).Source)"
+          "node: $((Get-Command node.exe -ErrorAction SilentlyContinue).Source)"
+          "pwsh: $($PSVersionTable.PSVersion)  powershell.exe: $((Get-Command powershell.exe).Source)"
+          $p = Start-Process cmd.exe -ArgumentList '/k', 'title probe-console' -PassThru
+          Start-Sleep 3
+          $p.Refresh()
+          "new console child: pid $($p.Id)  MainWindowHandle $($p.MainWindowHandle)  visible: $([U]::IsWindowVisible($p.MainWindowHandle))  title: $($p.MainWindowTitle)"
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          try {
+            Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            New-Item -ItemType Directory -Force probe | Out-Null
+            $bmp.Save("$PWD\probe\screen.png")
+            "screenshot: $($b.Width)x$($b.Height) ok"
+          } catch { "screenshot failed: $_" }
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: runner-probe
+          path: probe/*
+          if-no-files-found: ignore
+
   build:
     runs-on: windows-latest
     defaults:
