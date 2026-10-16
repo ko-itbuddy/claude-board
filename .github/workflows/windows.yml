@@ -1,4 +1,4 @@
-# Claude Board for Windows — 빌드·테스트와 자동 릴리스 (windows/docs/SPEC.md 8.3)
+# Claude Board for Windows — 빌드·테스트, 실제 Windows 설치 확인(smoke), 자동 릴리스 (windows/docs/SPEC.md 8.3)
 # 릴리스는 태그 windows-v<버전> 으로 만들고 절대 Latest 로 표시하지 않는다(--latest=false).
 # 설치된 macOS 앱이 releases/latest/download/... 를 읽으므로 Windows 릴리스가 Latest 가 되면 macOS 업데이트가 깨진다(SPEC 0.1).
 name: windows
@@ -31,59 +31,6 @@ permissions:
   contents: read
 
 jobs:
-  # 임시 — 러너에 화면 세션이 있는지 살핀다(화면이 필요한 실기 확인을 할지 정하려고). 결과를 읽은 뒤 지운다
-  probe:
-    runs-on: windows-latest
-    continue-on-error: true
-    steps:
-      - name: 러너 환경 살피기
-        shell: pwsh
-        run: |
-          Add-Type -TypeDefinition @'
-          using System;
-          using System.Runtime.InteropServices;
-          public static class U {
-            [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-            [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
-            [DllImport("user32.dll")] public static extern IntPtr OpenInputDesktop(uint f, bool i, uint a);
-            [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
-          }
-          '@
-          $me = Get-Process -Id $PID
-          "OS: $([Environment]::OSVersion.VersionString)  user: $env:USERNAME  session: $($me.SessionId)"
-          "UserInteractive: $([Environment]::UserInteractive)"
-          "my console window: $([U]::GetConsoleWindow())  visible: $([U]::IsWindowVisible([U]::GetConsoleWindow()))"
-          "foreground window: $([U]::GetForegroundWindow())"
-          "OpenInputDesktop: $([U]::OpenInputDesktop(0, $false, 0x0100))"
-          "explorer: $((Get-Process explorer -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Id)/s$($_.SessionId)" }) -join ',')"
-          $wv = Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction SilentlyContinue
-          "WebView2: $($wv.pv)"
-          "wt.exe: $((Get-Command wt.exe -ErrorAction SilentlyContinue).Source)"
-          "node: $((Get-Command node.exe -ErrorAction SilentlyContinue).Source)"
-          "pwsh: $($PSVersionTable.PSVersion)  powershell.exe: $((Get-Command powershell.exe).Source)"
-          $p = Start-Process cmd.exe -ArgumentList '/k', 'title probe-console' -PassThru
-          Start-Sleep 3
-          $p.Refresh()
-          "new console child: pid $($p.Id)  MainWindowHandle $($p.MainWindowHandle)  visible: $([U]::IsWindowVisible($p.MainWindowHandle))  title: $($p.MainWindowTitle)"
-          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-          try {
-            Add-Type -AssemblyName System.Windows.Forms, System.Drawing
-            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
-            $g = [System.Drawing.Graphics]::FromImage($bmp)
-            $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
-            New-Item -ItemType Directory -Force probe | Out-Null
-            $bmp.Save("$PWD\probe\screen.png")
-            "screenshot: $($b.Width)x$($b.Height) ok"
-          } catch { "screenshot failed: $_" }
-
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: runner-probe
-          path: probe/*
-          if-no-files-found: ignore
-
   build:
     runs-on: windows-latest
     defaults:
@@ -216,10 +163,44 @@ jobs:
           path: windows/dist/*
           if-no-files-found: error
 
+  # 실제 Windows 러너에서 build 의 자산을 깔고 지워 본다(windows/ci/). 러너는 일회용 VM 이라 실제 %USERPROFILE%·HKCU 를 쓴다.
+  # 설치 확인이 실패하면 이 작업이 실패해 release 가 나가지 않는다. 화면 확인은 정보용(continue-on-error)이라 릴리스를 막지 않는다
+  smoke:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: claude-board-windows
+          path: dist
+
+      # setup.exe /S 설치 → 등록된 hook 을 가짜 Claude Code 아래에서 실행 → 같은 버전 다시 설치·제자리 제거 → 제거 → install.ps1·uninstall.ps1(PS 5.1)
+      - name: 설치 확인
+        run: ./windows/ci/install-checks.ps1 -Assets dist -Results smoke-results
+
+      # 보드 창·단일 실행·알림 패널(포커스를 가져가지 않는지·확장 스타일)·스크린샷 — 설치 확인이 실패해도 정보를 얻으려고 돌린다
+      - name: 화면 확인 (정보용)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: ./windows/ci/screen-checks.ps1 -Assets dist -Results smoke-results
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: smoke-results
+          path: smoke-results/
+          if-no-files-found: ignore
+
   # 실제 릴리스: main 의 push, 또는 main 에서 workflow_dispatch(dry_run=false).
   # dry run(workflow_dispatch 기본값): 아래 확인을 모두 하고 실행할 gh 명령만 보여 준다 — 아무것도 만들지 않는다
   release:
-    needs: build
+    needs: [build, smoke]
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
