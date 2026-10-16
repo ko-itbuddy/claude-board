@@ -299,6 +299,13 @@ mod tests {
             format!(r#"{{"context_window":{{"context_window_size":400000,"current_usage":{{}},"used_percentage":50}},"at":{at}}}"#),
         )
         .unwrap();
+        // Windows 는 수정 시각이 타이머 틱(약 15ms) 단위라 바로 앞에 쓴 기록과 같은 값이 될 수 있다 — 바뀐 것으로 보이게 확실히 옮긴다
+        fs::File::options()
+            .append(true)
+            .open(ctx_dir.join("s.json"))
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(2))
+            .unwrap();
         assert_eq!(r4.read("s", &t, "", 301.0).unwrap(), Ctx::new(200_000, 400_000));
         fs::remove_dir_all(&d).unwrap();
     }

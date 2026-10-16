@@ -5,7 +5,8 @@
 //! - 자식은 `CreateProcessW` 로 직접 띄운다 — std `Command` 는 부모의 표준 핸들(CI 에서는 파이프)을
 //!   `STARTF_USESTDHANDLES` 로 넘기므로, 새 콘솔을 받은 자식의 표준 입력이 그 콘솔이 되지 않는다.
 //! - 자식(node.exe)은 준비되면 준비 파일을 쓰고, 잡히지 않은 오류는 `<준비 파일>.err` 에 남긴다(새 콘솔에 쓴 글은 시험이 볼 수 없다).
-//! - `terminal_window`·`is_headless`(-p 아님)는 아직 무엇이 맞는지 정하지 않아 값만 기록에 남긴다.
+//! - 창에 관한 assert(`terminal_window` 가 보이는 창, headless 거짓)는 화면 세션(데스크톱)이 있어야 성립한다 — CI 러너에는 있다.
+//!   창 없는 콘솔(`CREATE_NO_WINDOW`)은 조상 사슬에 따라 달라지므로 값만 기록에 남긴다.
 #![cfg(windows)]
 
 mod common;
@@ -238,8 +239,15 @@ fn console_window_of(pid: u32) -> Option<isize> {
     }
 }
 
-/// 아직 assert 하지 않는 값들을 기록에 남긴다 — 다음 실행 결과를 보고 무엇이 맞는지 정한다.
-fn report_window(label: &str, pid: u32) {
+/// 붙기·콘솔 창·터미널 창·headless·제목을 읽어 기록에 남기고 돌려준다(실패 메시지에도 그 줄을 넣는다).
+struct Seen {
+    term: Option<isize>,
+    headless: bool,
+    title: Option<String>,
+    line: String,
+}
+
+fn report_window(label: &str, pid: u32) -> Seen {
     let attach = keeps_std("can_attach", || console::can_attach(pid));
     let raw = console_window_of(pid);
     let term = keeps_std("terminal_window", || console::terminal_window(pid));
@@ -250,10 +258,12 @@ fn report_window(label: &str, pid: u32) {
         Some(w) => describe_window(w),
         None => "붙지 못함".to_string(),
     };
-    note(&format!(
+    let line = format!(
         "{label}(pid {pid}): can_attach {attach} / 콘솔 창 {raw_text} / terminal_window {} / is_headless(-p 없음) {headless} / 제목 {title:?}",
         term.map_or_else(|| "None".to_string(), describe_window)
-    ));
+    );
+    note(&line);
+    Seen { term, headless, title, line }
 }
 
 /// 받은 입력 파일의 16진수 줄들(다 쓴 줄만)을 이어 붙인 바이트.
@@ -307,7 +317,12 @@ fn new_console_title_round_trip() {
     // -p 로 띄운 세션은 콘솔·창과 상관없이 headless
     let argv: Vec<String> = ["claude.exe", "-p", "hi"].map(String::from).to_vec();
     assert!(keeps_std("is_headless", || console::is_headless(child.pid, &argv)), "-p 인데 headless 가 아니다");
-    report_window("새 콘솔 자식", child.pid);
+    let seen = report_window("새 콘솔 자식", child.pid);
+    // 화면 세션(데스크톱)이 있어야 한다 — 콘솔 창(WT 탭이면 그 소유 창인 WT 창)이 보이는 터미널 창이고, 그래서 headless 가 아니다
+    let Some(term) = seen.term else { panic!("새 콘솔 자식의 터미널 창을 찾지 못했다 — {}", seen.line) };
+    // SAFETY: 창 핸들 조회만 한다
+    assert!(unsafe { IsWindowVisible(term as HWND) } != 0, "터미널 창이 보이지 않는다 — {}", seen.line);
+    assert!(!seen.headless, "새 콘솔 자식이 headless 로 판별됐다 — {}", seen.line);
 }
 
 #[test]
@@ -321,7 +336,10 @@ fn cannot_attach_without_console() {
     assert!(!keeps_std("can_attach", || console::can_attach(detached.pid)), "콘솔 없는 자식(DETACHED_PROCESS)에 붙었다");
     assert!(!keeps_std("set_title", || console::set_title(detached.pid, "x")), "콘솔 없는 자식의 제목을 바꿨다고 한다");
     assert!(!keeps_std("send_input", || console::send_input(detached.pid, &[Input::Enter])), "콘솔 없는 자식에 입력을 넣었다고 한다");
-    report_window("콘솔 없는 자식(DETACHED_PROCESS)", detached.pid);
+    let seen = report_window("콘솔 없는 자식(DETACHED_PROCESS)", detached.pid);
+    assert_eq!(seen.term, None, "콘솔 없는 자식에 터미널 창이 있다고 한다 — {}", seen.line);
+    assert!(seen.headless, "콘솔 없는 자식이 headless 가 아니다 — {}", seen.line);
+    assert_eq!(seen.title, None, "콘솔 없는 자식의 제목을 읽었다 — {}", seen.line);
 
     // 없는 pid — 홀수(pid 는 4 의 배수, 커널은 아래 두 비트를 무시)이고 u32::MAX(ATTACH_PARENT_PROCESS)가 아니다
     let ghost = 0x7FFF_FFFD_u32;
@@ -330,7 +348,8 @@ fn cannot_attach_without_console() {
     assert!(!keeps_std("can_attach", || console::can_attach(ghost)), "없는 pid 에 붙었다");
     assert_eq!(keeps_std("title", || console::title(ghost)), None);
 
-    // 창 없는 콘솔(CREATE_NO_WINDOW) — 값만 남긴다(조상의 창으로 headless 가 정해지는 경우)
+    // 창 없는 콘솔(CREATE_NO_WINDOW) — 조상 사슬에 보이는 창이 있는지에 따라 달라지므로 값만 남긴다
+    // (CI: 조상이 cargo → bash → Runner.Worker → 서비스라 terminal_window None, headless 참)
     let (hidden, _, _) = node_child(&node, dir.path(), "hidden", IDLE, "", CREATE_NO_WINDOW);
     report_window("창 없는 콘솔 자식(CREATE_NO_WINDOW)", hidden.pid);
 }

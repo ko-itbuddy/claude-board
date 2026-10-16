@@ -5,7 +5,7 @@
 //!   hook 을 셸 없이 `child_process.spawnSync` 로 두 번(SessionStart → UserPromptSubmit) 띄운 뒤 결과를 파일로 남기고 기다린다.
 //!   시험이 확인을 끝낼 때까지 살아 있어야 한다(끝나면 alive 판단이 달라진다). 끝나면 Drop 이 끝낸다.
 //! - 실제 사용자의 ~/.claude 를 건드리지 않게 `CLAUDE_BOARD_HOME` 을 임시 폴더로 한다.
-//! - -p 가 아닌 세션의 headless·콘솔 제목은 아직 무엇이 맞는지 정하지 않아 값만 기록에 남긴다.
+//! - -p 가 아닌 세션의 headless 거짓·터미널 창은 화면 세션(데스크톱)이 있어야 성립한다 — CI 러너에는 있다.
 #![cfg(windows)]
 
 #[path = "../../core/tests/common/mod.rs"]
@@ -219,14 +219,30 @@ fn session(tag: &str, print_mode: bool) {
     assert_eq!(rec2["headless"], headless, "{ctx2}");
     assert_eq!(rec2["resume_args"], json!(resume), "{ctx2}");
 
-    // 아직 assert 하지 않는 값 — headless(-p 아님)·콘솔 제목·터미널 창. headless 가 거짓이면 hook 이 제목을 바꿨어야 한다
+    // 콘솔 제목·터미널 창 — 먼저 값을 기록에 남기고(실패 원인 파악용) 확인한다
     let expect_title = state::title_text("working", rec2.as_object().unwrap());
+    let hook_titles = [state::title_text("idle", rec.as_object().unwrap()), expect_title.clone()];
     let title = console::title(pid);
-    note(&format!(
+    let term = console::terminal_window(pid);
+    let line = format!(
         "hook {tag}: headless {headless} / 콘솔 제목 {title:?} (headless=false 면 기대 {expect_title:?}) / can_attach {} / terminal_window {:?} / {tree}",
         console::can_attach(pid),
-        console::terminal_window(pid).map(|w| format!("{w:#x}"))
-    ));
+        term.map(|w| format!("{w:#x}"))
+    );
+    note(&line);
+    if print_mode {
+        // headless 세션은 hook 이 제목을 바꾸지 않는다 — hook 이 쓰는 제목(상태 아이콘으로 시작)이 아니어야 한다
+        let icons = ["working", "waiting", "idle", "ended"].map(state::icon);
+        assert!(
+            !title.as_deref().is_some_and(|t| hook_titles.iter().any(|h| h == t) || icons.iter().any(|i| t.starts_with(i))),
+            "-p 세션의 콘솔 제목을 hook 이 바꿨다 — {line}"
+        );
+    } else {
+        // 화면 세션(데스크톱)이 있어야 한다 — 새 콘솔(WT 탭)의 터미널 창이 보이므로 headless 가 아니고, hook 이 제목을 바꾼다
+        assert_eq!(headless, false, "콘솔 세션이 headless 로 판별됐다 — {line}");
+        assert_eq!(title.as_deref(), Some(expect_title.as_str()), "hook 이 바꾼 콘솔 제목이 다르다 — {line}");
+        assert!(term.is_some(), "콘솔 세션의 터미널 창을 찾지 못했다 — {line}");
+    }
     assert_eq!(fs::read_to_string(&session_file).ok().as_deref(), runs[1]["record"].as_str(), "세션 파일이 마지막 hook 뒤에 바뀌었다");
 }
 
