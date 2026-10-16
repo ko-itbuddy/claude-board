@@ -625,6 +625,17 @@ mod tests {
         // 금고 파일은 계정 id 해시 이름
         assert!(p.vault(&b.id).exists());
         assert_eq!(p.vault(&b.id).file_name().unwrap().len(), 16 + 4);
+        // 금고 파일 내용 — Windows 는 DPAPI 로 봉인돼 토큰이 평문으로 보이지 않는다(그 밖은 개발용 평문)
+        let raw = fs::read(p.vault(&b.id)).unwrap();
+        for needle in ["claudeAiOauth", "accessToken", "r-B1"] {
+            assert_eq!(
+                crate::util::contains(&raw, needle.as_bytes()),
+                !cfg!(windows),
+                "금고 파일({}바이트)에서 {needle:?} 평문 여부가 기대와 다르다: {}",
+                raw.len(),
+                String::from_utf8_lossy(&raw[..raw.len().min(200)])
+            );
+        }
 
         // 지금 계정의 토큰이 회전된 뒤 b 로 전환 — a 의 최신 토큰을 저장하고 b 토큰을 넣는다
         fs::write(&p.credentials, serde_json::to_vec(&json!({"claudeAiOauth": token("A2"), "mcpOAuth": {"x": 1}})).unwrap()).unwrap();

@@ -441,4 +441,218 @@ mod tests {
         assert_eq!(v.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), ["wt", "pwsh", "powershell", "cmd", "git-bash"]);
         assert!(v.iter().all(|x| !x.installed && !x.running));
     }
+
+    /// 실제 Windows 에서만 — `spawn_console` 로 node.exe 를 새 콘솔에 띄워 자식이 받은 인자·환경변수·작업 폴더를 비교한다.
+    /// 위 `console_launch_line_and_env` 가 명령줄 문자열의 모양을 본다면, 이것은 그 문자열을 Windows 의 CRT(node.exe 는
+    /// MSVC 빌드)가 같은 배열로 되돌리는지를 본다. 기본 터미널이 Windows Terminal 이면 자식은 그 탭으로 열린다 — 쓰고 바로 끝난다.
+    #[cfg(windows)]
+    mod real_spawn {
+        use super::*;
+        use serde_json::Value;
+        use std::time::Instant;
+
+        /// 자식 스크립트. 결과는 스크립트 옆 result.json 에 쓴다(인자·환경이 틀려도 스크립트만 돌면 보고가 남게).
+        /// 작업 폴더는 경로 문자열 대신 표지 파일로 확인한다(임시 폴더가 8.3 짧은 이름이거나 대소문자가 다를 수 있다).
+        const SCRIPT: &str = r#"
+const fs = require('fs'), path = require('path');
+const out = path.join(__dirname, 'result.json');
+let r;
+try {
+  const names = ['CB_SPAWN_VALUE', 'USERPROFILE', 'SYSTEMROOT'];
+  const env = Object.keys(process.env).filter(k => names.includes(k.toUpperCase())).map(k => [k, process.env[k]]);
+  fs.writeFileSync(path.join(process.cwd(), 'cwd-marker'), String(process.pid));
+  r = { pid: process.pid, argv0: process.argv0, args: process.argv.slice(2), cwd: process.cwd(), env };
+} catch (e) {
+  r = { pid: process.pid, error: String((e && e.stack) || e) };
+}
+fs.writeFileSync(out + '.tmp', JSON.stringify(r));
+fs.renameSync(out + '.tmp', out);
+"#;
+
+        fn find_node() -> Option<PathBuf> {
+            let dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+            dirs.into_iter().map(|d| d.join("node.exe")).find(|p| p.is_file())
+        }
+
+        /// 끝나면 남은 자식(명령줄에 이 시험 폴더 이름이 든 node.exe)을 5초 기다렸다 끝내고 시험 폴더를 지운다.
+        struct Cleanup(PathBuf);
+
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let mark = self.0.file_name().unwrap().to_string_lossy().into_owned();
+                let deadline = Instant::now() + Duration::from_secs(5);
+                loop {
+                    let left: Vec<u32> = ProcessTable::capture()
+                        .pids_named("node.exe")
+                        .into_iter()
+                        .filter(|&p| proc::command_line(p).is_some_and(|a| a.iter().any(|s| s.contains(&mark))))
+                        .collect();
+                    if left.is_empty() {
+                        break;
+                    }
+                    if Instant::now() >= deadline {
+                        eprintln!("남은 자식을 끝낸다: {left:?}");
+                        for p in left {
+                            proc::terminate(p);
+                        }
+                        std::thread::sleep(Duration::from_millis(500));
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+                // 실행 파일 이미지가 막 풀린 참이면 지우기가 잠깐 실패할 수 있다
+                for _ in 0..10 {
+                    if fs::remove_dir_all(&self.0).is_ok() || !self.0.exists() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(300));
+                }
+            }
+        }
+
+        fn listing(dir: &Path) -> Vec<String> {
+            fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()
+        }
+
+        /// 한 번 띄우고 결과를 60초까지 기다린다. 못 받으면 명령줄과 폴더 내용을 실패 메시지에 넣는다.
+        fn run(exe: &Path, args: &[String], cwd: &Path, envs: &[(&str, &OsStr)], result: &Path) -> Value {
+            let _ = fs::remove_file(result);
+            let _ = fs::remove_file(cwd.join("cwd-marker"));
+            let line = console_command_line(exe, args);
+            spawn_console(exe, args, cwd, envs).unwrap_or_else(|e| panic!("spawn_console 실패: {e}\n명령줄: {line}"));
+            let deadline = Instant::now() + Duration::from_secs(60);
+            while Instant::now() < deadline {
+                if let Ok(b) = fs::read(result) {
+                    return serde_json::from_slice(&b)
+                        .unwrap_or_else(|e| panic!("결과 파일이 JSON 이 아니다: {e}\n{}", String::from_utf8_lossy(&b)));
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            let scripts = result.parent().unwrap();
+            panic!(
+                "60초 안에 자식의 결과 파일이 생기지 않았다 — 자식이 스크립트를 돌리지 못했다(실행 파일 경로나 인자가 쪼개졌을 수 있다)\n\
+                 실행 파일: {}\n명령줄: {line}\n작업 폴더: {} {:?}\n스크립트 폴더: {:?}",
+                exe.display(),
+                cwd.display(),
+                listing(cwd),
+                listing(scripts)
+            );
+        }
+
+        /// 인자·argv[0]·작업 폴더 — 두 번의 실행에 같이 쓴다.
+        fn check_common(r: &Value, exe: &Path, args: &[String], cwd: &Path) {
+            let line = console_command_line(exe, args);
+            if let Some(e) = r.get("error") {
+                panic!("자식 스크립트 오류: {e}\n명령줄: {line}");
+            }
+            let got: Vec<String> = r["args"]
+                .as_array()
+                .unwrap_or_else(|| panic!("결과에 args 가 없다: {r}"))
+                .iter()
+                .map(|v| v.as_str().unwrap_or_default().to_string())
+                .collect();
+            // args[0] 은 스크립트 경로 — node 가 process.argv[1] 로 바꿔 넣으므로 그 뒤부터 비교한다
+            let want = &args[1..];
+            if got != want {
+                let diff: Vec<String> = (0..got.len().max(want.len()))
+                    .filter(|&i| got.get(i) != want.get(i))
+                    .map(|i| format!("  [{i}] 보냄 {:?} / 받음 {:?}", want.get(i), got.get(i)))
+                    .collect();
+                panic!("자식이 받은 인자가 다르다 (보냄 {}개, 받음 {}개)\n{}\n명령줄: {line}", want.len(), got.len(), diff.join("\n"));
+            }
+            assert_eq!(r["argv0"].as_str(), Some(&*exe.to_string_lossy()), "argv[0] 이 실행 파일 경로와 다르다\n명령줄: {line}");
+            assert!(
+                cwd.join("cwd-marker").is_file(),
+                "자식의 작업 폴더가 넘긴 폴더가 아니다 — 자식 cwd {}, 넘긴 폴더 {}",
+                r["cwd"],
+                cwd.display()
+            );
+        }
+
+        /// 자식이 본 환경변수 가운데 이름(대소문자 무시)이 `name` 인 것들 — 같은 이름이 두 번 들어갔는지도 보인다.
+        fn env_of(r: &Value, name: &str) -> Vec<(String, String)> {
+            r["env"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|kv| Some((kv[0].as_str()?.to_string(), kv[1].as_str()?.to_string())))
+                .filter(|(k, _)| k.eq_ignore_ascii_case(name))
+                .collect()
+        }
+
+        #[test]
+        fn spawn_console_delivers_args_env_and_cwd() {
+            let Some(node) = find_node() else {
+                if std::env::var_os("CI").is_some() {
+                    panic!("CI 인데 PATH 에서 node.exe 를 찾지 못했다 — PATH: {:?}", std::env::var_os("PATH"));
+                }
+                eprintln!("node.exe 가 PATH 에 없어 spawn_console 실제 실행 시험을 건너뛴다");
+                return;
+            };
+            let root = std::env::temp_dir().join(format!("cb-console-{}", crate::util::short_id()));
+            let _cleanup = Cleanup(root.clone());
+            // 실행 파일 경로에도 공백·한글을 넣는다 — argv[0] 이 쪼개지면 뒤 인자가 모두 밀린다. 같은 볼륨이면 하드 링크, 아니면 복사
+            let (bin, scripts, cwd) = (root.join("노드 복사본"), root.join("자식 스크립트"), root.join("작업 폴더"));
+            for d in [&bin, &scripts, &cwd] {
+                fs::create_dir_all(d).unwrap();
+            }
+            let exe = bin.join("node.exe");
+            if fs::hard_link(&node, &exe).is_err() {
+                fs::copy(&node, &exe).unwrap_or_else(|e| panic!("{} 를 {} 로 복사하지 못했다: {e}", node.display(), exe.display()));
+            }
+            let script = scripts.join("child.js");
+            fs::write(&script, SCRIPT).unwrap();
+            let result = scripts.join("result.json");
+
+            // 이어 열기 인자에는 저장소 설정 파일에서 온 모델 이름이 들어갈 수 있다 — 셸 문자·따옴표·역슬래시가 그대로 하나씩 도착해야 한다
+            let cases = [
+                "공백 있는 인자",
+                r#"say "hi" now"#,
+                "한글",
+                "",
+                r"C:\끝\",
+                r"C:\my dir\",
+                r"C:\두 개\\",
+                r#"a\"b"#,
+                r#"a\\"b c"#,
+                r"\\server\share dir",
+                "\\",
+                "\"",
+                "& | ^ % ! < >",
+                "a&b|c^d%e!f<g>h(i)",
+                "%PATH%",
+                "!PATH!",
+                "--model",
+                "x; calc & echo",
+                r#"x" & calc & echo ""#,
+                "--resume",
+                "탭\t문자",
+                "  앞뒤 공백  ",
+                CARRY_ON_PROMPT,
+            ];
+            let args: Vec<String> = std::iter::once(script.to_string_lossy().into_owned()).chain(cases.map(String::from)).collect();
+            let system_root = std::env::var("SystemRoot").expect("SystemRoot 환경변수");
+
+            // 이어 열기 꼴 — 더할 환경변수 없이(보드의 환경을 그대로 물려준다)
+            let r = run(&exe, &args, &cwd, &[], &result);
+            eprintln!("이어 열기 꼴 결과: {r}");
+            check_common(&r, &exe, &args, &cwd);
+            let extra = env_of(&r, "CB_SPAWN_VALUE");
+            assert!(extra.is_empty(), "더하지 않은 환경변수가 보인다: {extra:?}");
+            assert_eq!(env_of(&r, "SystemRoot").into_iter().map(|(_, v)| v).collect::<Vec<_>>(), [system_root.as_str()]);
+
+            // 계정 추가 꼴 — 환경변수를 더한다. 이미 있는 이름(USERPROFILE)은 대소문자가 달라도 하나로 덮어써야 한다
+            let value = "값 \"따옴표\" & | ^ < > %TEMP% !PATH! a=b ; 끝\\";
+            let profile = r"D:\가짜 프로필 %USERPROFILE%";
+            let envs = [("CB_SPAWN_VALUE", OsStr::new(value)), ("userprofile", OsStr::new(profile))];
+            let r = run(&exe, &args, &cwd, &envs, &result);
+            eprintln!("계정 추가 꼴 결과: {r}");
+            check_common(&r, &exe, &args, &cwd);
+            assert_eq!(env_of(&r, "CB_SPAWN_VALUE"), [("CB_SPAWN_VALUE".to_string(), value.to_string())]);
+            let got = env_of(&r, "USERPROFILE");
+            assert!(got.len() == 1 && got[0].1 == profile, "USERPROFILE 덮어쓰기가 틀렸다 — 자식이 본 값 {got:?}");
+            // 더한 환경 블록에도 보드의 나머지 환경이 그대로 들어가야 한다
+            assert_eq!(env_of(&r, "SystemRoot").into_iter().map(|(_, v)| v).collect::<Vec<_>>(), [system_root.as_str()]);
+        }
+    }
 }

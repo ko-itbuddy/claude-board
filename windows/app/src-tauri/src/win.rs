@@ -212,3 +212,94 @@ mod sys {
         false
     }
 }
+
+/// 실제 Windows 에서만 — DPAPI(현재 사용자) 봉인·풀기. 다른 OS 의 금고는 평문 그대로라 볼 것이 없다.
+#[cfg(all(test, windows))]
+mod tests {
+    use super::{protect, unprotect};
+    use crate::util::contains;
+
+    /// 실패 메시지용 — 앞 48바이트 16진수
+    fn hex(b: &[u8]) -> String {
+        b.iter().take(48).map(|x| format!("{x:02x}")).collect()
+    }
+
+    /// 봉인 → 풀기가 원문으로 돌아오는지. 봉인은 원문과 달라야 한다. 봉인한 바이트를 돌려준다.
+    fn round_trip(plain: &[u8]) -> Vec<u8> {
+        let sealed = protect(plain)
+            .unwrap_or_else(|| panic!("protect 실패 — 원문 {}바이트 ({})", plain.len(), std::io::Error::last_os_error()));
+        let back = unprotect(&sealed).unwrap_or_else(|| {
+            let err = std::io::Error::last_os_error();
+            panic!("unprotect 실패 — 원문 {}바이트, 봉인 {}바이트 {}… ({err})", plain.len(), sealed.len(), hex(&sealed))
+        });
+        assert_eq!(back, plain, "왕복 결과가 원문과 다르다 — 봉인 {}바이트 {}…", sealed.len(), hex(&sealed));
+        assert_ne!(sealed, plain, "봉인한 바이트가 원문 그대로다");
+        sealed
+    }
+
+    #[test]
+    fn dpapi_round_trip_hides_plain() {
+        let token = r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-시험용-0123456789abcdef","refreshToken":"sk-ant-ort01-시험용-fedcba9876543210","expiresAt":1}}"#;
+        let sealed = round_trip(token.as_bytes());
+        assert!(sealed.len() > token.len(), "봉인({}바이트)이 원문({}바이트)보다 짧다", sealed.len(), token.len());
+        for needle in [token, "accessToken", "sk-ant-oat01-", "fedcba9876543210"] {
+            assert!(
+                !contains(&sealed, needle.as_bytes()),
+                "봉인에 원문 조각 {needle:?} 이 그대로 있다 — {}…",
+                String::from_utf8_lossy(&sealed[..sealed.len().min(200)])
+            );
+        }
+        // 모든 바이트 값, 64KiB
+        let bytes: Vec<u8> = (0..=255u8).cycle().take(64 * 1024).collect();
+        let sealed = round_trip(&bytes);
+        assert!(!contains(&sealed, &bytes[..256]), "봉인에 원문 0..=255 가 그대로 있다");
+    }
+
+    #[test]
+    fn dpapi_empty_round_trip() {
+        let sealed = protect(b"").unwrap_or_else(|| panic!("빈 원문 protect 실패 ({})", std::io::Error::last_os_error()));
+        assert!(!sealed.is_empty(), "빈 원문의 봉인이 비어 있다");
+        let back = unprotect(&sealed);
+        assert_eq!(back.as_deref(), Some(&b""[..]), "빈 원문 왕복 실패 — 봉인 {}바이트 {}…", sealed.len(), hex(&sealed));
+    }
+
+    #[test]
+    fn dpapi_rejects_damaged() {
+        assert_eq!(unprotect(b""), None, "빈 입력이 풀렸다");
+        // 고정 씨앗 xorshift — 매번 같은 "무작위" 바이트
+        let mut x = 0x9E37_79B9_7F4A_7C15u64;
+        let mut noise = |n: usize| -> Vec<u8> {
+            (0..n)
+                .map(|_| {
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
+                    x as u8
+                })
+                .collect()
+        };
+        for n in [1, 16, 300, 1000] {
+            let junk = noise(n);
+            assert_eq!(unprotect(&junk), None, "무작위 {n}바이트가 풀렸다 — {}…", hex(&junk));
+        }
+        // 원문을 길게 잡아 봉인의 가운데가 암호문에 오게 한다
+        let plain = "계정 토큰 sk-ant-oat01-0123456789abcdef ".repeat(30);
+        let sealed = round_trip(plain.as_bytes());
+        let flip = |i: usize| {
+            let mut s = sealed.clone();
+            s[i] ^= 0x5a;
+            s
+        };
+        let n = sealed.len();
+        let damaged = [
+            ("끝 1바이트 잘림", sealed[..n - 1].to_vec()),
+            ("절반으로 잘림", sealed[..n / 2].to_vec()),
+            ("앞 16바이트만", sealed[..16].to_vec()),
+            ("가운데 1바이트 바뀜", flip(n / 2)),
+            ("마지막 바이트 바뀜", flip(n - 1)),
+        ];
+        for (what, bytes) in damaged {
+            assert_eq!(unprotect(&bytes), None, "망가진 봉인({what}, 원래 {n}바이트)이 풀렸다");
+        }
+    }
+}
