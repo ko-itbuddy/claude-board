@@ -3818,6 +3818,7 @@ struct BoardView: View {
 // 업데이트 단추는 설치와 같은 install.sh 를 curl 로 받아 실행한다 — 스크립트가 앱을 바꿔 끼우고 보드를 다시 띄운다
 let releaseRepo = "suhojang/claude-board"   // packaging/install.sh·release.sh 의 REPO 와 같게
 let releaseBase = "https://github.com/\(releaseRepo)/releases/latest/download"
+let changelogURL = URL(string: "https://github.com/\(releaseRepo)/blob/main/CHANGELOG.md")!
 
 final class Updater: ObservableObject {
     static let shared = Updater()
@@ -3832,7 +3833,7 @@ final class Updater: ObservableObject {
         // build-board.sh 로 만든 개발용 빌드(1.0)는 배포판으로 덮어쓰지 않게 확인하지 않는다
         guard !current.isEmpty, current != "1.0" else { return }
         check()
-        timer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in self?.check() }
+        timer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in self?.check() }
     }
 
     func check() {
@@ -3876,6 +3877,7 @@ final class Updater: ObservableObject {
 struct UpdateBanner: View {
     @ObservedObject var updater: Updater
     @State private var hover = false
+    @State private var notesHover = false
 
     var body: some View {
         let tint = updater.failed ? Palette.color("waiting") : Palette.accent
@@ -3890,6 +3892,13 @@ struct UpdateBanner: View {
             if updater.running {
                 ProgressView().controlSize(.small)
             } else {
+                // 무엇이 바뀌었는지 — 브라우저에서 GitHub 의 CHANGELOG.md 를 연다
+                Button("변경 내용") { NSWorkspace.shared.open(changelogURL) }
+                    .buttonStyle(.plain).font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(notesHover ? .primary : .secondary)
+                    .clickable($notesHover)
+                    .help("GitHub 에서 CHANGELOG.md 를 엽니다")
+                Rectangle().fill(Color.white.opacity(0.14)).frame(width: 0.5, height: 10).padding(.horizontal, 2)
                 Button(updater.failed ? "다시 시도" : "업데이트") { updater.run() }
                     .buttonStyle(.plain).font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(tint.opacity(hover ? 1 : 0.85))
