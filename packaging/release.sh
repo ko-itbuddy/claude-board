@@ -7,7 +7,7 @@
 set -e
 VERSION="${1:?사용법: release.sh <버전>}"
 REPO="suhojang/claude-board"
-N="$HOME/.claude/notifier"
+N="$(cd "$(dirname "$0")/.." && pwd)"
 P="$N/packaging"
 
 NOTES="$(awk -v v="$VERSION" '/^## /{p = ($2 == v); next} p' "$N/CHANGELOG.md")"

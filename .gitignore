@@ -1,4 +1,4 @@
-# 소스만 올린다 — 이 폴더는 실행 중 상태(sessions·context·accounts 등)도 함께 쓰므로 기본은 모두 빼고 소스만 고른다
+# 소스만 올린다 — 기본은 모두 빼고 소스만 고른다(dist 의 빌드 결과·IDE 설정 등은 올리지 않는다)
 /*
 !/.gitignore
 !/README.md

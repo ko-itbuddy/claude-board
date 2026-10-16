@@ -1,7 +1,8 @@
 #!/bin/sh
 # Claude Board.app 을 빌드해 /Applications 에 설치한다 (배포판 pkg 와 같은 위치)
+# 알림 패널·hook 스크립트는 hook 이 실행하는 ~/.claude/notifier 에 설치한다
 set -e
-N="$HOME/.claude/notifier"
+N="$(cd "$(dirname "$0")" && pwd)"
 APP="/Applications/Claude Board.app"
 SIGN_ID="${CLAUDE_BOARD_SIGN_ID:-Claude Board Signing}"
 # pkg 로 설치한 앱은 root 소유라 그대로는 덮어쓸 수 없다 — 처음 한 번 관리자 비밀번호 창을 띄워 소유자를 나로 바꾼다
@@ -38,3 +39,10 @@ else
 fi
 touch "$APP"
 echo "built: $APP"
+# sessions 등 실행 상태는 그대로 둔다. 알림 패널은 떠 있는 패널이 있어도 깨지지 않게 새 파일로 빌드해 바꿔 끼운다
+R="$HOME/.claude/notifier"
+mkdir -p "$R/sessions"
+swiftc -O "$N/ClaudeNotifier.swift" -o "$R/claude-notifier.new"
+mv "$R/claude-notifier.new" "$R/claude-notifier"
+cp "$N/notify.py" "$N/state.py" "$N/board-tui.py" "$N/hooks.py" "$R/"
+echo "installed: $R"

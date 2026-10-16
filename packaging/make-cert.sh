@@ -40,7 +40,7 @@ echo "2) 서명용으로 신뢰 등록 — 비밀번호 창이 뜨면 로그인 
 security add-trusted-cert -r trustRoot -p codeSign -p basic -k "$KC" "$W/cert.pem"
 
 # 받는 사람에게 서명자를 확인시켜 줄 때 쓰는 공개 인증서(개인 키 없음)
-OUT="$HOME/.claude/notifier/dist"
+OUT="$(cd "$(dirname "$0")/.." && pwd)/dist"
 mkdir -p "$OUT"
 cp "$W/cert.pem" "$OUT/$CN.cer"
 

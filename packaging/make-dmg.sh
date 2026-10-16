@@ -3,11 +3,11 @@
 # pkg 는 서명하지 않는다 — macOS 는 pkg 서명을 Apple 발급 인증서로만 허용한다(자체 서명은 "Certificate authority pinning mismatch")
 # 받는 사람은 dmg 안의 pkg 를 열고 관리자 비밀번호만 입력하면 설치된다(/Applications + 사용자 설정)
 # 사용법: make-dmg.sh <버전>   서명 인증서 이름은 CLAUDE_BOARD_SIGN_ID (기본 "Claude Board Signing" — make-cert.sh 로 만든다)
-# 결과: ~/.claude/notifier/dist/ClaudeBoard-<버전>.dmg, curl 설치·업데이트용 앱 zip ClaudeBoard-<버전>-app.zip (release.sh 가 올린다)
+# 결과: <저장소>/dist/ClaudeBoard-<버전>.dmg, curl 설치·업데이트용 앱 zip ClaudeBoard-<버전>-app.zip (release.sh 가 올린다)
 set -e
 VERSION="${1:?사용법: make-dmg.sh <버전>}"
 SIGN_ID="${CLAUDE_BOARD_SIGN_ID:-Claude Board Signing}"
-N="$HOME/.claude/notifier"
+N="$(cd "$(dirname "$0")/.." && pwd)"
 P="$N/packaging"
 OUT="$N/dist"
 WORK="$(mktemp -d)"
