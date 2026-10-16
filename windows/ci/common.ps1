@@ -258,9 +258,10 @@ function Wait-Until {
 
 # 콘솔 프로그램을 실행해 끝날 때까지(시간 제한) 기다리고 표준 출력·오류를 UTF-8 로 받는다. 표준 입력은 리디렉션해 바로 닫는다
 function Invoke-Native {
-  param([string]$File, [string[]]$Arguments = @(), [int]$TimeoutSec = 120, [string]$StdIn = '')
+  param([string]$File, [string[]]$Arguments = @(), [int]$TimeoutSec = 120, [string]$StdIn = '', [string[]]$UnsetEnv = @())
   $psi = [Diagnostics.ProcessStartInfo]::new($File)
   foreach ($a in $Arguments) { $psi.ArgumentList.Add($a) }
+  foreach ($n in $UnsetEnv) { [void]$psi.Environment.Remove($n) }
   $psi.UseShellExecute = $false
   $psi.RedirectStandardInput = $true
   $psi.RedirectStandardOutput = $true
@@ -725,13 +726,13 @@ public static class CbWin {
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
   [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
 
-  // 그 프로세스의 보이는 최상위 창들
+  // 그 프로세스의 보이는 최상위 Tauri 창들 — Tao 의 숨은 16x16 도우미 창(Tao Thread Event Target·단일 실행 창)은 뺀다
   public static long[] VisibleWindows(uint pid) {
     var list = new List<long>();
     EnumWindows((h, l) => {
       uint p;
       GetWindowThreadProcessId(h, out p);
-      if (p == pid && IsWindowVisible(h)) list.Add(h.ToInt64());
+      if (p == pid && IsWindowVisible(h) && ClassName(h.ToInt64()) == "Tauri Window") list.Add(h.ToInt64());
       return true;
     }, IntPtr.Zero);
     return list.ToArray();
@@ -756,7 +757,7 @@ function Format-Window {
   return ("0x{0:X} pid={1} class={2} title='{3}' rect={4}" -f $Hwnd, [CbWin]::Pid($Hwnd), [CbWin]::ClassName($Hwnd), [CbWin]::Title($Hwnd), [CbWin]::Rect($Hwnd))
 }
 
-# 화면 전체 — CaptureBlt 를 켜야 겹친(layered) 창도 찍힌다
+# 화면 전체 — DWM 이 합성한 화면을 찍으므로 겹친(layered) 창도 찍힌다
 function Save-Screenshot {
   param([string]$Name)
   try {
@@ -764,8 +765,8 @@ function Save-Screenshot {
     $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
     $bmp = [System.Drawing.Bitmap]::new($b.Width, $b.Height)
     $g = [System.Drawing.Graphics]::FromImage($bmp)
-    $op = [Enum]::ToObject([System.Drawing.CopyPixelOperation], [int][System.Drawing.CopyPixelOperation]::SourceCopy -bor [int][System.Drawing.CopyPixelOperation]::CaptureBlt)
-    $g.CopyFromScreen($b.X, $b.Y, 0, 0, $b.Size, $op)
+    # SourceCopy|CaptureBlt 조합은 .NET 이 정의되지 않은 enum 값이라며 거부한다
+    $g.CopyFromScreen($b.X, $b.Y, 0, 0, $b.Size)
     $path = Join-Path $Results $Name
     $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
     $g.Dispose()

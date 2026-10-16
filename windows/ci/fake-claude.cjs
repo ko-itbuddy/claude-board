@@ -82,8 +82,11 @@ const timer = setInterval(() => {
   try {
     const cmd = JSON.parse(fs.readFileSync(file, 'utf8'));
     for (const step of cmd.steps || []) res.results.push(runStep(step));
-    // Node 는 Windows 에서 process.title 을 처음 읽을 때 콘솔 제목(GetConsoleTitleW)을 읽고 그 뒤로는 기억한 값을 준다 — 한 번만 쓸모 있다
-    if (cmd.readTitle) res.title = process.title;
+    // Node 는 Windows 에서 process.title 을 처음 읽을 때 콘솔 제목(GetConsoleTitleW)을 읽고 그 뒤로는 기억한 값을 준다 —
+    // 같은 콘솔을 물려받는 새 자식이 처음 읽게 해서 지금 제목을 얻는다
+    if (cmd.readTitle) {
+      res.title = cp.spawnSync(process.execPath, ['-e', 'process.stdout.write(process.title)'], { encoding: 'utf8' }).stdout;
+    }
   } catch (e) {
     res.error = String((e && e.stack) || e);
     log(`cmd-${next} 처리 실패: ${res.error}`);

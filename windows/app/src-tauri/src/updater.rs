@@ -183,7 +183,10 @@ fn launch(log: &std::path::Path, version: &str) -> bool {
     let open = || OpenOptions::new().append(true).open(log);
     let (Ok(out), Ok(err)) = (open(), open()) else { return false };
     let mut cmd = Command::new("powershell.exe");
-    cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &install_command(version)])
+    // PowerShell 7 에서 띄운 보드(install.ps1·claude-board 명령)는 PowerShell 7 의 PSModulePath 를 물려받는다.
+    // 그대로 넘기면 Windows PowerShell 5.1 이 PowerShell 7 모듈을 읽으려다 Get-FileHash 같은 명령을 찾지 못하므로 지운다(5.1 이 기본값을 쓴다)
+    cmd.env_remove("PSModulePath")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &install_command(version)])
         .stdout(Stdio::from(out))
         .stderr(Stdio::from(err));
     match crate::util::spawn_detached(cmd) {

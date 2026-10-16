@@ -272,7 +272,8 @@ try {
       Remove-Item -LiteralPath $resultFile -ErrorAction SilentlyContinue
       $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
       $driver = Join-Path $PSScriptRoot 'ps51-install.ps1'
-      $r = Invoke-Native -File $ps -Arguments @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $driver, '-Mode', $Mode, '-Script', $Script, '-Assets', $Assets, '-CiVersion', $CbVersion, '-Result', $resultFile) -TimeoutSec 300
+      # 보드의 업데이트 단추처럼 PSModulePath 를 지우고 띄운다(updater.rs) — 이 pwsh 의 PowerShell 7 모듈 경로를 물려주지 않는다
+      $r = Invoke-Native -File $ps -Arguments @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $driver, '-Mode', $Mode, '-Script', $Script, '-Assets', $Assets, '-CiVersion', $CbVersion, '-Result', $resultFile) -TimeoutSec 300 -UnsetEnv 'PSModulePath'
       Write-Host "  --- powershell.exe ($Mode) 종료 코드 $(Format-Cell $r.ExitCode), 시간 초과 $($r.TimedOut) ---"
       foreach ($l in ("$($r.Out)" -split "`r?`n")) { Write-Host "    > $l" }
       if ($r.Err) { foreach ($l in ("$($r.Err)" -split "`r?`n")) { Write-Host "    ! $l" } }
@@ -282,6 +283,15 @@ try {
       }
       return ((Read-TextShared $resultFile) | ConvertFrom-Json)
     }
+
+    # PowerShell 7 의 PSModulePath 를 물려받은 5.1 은 PowerShell 7 모듈을 읽으려다 Get-FileHash(스크립트 모듈 명령)를 찾지 못한다.
+    # 보드가 PowerShell 7 에서 띄워졌을 때의 업데이트 단추가 이 경우였다 — 그래서 updater.rs 가 PSModulePath 를 지우고 띄운다
+    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $probe = @('-NoProfile', '-Command', "if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) { 'found' } else { 'missing' }")
+    $inherited = Invoke-Native -File $ps -Arguments $probe -TimeoutSec 60
+    Test-Value 'PowerShell 7 의 PSModulePath 를 물려받은 5.1 의 Get-FileHash(원인 기록)' 'missing' "$($inherited.Out)".Trim() -Info
+    $cleaned = Invoke-Native -File $ps -Arguments $probe -TimeoutSec 60 -UnsetEnv 'PSModulePath'
+    Test-Value 'PSModulePath 를 지우고 띄운 5.1 의 Get-FileHash' 'found' "$($cleaned.Out)".Trim()
 
     # (a) 처음 설치 + 표준 입력 리디렉션 — hook 등록을 물을 수 없으므로 안내와 함께 throw, 아무것도 설치하지 않는다
     $settingsBefore = Get-FileHashText $CbSettings
