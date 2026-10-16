@@ -1,0 +1,15 @@
+# 소스만 올린다 — 이 폴더는 실행 중 상태(sessions·context·accounts 등)도 함께 쓰므로 기본은 모두 빼고 소스만 고른다
+/*
+!/.gitignore
+!/ClaudeBoard.swift
+!/ClaudeNotifier.swift
+!/ClaudeStatus.swift
+!/AppIcon.swift
+!/AppIcon.icns
+!/notify.py
+!/state.py
+!/board-tui.py
+!/hooks.py
+!/build-board.sh
+!/packaging/
+.DS_Store

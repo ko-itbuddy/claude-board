@@ -1,0 +1,4 @@
+#!/bin/bash
+# Claude Board 설치 전 처리 — Installer 가 root 로 실행한다. 실행 중인 보드를 끄고 덮어쓴다
+pkill -x ClaudeBoard 2>/dev/null || true
+exit 0

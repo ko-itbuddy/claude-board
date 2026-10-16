@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+  <title>Claude Board</title>
+  <readme file="README.txt" mime-type="text/plain"/>
+  <conclusion file="conclusion.txt" mime-type="text/plain"/>
+  <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+  <domains enable_localSystem="true" enable_anywhere="false" enable_currentUserHome="false"/>
+  <allowed-os-versions><os-version min="14.0"/></allowed-os-versions>
+  <choices-outline>
+    <line choice="com.claude.board"/>
+  </choices-outline>
+  <choice id="com.claude.board" visible="false" title="Claude Board">
+    <pkg-ref id="com.claude.board"/>
+  </choice>
+  <pkg-ref id="com.claude.board" version="@VERSION@" onConclusion="none">ClaudeBoard-component.pkg</pkg-ref>
+</installer-gui-script>
