@@ -3528,7 +3528,6 @@ struct BoardView: View {
     @State private var tops = CardTopsBox()
     @State private var hiddenIds: [String] = []
     @State private var moreHover = false
-    @State private var miniHover = false
     // 창 크기 단계 — 중간에서는 카드를 접힌 한 줄로 보이고, 그 단계에서 눌러 펼친 카드만 따로 기억한다(저장한 접힘 상태는 그대로)
     @ObservedObject private var fit = BoardFit.shared
     @State private var mediumOpen: Set<String> = []
@@ -3614,18 +3613,6 @@ struct BoardView: View {
             }
             Spacer(minLength: 6)
             AllMuteButton(muted: store.allMuted) { store.setAllMuted(!store.allMuted) }
-            // 최대축소 — 창을 가장 작게 줄여 경로마다 한 줄로 본다. 미니의 제목 막대 ⤢ 로 원래 크기로 돌아온다
-            Button { enterMini(rows: store.groups.count) } label: {
-                Image(systemName: "arrow.down.right.and.arrow.up.left")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(miniHover ? .primary : .secondary)
-                    .padding(.horizontal, 8)
-                    .frame(minWidth: 28, minHeight: 24)
-                    .background(Capsule().fill(Color.white.opacity(miniHover ? 0.12 : 0.07)))
-            }
-            .buttonStyle(.plain)
-            .clickable($miniHover)
-            .help("최대축소 — 창을 가장 작게 줄이고 경로마다 한 줄로 봅니다")
             // 모두 접기 = 경로 카드를 다 접고 사용 한도를 간략(한 줄)으로, 모두 펼치기 = 다 펴고 상세로.
             // 중간 화면은 이미 카드가 접힌 한 줄·사용 한도가 한 줄이라 숨긴다
             let all = usageCompact && store.groups.allSatisfy { store.collapsed.contains($0.id) }
@@ -3970,7 +3957,6 @@ final class BoardFit: ObservableObject {
         guard t != tier else { return }
         tier = t
         UserDefaults.standard.set(t == .mini, forKey: "boardMini")   // 미니로 둔 채 끄면 다음에도 그 크기로 연다
-        miniTitlebar?.view.isHidden = t != .mini
     }
 }
 
@@ -3998,10 +3984,7 @@ func leaveMini() {
     snapRight()
 }
 
-// 미니에서만 보이는 제목 막대 오른쪽 — 상태별 세션 수와 원래 크기로 되돌리기 단추.
-// 오른쪽 액세서리는 컨트롤러의 isHidden 이 먹지 않아(2026-10-16 확인) 안의 뷰를 숨긴다
-var miniTitlebar: NSTitlebarAccessoryViewController?
-
+// 제목 막대 오른쪽 — 미니에서는 상태별 세션 수와 원래 크기로 되돌리기 단추, 전체·중간에서는 같은 자리에 최대축소 단추
 func addMiniTitlebar(_ store: Store) {
     let vc = NSTitlebarAccessoryViewController()
     let host = FirstClickHostingView(rootView: MiniTitleBar(store: store))
@@ -4009,13 +3992,12 @@ func addMiniTitlebar(_ store: Store) {
     vc.view = host
     vc.layoutAttribute = .trailing
     window.addTitlebarAccessoryViewController(vc)
-    host.isHidden = BoardFit.shared.tier != .mini
-    miniTitlebar = vc
 }
 
 struct MiniTitleBar: View {
     static let width: CGFloat = 176     // 미니 폭 300 에서 창 단추·붙이기 단추를 뺀 자리
     @ObservedObject var store: Store
+    @ObservedObject private var fit = BoardFit.shared
     @State private var hover = false
 
     // 상태별 세션 수 — 자리가 모자라면 글자를 빼고 수만
@@ -4040,11 +4022,15 @@ struct MiniTitleBar: View {
     }
 
     var body: some View {
+        let mini = fit.tier == .mini
         HStack(spacing: 5) {
             Spacer(minLength: 0)
-            ViewThatFits(in: .horizontal) { chips(labels: true); chips(labels: false) }
-            Button(action: leaveMini) {
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
+            if mini {
+                ViewThatFits(in: .horizontal) { chips(labels: true); chips(labels: false) }
+            }
+            // 미니 = 원래 크기로, 전체·중간 = 최대축소(창을 가장 작게 줄여 경로마다 한 줄로 본다)
+            Button { if mini { leaveMini() } else { enterMini(rows: store.groups.count) } } label: {
+                Image(systemName: mini ? "arrow.up.left.and.arrow.down.right" : "arrow.down.right.and.arrow.up.left")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(hover ? .primary : .secondary)
                     .frame(width: 24, height: 20)
@@ -4053,7 +4039,7 @@ struct MiniTitleBar: View {
             }
             .buttonStyle(.plain)
             .clickable($hover)
-            .help("원래 크기로 되돌리기")
+            .help(mini ? "원래 크기로 되돌리기" : "최대축소 — 창을 가장 작게 줄이고 경로마다 한 줄로 봅니다")
         }
         .padding(.trailing, 8)
         .frame(width: Self.width, height: 28)
