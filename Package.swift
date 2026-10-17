@@ -20,7 +20,7 @@ let package = Package(
             ],
             path: ".",
             exclude: [
-                "windows", "packaging", "docs", "dist",
+                "windows", "packaging", "plugins", "docs", "dist",
                 "ClaudeNotifier.swift", "ClaudeStatus.swift", "AppIcon.swift", "AppIcon.icns",
                 "notify.py", "state.py", "hooks.py", "board-tui.py", "build-board.sh",
                 "README.md", "CHANGELOG.md", "CLAUDE.md", "LICENSE",

@@ -4469,16 +4469,19 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
     let view: BoardTerminalView
     let command: String?            // 셸 없이 띄운 명령(claude …) — nil 이면 셸 탭
     let sessionId: String?          // 보드가 띄울 때 아는 세션 id(새 세션의 --session-id, 이어 연 세션)
+    let mdRenderOff: Bool           // 답변 꾸미기를 끄고 띄운 탭 — 이 탭의 세션 id 는 모두 끈 세션으로 기억한다
     @Published var title = ""
     @Published var cwd: String
     @Published var session: Session?   // 이 탭에서 도는 세션(세션 파일의 tty 로 짝짓는다) — 탭의 상태 점·제목
     @Published var exited = false      // 명령이 끝났다 — 엔진의 "Process exited" 화면 대신 [다시 열기][셸 열기] 막대
     private var exitWatch: DispatchSourceProcess?
 
-    init(_ options: TerminalSurfaceOptions, frame: NSRect, controller: TerminalController, command: String? = nil, sessionId: String? = nil) {
+    init(_ options: TerminalSurfaceOptions, frame: NSRect, controller: TerminalController, command: String? = nil, sessionId: String? = nil,
+         mdRenderOff: Bool = false) {
         cwd = options.workingDirectory ?? NSHomeDirectory()
         self.command = command
         self.sessionId = sessionId
+        self.mdRenderOff = mdRenderOff
         view = BoardTerminalView(frame: frame)
         super.init()
         view.autoresizingMask = [.width, .height]
@@ -4613,10 +4616,12 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
 
     // at 을 주면 그 자리의 탭을 바꿔 끼운다([다시 열기][셸 열기])
     @discardableResult
-    func open(_ options: TerminalSurfaceOptions, command: String? = nil, sessionId: String? = nil, at index: Int? = nil) -> BoardTab? {
+    func open(_ options: TerminalSurfaceOptions, command: String? = nil, sessionId: String? = nil, mdRenderOff: Bool = false,
+              at index: Int? = nil) -> BoardTab? {
         guard let area else { return nil }
         area.superview?.layoutSubtreeIfNeeded()   // 크기가 0 인 뷰는 셸을 띄우지 않는다
-        let tab = BoardTab(options, frame: area.container.bounds, controller: controller, command: command, sessionId: sessionId)
+        let tab = BoardTab(options, frame: area.container.bounds, controller: controller, command: command, sessionId: sessionId,
+                           mdRenderOff: mdRenderOff)
         tab.view.isHidden = true
         area.container.addSubview(tab.view)
         if let index, index <= tabs.count { tabs.insert(tab, at: index) } else { tabs.append(tab) }
@@ -4634,15 +4639,18 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
     // 명령(claude …)을 셸 없이 보드 탭에서 띄운다. 엔진은 명령을 `login … bash -c "exec -l <명령>"` 으로 띄우는데 exec -l 이
     // 첫 인자 앞에 - 를 붙여(ps 의 comm 이 -claude) hook 이 claude 를 못 알아본다 — /usr/bin/env 를 앞에 두면 - 는 env 에 붙고
     // claude 는 제 이름으로 뜬다. 환경은 시작할 때 읽어 둔 로그인+대화형 셸 환경(PATH 등) — 못 읽었으면 띄우지 않는다.
-    // reveal false — 다시 뜰 때 되살리는 탭은 접힌 보드를 펼치거나 앞으로 꺼내지 않는다
+    // reveal false — 다시 뜰 때 되살리는 탭은 접힌 보드를 펼치거나 앞으로 꺼내지 않는다.
+    // mdRenderOff — 답변 꾸미기를 끈 탭(명령은 부르는 쪽이 mdRenderCommand 로 고쳐 넘긴다). 그 세션 id 를 끈 세션으로 기억한다
     @discardableResult
-    func launch(_ command: String, in dir: String, sessionId: String?, at index: Int? = nil, reveal show: Bool = true) -> BoardTab? {
+    func launch(_ command: String, in dir: String, sessionId: String?, mdRenderOff: Bool = false, at index: Int? = nil,
+                reveal show: Bool = true) -> BoardTab? {
         guard let env = LoginEnvironment.values else {
             toast("셸 환경을 아직 읽지 못했습니다 — 잠시 뒤 다시 시도해 주세요")
             return nil
         }
         let opts = TerminalSurfaceOptions(backend: .exec, workingDirectory: dir, envVars: env, command: "/usr/bin/env " + command)
-        guard let tab = open(opts, command: command, sessionId: sessionId, at: index) else { return nil }
+        guard let tab = open(opts, command: command, sessionId: sessionId, mdRenderOff: mdRenderOff, at: index) else { return nil }
+        if mdRenderOff { rememberMdRenderOff(sessionId) }
         if show { reveal(tab.id) }
         return tab
     }
@@ -4659,6 +4667,7 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
             var e = ["cwd": t.cwd]
             if let command = t.command {
                 e["command"] = command
+                if t.mdRenderOff { e["mdoff"] = "1" }   // 대화 없이 꺼져 세션 파일·끈 세션 기억이 치워져도 끈 채로 되살린다
                 // 탭 안에서 /clear 등으로 세션 id 가 바뀌면 tty 로 짝지은 세션이 지금 것이다
                 if let id = t.session?.id ?? t.sessionId {
                     e["session"] = id
@@ -4692,7 +4701,8 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
             guard let cwd = e["cwd"] else { continue }
             var tab: BoardTab?
             if e["command"] != nil {
-                if let (cmd, id, dir) = restoreCommand(e) { tab = launch(cmd, in: dir, sessionId: id, reveal: false) }
+                let off = e["mdoff"] != nil || isMdRenderOff(e["session"])
+                if let (cmd, id, dir) = restoreCommand(e, off: off) { tab = launch(cmd, in: dir, sessionId: id, mdRenderOff: off, reveal: false) }
             } else {
                 tab = openShell(in: FileManager.default.fileExists(atPath: cwd) ? cwd : NSHomeDirectory())
             }
@@ -4705,9 +4715,10 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
 
     // 되살릴 명령 탭의 (명령, 세션 id, 작업 경로). 대화가 남은 세션은 세션 파일의 resume_cmd(파일이 지워졌으면 남겨 둔 것),
     // 대화 없이 끝난 세션(대화 기록 없음 — 보드가 세션 파일도 지운다)은 [다시 열기]처럼 처음 명령을 새 세션 id 로.
-    // 세션 파일의 pid 가 아직 claude 로 살아 있으면(/bg·nohup 으로 떨어져 나갔거나 다른 터미널에서 이어 연 세션) 이어 열지 않는다 — nil
-    private func restoreCommand(_ e: [String: String]) -> (String, String?, String)? {
-        guard let command = e["command"], let cwd = e["cwd"] else { return nil }
+    // 세션 파일의 pid 가 아직 claude 로 살아 있으면(/bg·nohup 으로 떨어져 나갔거나 다른 터미널에서 이어 연 세션) 이어 열지 않는다 — nil.
+    // 답변 꾸미기는 off(끈 탭·끈 세션)를 따라 mdRenderCommand 로 고친다 — 세션 파일이 없으면 남겨 둔 명령·resume_cmd 문자열로
+    private func restoreCommand(_ e: [String: String], off: Bool) -> (String, String?, String)? {
+        guard let command = e["command"].map({ mdRenderCommand($0, off: off) }), let cwd = e["cwd"] else { return nil }
         guard let id = e["session"] else {
             let (c, i) = freshSessionCommand(command)
             return FileManager.default.fileExists(atPath: cwd) ? (c, i, cwd) : nil
@@ -4724,16 +4735,16 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
         }
         if FileManager.default.fileExists(atPath: transcriptPath(rec?["transcript_path"] as? String, dir, id)) {
             let resume = (rec?["resume_cmd"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? e["resume"] ?? "claude --resume \(id)"
-            return (resume, id, dir)
+            return (mdRenderCommand(resume, args: rec?["args"] as? [String], off: off), id, dir)
         }
         let (c, i) = freshSessionCommand(command)
         return (c, i, dir)
     }
 
-    // 새 세션 — claude 면 보드가 세션 id 를 붙여 미리 안다
-    func startSession(_ command: String, in dir: String) {
-        let (cmd, id) = freshSessionCommand(command)
-        launch(cmd, in: dir, sessionId: id)
+    // 새 세션 — claude 면 보드가 세션 id 를 붙여 미리 안다. 답변 꾸미기는 새 세션 창의 체크(경로 카드 "+" 는 늘 켬) — 끄면 그 세션 id 를 기억한다
+    func startSession(_ command: String, in dir: String, mdRender: Bool = true) {
+        let (cmd, id) = freshSessionCommand(mdRenderCommand(command, off: !mdRender))
+        launch(cmd, in: dir, sessionId: id, mdRenderOff: !mdRender)
     }
 
     // "+ 새 세션" 창 — 작업 폴더는 보드에 있는 경로(지금 탭의 경로를 먼저 고른다) + 다른 폴더
@@ -4746,7 +4757,7 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
         let end = { window.endSheet(sheet) }
         sheet.contentViewController = NSHostingController(rootView: NewSessionSheet(
             paths: paths, initial: current.flatMap { paths.contains($0) ? $0 : nil } ?? paths.first ?? NSHomeDirectory(),
-            cancel: end, start: { cmd, dir in end(); self.startSession(cmd, in: dir) }))
+            cancel: end, start: { cmd, dir, md in end(); self.startSession(cmd, in: dir, mdRender: md) }))
         window.beginSheet(sheet)
     }
 
@@ -4762,9 +4773,13 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
     func relaunch(_ tab: BoardTab) {
         guard let i = tabs.firstIndex(where: { $0 === tab }), let command = tab.command else { return }
         let s = tab.sessionId.flatMap { id in store?.groups.flatMap(\.sessions).first { $0.id == id } }
+        let off = tab.mdRenderOff || isMdRenderOff(s?.id)   // 대화 없는 세션을 새 id 로 다시 띄워도 끈 탭이면 끈 채로
         let next: (String, String?)
-        if let s { next = (s.resumeCmd.isEmpty ? "claude --resume \(s.id)" : s.resumeCmd, s.id) } else { next = freshSessionCommand(command) }
-        guard launch(next.0, in: s?.cwd ?? tab.cwd, sessionId: next.1, at: i) != nil else { return }
+        if let s {
+            next = (mdRenderCommand(s.resumeCmd.isEmpty ? "claude --resume \(s.id)" : s.resumeCmd, args: sessionRecord(s.id)?["args"] as? [String],
+                                    off: off), s.id)
+        } else { next = freshSessionCommand(mdRenderCommand(command, off: off)) }
+        guard launch(next.0, in: s?.cwd ?? tab.cwd, sessionId: next.1, mdRenderOff: off, at: i) != nil else { return }
         remove(tab)
     }
 
@@ -4821,6 +4836,7 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
         for t in tabs {
             let s = main[t.id] ?? t.sessionId.flatMap { id in sessions.first { $0.id == id } }
             if t.session != s { t.session = s }
+            if t.mdRenderOff { rememberMdRenderOff(s?.id) }   // 끈 탭에서 세션 id 가 바뀌어도(/clear 등) 끈 채로 이어 열게
         }
         if map != paired { paired = map }
         if owned != tabOwnedHeadless { tabOwnedHeadless = owned }
@@ -5048,6 +5064,83 @@ func freshSessionCommand(_ command: String) -> (String, String?) {
     let base = command.replacingOccurrences(of: #"\s--session-id(=|\s+)\S+"#, with: "", options: .regularExpression)
     let id = UUID().uuidString.lowercased()
     return (base + " --session-id " + id, id)
+}
+
+// 답변 마크다운 꾸미기(md-render) — 보드 탭 claude 에 --plugin-dir 로 넘기는 경로. 앱 안 Contents/Resources/plugins/md-render 를
+// ~/.claude/notifier/plugins/md-render 로 옮겨 두고 그쪽을 넘긴다 — 대화형 claude 는 사용자 소유 플러그인 폴더에 tsconfig.json·
+// .claude-plugin/types/ 를 써서(실측) 앱 안 경로를 넘기면 서명된 앱이 바뀐다. 앱이 싣는 파일만 내용이 다를 때 덮고 Claude Code 가 만든 것은 둔다.
+// 앱 밖(.build)에서 띄워 원본이 없거나 옮기지 못하면 nil — 어떤 길에도 붙이지 않는다
+let mdRenderDir: String? = {
+    let fm = FileManager.default
+    guard let src = Bundle.main.resourceURL?.appendingPathComponent("plugins/md-render").path, fm.fileExists(atPath: src) else { return nil }
+    let dest = NSHomeDirectory() + "/.claude/notifier/plugins/md-render"
+    for f in (try? fm.subpathsOfDirectory(atPath: src)) ?? [] {
+        guard let data = fm.contents(atPath: "\(src)/\(f)") else { continue }   // 폴더
+        let to = "\(dest)/\(f)"
+        if fm.contents(atPath: to) == data { continue }
+        do {
+            try fm.createDirectory(atPath: (to as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+            try data.write(to: URL(fileURLWithPath: to), options: .atomic)
+        } catch {
+            boardLog("답변 꾸미기 플러그인을 옮기지 못했습니다: \(to) \(error.localizedDescription)")
+            return nil
+        }
+    }
+    return dest
+}()
+
+// state.py 가 resume_cmd 를 만들 때 쓰는 shlex.quote 와 같은 인용 — resume_cmd 안의 토큰을 그대로 찾고, 보드가 붙이는 경로를
+// 엔진이 명령을 넘기는 bash -c 에 안전하게 넘긴다
+func shlexQuote(_ s: String) -> String {
+    if !s.isEmpty, s.range(of: "[^A-Za-z0-9_@%+=:,./-]", options: .regularExpression) == nil { return s }
+    return "'" + s.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+}
+
+// shlex.quote 꼴 토큰 가운데 md-render 의 --plugin-dir(값이 /plugins/md-render 로 끝남) — 따옴표 없는 꼴, '…' 꼴(안의 ' 는 '"'"'),
+// '--plugin-dir=…' 꼴. 앞의 공백까지 잡아 지운다
+private let mdRenderTokenPattern = #"\s+(?:--plugin-dir(?:\s+|=)[A-Za-z0-9_@%+=:,./-]*/plugins/md-render|--plugin-dir\s+'[^']*(?:'"'"'[^']*)*/plugins/md-render'|'--plugin-dir=[^']*(?:'"'"'[^']*)*/plugins/md-render')(?=\s|$)"#
+
+// 보드 탭에서 띄우거나 이어 여는 claude 의 답변 꾸미기(사용자 결정 2026-10-17) — 기본으로 켜고(Ghostty·claude -p 에서 시작해 보드로 옮기거나
+// 이어 연 세션 포함), 새 세션 창에서 끄고 띄운 세션(isMdRenderOff)만 끈다. 명령에 든 md-render 의 --plugin-dir(옛 경로·옛 설치본·사용자가 적은 것)은
+// 빼고, 켜져 있으면 지금 경로를 한 번 붙인다. 사용자의 다른 --plugin-dir 은 둔다. 뺄 토큰은 세션 파일의 args(state.py 가 shlex.join 해
+// resume_cmd 를 만든 재료)를 알면 그 shlex.quote 꼴 그대로 찾고, 남은 것·args 를 모를 때(저장해 둔 명령·resume_cmd)는 shlex.quote 꼴 정규식으로.
+// 그래도 md-render 경로가 남으면(큰따옴표 등 다른 꼴로 사용자가 적음) 더 붙이지 않는다. claude 가 아닌 명령은 그대로
+func mdRenderCommand(_ command: String, args: [String]? = nil, off: Bool) -> String {
+    guard command.range(of: #"^\s*(\S*/)?claude(\s|$)"#, options: .regularExpression) != nil else { return command }
+    var out = command, i = 0
+    let args = args ?? []
+    while i < args.count {
+        var token: String?
+        if args[i].hasPrefix("--plugin-dir="), args[i].hasSuffix("/plugins/md-render") {
+            token = shlexQuote(args[i])
+        } else if args[i] == "--plugin-dir", i + 1 < args.count, args[i + 1].hasSuffix("/plugins/md-render") {
+            token = "--plugin-dir " + shlexQuote(args[i + 1])
+            i += 1
+        }
+        if let token { out = out.replacingOccurrences(of: " \(token) ", with: " ") }   // resume_cmd 는 --resume <id> 로 끝나 인자 뒤에 늘 공백이 있다
+        i += 1
+    }
+    out = out.replacingOccurrences(of: mdRenderTokenPattern, with: "", options: .regularExpression)
+    guard !off, let dir = mdRenderDir, !out.contains("/plugins/md-render") else { return out }
+    return out + " --plugin-dir " + shlexQuote(dir)
+}
+
+// 새 세션 창에서 꾸미기를 끄고 띄운 세션 id — 보드 설정 mdRenderOff. 그 세션은 이어 열 때도 끈 채로 연다. 끈 탭의 세션 id 가 바뀌면
+// (/clear, [다시 열기]·되살리기가 대화 없는 세션을 새 id 로 띄움) 그 id 도 더한다(launch·pair). 보드가 시작할 때 세션 파일이 없어진 id 는 치운다
+func isMdRenderOff(_ id: String?) -> Bool {
+    guard let id else { return false }
+    return UserDefaults.standard.stringArray(forKey: "mdRenderOff")?.contains(id) ?? false
+}
+
+func rememberMdRenderOff(_ id: String?) {
+    guard let id, !isMdRenderOff(id) else { return }
+    UserDefaults.standard.set((UserDefaults.standard.stringArray(forKey: "mdRenderOff") ?? []) + [id], forKey: "mdRenderOff")
+}
+
+func pruneMdRenderOff() {
+    let list = UserDefaults.standard.stringArray(forKey: "mdRenderOff") ?? []
+    let kept = list.filter { FileManager.default.fileExists(atPath: (sessionsDir as NSString).appendingPathComponent("\($0).json")) }
+    if kept.count != list.count { UserDefaults.standard.set(kept, forKey: "mdRenderOff") }
 }
 
 // 펼쳤을 때 보드 폭 — 창이 좁으면 터미널 최소 폭을 남기고 줄인다
@@ -5327,13 +5420,14 @@ let defaultSessionCommand = "claude --dangerously-skip-permissions"
 struct NewSessionSheet: View {
     let paths: [String]
     let cancel: () -> Void
-    let start: (String, String) -> Void
+    let start: (String, String, Bool) -> Void   // 명령, 작업 폴더, 답변 마크다운 꾸미기
     @ObservedObject private var hub = TerminalHub.shared
     @State private var dir: String
     @State private var others: [String] = []
     @State private var command = defaultSessionCommand
+    @State private var mdRender = true   // 명령처럼 열 때마다 기본값(켬)
 
-    init(paths: [String], initial: String, cancel: @escaping () -> Void, start: @escaping (String, String) -> Void) {
+    init(paths: [String], initial: String, cancel: @escaping () -> Void, start: @escaping (String, String, Bool) -> Void) {
         self.paths = paths
         self.cancel = cancel
         self.start = start
@@ -5388,11 +5482,17 @@ struct NewSessionSheet: View {
                 Text("셸을 거치지 않고 바로 실행합니다 — claude 면 보드가 --session-id 를 붙입니다")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle("답변 마크다운 꾸미기", isOn: $mdRender).toggleStyle(.checkbox).font(.system(size: 13))
+                    .disabled(mdRenderDir == nil)
+                Text("답변이 끝나면 제목·굵게·인라인 코드·목록 등을 색으로 다시 그립니다(md-render) — claude 면 --plugin-dir 로 붙입니다")
+                    .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             HStack {
                 if !hub.envReady { Text("셸 환경을 읽는 중…").font(.system(size: 11)).foregroundStyle(.secondary) }
                 Spacer()
                 Button("취소", action: cancel).keyboardShortcut(.cancelAction)
-                Button("새 탭에서 시작") { start(command.trimmingCharacters(in: .whitespaces), dir) }
+                Button("새 탭에서 시작") { start(command.trimmingCharacters(in: .whitespaces), dir, mdRender) }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!hub.envReady || command.trimmingCharacters(in: .whitespaces).isEmpty)
             }
@@ -6210,13 +6310,15 @@ func transcriptPath(_ given: String?, _ cwd: String, _ id: String) -> String {
 // 끝난 세션을 보드 새 탭에서 같은 작업 경로로 이어 연다. 대화 이력은 claude --resume 이 불러오고,
 // 실행 인자·마지막 권한 모드·모델은 state.py 가 기록한 resume_cmd 에 담겨 있다(-p 는 넘기지 않아 대화형으로 열린다)
 @MainActor func resumeSession(_ s: Session, carryOn: Bool = false) {
-    var cmd = s.resumeCmd.isEmpty ? "claude --resume \(s.id)" : s.resumeCmd
+    // 답변 꾸미기는 기본으로 켠다(보드 밖에서 시작한 세션도) — 새 세션 창에서 끄고 띄운 세션만 끈 채로. 재개 문구보다 앞에
+    let off = isMdRenderOff(s.id)
+    var cmd = mdRenderCommand(s.resumeCmd.isEmpty ? "claude --resume \(s.id)" : s.resumeCmd, args: sessionRecord(s.id)?["args"] as? [String], off: off)
     // 일시중지했던 세션은 첫 요청으로 이어서 진행하라는 문구를 넘겨 바로 다음 작업을 시작하게 한다
     if carryOn {
         cmd += " '" + carryOnPrompt.replacingOccurrences(of: "'", with: "'\\''") + "'"
         try? FileManager.default.removeItem(atPath: pausedMark(s))
     }
-    TerminalHub.shared.launch(cmd, in: s.cwd, sessionId: s.id)
+    TerminalHub.shared.launch(cmd, in: s.cwd, sessionId: s.id, mdRenderOff: off)
 }
 
 // 세션을 한 번 눌렀을 때(목록·미니·알림 패널 "세션으로 이동") — 보드 탭이면 펼치고 그 탭으로, 끝난 세션은 보드 새 탭에서 이어 열기,
@@ -6296,6 +6398,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         TerminalHub.shared.area = root.terminal
         TerminalHub.shared.store = store
         PointerTracker.shared.attach(blur)
+        _ = mdRenderDir   // 답변 꾸미기 플러그인을 ~/.claude/notifier 로 옮겨 둔다 — 되살릴 탭이 쓴다
+        pruneMdRenderOff()
         LoginEnvironment.load()
         // 손으로 바꿔도 자동 전환이 전환 시각을 알아야 한다 — 그 뒤 잠시 난 한도 오류는 이전 계정 토큰 탓이다
         accounts.onSwitch = { [usage, autoSwitcher] in

@@ -43,6 +43,14 @@ build "$N/ClaudeNotifier.swift" "$APP/Contents/Resources/notifier/claude-notifie
 cp "$N/notify.py" "$N/state.py" "$N/board-tui.py" "$P/hooks.py" "$APP/Contents/Resources/notifier/"
 cp "$N/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 cp "$N/LICENSE" "$APP/Contents/Resources/LICENSE"
+# 앱에 정적으로 들어간 구성 요소(터미널 엔진 등)의 라이선스 고지
+cp "$P/THIRD_PARTY_NOTICES.txt" "$APP/Contents/Resources/"
+# 답변 마크다운 꾸미기(md-render) — 실행에 필요한 파일과 LICENSE·README.md 만 이름으로 고른다(시험용 tests/, Claude Code 가
+# 저장소 사본에 만드는 tsconfig.json·.claude-plugin/types/ 는 뺀다). 보드가 시작할 때 ~/.claude/notifier/plugins/md-render 로 옮겨 쓴다
+for f in LICENSE README.md .claude-plugin/plugin.json hooks/hooks.json hooks/register.tsx; do
+  mkdir -p "$(dirname "$APP/Contents/Resources/plugins/md-render/$f")"
+  cp "$N/plugins/md-render/$f" "$APP/Contents/Resources/plugins/md-render/$f"
+done
 # install.sh(curl 설치·업데이트)가 앱을 바꿔 끼운 뒤 실행하는 사용자 설정 — 서명 전에 넣어야 앱 서명에 포함된다
 cp "$P/pkg/scripts/user-setup.sh" "$APP/Contents/Resources/"
 cat > "$APP/Contents/Info.plist" <<PLIST

@@ -19,6 +19,7 @@
 !/hooks.py
 !/build-board.sh
 !/packaging/
+!/plugins/
 !/windows/
 !/.github/
 .DS_Store

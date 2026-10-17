@@ -32,6 +32,15 @@ mv "$APP/Contents/MacOS/ClaudeBoard.new" "$APP/Contents/MacOS/ClaudeBoard"
 rm -rf "$APP/Contents/Resources/GhosttyKit_GhosttyTerminal.bundle"
 cp -R "$BIN/GhosttyKit_GhosttyTerminal.bundle" "$APP/Contents/Resources/"
 cp "$N/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+# 답변 마크다운 꾸미기(md-render) — 실행에 필요한 파일과 LICENSE·README.md 만 이름으로 고른다(시험용 tests/, Claude Code 가
+# 저장소 사본에 만드는 tsconfig.json·.claude-plugin/types/ 는 뺀다). 보드가 시작할 때 ~/.claude/notifier/plugins/md-render 로 옮겨 쓴다
+rm -rf "$APP/Contents/Resources/plugins"
+for f in LICENSE README.md .claude-plugin/plugin.json hooks/hooks.json hooks/register.tsx; do
+  mkdir -p "$(dirname "$APP/Contents/Resources/plugins/md-render/$f")"
+  cp "$N/plugins/md-render/$f" "$APP/Contents/Resources/plugins/md-render/$f"
+done
+# 앱에 정적으로 들어간 구성 요소(터미널 엔진 등)의 라이선스 고지
+cp "$N/packaging/THIRD_PARTY_NOTICES.txt" "$APP/Contents/Resources/"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
