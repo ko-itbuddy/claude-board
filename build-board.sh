@@ -47,7 +47,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
-  <key>NSAppleEventsUsageDescription</key><string>더블 클릭한 세션의 터미널(Ghostty·iTerm2·Terminal)로 포커스를 옮깁니다.</string>
+  <key>NSAppleEventsUsageDescription</key><string>세션의 터미널(Ghostty·iTerm2·Terminal)로 포커스를 옮기고, 일시중지·재개·중단·보드로 옮기기 때 Ghostty 세션에 키를 입력합니다.</string>
 </dict>
 </plist>
 PLIST
