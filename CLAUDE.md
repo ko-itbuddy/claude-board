@@ -34,7 +34,7 @@ claude plugin validate plugins/md-render --strict && claude plugin test plugins/
 #  → 떠 있는 보드는 다시 띄우지 않는다. 바꾼 앱을 보려면: pkill -f "Claude Board.app/Contents/MacOS"; open -a "Claude Board"
 #    (pkill -x ClaudeBoard 는 시험 빌드까지 끈다)
 
-# 배포 (관리자) — CHANGELOG.md 맨 위에 "## <버전> — <날짜>" 항목을 쓰고 commit·push 한 뒤
+# 배포 (관리자) — CHANGELOG.md 맨 위에 "## <버전> (<날짜>)" 항목을 쓰고 commit·push 한 뒤
 packaging/release.sh <버전>   # make-dmg.sh 로 universal(arm64+x86_64) 빌드·서명 → gh release 생성
 ```
 
@@ -106,6 +106,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
 - `.gitignore` 는 `/*` 로 모두 빼고 `!/<이름>` 으로 올릴 파일만 고르는 방식이다. 최상위에 새 파일을 만들면 여기에 추가해야 추적된다. `dist/` 의 빌드 결과는 올리지 않는다.
 - 사용자에게 보이는 기능이 바뀌면 `CHANGELOG.md`(바뀜·추가·고침), `README.md`, `packaging/README.txt`(설치 가이드 — 모든 기능의 자세한 설명)를 함께 고친다.
 - 릴리스 커밋 메시지는 `<버전> 릴리스 — <요약>` 형식이다.
+- 사용자에게 보이는 글자(앱 화면 문자열·README·CHANGELOG·설치 가이드)에는 긴 줄표(—)를 쓰지 않는다. 문장을 나누거나 쉼표·쌍점·괄호·가운뎃점으로 쓴다. 코드 주석·설계 문서는 그대로 써도 된다.
 
 ## Windows 판 (windows/)
 

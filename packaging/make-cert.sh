@@ -36,7 +36,7 @@ PW="$(/usr/bin/openssl rand -hex 16)"
 echo "1) 로그인 키체인에 인증서·개인 키 등록: $CN"
 security import "$W/id.p12" -k "$KC" -P "$PW" -T /usr/bin/codesign -T /usr/bin/productsign >/dev/null
 
-echo "2) 서명용으로 신뢰 등록 — 비밀번호 창이 뜨면 로그인 비밀번호를 입력하세요"
+echo "2) 서명용으로 신뢰 등록: 비밀번호 창이 뜨면 로그인 비밀번호를 입력하세요"
 security add-trusted-cert -r trustRoot -p codeSign -p basic -k "$KC" "$W/cert.pem"
 
 # 받는 사람에게 서명자를 확인시켜 줄 때 쓰는 공개 인증서(개인 키 없음)

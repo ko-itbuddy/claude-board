@@ -42,7 +42,7 @@ ln -sf "$N/board-tui.py" "$BIN/claude-board-tui"
 echo "5) 로그인 항목 등록"
 osascript -e 'tell application "System Events" to delete (every login item whose name is "Claude Board")' >/dev/null 2>&1 || true
 osascript -e "tell application \"System Events\" to make login item at end with properties {path:\"$APP\", hidden:false}" >/dev/null 2>&1 \
-  || echo "   (로그인 항목 등록 실패 — 시스템 설정 > 일반 > 로그인 항목에서 직접 추가하세요)"
+  || echo "   (로그인 항목 등록 실패: 시스템 설정 > 일반 > 로그인 항목에서 직접 추가하세요)"
 
 if [ -d "/Applications/Ghostty.app" ] || [ -d "$HOME/Applications/Ghostty.app" ]; then
   if ! grep -q ">>> claude-board >>>" "$HOME/.zshrc" 2>/dev/null; then

@@ -11,7 +11,7 @@ LABEL="com.claude.board"
 AGENT="$HOME/Library/LaunchAgents/$LABEL.plist"
 
 if ! python3 -c 'import sys' >/dev/null 2>&1; then
-  echo "Claude Board: python3 가 없습니다 — hook 이 python3 로 실행되므로 먼저 설치해야 합니다(xcode-select --install)" >&2
+  echo "Claude Board: python3 가 없습니다. hook 이 python3 로 실행되므로 먼저 설치해야 합니다(xcode-select --install)" >&2
   exit 1
 fi
 

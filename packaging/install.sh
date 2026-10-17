@@ -53,7 +53,7 @@ main() {
     # 이미 있는 앱은 Contents 만 바꿔 끼운다 — 앱 폴더만 내 소유면 되므로 다음 업데이트부터는 관리자 비밀번호가 필요 없다.
     # pkg 로 설치한 앱(root 소유)이거나 /Applications 에 쓸 수 없는 계정이면 이번 한 번만 관리자 비밀번호 창을 띄운다
     if [ ! -w "$APP" ] || { [ -e "$APP/Contents" ] && [ ! -w "$APP/Contents" ]; }; then
-      echo "   앱 폴더를 이 계정 소유로 바꿉니다 — 관리자 비밀번호 창이 뜹니다(처음 한 번만)"
+      echo "   앱 폴더를 이 계정 소유로 바꿉니다. 관리자 비밀번호 창이 뜹니다(처음 한 번만)"
       osascript -e "do shell script \"mkdir -p '$APP' && chown -R $(id -un):staff '$APP'\" with administrator privileges" >/dev/null
     fi
     if [ -e "$APP/Contents" ]; then mv "$APP/Contents" "$W/old"; fi

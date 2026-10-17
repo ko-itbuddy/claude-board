@@ -464,7 +464,7 @@ func withFileLock<T>(_ file: String, _ body: () throws -> T) throws -> T {
     while mkdir(lock, 0o755) != 0 {
         guard errno == EEXIST else { throw AccountError("잠금을 만들지 못했습니다: \(lock)") }
         if let m = mtime(lock), Date().timeIntervalSince(m) > 15 { rmdir(lock); continue }
-        guard Date() < deadline else { throw AccountError("Claude Code 가 로그인 정보를 쓰는 중입니다 — 잠시 뒤 다시 시도해 주세요") }
+        guard Date() < deadline else { throw AccountError("Claude Code 가 로그인 정보를 쓰는 중입니다. 잠시 뒤 다시 시도해 주세요") }
         Thread.sleep(forTimeInterval: 0.1)
     }
     defer { rmdir(lock) }
@@ -642,11 +642,11 @@ final class AccountStore: ObservableObject {
                 switch r {
                 case .success(let warning):
                     self.onSwitch?()
-                    self.flash(warning ?? note ?? "\(a.email) 계정으로 전환했습니다 — 실행 중인 세션도 다음 요청부터 이 계정을 씁니다",
+                    self.flash(warning ?? note ?? "\(a.email) 계정으로 전환했습니다. 실행 중인 세션도 다음 요청부터 이 계정을 씁니다",
                                error: warning != nil)
                     done?(true)
                 case .failure(let e):
-                    self.flash("전환하지 못했습니다 — \(e.localizedDescription)", error: true)
+                    self.flash("전환하지 못했습니다: \(e.localizedDescription)", error: true)
                     done?(false)
                 }
             }
@@ -656,7 +656,7 @@ final class AccountStore: ObservableObject {
     // queue 에서 부른다. 고칠 수 없었던 부분이 있으면 그 안내를 돌려준다
     private func performSwitch(_ target: Account) throws -> String? {
         guard let oauth = Keychain.json(Self.vault, account: target.id)?["claudeAiOauth"] as? [String: Any] else {
-            throw AccountError("저장된 로그인 정보가 없습니다 — 계정을 다시 추가해 주세요")
+            throw AccountError("저장된 로그인 정보가 없습니다. 계정을 다시 추가해 주세요")
         }
         // CLAUDE_CONFIG_DIR 을 따로 정해 띄운 세션은 이름 뒤에 경로 해시가 붙은 다른 항목을 쓴다 — 그 항목은 건드리지 않는다.
         // 같은 토큰을 두 항목에 넣으면 한쪽이 갱신(회전)할 때 다른 쪽 토큰이 무효가 되기 때문
@@ -685,7 +685,7 @@ final class AccountStore: ObservableObject {
                 if previous != target.id { for k in Self.accountCaches { j[k] = nil } }
             }
         } catch {
-            return "토큰은 바꿨지만 계정 정보 파일을 고치지 못했습니다 — \(error.localizedDescription)"
+            return "토큰은 바꿨지만 계정 정보 파일을 고치지 못했습니다: \(error.localizedDescription)"
         }
         return nil
     }
@@ -697,7 +697,7 @@ final class AccountStore: ObservableObject {
         guard let claude = findCommand("claude") else { return flash("claude 명령을 찾지 못했습니다", error: true) }
         let slot = loginRoot + "/login-" + UUID().uuidString.prefix(8).lowercased()
         do { try FileManager.default.createDirectory(atPath: slot, withIntermediateDirectories: true) } catch {
-            return flash("로그인 자리를 만들지 못했습니다 — \(error.localizedDescription)", error: true)
+            return flash("로그인 자리를 만들지 못했습니다: \(error.localizedDescription)", error: true)
         }
         var cmd = "CLAUDE_CONFIG_DIR=\(shellQuote(slot)) \(shellQuote(claude.path)) auth login --claudeai"
         if let email { cmd += " --email \(shellQuote(email))" }
@@ -753,7 +753,7 @@ final class AccountStore: ObservableObject {
                     self.tokenOnlySince = since
                     if Date().timeIntervalSince(since) > 30 {
                         self.cancelAdd()
-                        self.flash("로그인은 됐지만 계정 정보를 받지 못했습니다 — 계정 추가를 다시 해 주세요", error: true)
+                        self.flash("로그인은 됐지만 계정 정보를 받지 못했습니다. 계정 추가를 다시 해 주세요", error: true)
                     }
                     return
                 }
@@ -763,8 +763,8 @@ final class AccountStore: ObservableObject {
                 self.adding = false
                 self.loadSaved()
                 switch result {
-                case .success(let a): self.flash("\(a.email) 계정을 추가했습니다 — 계정 메뉴에서 골라 바로 전환할 수 있습니다")
-                case .failure(let e): self.flash("계정을 추가하지 못했습니다 — \(e.localizedDescription)", error: true)
+                case .success(let a): self.flash("\(a.email) 계정을 추가했습니다. 계정 메뉴에서 골라 바로 전환할 수 있습니다")
+                case .failure(let e): self.flash("계정을 추가하지 못했습니다: \(e.localizedDescription)", error: true)
                 }
             }
         }
@@ -861,20 +861,20 @@ final class AutoSwitcher {
             // 1초 타이머(메인 스레드)에서 부른다
             guard MainActor.assumeIsolated({ canDriveSession(s) }) else {
                 manual.append(name)
-                log("\(name) — 보드 탭·Ghostty 세션이 아니라 이어 가지 못함")
+                log("\(name): 보드 탭·Ghostty 세션이 아니라 이어 가지 못함")
                 continue
             }
             // Esc 를 먼저 — Claude Code 가 띄운 한도 선택 창을 닫고 "한도가 풀리면 저절로 이어 가기" 예약을 취소한다.
             // 선택 창이 열린 채 Enter 를 보내면 그 창의 항목이 골라진다
             MainActor.assumeIsolated {
                 driveSession(s, [("key", "escape"), ("wait", "0.5"), ("text", Self.prompt), ("wait", "0.2"), ("key", "enter")]) { [weak self] ok in
-                    self?.log("\(name) — \(ok ? "이어 가기 요청을 넣음" : "터미널을 찾지 못해 이어 가지 못함")")
+                    self?.log("\(name): \(ok ? "이어 가기 요청을 넣음" : "터미널을 찾지 못해 이어 가지 못함")")
                 }
             }
         }
         let n = todo.count - manual.count
         accounts.flash((n > 0 ? "한도로 멈췄던 세션 \(n)개를 이어서 진행합니다" : "")
-                       + (manual.isEmpty ? "" : (n > 0 ? " — " : "") + "\(manual.joined(separator: ", ")) 세션은 보드 탭·Ghostty 밖이라 직접 이어 주세요"),
+                       + (manual.isEmpty ? "" : (n > 0 ? ". " : "") + "\(manual.joined(separator: ", ")) 세션은 보드 탭·Ghostty 밖이라 직접 이어 주세요"),
                        error: !manual.isEmpty)
     }
 
@@ -890,20 +890,20 @@ final class AutoSwitcher {
         guard let next = (saved[start...] + saved[..<start]).first(where: { $0.id != cur.id && !$0.expired && marks[$0.id] == nil }) else {
             if !noCandidate {
                 noCandidate = true
-                log("\(reason) — 전환할 계정 없음")
-                accounts.flash("사용 한도에 도달했지만 전환할 다른 계정이 없습니다 — 저장한 계정이 모두 한도에 도달했거나 다시 로그인이 필요합니다", error: true)
+                log("\(reason): 전환할 계정 없음")
+                accounts.flash("사용 한도에 도달했지만 전환할 다른 계정이 없습니다. 저장한 계정이 모두 한도에 도달했거나 다시 로그인이 필요합니다", error: true)
             }
             return
         }
         pending = true
-        log("\(reason) — \(cur.email) 에서 \(next.email) 로 전환")
+        log("\(reason): \(cur.email) 에서 \(next.email) 로 전환")
         let stopped = store.groups.flatMap(\.sessions).contains { $0.limitAt != nil && $0.state != "ended" }
         let note = "사용 한도에 도달해 \(next.email) 계정으로 자동 전환했습니다"
-            + (stopped ? " — 한도로 멈춘 세션은 \(Int(Self.settle))초 뒤 이어서 진행합니다" : "")
+            + (stopped ? ". 한도로 멈춘 세션은 \(Int(Self.settle))초 뒤 이어서 진행합니다" : "")
         accounts.switchTo(next, note: note) { [weak self] ok in
             self?.pending = false
             guard !ok else { return }
-            self?.log("\(next.email) 로 전환하지 못함 — 1시간 동안 고르지 않음")
+            self?.log("\(next.email) 로 전환하지 못함 (1시간 동안 고르지 않음)")
             self?.full[next.id] = now.addingTimeInterval(3600).timeIntervalSince1970
         }
     }
@@ -1411,17 +1411,17 @@ struct PlaceChip: View {
         switch place {
         case .tab(_, let headless):
             chip(mode.map { "CB \($0)" } ?? "CB", Color(red: 0.18, green: 0.23, blue: 0.34), Color(red: 0.66, green: 0.76, blue: 1.0),
-                 hint: headless || mode != nil ? "보드 탭 안에서 시작된 claude \(mode ?? "-p") — 탭이 닫히면 함께 끝납니다" : "보드 탭에서 도는 세션 — 누르면 그 탭으로")
+                 hint: headless || mode != nil ? "보드 탭 안에서 시작된 claude \(mode ?? "-p") (탭이 닫히면 함께 끝납니다)" : "보드 탭에서 도는 세션: 누르면 그 탭으로")
         case .terminal:
             if let appName {
                 chip(appName, Color(red: 0.14, green: 0.25, blue: 0.29), Color(red: 0.56, green: 0.85, blue: 0.91), hint: "\(appName) 에서 도는 세션")
             }
         case .background:
             chip("$ claude \(mode ?? "-p")", Color(red: 0.23, green: 0.20, blue: 0.27), Color(red: 0.83, green: 0.72, blue: 1.0), mono: true,
-                 hint: "터미널 없이 도는 세션 — 보드는 상태만 보여 줍니다")
+                 hint: "터미널 없이 도는 세션입니다. 보드는 상태만 보여 줍니다")
         case .ended:
             if s.headless {
-                chip("$ claude -p", Color.white.opacity(0.08), .secondary, mono: true, hint: "끝난 백그라운드 세션 — 메뉴의 세션 다시 열기로 보드 탭에서 엽니다")
+                chip("$ claude -p", Color.white.opacity(0.08), .secondary, mono: true, hint: "끝난 백그라운드 세션입니다. 메뉴의 세션 다시 열기로 보드 탭에서 엽니다")
             } else {
                 chip("보드에서 이어 열기", Color.white.opacity(0.08), .secondary, hint: "누르면 보드 새 탭에서 이 대화를 이어 엽니다")
             }
@@ -1536,7 +1536,7 @@ struct UsagePanel: View {
     }
 
     private var status: some View {
-        Label(usage.tokenExpired ? "로그인 토큰 갱신 전 — 세션이 다음 요청을 보내면 보입니다"
+        Label(usage.tokenExpired ? "로그인 토큰 갱신 전: 세션이 다음 요청을 보내면 보입니다"
               : usage.failed ? "사용량을 불러오지 못했습니다" : "사용량 불러오는 중…",
               systemImage: "gauge.with.dots.needle.33percent")
             .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
@@ -1667,7 +1667,7 @@ struct UsageModeButton: View {
         }
         .buttonStyle(.plain)
         .clickable($hover)
-        .hint(compact ? "자세히 보기 — 한도마다 막대와 초기화 시각" : "간략히 보기 — 한 줄로")
+        .hint(compact ? "자세히 보기: 한도마다 막대와 초기화 시각" : "간략히 보기: 한 줄로")
     }
 }
 
@@ -1712,14 +1712,14 @@ struct AccountChip: View {
         }
         .buttonStyle(.plain)
         .clickable($hover)
-        .hint("로그인 계정 \(c?.email ?? "없음")\(c.map { $0.org.isEmpty ? "" : " · \($0.org)" } ?? "") — 눌러서 다른 계정으로 전환하거나 계정을 추가합니다"
-              + (accounts.autoSwitch ? " · 한도 자동 전환 켜짐" : ""))
+        .hint("로그인 계정 \(c?.email ?? "없음")\(c.map { $0.org.isEmpty ? "" : " · \($0.org)" } ?? "")"
+              + (accounts.autoSwitch ? " · 한도 자동 전환 켜짐" : "") + "\n눌러서 다른 계정으로 전환하거나 계정을 추가합니다")
     }
 
     private func showMenu() {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        let head = NSMenuItem(title: "Claude 계정 — 고르면 모든 세션이 그 계정으로 이어 갑니다", action: nil, keyEquivalent: "")
+        let head = NSMenuItem(title: "Claude 계정: 고르면 모든 세션이 그 계정으로 이어 갑니다", action: nil, keyEquivalent: "")
         head.isEnabled = false
         menu.addItem(head)
         var list = accounts.saved
@@ -1727,7 +1727,7 @@ struct AccountChip: View {
         for a in list {
             let isCurrent = a.id == accounts.current?.id
             let title = [a.email, a.plan].filter { !$0.isEmpty }.joined(separator: "  ·  ")
-                + (!isCurrent && a.expired ? "  — 다시 로그인 필요" : "")
+                + (!isCurrent && a.expired ? "  (다시 로그인 필요)" : "")
             let item = ActionItem(title, enabled: !accounts.switching) {
                 guard !isCurrent else { return }
                 a.expired ? accounts.beginAdd(email: a.email) : confirmSwitch(a)
@@ -1738,7 +1738,7 @@ struct AccountChip: View {
         }
         menu.addItem(.separator())
         if accounts.adding {
-            menu.addItem(ActionItem("로그인 기다리는 중 — 계정 추가 취소") { accounts.cancelAdd() })
+            menu.addItem(ActionItem("계정 추가 취소 (로그인 기다리는 중)") { accounts.cancelAdd() })
         } else {
             menu.addItem(ActionItem("계정 추가… (터미널·브라우저에서 로그인)") { accounts.beginAdd() })
         }
@@ -1763,7 +1763,7 @@ struct AccountChip: View {
         let working = busy()
         if !working.isEmpty {
             let names = working.prefix(5).map { s in
-                "• \((s.cwd as NSString).lastPathComponent) — \(s.topic.isEmpty ? Palette.name(s.state) : s.topic)"
+                "• \((s.cwd as NSString).lastPathComponent) · \(s.topic.isEmpty ? Palette.name(s.state) : s.topic)"
             }
             let alert = NSAlert()
             alert.messageText = "이전 계정으로 작업 중인 세션이 있습니다"
@@ -1910,15 +1910,16 @@ struct SessionRow: View {
     }
 }
 
-// 세션 줄 오른쪽 위의 … 메뉴 — 일시중지·재개·중단
+// 세션 줄 오른쪽 위의 … 메뉴 — 일시중지·재개·중단. 누르면 보드 모양의 메뉴 패널(SessionMenuPanel)을 단추 아래에 띄운다
 struct SessionMenu: View {
     let s: Session
     @State private var hover = false
+    @State private var anchor = MenuAnchor()
 
     // SwiftUI Menu(borderlessButton) 는 AppKit 팝업 단추라 확대하면 마우스 감지 영역까지 커졌다 줄어 떨리고,
-    // 커서도 스스로 화살표로 되돌린다 — 별·X 단추와 같은 일반 버튼으로 두고 누르면 메뉴를 직접 띄운다
+    // 커서도 스스로 화살표로 되돌린다 — 별·X 단추와 같은 일반 버튼으로 두고 누르면 메뉴 패널을 직접 띄운다
     var body: some View {
-        Button(action: showMenu) {
+        Button { SessionMenuPanel.shared.toggle(s, from: anchor.view) } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 12, weight: .bold))
                 .foregroundStyle(.primary.opacity(hover ? 0.95 : 0.55))
@@ -1931,31 +1932,290 @@ struct SessionMenu: View {
         .buttonStyle(.plain)
         .clickable($hover)
         .hint("세션 일시중지·재개·중단")
+        .background(MenuAnchorView(anchor: anchor))
+    }
+}
+
+// 메뉴 패널을 붙일 자리 — 단추 뒤에 깔린 빈 NSView 를 기억한다(클릭은 받지 않는다)
+final class MenuAnchor { weak var view: NSView? }
+
+struct MenuAnchorView: NSViewRepresentable {
+    let anchor: MenuAnchor
+    final class Spot: NSView { override func hitTest(_ point: NSPoint) -> NSView? { nil } }
+    func makeNSView(context: Context) -> NSView {
+        let v = Spot()
+        anchor.view = v
+        return v
+    }
+    func updateNSView(_ v: NSView, context: Context) { anchor.view = v }
+}
+
+// … 메뉴 패널 — 보드와 같은 어두운 둥근 패널. 맨 위에 세션 이름·상태·칩, 그 아래 항목마다 아이콘 + 제목 + 한 줄 설명, 세션 중단은 구분선 아래 빨간색.
+// 마우스를 올리거나 ↑↓ 로 고르고 Return·클릭으로 실행, Esc·바깥 클릭·스크롤·다른 앱으로 넘어감·보드 창 이동이면 닫는다.
+// 패널은 열린 동안 키 창이 된다(SwiftUI 의 마우스 올림은 키 창에서만 온다). 키는 앱 안 이벤트 감시로 먼저 받고, 닫으면 보드 창이 다시
+// 키 창이 되어 터미널 포커스가 돌아온다. 열린 동안 보드는 불투명하게 둔다(WindowOpacity).
+// 항목과 조건은 예전 NSMenu 와 같고 동작 함수(resumeSession·resumePaused·pauseSession·moveToBoard·stopSession)를 그대로 부른다
+@MainActor final class SessionMenuPanel: ObservableObject {
+    static let shared = SessionMenuPanel()
+    struct Item: Identifiable {
+        let id: Int
+        let icon: String
+        let title: String
+        let detail: String
+        var enabled = true
+        var destructive = false
+        var tint = Palette.color("working")
+        let run: @MainActor () -> Void
+    }
+    // 연 순간의 세션과 그 칩 — 1초마다 다시 읽는 목록과 따로 둔다(canDrive 는 프로세스를 살피므로 열 때 한 번만)
+    private(set) var session: Session?
+    private(set) var place: SessionPlace = .ended
+    private(set) var appName: String?
+    private(set) var mode: String?
+    private(set) var items: [Item] = []
+    @Published var highlighted: Int?
+    final class Panel: NSPanel { override var canBecomeKey: Bool { true } }
+    private let panel = Panel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+    private var host: NSHostingView<SessionMenuView>?
+    private var monitors: [Any] = []
+    private var observers: [NSObjectProtocol] = []
+    private var closed: (id: String, at: Date)?   // 열린 메뉴의 ⋯ 를 다시 누른 클릭은 닫기만 한다
+
+    private init() {
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.level = .popUpMenu   // 위에 고정한 보드(.floating)보다 위
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.title = "세션 메뉴"
+        panel.isReleasedWhenClosed = false
     }
 
-    private func showMenu() {
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        let s = self.s
-        let place = TerminalHub.shared.place(s)
+    var isOpen: Bool { panel.isVisible }
+
+    func toggle(_ s: Session, from view: NSView?) {
+        if let c = closed, c.id == s.id, Date().timeIntervalSince(c.at) < 0.4 { closed = nil; return }
+        if panel.isVisible { close() }
+        open(s, from: view)
+    }
+
+    private func open(_ s: Session, from view: NSView?) {
+        HintPanel.shared.leaveAll()
+        let hub = TerminalHub.shared
+        session = s
+        place = hub.place(s)
+        appName = hub.appNames[s.id]
+        mode = s.state == "ended" ? nil : hub.mode(s)
+        items = Self.items(for: s, place: place)
+        highlighted = nil
+        let host = self.host ?? FirstClickHostingView(rootView: SessionMenuView(model: self))
+        host.rootView = SessionMenuView(model: self)
+        if self.host == nil {
+            self.host = host
+            panel.contentView = host
+        }
+        let size = host.fittingSize
+        // 단추 아래에 오른쪽 끝을 맞춰 붙인다 — 아래 자리가 없으면 단추 위로. 단추를 못 찾으면 마우스 자리
+        let anchor: NSRect
+        if let v = view, let w = v.window {
+            anchor = w.convertToScreen(v.convert(v.bounds, to: nil))
+        } else {
+            let m = NSEvent.mouseLocation
+            anchor = NSRect(x: m.x, y: m.y, width: 0, height: 0)
+        }
+        let vf = (NSScreen.screens.first { $0.frame.intersects(anchor) } ?? NSScreen.main)?.visibleFrame ?? anchor
+        var o = NSPoint(x: anchor.maxX - size.width, y: anchor.minY - 6 - size.height)
+        if o.y < vf.minY + 4 { o.y = anchor.maxY + 6 }
+        o.x = max(vf.minX + 4, min(o.x, vf.maxX - size.width - 4))
+        o.y = max(vf.minY + 4, min(o.y, vf.maxY - size.height - 4))
+        panel.setFrame(NSRect(origin: o, size: size), display: true)
+        panel.invalidateShadow()
+        // 손쉬운 사용 등으로 보드가 앞에 없을 때 눌렸으면 앞으로 — 키(↑↓·Return·Esc)가 보드로 와야 한다
+        if !NSApp.isActive { NSApp.activate(ignoringOtherApps: true) }
+        panel.makeKeyAndOrderFront(nil)
+        watch()
+    }
+
+    private func watch() {
+        if let m = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel],
+                                                    handler: { [weak self] e in self?.handle(e) ?? e }) { monitors.append(m) }
+        if let m = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown],
+                                                     handler: { [weak self] _ in MainActor.assumeIsolated { self?.close() } }) { monitors.append(m) }
+        let nc = NotificationCenter.default
+        for (name, object) in [(NSApplication.didResignActiveNotification, nil), (NSWindow.didMoveNotification, window),
+                               (NSWindow.didResizeNotification, window), (NSWindow.didResignKeyNotification, panel)] as [(Notification.Name, Any?)] {
+            observers.append(nc.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.close() }
+            })
+        }
+    }
+
+    // 앱 안 이벤트 — ↑↓·Return·Esc 는 메뉴가 쓰고, 패널 밖을 누르거나 굴리면 닫고 그 이벤트는 그대로 보낸다
+    private func handle(_ e: NSEvent) -> NSEvent? {
+        switch e.type {
+        case .keyDown:
+            if e.modifierFlags.contains(.command) { close(); return e }   // ⌘Q 등은 그대로
+            switch e.keyCode {
+            case 125: move(1)
+            case 126: move(-1)
+            case 36, 76, 49: if let h = highlighted { run(h) }   // Return·Enter·Space
+            case 53: close()
+            default: break
+            }
+            return nil
+        default:
+            if e.window !== panel { close() }
+            return e
+        }
+    }
+
+    func move(_ d: Int) {
+        let ids = items.filter(\.enabled).map(\.id)
+        guard !ids.isEmpty else { return }
+        if let h = highlighted, let i = ids.firstIndex(of: h) {
+            highlighted = ids[(i + d + ids.count) % ids.count]
+        } else {
+            highlighted = d > 0 ? ids.first : ids.last
+        }
+    }
+
+    func hover(_ id: Int, _ inside: Bool) {
+        guard items.first(where: { $0.id == id })?.enabled == true else { return }
+        if inside { highlighted = id } else if highlighted == id { highlighted = nil }
+    }
+
+    // 고른 항목 — 패널을 먼저 닫고 다음 차례에 부른다(중단·옮기기는 확인 창을 띄운다)
+    func run(_ id: Int) {
+        guard let item = items.first(where: { $0.id == id }), item.enabled else { return }
+        close()
+        DispatchQueue.main.async { item.run() }
+    }
+
+    func close() {
+        guard panel.isVisible else { return }
+        monitors.forEach(NSEvent.removeMonitor)
+        monitors = []
+        observers.forEach(NotificationCenter.default.removeObserver)
+        observers = []
+        panel.orderOut(nil)
+        closed = (session?.id ?? "", Date())
+        highlighted = nil
+        if NSApp.isActive, window.isVisible, !window.isKeyWindow { window.makeKey() }   // 키 창·터미널 포커스를 보드로 돌린다
+        WindowOpacity.shared.apply()
+    }
+
+    // 항목과 조건 — 끝난 세션: 다시 열기(일시중지였으면 재개), 일시중지: 재개·중단, 그 밖: 일시중지·(Ghostty 세션이면) 보드로 옮기기·중단
+    static func items(for s: Session, place: SessionPlace) -> [Item] {
+        let red = Color(red: 1.0, green: 0.45, blue: 0.45)
+        let stop = Item(id: 9, icon: "stop.fill", title: "세션 중단", detail: "응답을 멈추고 끝냅니다. 대화 기록은 남습니다",
+                        destructive: true, tint: red) { stopSession(s) }
         switch s.state {
         case "ended":
             // 보드 새 탭에서 이어 연다 — 백그라운드(claude -p)였던 세션은 -p 없이 대화형으로 열리고 그때부터 보드 탭 세션
-            menu.addItem(ActionItem(s.paused ? "세션 재개 (이어서 진행)" : s.headless ? "세션 다시 열기 — 보드 새 탭에서" : "세션 다시 열기") {
-                resumeSession(s, carryOn: s.paused)
-            })
+            if s.paused {
+                return [Item(id: 0, icon: "play.fill", title: "세션 재개 (이어서 진행)", detail: "보드 새 탭에서 열고 멈춘 작업을 이어 갑니다") {
+                    resumeSession(s, carryOn: true)
+                }]
+            }
+            return [Item(id: 0, icon: "arrow.clockwise", title: "세션 다시 열기",
+                         detail: s.headless ? "보드 새 탭에서 대화형으로 이어 엽니다" : "보드 새 탭에서 이 대화를 이어 엽니다") {
+                resumeSession(s, carryOn: false)
+            }]
         case "paused":
-            menu.addItem(ActionItem("세션 재개") { resumePaused(s) })
-            menu.addItem(.separator())
-            menu.addItem(ActionItem("세션 중단") { stopSession(s) })
+            return [Item(id: 0, icon: "play.fill", title: "세션 재개", detail: "멈춘 지점부터 이어서 진행하게 합니다") { resumePaused(s) }, stop]
         default:
-            menu.addItem(ActionItem("일시중지", enabled: s.state != "idle" && canDriveSession(s)) { pauseSession(s) })
+            let canPause = s.state != "idle" && canDriveSession(s)
+            var list = [Item(id: 0, icon: "pause.fill", title: "일시중지",
+                             detail: canPause ? "지금 응답을 멈춥니다. 재개하면 이어 갑니다"
+                                 : s.state == "idle" ? "대기 중이라 멈출 응답이 없습니다" : "이 터미널에는 키를 넣을 수 없습니다",
+                             enabled: canPause, tint: Palette.color("paused")) { pauseSession(s) }]
             // 다른 터미널(Ghostty)의 세션을 보드 탭으로 — 그쪽을 /exit 로 끝내고 보드에서 이어 연다
-            if place == .terminal, canDrive(s) { menu.addItem(ActionItem("보드로 옮기기") { moveToBoard(s) }) }
-            menu.addItem(.separator())
-            menu.addItem(ActionItem("세션 중단") { stopSession(s) })
+            if place == .terminal, canDrive(s) {
+                list.append(Item(id: 1, icon: "arrow.right.square", title: "보드로 옮기기", detail: "그쪽을 끝내고 보드 새 탭에서 이어 엽니다",
+                                 tint: Color(red: 0.66, green: 0.76, blue: 1.0)) { moveToBoard(s) })
+            }
+            return list + [stop]
         }
-        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+    }
+}
+
+struct SessionMenuView: View {
+    @ObservedObject var model: SessionMenuPanel
+    static let width: CGFloat = 300
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let s = model.session { header(s) }
+            Rectangle().fill(Color.white.opacity(0.08)).frame(height: 0.5)
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(model.items) { item in
+                    if item.destructive {
+                        Rectangle().fill(Color.white.opacity(0.08)).frame(height: 0.5).padding(.horizontal, 8).padding(.vertical, 4)
+                    }
+                    row(item)
+                }
+            }
+            .padding(6)
+        }
+        .frame(width: Self.width)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Color(red: 0.11, green: 0.11, blue: 0.17).opacity(0.9))
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        )
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.14), lineWidth: 0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .preferredColorScheme(.dark)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("세션 메뉴")
+    }
+
+    // 세션 이름, 그 아래 상태 점·상태 이름·칩·작업 폴더
+    private func header(_ s: Session) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(s.title)
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                Circle().fill(Palette.color(s.state)).frame(width: 7, height: 7)
+                Text(Palette.name(s.state)).font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.color(s.state)).fixedSize()
+                PlaceChip(s: s, place: model.place, appName: model.appName, mode: model.mode)
+                Text((s.cwd as NSString).lastPathComponent).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 12)
+        .padding(.bottom, 10)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func row(_ item: SessionMenuPanel.Item) -> some View {
+        let on = model.highlighted == item.id
+        return Button { model.run(item.id) } label: {
+            HStack(spacing: 10) {
+                Image(systemName: item.icon)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(item.tint)
+                    .frame(width: 26, height: 26)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(item.tint.opacity(on ? 0.26 : 0.14)))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.title).font(.system(size: 13, weight: .semibold)).foregroundStyle(item.destructive ? item.tint : .primary)
+                    Text(item.detail).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 9).fill(on ? (item.destructive ? item.tint.opacity(0.16) : Color.white.opacity(0.10)) : .clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!item.enabled)
+        .opacity(item.enabled ? 1 : 0.45)
+        .onHover { model.hover(item.id, $0) }
+        .accessibilityLabel(item.title)
+        .accessibilityHint(item.detail)
     }
 }
 
@@ -2030,8 +2290,8 @@ struct MuteToggle: View {
             .disabled(locked)
             .modifier(ClickableIf(active: !locked, hover: $hover))
             .onChange(of: s.muted) { pending = nil }
-            .hint(locked ? "전체 알림이 꺼져 있어 바꿀 수 없습니다 — 윗줄 종 단추로 전체 알림을 켜면 이 세션의 설정(\(on ? "켜짐" : "꺼짐"))대로 돌아갑니다"
-                  : !on ? "알림 꺼짐 — 켜면 작업 완료·승인 대기 알림을 다시 띄웁니다" : "알림 켜짐 — 끄면 이 세션의 작업 완료·승인 대기 알림을 띄우지 않습니다")
+            .hint(locked ? "전체 알림이 꺼져 있어 바꿀 수 없습니다. 윗줄 종 단추로 전체 알림을 켜면 이 세션의 설정(\(on ? "켜짐" : "꺼짐"))대로 돌아갑니다"
+                  : !on ? "알림 꺼짐: 켜면 작업 완료·승인 대기 알림을 다시 띄웁니다" : "알림 켜짐: 끄면 이 세션의 작업 완료·승인 대기 알림을 띄우지 않습니다")
     }
 }
 
@@ -2097,8 +2357,8 @@ struct AllMuteButton: View {
         }
         .buttonStyle(.plain)
         .clickable($hover)
-        .hint(muted ? "전체 알림 꺼짐 — 누르면 다시 켜고, 세션마다 정해 둔 알림 설정으로 돌아갑니다"
-              : "전체 알림 끄기 — 모든 세션의 작업 완료·승인 대기 알림을 띄우지 않습니다")
+        .hint(muted ? "전체 알림 꺼짐: 누르면 다시 켜고, 세션마다 정해 둔 알림 설정으로 돌아갑니다"
+              : "전체 알림 끄기: 모든 세션의 작업 완료·승인 대기 알림을 띄우지 않습니다")
     }
 }
 
@@ -2140,7 +2400,7 @@ struct KindSection: View {
         .contentShape(Rectangle())
         .clickable($hover)
         .onTapGesture { withAnimation(foldSpring) { toggle() } }
-        .hint((headless ? "터미널 없이 도는 세션 — 이동할 터미널이 없습니다" : "터미널에서 도는 세션 — 보드 탭 세션은 눌러서 그 탭으로, 다른 터미널 세션은 눌러서 그 앱, 두 번 눌러서 그 세션으로 이동합니다")
+        .hint((headless ? "터미널 없이 도는 세션이라 이동할 터미널이 없습니다" : "터미널에서 도는 세션입니다. 보드 탭 세션은 눌러서 그 탭으로, 다른 터미널 세션은 눌러서 그 앱, 두 번 눌러서 그 세션으로 이동합니다")
               + (collapsed ? " (누르면 펼치기)" : " (누르면 접기)"))
     }
 }
@@ -2177,7 +2437,7 @@ struct SubToggle: View {
         }
         .buttonStyle(.plain)
         .clickable($hover)
-        .hint("하위 작업 \(count)개 — " + (open ? "서브에이전트 목록 접기" : "서브에이전트 목록 펼치기"))
+        .hint("하위 작업 \(count)개 · " + (open ? "서브에이전트 목록 접기" : "서브에이전트 목록 펼치기"))
     }
 }
 
@@ -2338,7 +2598,7 @@ struct GroupCard: View {
                 }
                 HeaderButton(icon: pinned ? "star.fill" : "star", tint: pinned ? Color(red: 1.0, green: 0.78, blue: 0.28) : nil,
                              help: pinned ? "상단 고정 풀기" : "상단에 고정", action: togglePin)
-                HeaderButton(icon: "xmark", tint: nil, help: "목록에서 지우기 — 새 활동이 생기면 다시 나타납니다", action: remove)
+                HeaderButton(icon: "xmark", tint: nil, help: "목록에서 지우기 (새 활동이 생기면 다시 나타납니다)", action: remove)
                 HStack(spacing: 6) {
                     ForEach(["waiting", "working", "idle"], id: \.self) { st in
                         let n = g.sessions.filter { $0.state == st }.count
@@ -2653,8 +2913,8 @@ struct SummaryChip: View {
         .contentShape(Capsule())
         .onTapGesture(perform: tap)
         .clickable($hover)
-        .hint(filtering ? "\(Palette.name(state))만 보는 중 — 누르면 모두 보기"
-                        : "\(Palette.name(state)) \(n)개 — 누르면 \(Palette.name(state))만 보기")
+        .hint(filtering ? "\(Palette.name(state))만 보는 중: 누르면 모두 보기"
+                        : "\(Palette.name(state)) \(n)개: 누르면 \(Palette.name(state))만 보기")
     }
 }
 
@@ -2737,7 +2997,7 @@ func foremanQuips(groups: [Group], limits: [Limit], now: Date) -> [Quip] {
     if !waiting.isEmpty {
         out.append(Quip(text: waiting.count == 1 ? "승인 기다리는 세션이 있어요!" : "승인 대기 \(waiting.count)개! 확인해 줘요", mood: .urgent))
         for s in waiting.prefix(3) {
-            out.append(Quip(text: s.topic.isEmpty ? "\(name(s)) 에서 기다려요!" : "\(name(s)): \(short(s.topic, 12)) — 승인 부탁!", mood: .urgent))
+            out.append(Quip(text: s.topic.isEmpty ? "\(name(s)) 에서 기다려요!" : "\(name(s)): \(short(s.topic, 12)), 승인 부탁!", mood: .urgent))
         }
         return out   // 승인 대기가 있으면 그것만 재촉한다
     }
@@ -2757,7 +3017,7 @@ func foremanQuips(groups: [Group], limits: [Limit], now: Date) -> [Quip] {
         out.append(Quip(text: "\(name(s)) 컨텍스트 \(s.ctx!.pct)%! 정리할 때예요", mood: working.isEmpty ? .idle : .busy))
     }
     for l in limits where l.pct >= 80 {
-        out.append(Quip(text: "\(l.label) 한도 \(Int(l.pct.rounded()))% — 아껴 써요!", mood: working.isEmpty ? .idle : .busy))
+        out.append(Quip(text: "\(l.label) 한도 \(Int(l.pct.rounded()))%, 아껴 써요!", mood: working.isEmpty ? .idle : .busy))
     }
     if !paused.isEmpty { out.append(Quip(text: "일시중지 \(paused.count)개, 잊지 마세요", mood: .idle)) }
     if working.isEmpty {
@@ -2768,7 +3028,7 @@ func foremanQuips(groups: [Group], limits: [Limit], now: Date) -> [Quip] {
                 out.append(Quip(text: "Zzz… 다음 지시 기다려요", mood: .sleepy))
             } else {
                 out.append(Quip(text: "\(name(s)) 끝났어요! 확인해 볼까요?", mood: .idle))
-                out.append(Quip(text: idle.count == 1 ? "다음 작업 뭐 할까요?" : "세션 \(idle.count)개 대기 중 — 다음 지시!", mood: .idle))
+                out.append(Quip(text: idle.count == 1 ? "다음 작업 뭐 할까요?" : "세션 \(idle.count)개 대기 중, 다음 지시!", mood: .idle))
             }
         } else if out.isEmpty {
             out.append(Quip(text: "세션을 열어 일을 맡겨 주세요!", mood: .sleepy))
@@ -2853,7 +3113,7 @@ struct Foreman: View {
             }
             .pickerStyle(.inline)
         }
-        .hint("\(mascot.name) — 누르면 다음 말 · 오른쪽 클릭으로 캐릭터 바꾸기")
+        .hint("\(mascot.name): 누르면 다음 말 · 오른쪽 클릭으로 캐릭터 바꾸기")
     }
 
     // 동작 — 모두 시계 t 의 함수라 반복 애니메이션 없이 공유 시계 하나로 움직인다
@@ -3733,7 +3993,7 @@ final class PointerTracker: NSResponder, ObservableObject {
     func apply() {
         guard let w = window else { return }
         // 터미널을 펼친 동안에는 늘 불투명 — 화면 전체의 터미널이 비쳐 보이게 할 까닭이 없다
-        let solid = !previewing && (PointerTracker.shared.inside || w.isKeyWindow || TerminalHub.shared.expanded)
+        let solid = !previewing && (PointerTracker.shared.inside || w.isKeyWindow || TerminalHub.shared.expanded || SessionMenuPanel.shared.isOpen)
         let target = solid ? 1 : CGFloat(level)
         guard abs(w.alphaValue - target) > 0.001 else { return }
         NSAnimationContext.runAnimationGroup { ctx in
@@ -3771,7 +4031,7 @@ struct OpacitySlider: View {
         .foregroundStyle(.secondary)
         .opacity(hover ? 1 : 0.6)
         .onHover { h in withAnimation(.easeOut(duration: 0.15)) { hover = h } }
-        .hint("투명도 — 보드에서 마우스가 벗어나 있고 다른 앱을 쓰는 동안 이 투명도로 보입니다. 마우스를 올리거나 보드를 누르면 불투명해집니다")
+        .hint("투명도: 보드에서 마우스가 벗어나 있고 다른 앱을 쓰는 동안 이 투명도로 보입니다. 마우스를 올리거나 보드를 누르면 불투명해집니다")
     }
 }
 
@@ -3948,7 +4208,7 @@ struct BoardView: View {
             .buttonStyle(.plain)
             .clickable($checkHover)
             .disabled(updater.checking)
-            .hint("업데이트 확인 — GitHub 에 새 버전이 있는지 확인합니다")
+            .hint("업데이트 확인: GitHub 에 새 버전이 있는지 확인합니다")
             // 모두 접기 = 경로 카드를 다 접고 사용 한도를 간략(한 줄)으로, 모두 펼치기 = 다 펴고 상세로.
             // 중간 화면은 이미 카드가 접힌 한 줄·사용 한도가 한 줄이라 숨긴다
             let all = usageCompact && store.groups.allSatisfy { store.collapsed.contains($0.id) }
@@ -3969,7 +4229,7 @@ struct BoardView: View {
             }
             .buttonStyle(.plain)
             .clickable($foldHover)
-            .hint(all ? "모두 펼치기 — 경로 카드를 펴고 사용 한도를 자세히" : "모두 접기 — 경로 카드를 접고 사용 한도를 한 줄로")
+            .hint(all ? "모두 펼치기: 경로 카드를 펴고 사용 한도를 자세히" : "모두 접기: 경로 카드를 접고 사용 한도를 한 줄로")
             }
             Button {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { setPinned(!pinned) }
@@ -4280,7 +4540,7 @@ struct UpdateBanner: View {
                     .buttonStyle(.plain).font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(tint.opacity(hover ? 1 : 0.85))
                     .clickable($hover)
-                    .hint("새 버전을 받아 바꿔 끼웁니다 — 끝나면 보드가 다시 열립니다")
+                    .hint("새 버전을 받아 바꿔 끼웁니다. 끝나면 보드가 다시 열립니다")
             }
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
@@ -4582,6 +4842,11 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
     @Published private(set) var expanded = UserDefaults.standard.object(forKey: "terminalExpanded") as? Bool ?? true
     // 펼쳤을 때 보드 폭 — 경계를 끌어 바꾼 폭을 기억한다
     var boardWidth = CGFloat(UserDefaults.standard.object(forKey: "boardPaneWidth") as? Double ?? Double(boardLaunchWidth))
+    // 보드 위치 — 화면 오른쪽(기본)·왼쪽(보드 설정 boardSide). 왼쪽이면 펼친 배치가 [보드 | 경계 | 터미널] 이고
+    // 접기·최대축소·처음 크기로 붙이기도 화면 왼쪽 기준이다
+    @Published private(set) var boardOnLeft = UserDefaults.standard.string(forKey: "boardSide") == "left"
+    // 펼치기·접기 애니메이션이 도는 중이면 그 애니메이션 — 그동안 BoardRootView 가 터미널 영역 크기를 고정한다
+    var slide: PaneSlide?
     weak var area: TerminalAreaView?
     weak var store: Store?
     // 세션 id → 그 세션이 도는 보드 탭(tty 로 짝지은 세션, 탭 안에서 시작된 claude -p) — 세션 목록을 다시 읽을 때마다 고친다
@@ -4612,6 +4877,11 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
     func setExpanded(_ on: Bool) {
         expanded = on
         UserDefaults.standard.set(on, forKey: "terminalExpanded")
+    }
+
+    func setBoardOnLeft(_ on: Bool) {
+        boardOnLeft = on
+        UserDefaults.standard.set(on ? "left" : "right", forKey: "boardSide")
     }
 
     // at 을 주면 그 자리의 탭을 바꿔 끼운다([다시 열기][셸 열기])
@@ -4645,7 +4915,7 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
     func launch(_ command: String, in dir: String, sessionId: String?, mdRenderOff: Bool = false, at index: Int? = nil,
                 reveal show: Bool = true) -> BoardTab? {
         guard let env = LoginEnvironment.values else {
-            toast("셸 환경을 아직 읽지 못했습니다 — 잠시 뒤 다시 시도해 주세요")
+            toast("셸 환경을 아직 읽지 못했습니다. 잠시 뒤 다시 시도해 주세요")
             return nil
         }
         let opts = TerminalSurfaceOptions(backend: .exec, workingDirectory: dir, envVars: env, command: "/usr/bin/env " + command)
@@ -4871,7 +5141,8 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
 
     // 고른 탭만 그리고 나머지는 실제 크기 그대로 숨긴다. 접혀 있거나 창이 안 보이면(가려짐·최소화·닫힘·다른 데스크톱) 모두 그리지 않는다
     func applyVisibility() {
-        let drawing = expanded && window.occlusionState.contains(.visible)
+        // 접는 애니메이션 동안에는 터미널이 밀려 나가는 모습이 보이도록 그린다
+        let drawing = (expanded || slide != nil) && window.occlusionState.contains(.visible)
         for t in tabs {
             t.view.isHidden = t.id != selected
             t.view.setSurfaceVisible(t.id == selected && drawing)
@@ -5001,7 +5272,7 @@ func sessionRecord(_ id: String) -> [String: Any]? {
     let a = NSAlert()
     a.messageText = "작업 중인 세션 \(busy.count)개가 꺼집니다"
     a.informativeText = "보드가 터미널을 쥐고 있어서 \(update ? "업데이트하면" : "보드를 끄면") 진행 중인 응답과 탭에서 도는 셸·서브에이전트가 끊깁니다. "
-        + "보드가 다시 뜨면 대화를 이어 엽니다 — 끊긴 세션은 일시중지로 남아 \"세션 재개\"로 이어 갈 수 있습니다."
+        + "보드가 다시 뜨면 대화를 이어 엽니다. 끊긴 세션은 일시중지로 남아 \"세션 재개\"로 이어 갈 수 있습니다."
     let list = NSHostingView(rootView: ShutdownList(rows: busy))
     list.frame.size = list.fittingSize
     a.accessoryView = list
@@ -5038,7 +5309,7 @@ struct ShutdownList: View {
                 ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                     HStack(spacing: 8) {
                         Circle().fill(Palette.color(row.0.state)).frame(width: 8, height: 8)
-                        Text("\((row.0.cwd as NSString).lastPathComponent) — \(row.0.title)").lineLimit(1).truncationMode(.tail)
+                        Text("\((row.0.cwd as NSString).lastPathComponent) · \(row.0.title)").lineLimit(1).truncationMode(.tail)
                         Spacer(minLength: 6)
                         Text(row.1).foregroundStyle(.secondary).fixedSize()
                     }
@@ -5143,36 +5414,147 @@ func pruneMdRenderOff() {
     if kept.count != list.count { UserDefaults.standard.set(kept, forKey: "mdRenderOff") }
 }
 
-// 펼쳤을 때 보드 폭 — 창이 좁으면 터미널 최소 폭을 남기고 줄인다
+// 펼쳤을 때 보드 폭 — 창이 좁으면 터미널 최소 폭을 남기고 줄인다. 펼치기·접기 애니메이션 중에는 그 애니메이션의 보드 폭
 @MainActor func boardPaneWidth() -> CGFloat {
+    if let slide = TerminalHub.shared.slide { return slide.board }
     guard TerminalHub.shared.expanded else { return window.frame.width }
     return max(boardMinWidth, min(TerminalHub.shared.boardWidth, window.frame.width - paneDividerWidth - terminalMinWidth))
 }
 
 let terminalExpandedMinSize = NSSize(width: boardMinWidth + paneDividerWidth + terminalMinWidth, height: 300)
 
-// 펼치기: 창을 화면의 쓸 수 있는 영역 전체로. 접기: 보드만 화면 오른쪽에 끈 폭으로.
-// 펼친 동안에는 "위에 고정" 을 쓰지 않는다 — 화면 전체를 덮은 창이 늘 위에 있으면 다른 앱을 쓸 수 없다
-@MainActor func setTerminalExpanded(_ on: Bool) {
+// 펼치기: 창을 화면의 쓸 수 있는 영역 전체로. 접기: 보드만 화면 한쪽(보드 위치 — 오른쪽·왼쪽)에 끈 폭으로.
+// 펼친 동안에는 "위에 고정" 을 쓰지 않는다 — 화면 전체를 덮은 창이 늘 위에 있으면 다른 앱을 쓸 수 없다.
+// animated — 메뉴의 "펼치기·접기 애니메이션"(보드 설정 terminalAnimation, 기본 끔). 처음 크기로 붙이기·최대축소는 접은 뒤
+// 제 애니메이션을 바로 이어 돌리므로 false 로 부른다. 도는 애니메이션이 있으면 끝 상태로 마친 뒤 새 요청을 받는다
+@MainActor func setTerminalExpanded(_ on: Bool, animated: Bool = UserDefaults.standard.bool(forKey: "terminalAnimation")) {
     let hub = TerminalHub.shared
+    hub.slide?.finish()
     guard hub.expanded != on, let vf = (window.screen ?? NSScreen.main)?.visibleFrame else { return }
-    hub.setExpanded(on)
-    if on {
-        window.contentMinSize = terminalExpandedMinSize
-        window.setFrame(vf, display: true)
-    } else {
-        // 숨는 터미널에 키 입력이 가지 않게 포커스를 거둔다
-        window.makeFirstResponder(nil)
-        window.contentMinSize = NSSize(width: miniWidth, height: miniMinHeight)
-        window.setFrame(NSRect(x: vf.maxX - hub.boardWidth, y: vf.minY, width: hub.boardWidth, height: vf.height), display: true)
-        saveRestoreFrame()
+    let target = on ? vf : NSRect(x: hub.boardOnLeft ? vf.minX : vf.maxX - hub.boardWidth, y: vf.minY, width: hub.boardWidth, height: vf.height)
+    guard animated, window.isVisible, let root = window.contentView as? BoardRootView else {
+        hub.setExpanded(on)
+        if !on { window.makeFirstResponder(nil) }   // 숨는 터미널에 키 입력이 가지 않게 포커스를 거둔다
+        window.contentMinSize = on ? terminalExpandedMinSize : NSSize(width: miniWidth, height: miniMinHeight)
+        window.setFrame(target, display: true)
+        if !on { saveRestoreFrame() }
+        settleTerminalPane()
+        return
     }
+    // 애니메이션 — 터미널 영역은 펼친 크기로 고정하고 자리만 옮긴다(펼칠 때 크기가 다르면 시작 전에 한 번만 맞춘다)
+    let slide: PaneSlide
+    if on {
+        let bw = max(boardMinWidth, min(hub.boardWidth, vf.width - paneDividerWidth - terminalMinWidth))   // 펼친 뒤 boardPaneWidth
+        slide = PaneSlide(from: window.frame, to: target, board: (window.frame.width, bw),
+                          terminal: NSSize(width: vf.width - bw - paneDividerWidth, height: vf.height)) { settleTerminalPane() }
+        hub.slide = slide
+        hub.setExpanded(true)
+        applyPin(UserDefaults.standard.bool(forKey: "pinned"))   // 위에 고정·투명도는 펼치기 시작할 때 바로 내린다
+        WindowOpacity.shared.apply()
+        hub.focusSelected()
+    } else {
+        window.makeFirstResponder(nil)
+        slide = PaneSlide(from: window.frame, to: target, board: (boardPaneWidth(), hub.boardWidth), terminal: root.terminal.frame.size) {
+            saveRestoreFrame()
+            settleTerminalPane()
+        }
+        hub.slide = slide
+        hub.setExpanded(false)
+    }
+    window.contentMinSize = NSSize(width: miniWidth, height: miniMinHeight)   // 중간 크기가 최소 크기에 막히지 않게 — 끝나면 맞춘다
+    root.needsLayout = true
+    root.layoutSubtreeIfNeeded()
+    hub.applyVisibility()
+    slide.start()
+}
+
+// 펼치기·접기가 끝난 뒤 — 최소 크기·위에 고정·투명도·크기 단계·터미널 그리기·포커스를 펼침 상태에 맞춘다
+@MainActor func settleTerminalPane() {
+    let hub = TerminalHub.shared
+    window.contentMinSize = hub.expanded ? terminalExpandedMinSize : NSSize(width: miniWidth, height: miniMinHeight)
     applyPin(UserDefaults.standard.bool(forKey: "pinned"))
     window.contentView?.needsLayout = true
     BoardFit.shared.update()
     WindowOpacity.shared.apply()
     hub.applyVisibility()
     hub.focusSelected()
+}
+
+// 펼치기·접기 애니메이션 — 창 프레임을 화면 주사율에 맞춰 옮긴다(0.55초, ease-in-out). 그동안 터미널 영역은 크기를 그대로 두고
+// 자리만 옮겨(BoardRootView.place) pty 크기가 바뀌지 않는다 — 프레임마다 바뀌면 안의 claude 화면이 그때마다 다시 그려진다
+@MainActor final class PaneSlide: NSObject {
+    static let duration: CFTimeInterval = 0.55
+    let terminal: NSSize               // 터미널 영역 크기 — 애니메이션 동안 그대로
+    private(set) var board: CGFloat    // 지금 보드 폭 — 처음 폭에서 끝 폭으로(보통 같다. 미니·손으로 줄인 창에서 펼칠 때만 다르다)
+    private let from: NSRect, to: NSRect, boardFrom: CGFloat, boardTo: CGFloat
+    private var started: CFTimeInterval = 0
+    private var link: CADisplayLink?
+    private var done: (() -> Void)?
+
+    init(from: NSRect, to: NSRect, board: (CGFloat, CGFloat), terminal: NSSize, done: @escaping () -> Void) {
+        self.from = from
+        self.to = to
+        boardFrom = board.0
+        boardTo = board.1
+        self.board = board.0
+        self.terminal = terminal
+        self.done = done
+    }
+
+    func start() {
+        started = CACurrentMediaTime()
+        link = window.displayLink(target: self, selector: #selector(tick(_:)))
+        link?.add(to: .main, forMode: .common)
+        // 화면이 그리기를 멈춰 링크가 돌지 않아도(잠자기 등) 끝 상태로 마친다
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.duration + 0.5) { [weak self] in self?.finish() }
+    }
+
+    @objc private func tick(_ link: CADisplayLink) {
+        let t = min(1, (CACurrentMediaTime() - started) / Self.duration)
+        guard t < 1 else { return finish() }
+        let e = CGFloat(t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2)   // ease-in-out(3차)
+        board = boardFrom + (boardTo - boardFrom) * e
+        window.setFrame(NSRect(x: from.minX + (to.minX - from.minX) * e, y: from.minY + (to.minY - from.minY) * e,
+                               width: from.width + (to.width - from.width) * e, height: from.height + (to.height - from.height) * e),
+                        display: true)
+    }
+
+    // 끝 상태로 마친다 — 두 번 불러도 한 번만
+    func finish() {
+        guard let done else { return }
+        self.done = nil
+        link?.invalidate()
+        link = nil
+        board = boardTo
+        window.setFrame(to, display: true)
+        if TerminalHub.shared.slide === self { TerminalHub.shared.slide = nil }
+        done()
+    }
+}
+
+// 보드 위치 바꾸기(메뉴) — 바로 적용한다. 펼쳤으면 배치만 바뀌고, 접혔으면 같은 크기로 화면 반대쪽 끝으로 옮긴다(미니도 높이·위치 그대로).
+// 미니에서 돌아갈 자리도 반대쪽 끝으로 옮겨 둔다
+@MainActor func setBoardSide(left: Bool) {
+    let hub = TerminalHub.shared
+    hub.slide?.finish()
+    guard hub.boardOnLeft != left else { return }
+    hub.setBoardOnLeft(left)
+    if let s = UserDefaults.standard.string(forKey: "boardRestoreFrame") {
+        var r = NSRectFromString(s)
+        if let vf = NSScreen.screens.first(where: { $0.visibleFrame.intersects(r) })?.visibleFrame {
+            r.origin.x = left ? vf.minX : vf.maxX - r.width
+            UserDefaults.standard.set(NSStringFromRect(r), forKey: "boardRestoreFrame")
+        }
+    }
+    if hub.expanded {
+        window.contentView?.needsLayout = true
+        return
+    }
+    guard let vf = (window.screen ?? NSScreen.main)?.visibleFrame else { return }
+    var f = window.frame
+    f.origin.x = left ? vf.minX : vf.maxX - f.width
+    window.setFrame(f, display: true)
+    if BoardFit.shared.tier != .mini { saveRestoreFrame() }
 }
 
 // ⌃⌥T·제목 막대 단추 — 펼쳐 있어도 보드가 앞에 없으면(다른 앱을 쓰는 중) 접지 않고 앞으로 꺼내 터미널에 포커스를 준다
@@ -5209,13 +5591,33 @@ final class BoardRootView: NSView {
 
     private func place() {
         guard let w = window else { return }
+        let hub = TerminalHub.shared, left = hub.boardOnLeft
         let below = w.contentLayoutRect.height   // 제목 막대 아래 높이
         terminal.titlebar = bounds.height - below
-        if TerminalHub.shared.expanded {
+        if let slide = hub.slide {
+            // 펼치기·접기 애니메이션 중 — 보드는 보드 쪽 창 가장자리에 붙여 화면의 제자리에 두고, 터미널 영역은 고정 크기(윗변을 창 윗변에)로
+            // 보드 옆에 붙인다. 창 밖으로 나간 부분은 잘린다. 크기가 그대로라 pty 크기도 바뀌지 않는다
+            let bw = slide.board, ts = slide.terminal
+            let bx = left ? 0 : bounds.width - bw
+            board.frame = NSRect(x: bx, y: 0, width: bw, height: bounds.height)
+            divider.frame = NSRect(x: left ? bw : bx - paneDividerWidth, y: 0, width: paneDividerWidth, height: bounds.height)
+            terminal.frame = NSRect(x: left ? bw + paneDividerWidth : bx - paneDividerWidth - ts.width, y: bounds.height - ts.height,
+                                    width: ts.width, height: ts.height)
+            terminal.isHidden = false
+            divider.isHidden = false
+            return
+        }
+        if hub.expanded {
             let bw = boardPaneWidth(), tw = bounds.width - bw - paneDividerWidth
-            terminal.frame = NSRect(x: 0, y: 0, width: tw, height: bounds.height)
-            divider.frame = NSRect(x: tw, y: 0, width: paneDividerWidth, height: bounds.height)
-            board.frame = NSRect(x: bounds.width - bw, y: 0, width: bw, height: bounds.height)
+            if left {
+                board.frame = NSRect(x: 0, y: 0, width: bw, height: bounds.height)
+                divider.frame = NSRect(x: bw, y: 0, width: paneDividerWidth, height: bounds.height)
+                terminal.frame = NSRect(x: bw + paneDividerWidth, y: 0, width: tw, height: bounds.height)
+            } else {
+                terminal.frame = NSRect(x: 0, y: 0, width: tw, height: bounds.height)
+                divider.frame = NSRect(x: tw, y: 0, width: paneDividerWidth, height: bounds.height)
+                board.frame = NSRect(x: bounds.width - bw, y: 0, width: bw, height: bounds.height)
+            }
         } else {
             var size = terminal.frame.size
             if size.width < terminalMinWidth, let vf = (w.screen ?? NSScreen.main)?.visibleFrame {
@@ -5295,7 +5697,8 @@ final class PaneDivider: NSView {
 
     override func mouseDragged(with event: NSEvent) {
         let hub = TerminalHub.shared
-        hub.boardWidth = max(boardMinWidth, min(startWidth - (event.locationInWindow.x - startX),
+        let dx = event.locationInWindow.x - startX   // 보드가 왼쪽이면 오른쪽으로 끌수록, 오른쪽이면 왼쪽으로 끌수록 넓어진다
+        hub.boardWidth = max(boardMinWidth, min(hub.boardOnLeft ? startWidth + dx : startWidth - dx,
                                                  (window?.frame.width ?? 0) - paneDividerWidth - terminalMinWidth))
         superview?.needsLayout = true
         BoardFit.shared.update()
@@ -5386,7 +5789,7 @@ struct TerminalExitBar: View {
         if let tab = hub.tabs.first(where: { $0.id == hub.selected }) {
             HStack(spacing: 10) {
                 Image(systemName: "stop.circle").foregroundStyle(.secondary)
-                Text("\(tab.session.map { $0.topic.isEmpty ? "세션" : $0.topic } ?? "명령") — 끝났습니다")
+                Text("\(tab.session.map { $0.topic.isEmpty ? "세션" : $0.topic } ?? "명령") · 끝났습니다")
                     .font(.system(size: 12, weight: .semibold)).lineLimit(1)
                 Spacer(minLength: 8)
                 Button { hub.relaunch(tab) } label: {
@@ -5469,7 +5872,7 @@ struct NewSessionSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("새 세션").font(.system(size: 16, weight: .bold))
             VStack(alignment: .leading, spacing: 6) {
-                Text("작업 폴더 — 보드에 있는 경로").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                Text("작업 폴더 (보드에 있는 경로)").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
                 ScrollView {
                     VStack(spacing: 2) { ForEach(paths + others, id: \.self) { row($0) } }
                 }
@@ -5479,13 +5882,13 @@ struct NewSessionSheet: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("실행할 명령").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
                 TextField("", text: $command).font(.system(size: 13, design: .monospaced)).textFieldStyle(.roundedBorder)
-                Text("셸을 거치지 않고 바로 실행합니다 — claude 면 보드가 --session-id 를 붙입니다")
+                Text("셸을 거치지 않고 바로 실행합니다. claude 면 보드가 --session-id 를 붙입니다")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: 4) {
                 Toggle("답변 마크다운 꾸미기", isOn: $mdRender).toggleStyle(.checkbox).font(.system(size: 13))
                     .disabled(mdRenderDir == nil)
-                Text("답변이 끝나면 제목·굵게·인라인 코드·목록 등을 색으로 다시 그립니다(md-render) — claude 면 --plugin-dir 로 붙입니다")
+                Text("답변이 끝나면 제목·굵게·인라인 코드·목록 등을 색으로 다시 그립니다(md-render). claude 면 --plugin-dir 로 붙입니다")
                     .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             HStack {
@@ -5558,7 +5961,7 @@ struct TerminalToggleButton: View {
         let on = hub.expanded
         Button(action: toggleTerminal) {
             HStack(spacing: 5) {
-                Image(systemName: "rectangle.leadinghalf.inset.filled")
+                Image(systemName: hub.boardOnLeft ? "rectangle.trailinghalf.inset.filled" : "rectangle.leadinghalf.inset.filled")
                 Text(on ? "터미널 펼침" : "터미널 접힘").fixedSize()
                 Text("⌃⌥T").font(.system(size: 10, weight: .medium))
                     .padding(.horizontal, 4)
@@ -5575,7 +5978,8 @@ struct TerminalToggleButton: View {
         }
         .buttonStyle(.plain)
         .clickable($hover)
-        .hint(on ? "터미널 접기 — 보드만 오른쪽에 남깁니다 (⌃⌥T)" : "터미널 펼치기 — 보드에서 띄운 세션을 왼쪽 탭에서 봅니다 (⌃⌥T)")
+        .hint(on ? "터미널 접기: 보드만 \(hub.boardOnLeft ? "왼쪽" : "오른쪽")에 남깁니다 (⌃⌥T)"
+                 : "터미널 펼치기: 보드에서 띄운 세션을 \(hub.boardOnLeft ? "오른쪽" : "왼쪽") 탭에서 봅니다 (⌃⌥T)")
         .fixedSize()
     }
 }
@@ -5659,16 +6063,17 @@ let mediumListMin: CGFloat = 56         // 중간으로 그리려면 남아야 �
 // 창이 줄어드는 애니메이션 중간 크기가 기억되지 않게 크기가 바뀔 때마다 기억하지는 않는다
 func saveRestoreFrame() { UserDefaults.standard.set(NSStringFromRect(window.frame), forKey: "boardRestoreFrame") }
 
-// 최대축소 — 오른쪽 위 모서리는 그대로 두고 폭은 miniWidth, 높이는 경로 수(최대 6줄)에 맞춘다
+// 최대축소 — 보드 쪽 위 모서리(보드 위치가 오른쪽이면 오른쪽 위, 왼쪽이면 왼쪽 위)는 그대로 두고 폭은 miniWidth, 높이는 경로 수(최대 6줄)에 맞춘다
 @MainActor func enterMini(rows: Int) {
-    setTerminalExpanded(false)   // 터미널을 펼쳤으면 먼저 접는다 — 미니에서 돌아갈 위치는 접힌 보드
+    setTerminalExpanded(false, animated: false)   // 터미널을 펼쳤으면 먼저 접는다 — 미니에서 돌아갈 위치는 접힌 보드
     saveRestoreFrame()
     let f = window.frame
     let h = miniMinHeight + CGFloat(min(max(rows, 2), 6) - 2) * miniRowHeight   // 최소 높이에 두 줄이 들어간다
-    window.setFrame(NSRect(x: f.maxX - miniWidth, y: f.maxY - h, width: miniWidth, height: h), display: true, animate: true)
+    let x = TerminalHub.shared.boardOnLeft ? f.minX : f.maxX - miniWidth
+    window.setFrame(NSRect(x: x, y: f.maxY - h, width: miniWidth, height: h), display: true, animate: true)
 }
 
-// 미니에서 원래 크기로 — 기억한 위치가 없거나 지금 연결된 화면 밖이면 처음 크기로 오른쪽에 붙인다
+// 미니에서 원래 크기로 — 기억한 위치가 없거나 지금 연결된 화면 밖이면 처음 크기로 보드 쪽 끝에 붙인다
 @MainActor func leaveMini() {
     if let s = UserDefaults.standard.string(forKey: "boardRestoreFrame") {
         let r = NSRectFromString(s)
@@ -5677,7 +6082,7 @@ func saveRestoreFrame() { UserDefaults.standard.set(NSStringFromRect(window.fram
             return
         }
     }
-    snapRight()
+    snapToSide()
 }
 
 // 제목 막대 오른쪽 — 미니에서는 상태별 세션 수와 원래 크기로 되돌리기 단추, 전체·중간에서는 같은 자리에 최대축소 단추
@@ -5735,7 +6140,7 @@ struct MiniTitleBar: View {
             }
             .buttonStyle(.plain)
             .clickable($hover)
-            .hint(mini ? "원래 크기로 되돌리기" : "최대축소 — 창을 가장 작게 줄이고 경로마다 한 줄로 봅니다")
+            .hint(mini ? "원래 크기로 되돌리기" : "최대축소: 창을 가장 작게 줄이고 경로마다 한 줄로 봅니다")
         }
         .padding(.trailing, 8)
         .frame(width: Self.width, height: 28)
@@ -5831,30 +6236,32 @@ struct MiniRow: View {
         }
         .hint(live.map { s in
             switch TerminalHub.shared.place(s) {
-            case .tab: return "\(g.path) — 눌러서 터미널을 펼치고 그 탭으로 이동"
-            case .terminal: return "\(g.path) — 눌러서 터미널 앱, 두 번 눌러서 그 세션으로 이동"
+            case .tab: return "\(g.path)\n눌러서 터미널을 펼치고 그 탭으로 이동"
+            case .terminal: return "\(g.path)\n눌러서 터미널 앱, 두 번 눌러서 그 세션으로 이동"
             case .background, .ended: return g.path
             }
         } ?? g.path)
     }
 }
 
-// 처음 실행할 때의 크기(폭 boardLaunchWidth, 높이는 화면의 쓸 수 있는 높이 전체)로 되돌려 지금 화면의 오른쪽 끝에 붙인다.
-// 터미널을 펼쳤으면 접는다 — "보드만 오른쪽에" 라는 뜻을 그대로 둔다(펼치기는 ⌃⌥T)
-@MainActor func snapRight() {
-    setTerminalExpanded(false)
+// 처음 실행할 때의 크기(폭 boardLaunchWidth, 높이는 화면의 쓸 수 있는 높이 전체)로 되돌려 지금 화면의 보드 쪽 끝(보드 위치 — 오른쪽·왼쪽)에 붙인다.
+// 터미널을 펼쳤으면 접는다 — "보드만 한쪽에" 라는 뜻을 그대로 둔다(펼치기는 ⌃⌥T)
+@MainActor func snapToSide() {
+    setTerminalExpanded(false, animated: false)   // 바로 아래에서 제 애니메이션으로 붙인다
     guard let vf = (window.screen ?? NSScreen.main)?.visibleFrame else { return }
-    let f = NSRect(x: vf.maxX - boardLaunchWidth, y: vf.minY, width: boardLaunchWidth, height: vf.height)
+    let x = TerminalHub.shared.boardOnLeft ? vf.minX : vf.maxX - boardLaunchWidth
+    let f = NSRect(x: x, y: vf.minY, width: boardLaunchWidth, height: vf.height)
     window.setFrame(f, display: true, animate: true)
     saveRestoreFrame()
 }
 
-// 창 단추(닫기·최소화·확대) 바로 오른쪽에 붙는 "처음 크기로 오른쪽에 붙이기" 단추
+// 창 단추(닫기·최소화·확대) 바로 오른쪽에 붙는 "처음 크기로 오른쪽(왼쪽)에 붙이기" 단추 — 보드 위치에 따라 그림·설명이 바뀐다
 struct SnapButton: View {
+    @ObservedObject private var hub = TerminalHub.shared
     @State private var hover = false
     var body: some View {
-        Button(action: snapRight) {
-            Image(systemName: "rectangle.righthalf.inset.filled")
+        Button(action: snapToSide) {
+            Image(systemName: hub.boardOnLeft ? "rectangle.lefthalf.inset.filled" : "rectangle.righthalf.inset.filled")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.primary.opacity(hover ? 1 : 0.8))
                 .frame(width: 26, height: 18)
@@ -5867,12 +6274,12 @@ struct SnapButton: View {
         }
         .buttonStyle(.plain)
         .clickable($hover)
-        .hint("처음 크기로 되돌려 화면 오른쪽에 붙이기 (⌃⌥B)")
+        .hint("처음 크기로 되돌려 화면 \(hub.boardOnLeft ? "왼쪽" : "오른쪽")에 붙이기 (⌃⌥B)")
         .padding(.leading, 4)
     }
 }
 
-// 전역 단축키 — ⌃⌥B: 어느 앱에서든 보드를 처음 크기로 오른쪽에 붙이고 앞으로 꺼낸다(포커스는 지금 앱에 남긴다).
+// 전역 단축키 — ⌃⌥B: 어느 앱에서든 보드를 처음 크기로 보드 쪽 끝(오른쪽·왼쪽)에 붙이고 앞으로 꺼낸다(포커스는 지금 앱에 남긴다).
 // ⌃⌥T: 터미널 펼치기·접기(toggleTerminal). Carbon 단축키는 손쉬운 사용 권한이 필요 없다
 func registerHotKeys() {
     var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
@@ -5885,7 +6292,7 @@ func registerHotKeys() {
                 toggleTerminal()
             } else {
                 window.orderFrontRegardless()
-                snapRight()
+                snapToSide()
             }
         }
         return noErr
@@ -6179,9 +6586,9 @@ func canDrive(_ s: Session) -> Bool {
     }
     let name = (s.cwd as NSString).lastPathComponent
     driveSession(s, [("key", "escape"), ("wait", "0.4"), ("text", "/exit"), ("wait", "0.2"), ("key", "enter")]) { ok in
-        guard ok else { return TerminalHub.shared.toast("\(name) — 세션 터미널을 찾지 못해 보드로 옮기지 못했습니다") }
+        guard ok else { return TerminalHub.shared.toast("\(name): 세션 터미널을 찾지 못해 보드로 옮기지 못했습니다") }
         waitExit(s.pid, timeout: 8) { exited in
-            if exited { resumeSession(s) } else { TerminalHub.shared.toast("\(name) — 세션이 끝나지 않아 보드로 옮기지 못했습니다. 그 터미널을 확인해 주세요") }
+            if exited { resumeSession(s) } else { TerminalHub.shared.toast("\(name): 세션이 끝나지 않아 보드로 옮기지 못했습니다. 그 터미널을 확인해 주세요") }
         }
     }
 }
@@ -6338,7 +6745,7 @@ func transcriptPath(_ given: String?, _ cwd: String, _ id: String) -> String {
         // 끝난 백그라운드 세션은 누르면 아무것도 하지 않는다 — 메뉴의 "세션 다시 열기"로만 보드 탭에서 연다
         if !s.headless { resumeSession(s, carryOn: s.paused) }
     case .background:
-        hub.toast("\(s.title) — claude \(hub.mode(s) ?? "-p") 로 실행된 세션이라 터미널이 없습니다. 보드에서는 상태만 보여 주고, 업데이트·종료에도 영향받지 않습니다.")
+        hub.toast("\(s.title): claude \(hub.mode(s) ?? "-p") 로 실행된 세션이라 터미널이 없습니다. 보드에서는 상태만 보여 주고, 업데이트·종료에도 영향받지 않습니다.")
     case .terminal:
         double ? focusSession(s) : activateOwner(s)
     }
@@ -6524,15 +6931,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         windowMenu.addItem(withTitle: "닫기", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         windowMenu.addItem(withTitle: "최소화", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(.separator())
-        // 단축키 표시용 — 실제 동작은 전역 단축키(registerSnapHotKey)가 받는다
-        let snap = ActionItem("처음 크기로 오른쪽에 붙이기") { snapRight() }
-        snap.keyEquivalent = "b"
+        // 단축키 표시용 — 실제 동작은 전역 단축키(registerSnapHotKey)가 받는다. 제목(오른쪽·왼쪽)은 validateMenuItem 이 보드 위치에 맞춘다
+        let snap = NSMenuItem(title: "처음 크기로 오른쪽에 붙이기", action: #selector(snapAction), keyEquivalent: "b")
         snap.keyEquivalentModifierMask = [.control, .option]
         windowMenu.addItem(snap)
         let term = ActionItem("터미널 펼치기·접기") { toggleTerminal() }
         term.keyEquivalent = "t"
         term.keyEquivalentModifierMask = [.control, .option]
         windowMenu.addItem(term)
+        windowMenu.addItem(.separator())
+        // 보드 위치(오른쪽·왼쪽)와 펼치기·접기 애니메이션 — 체크 표시는 validateMenuItem 이 단다
+        let sideMenu = NSMenu(title: "보드 위치")
+        for (value, name) in [("right", "오른쪽 (기본)"), ("left", "왼쪽")] {
+            sideMenu.addItem(withTitle: name, action: #selector(pickBoardSide(_:)), keyEquivalent: "").representedObject = value
+        }
+        windowMenu.addItem(withTitle: "보드 위치", action: nil, keyEquivalent: "").submenu = sideMenu
+        windowMenu.addItem(withTitle: "펼치기·접기 애니메이션", action: #selector(toggleTerminalAnimation), keyEquivalent: "")
         windowItem.submenu = windowMenu
         NSApp.mainMenu = main
     }
@@ -6546,7 +6960,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             icon.size = NSSize(width: 18, height: 18)
             icon.accessibilityDescription = "Claude Board"
             button.image = icon
-            button.toolTip = "Claude Board — 누르면 보드를 열고 닫습니다"   // 보드 밖이라 시스템 툴팁
+            button.toolTip = "Claude Board: 누르면 보드를 열고 닫습니다"   // 보드 밖이라 시스템 툴팁
             button.imagePosition = .imageLeading
             button.action = #selector(toggleBoard)
             button.target = self
@@ -6588,6 +7002,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc func pickMascot(_ item: NSMenuItem) { UserDefaults.standard.set(item.representedObject as? String, forKey: "mascot") }
 
+    @objc func snapAction() { MainActor.assumeIsolated { snapToSide() } }
+
+    @objc func pickBoardSide(_ item: NSMenuItem) { MainActor.assumeIsolated { setBoardSide(left: item.representedObject as? String == "left") } }
+
+    // 펼치기·접기 애니메이션 켜고 끄기 — 기본 끔(바로 펼치고 접는다)
+    @objc func toggleTerminalAnimation() {
+        UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: "terminalAnimation"), forKey: "terminalAnimation")
+    }
+
     // 중앙(기본)을 고르면 표지 파일을 지운다 — 파일이 없으면 notify.py 가 가운데로 띄운다
     @objc func pickNotifyPosition(_ item: NSMenuItem) {
         guard let value = item.representedObject as? String else { return }
@@ -6606,6 +7029,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(togglePin) { item.state = UserDefaults.standard.bool(forKey: "pinned") ? .on : .off }
+        let left = UserDefaults.standard.string(forKey: "boardSide") == "left"
+        if item.action == #selector(snapAction) { item.title = left ? "처음 크기로 왼쪽에 붙이기" : "처음 크기로 오른쪽에 붙이기" }
+        if item.action == #selector(pickBoardSide(_:)) { item.state = (item.representedObject as? String == "left") == left ? .on : .off }
+        if item.action == #selector(toggleTerminalAnimation) { item.state = UserDefaults.standard.bool(forKey: "terminalAnimation") ? .on : .off }
         if item.action == #selector(pickMascot(_:)) {
             let current = UserDefaults.standard.string(forKey: "mascot") ?? Mascot.tralalero.rawValue
             item.state = item.representedObject as? String == current ? .on : .off
