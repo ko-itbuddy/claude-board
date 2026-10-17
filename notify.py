@@ -129,7 +129,7 @@ def main():
         [BIN, "--title", title, "--subtitle", project, "--body", first_sentence(body),
          "--summary", session_summary(data.get("session_id"), "waiting" if accent == "wait" else "idle"),
          "--sound", sound, "--kind", accent, "--duration", "10",
-         "--activate", "com.claude.board", "--position", position],
+         "--activate", "com.claude.board", "--position", position, "--session", data.get("session_id") or ""],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         start_new_session=True,
     )

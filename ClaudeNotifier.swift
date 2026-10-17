@@ -1,6 +1,6 @@
 // Claude Code 작업 완료·승인 대기 알림 패널
 // 사용법: claude-notifier --title T --subtitle S --body B [--kind done|wait] [--summary waiting=1,working=2,idle=3]
-//        [--sound Glass] [--duration 10] [--activate <bundle id>]
+//        [--sound Glass] [--duration 10] [--activate <bundle id>] [--session <세션 id>]
 //        [--position center|top-left|top-right|bottom-left|bottom-right]
 import AppKit
 
@@ -11,6 +11,7 @@ struct Options {
     var sound = "Glass"
     var duration: TimeInterval = 10
     var activate = ""
+    var session = ""        // 누르면 보드가 이 세션으로 이동한다(보드 탭 세션은 펼치고 그 탭으로)
     var kind = "done"
     var summary: [String: Int] = [:]
     var position = "center"
@@ -37,6 +38,7 @@ func parseOptions() -> Options {
         case "--sound": o.sound = value
         case "--duration": o.duration = TimeInterval(value) ?? o.duration
         case "--activate": o.activate = value
+        case "--session": o.session = value
         case "--kind": o.kind = value
         case "--position": o.position = value
         case "--summary":   // 예: waiting=1,working=2,idle=3
@@ -425,6 +427,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func clicked() {
+        // 보드에 그 세션으로 이동하라고 알린다 — 보드의 --action focus 와 같다. 시험 빌드(com.claude.board.dev)는 알림 이름이 따로다
+        if !opts.session.isEmpty {
+            let board = opts.activate == "com.claude.board.dev" ? "claude-board-dev" : "claude-board"
+            DistributedNotificationCenter.default().postNotificationName(
+                .init("\(board).action"), object: nil, userInfo: ["action": "focus", "id": opts.session], deliverImmediately: true)
+        }
         if !opts.activate.isEmpty,
            let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: opts.activate) {
             NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
