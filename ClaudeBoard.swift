@@ -2140,7 +2140,7 @@ struct KindSection: View {
         .contentShape(Rectangle())
         .clickable($hover)
         .onTapGesture { withAnimation(foldSpring) { toggle() } }
-        .hint((headless ? "터미널 없이 도는 세션 — 더블 클릭으로 이동할 터미널이 없습니다" : "터미널 창에서 도는 세션 — 더블 클릭하면 그 터미널로 이동합니다")
+        .hint((headless ? "터미널 없이 도는 세션 — 이동할 터미널이 없습니다" : "터미널에서 도는 세션 — 보드 탭 세션은 눌러서 그 탭으로, 다른 터미널 세션은 눌러서 그 앱, 두 번 눌러서 그 세션으로 이동합니다")
               + (collapsed ? " (누르면 펼치기)" : " (누르면 접기)"))
     }
 }
@@ -5829,7 +5829,13 @@ struct MiniRow: View {
             guard let s = live else { return }
             openSession(s, double: (NSApp.currentEvent?.clickCount ?? 1) >= 2)
         }
-        .hint(live == nil ? g.path : "\(g.path) — 눌러서 터미널 앱, 두 번 눌러서 그 세션으로 이동")
+        .hint(live.map { s in
+            switch TerminalHub.shared.place(s) {
+            case .tab: return "\(g.path) — 눌러서 터미널을 펼치고 그 탭으로 이동"
+            case .terminal: return "\(g.path) — 눌러서 터미널 앱, 두 번 눌러서 그 세션으로 이동"
+            case .background, .ended: return g.path
+            }
+        } ?? g.path)
     }
 }
 

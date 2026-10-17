@@ -6,12 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Claude Board 는 Claude Code 세션 여러 개의 상태(승인 대기·작업 중·대기)를 한 화면에 모아 보여 주는 macOS 14+ 앱이다.
 Claude Code hook 이 Python 스크립트를 실행해 세션 상태를 파일로 남기고, Swift 앱(보드·알림 패널)과 TUI 가 그 파일을 읽는다.
+보드 창 왼쪽에는 내장 터미널(libghostty)이 있어, 보드에서 띄우거나 이어 연 세션은 보드가 pty 를 직접 쥔 탭(보드 탭)에서 돈다.
 문서·코드 주석·커밋 메시지는 모두 한국어로 쓴다.
 
 ## 명령
 
 Xcode 프로젝트는 없다. 보드(`ClaudeBoard.swift`)는 내장 터미널 엔진(libghostty-spm) 때문에 저장소 맨 위 `Package.swift` 의 SwiftPM 실행 타깃으로 빌드하고(소스는 그 파일 하나, Command Line Tools 만으로 된다),
-나머지 Swift 파일은 하나가 실행 파일 하나이고 `swiftc` 로 바로 빌드한다. 테스트·린트 설정은 없다.
+나머지 Swift 파일은 하나가 실행 파일 하나이고 `swiftc` 로 바로 빌드한다. 테스트·린트 설정은 없다(md-render 플러그인의 `claude plugin test` 만 있다).
 모든 `swift build`/`swift package` 에 `--disable-keychain`(빼면 엔진 내려받기에서 키체인 조회로 10분 넘게 멈춘다)과 `--triple`(배포 빌드와 같은 `.build` 를 쓰므로 생략한 빌드와 섞으면 오류)을 붙인다.
 
 ```sh
@@ -19,6 +20,7 @@ Xcode 프로젝트는 없다. 보드(`ClaudeBoard.swift`)는 내장 터미널 �
 swift build -c release --disable-keychain --triple "$(uname -m)-apple-macosx14.0"
 swiftc -typecheck ClaudeNotifier.swift
 python3 -m py_compile state.py notify.py hooks.py board-tui.py   # 만들어진 __pycache__ 는 지운다
+claude plugin validate plugins/md-render --strict && claude plugin test plugins/md-render   # Claude Code 가 저장소 사본에 만드는 tsconfig.json 은 올리지 않는다
 
 # 시험 빌드 — 설치된 보드·hook 은 건드리지 않는다
 ./build-board.sh --dev
@@ -61,18 +63,27 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
 |---|---|---|
 | `sessions/<sid>.json` (`state`·`pid`·`tty`·`headless`·`cwd`·`topic`·`last_message`·`subagents`·`limit_hit`·`resume_cmd`·`transcript_path`·`model` …) | state.py | ClaudeBoard.swift, board-tui.py, notify.py(상태별 개수) |
 | `sessions/<sid>.mute`, `mute-all`, `notify-position` | 보드 | notify.py |
-| `sessions/<sid>.paused` | 보드 | state.py (새 요청이 오면 지움) |
+| `sessions/<sid>.paused` | 보드 (일시중지 때, 업데이트·종료로 끊기는 보드 탭 세션에도) | state.py (새 요청이 오면 지움), 보드 (일시중지 카드·재개) |
+| `plugins/md-render/` | 보드 (시작할 때 앱 안 사본에서 바뀐 파일만 옮김. Claude Code 가 안에 `tsconfig.json`·`.claude-plugin/types/` 를 더 씀, `Uninstall.command` 가 지움) | 보드 탭 claude (`--plugin-dir`) |
 | `context/<sid>.json` | 사용자의 상태줄 스크립트 (이 저장소에 없음) | 보드 (컨텍스트 사용량·effort) |
 | `/tmp/.claude-usage-cache.json` | 보드·상태줄 스크립트가 함께 씀 | 보드 |
 
 ### 실행 파일
 
-- `ClaudeBoard.swift` (약 5,200줄) — 보드 앱 전체. AppKit 창 위에 SwiftUI 화면을 얹었고 `// MARK:` 로 나뉜다.
+- `ClaudeBoard.swift` (약 6,700줄) — 보드 앱 전체. AppKit 창 위에 SwiftUI 화면을 얹었고 `// MARK:` 로 나뉜다.
   주요 부분: `Store`(세션 파일을 mtime 캐시로 1초마다 읽어 경로별 `Group` 으로 묶음), `UsageStore`(키체인의 OAuth 토큰으로 `api.anthropic.com/api/oauth/usage` 조회),
   `AccountStore`·`AutoSwitcher`(키체인 `Claude Code-credentials` 와 `~/.claude.json` 의 `oauthAccount` 를 `/usr/bin/security` 로 바꿔 끼워 계정 전환, 저장 계정은 키체인 서비스 `Claude Board-account`),
-  `Updater`(최신 릴리스의 `VERSION` 비교 후 `install.sh` 실행), 터미널 포커스·일시중지·이어 열기(Ghostty·iTerm2·Terminal 에 AppleScript, `focusGhostty`·`ghosttySend` 등).
+  `Updater`(최신 릴리스의 `VERSION` 비교 후 `install.sh` 실행), 다른 터미널 포커스·조작(Ghostty·iTerm2·Terminal 에 AppleScript, `focusGhostty`·`ghosttySend` 등).
   창 크기에 따라 `BoardTier`(full·medium·mini)로 그린다. `$TMPDIR/claude-board.lock` 을 `flock` 해 한 번만 뜨고, 두 번째 실행은 `claude-board.show` 분산 알림만 보내고 끝난다.
-- `ClaudeNotifier.swift` — 알림 패널. 인자는 파일 머리 주석 참고. 여러 패널이 동시에 뜨면 슬롯 파일로 자리를 나눈다.
+  `--action pause|resume|stop|reopen|focus <세션 id>` 는 떠 있는 보드에 `claude-board.action` 분산 알림으로 넘긴다(메뉴와 같은 함수).
+  `// MARK: - 내장 터미널` — 창 내용은 `BoardRootView`([터미널 영역 │ `PaneDivider` │ 보드]). `TerminalHub` 가 탭(`BoardTab`)을 쥐고,
+  claude 는 셸 없이 `/usr/bin/env <명령>` 으로 띄운다(새 세션은 `--session-id`). `pair` 가 세션 파일의 `tty` = 탭 tty(headless 는 pid 조상이 탭)로 짝짓고
+  `place` 가 보드 탭·다른 터미널·백그라운드·끝남을 가른다 — 세션 파일 약속은 그대로. 쥔 탭 목록은 UserDefaults `terminalTabs` 에 바뀔 때마다 남기고 다시 뜰 때 `restoreTabs` 가 resume_cmd 로 이어 연다.
+  `BoardTerminalView`(한글 조합 중 Return·Esc 고침 — 엔진을 올리면 다시 시험), `LoginEnvironment`(시작할 때 사용자 셸을 `-i -l` 로 띄워 읽은 환경을 탭 claude 에 넘김),
+  `confirmShutdown`(업데이트·종료 전 확인, 끊기는 탭의 주 세션에 `.paused`), `driveSession`(보드 탭은 탭에 직접, Ghostty 는 AppleScript),
+  `mdRenderDir`·`mdRenderCommand`(md-render 를 `~/.claude/notifier/plugins/` 로 옮기고 `--plugin-dir` 을 한 번만 붙임, 끈 세션은 `mdRenderOff`). 보드 쪽 문제는 `~/.claude/notifier/board.log`.
+  설계·결정·실측은 `docs/내장 터미널/설계.md`(11장 단계별 메모) — 이 기능을 바꿀 때 먼저 본다.
+- `ClaudeNotifier.swift` — 알림 패널. 인자는 파일 머리 주석 참고. 여러 패널이 동시에 뜨면 슬롯 파일로 자리를 나눈다. `--session` 을 받으면 누를 때 보드에 `focus` 동작을 알린다.
 - `board-tui.py` — 터미널판 보드(`claude-board-tui`).
 - `AppIcon.swift` — 앱 아이콘 PNG(iconset 이름 규칙)를 인자로 준 폴더에 그린다. 결과 `AppIcon.icns` 는 저장소에 커밋되어 있다.
 - `ClaudeStatus.swift` — 예전 메뉴 막대 앱. 어떤 빌드 스크립트도 빌드하지 않는다.
@@ -83,6 +94,9 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
 - 엔진 리소스 번들 `GhosttyKit_GhosttyTerminal.bundle`(terminfo·셸 통합)은 `.app` 맨 위에 두면 서명이 거부되어 `Contents/Resources/` 에 둔다. SwiftPM 의 `Bundle.module` 은 그 자리를 못 찾으므로 앱이 시작할 때 `resolveResourceBundleInApp()` 이 알려 준다.
   빌드 경로가 남은 개발 Mac 에서는 이게 깨져도 멀쩡해 보이고 사용자 Mac 에서만 첫 터미널을 열 때 죽는다 — 확인할 때는 `.build/<triple>/release/` 의 번들을 치우고 연다. 엔진 버전은 `exact:` 로 고정한다(2.2.2026101502 아래는 LGPL libintl 이 정적으로 들어 있다).
 - `hooks.py` 와 `packaging/hooks.py` 는 같은 내용의 사본이다. build-board.sh 는 앞의 것, make-dmg.sh 는 뒤의 것을 앱에 넣으므로 둘을 함께 고친다.
+- `plugins/md-render/` 는 들여온 md-render 다(들여온 파일은 원본 그대로 — 출처·커밋·바꾼 점은 그 README). 앱 `Contents/Resources/plugins/md-render/` 에는 `LICENSE`·`README.md`·`.claude-plugin/plugin.json`·`hooks/hooks.json`·`hooks/register.tsx`
+  다섯 파일만 build-board.sh·make-dmg.sh 가 이름으로 골라 싣는다(두 곳을 함께 고친다). `tests/` 는 `claude plugin test` 용이라 싣지 않는다.
+- `packaging/THIRD_PARTY_NOTICES.txt` — 앱에 정적으로 들어간 구성 요소(엔진과 그 안의 MIT 아닌 것까지)의 고지. 두 스크립트가 `Contents/Resources/` 에 복사한다. 엔진 버전을 올리면 다시 만든다.
 - 설치 경로는 두 가지다: `packaging/install.sh`(curl 설치·업데이트, 보드의 업데이트 단추도 이것을 실행)와 dmg 안의 pkg(`pkg/scripts/postinstall` → `user-setup.sh`). 둘 다 사용자 설정은 앱 안의 `user-setup.sh` 가 맡는다.
 - 저장소 `suhojang/claude-board` 와 릴리스 파일 이름 `ClaudeBoard.zip`·`install.sh`·`VERSION` 은 `release.sh`·`install.sh`·`ClaudeBoard.swift`(`releaseRepo`) 가 함께 쓴다 — 이름을 바꾸면 이미 설치된 앱의 업데이트가 깨진다.
 - `install.sh` 는 서명 인증서의 SHA1(`CERT_SHA1`)을 고정해 확인한다. 인증서를 바꾸면 기존 사용자의 업데이트가 거부되고 Ghostty 제어 권한을 다시 묻는다.
