@@ -858,23 +858,23 @@ final class AutoSwitcher {
         for s in todo {
             resumed.insert("\(s.id)@\(s.limitAt!.timeIntervalSince1970)")
             let name = (s.cwd as NSString).lastPathComponent
-            guard canDrive(s) else {
+            // 1초 타이머(메인 스레드)에서 부른다
+            guard MainActor.assumeIsolated({ canDriveSession(s) }) else {
                 manual.append(name)
-                log("\(name) — Ghostty 터미널 세션이 아니라 이어 가지 못함")
+                log("\(name) — 보드 탭·Ghostty 세션이 아니라 이어 가지 못함")
                 continue
             }
-            ghosttyQueue.async { [weak self] in
-                // Esc 를 먼저 — Claude Code 가 띄운 한도 선택 창을 닫고 "한도가 풀리면 저절로 이어 가기" 예약을 취소한다.
-                // 선택 창이 열린 채 Enter 를 보내면 그 창의 항목이 골라진다
-                let ok = ghosttyTerminalId(s).map {
-                    ghosttySend($0, [("key", "escape"), ("wait", "0.5"), ("text", Self.prompt), ("wait", "0.2"), ("key", "enter")])
-                } ?? false
-                DispatchQueue.main.async { self?.log("\(name) — \(ok ? "이어 가기 요청을 넣음" : "터미널을 찾지 못해 이어 가지 못함")") }
+            // Esc 를 먼저 — Claude Code 가 띄운 한도 선택 창을 닫고 "한도가 풀리면 저절로 이어 가기" 예약을 취소한다.
+            // 선택 창이 열린 채 Enter 를 보내면 그 창의 항목이 골라진다
+            MainActor.assumeIsolated {
+                driveSession(s, [("key", "escape"), ("wait", "0.5"), ("text", Self.prompt), ("wait", "0.2"), ("key", "enter")]) { [weak self] ok in
+                    self?.log("\(name) — \(ok ? "이어 가기 요청을 넣음" : "터미널을 찾지 못해 이어 가지 못함")")
+                }
             }
         }
         let n = todo.count - manual.count
         accounts.flash((n > 0 ? "한도로 멈췄던 세션 \(n)개를 이어서 진행합니다" : "")
-                       + (manual.isEmpty ? "" : (n > 0 ? " — " : "") + "\(manual.joined(separator: ", ")) 세션은 Ghostty 밖이라 직접 이어 주세요"),
+                       + (manual.isEmpty ? "" : (n > 0 ? " — " : "") + "\(manual.joined(separator: ", ")) 세션은 보드 탭·Ghostty 밖이라 직접 이어 주세요"),
                        error: !manual.isEmpty)
     }
 
@@ -1868,7 +1868,8 @@ struct SessionRow: View {
                         .lineLimit(1)
                     Spacer(minLength: 4)
                     if s.state != "ended" { MuteToggle(s: s) }
-                    SessionMenu(s: s)
+                    // 도는 백그라운드 세션은 메뉴가 없다 — 보드는 그 세션을 멈추거나 끝내지 않는다(일시중지도 터미널이 없어 안 된다)
+                    if !(s.state != "ended" && hub.place(s) == .background) { SessionMenu(s: s) }
                     if s.state == "ended" {
                         Button { try? FileManager.default.removeItem(atPath: s.file) } label: {
                             Image(systemName: "xmark.circle.fill")
@@ -1936,15 +1937,21 @@ struct SessionMenu: View {
         let menu = NSMenu()
         menu.autoenablesItems = false
         let s = self.s
+        let place = TerminalHub.shared.place(s)
         switch s.state {
         case "ended":
-            menu.addItem(ActionItem(s.paused ? "세션 재개 (이어서 진행)" : "세션 다시 열기") { resumeSession(s, carryOn: s.paused) })
+            // 보드 새 탭에서 이어 연다 — 백그라운드(claude -p)였던 세션은 -p 없이 대화형으로 열리고 그때부터 보드 탭 세션
+            menu.addItem(ActionItem(s.paused ? "세션 재개 (이어서 진행)" : s.headless ? "세션 다시 열기 — 보드 새 탭에서" : "세션 다시 열기") {
+                resumeSession(s, carryOn: s.paused)
+            })
         case "paused":
             menu.addItem(ActionItem("세션 재개") { resumePaused(s) })
             menu.addItem(.separator())
             menu.addItem(ActionItem("세션 중단") { stopSession(s) })
         default:
-            menu.addItem(ActionItem("일시중지", enabled: s.state != "idle" && canDrive(s)) { pauseSession(s) })
+            menu.addItem(ActionItem("일시중지", enabled: s.state != "idle" && canDriveSession(s)) { pauseSession(s) })
+            // 다른 터미널(Ghostty)의 세션을 보드 탭으로 — 그쪽을 /exit 로 끝내고 보드에서 이어 연다
+            if place == .terminal, canDrive(s) { menu.addItem(ActionItem("보드로 옮기기") { moveToBoard(s) }) }
             menu.addItem(.separator())
             menu.addItem(ActionItem("세션 중단") { stopSession(s) })
         }
@@ -4500,6 +4507,27 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
         if kill(leader, 0) != 0 { markExited() }   // 이미 끝난 pid 에 건 감시는 울리지 않는다
     }
 
+    // pid 가 탭의 앞(포그라운드) 프로그램인가 — 그 프로세스 그룹이 tty 의 포그라운드 그룹이면. 보드가 띄운 claude 는 login 의 그룹,
+    // 셸에서 띄운 claude 는 제 작업 그룹이 포그라운드다. 셸 탭에서 & 로 띄운 claude -p 는 아니다(키를 넣으면 셸이 받는다)
+    func isForeground(_ pid: Int32) -> Bool {
+        guard pid > 0, let fg = view.foregroundPid, fg > 0 else { return false }
+        return getpgid(pid) == fg
+    }
+
+    // 탭의 프로그램에 키·글자를 넣는다(driveSession 의 단계) — 키는 키 경로, 글자는 붙여넣기
+    func drive(_ steps: [(String, String)], done: @escaping @MainActor (Bool) -> Void) {
+        guard let (kind, value) = steps.first else { return done(true) }
+        let rest = Array(steps.dropFirst())
+        switch kind {
+        case "key": _ = view.sendKey(value == "escape" ? .escape : .enter)
+        case "text": _ = view.paste(text: value)
+        default:
+            DispatchQueue.main.asyncAfter(deadline: .now() + (Double(value) ?? 0)) { self.drive(rest, done: done) }
+            return
+        }
+        drive(rest, done: done)
+    }
+
     private func markExited() {
         exitWatch?.cancel()
         exitWatch = nil
@@ -5799,9 +5827,61 @@ func ghosttySend(_ id: String, _ steps: [(String, String)]) -> Bool {
     """)?.stringValue == "ok"
 }
 
-// 터미널에 직접 키를 보낼 수 있는 세션인가 — 지금은 Ghostty 에서 도는 터미널 세션만
+// Ghostty 에서 도는 터미널 세션인가 — AppleScript 로 키를 보낼 수 있다
 func canDrive(_ s: Session) -> Bool {
     !s.headless && !s.tty.isEmpty && s.state != "ended" && ownerApp(s) == ghosttyId
+}
+
+// 세션 터미널에 직접 키를 넣을 수 있는가 — 보드 탭 세션(그 탭의 대화형 claude)과 Ghostty 세션
+@MainActor func canDriveSession(_ s: Session) -> Bool {
+    let hub = TerminalHub.shared
+    switch hub.place(s) {
+    case .tab(let id, let headless): return !headless && hub.tabs.first { $0.id == id }.map { !$0.exited && $0.isForeground(s.pid) } == true
+    case .terminal: return canDrive(s)
+    default: return false
+    }
+}
+
+// 세션 터미널에 키·글자를 넣는다. 단계: ("key", "escape"|"enter") | ("text", 붙여 넣을 글자) | ("wait", 초).
+// 보드 탭 세션은 그 탭에 직접, Ghostty 세션은 AppleScript. 넣을 수 없으면 done(false) — done 은 메인에서
+@MainActor func driveSession(_ s: Session, _ steps: [(String, String)], done: @escaping @MainActor (Bool) -> Void = { _ in }) {
+    let hub = TerminalHub.shared
+    if case .tab(let id, false) = hub.place(s), let tab = hub.tabs.first(where: { $0.id == id }), !tab.exited, tab.isForeground(s.pid) {
+        tab.drive(steps, done: done)
+        return
+    }
+    guard hub.place(s) == .terminal, canDrive(s) else { return done(false) }
+    ghosttyQueue.async {
+        let ok = ghosttyTerminalId(s).map { ghosttySend($0, steps) } ?? false
+        DispatchQueue.main.async { done(ok) }
+    }
+}
+
+// 프로세스가 끝나기를 기다린다(최대 timeout 초) — 끝나면 done(true)
+@MainActor func waitExit(_ pid: Int32, timeout: Double, done: @escaping @MainActor (Bool) -> Void) {
+    guard pid > 0, kill(pid, 0) == 0 else { return done(true) }
+    guard timeout > 0 else { return done(false) }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { waitExit(pid, timeout: timeout - 0.2, done: done) }
+}
+
+// 다른 터미널(Ghostty)에서 도는 세션을 보드로 — 그쪽을 /exit 로 끝내고, 끝나면 보드 새 탭에서 resume_cmd 로 이어 연다(대화 그대로)
+@MainActor func moveToBoard(_ s: Session) {
+    if s.state == "working" || s.state == "waiting" {
+        let a = NSAlert()
+        a.messageText = "보드로 옮길까요?"
+        a.informativeText = "\(s.title)\n\n지금 터미널의 세션을 끝내고 보드 새 탭에서 같은 대화를 이어 엽니다. 진행 중인 응답은 끊깁니다."
+        a.addButton(withTitle: "옮기기")
+        a.addButton(withTitle: "취소").keyEquivalent = "\u{1b}"
+        NSApp.activate(ignoringOtherApps: true)
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+    }
+    let name = (s.cwd as NSString).lastPathComponent
+    driveSession(s, [("key", "escape"), ("wait", "0.4"), ("text", "/exit"), ("wait", "0.2"), ("key", "enter")]) { ok in
+        guard ok else { return TerminalHub.shared.toast("\(name) — 세션 터미널을 찾지 못해 보드로 옮기지 못했습니다") }
+        waitExit(s.pid, timeout: 8) { exited in
+            if exited { resumeSession(s) } else { TerminalHub.shared.toast("\(name) — 세션이 끝나지 않아 보드로 옮기지 못했습니다. 그 터미널을 확인해 주세요") }
+        }
+    }
 }
 
 let sessionsDir = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/notifier/sessions")
@@ -5839,9 +5919,9 @@ func pausedMark(_ s: Session) -> String { (sessionsDir as NSString).appendingPat
 let carryOnPrompt = "보드에서 일시중지했던 세션을 재개합니다. 중단된 지점부터 직전 작업을 이어서 진행해 주세요."
 
 // 일시중지: Esc 로 지금 응답을 멈춘다. 그때까지 한 작업은 대화 기록에 남아 있으므로 재개하면 바로 이어 간다
-func pauseSession(_ s: Session) {
-    ghosttyQueue.async {
-        guard let id = ghosttyTerminalId(s), ghosttySend(id, [("key", "escape")]) else { return }
+@MainActor func pauseSession(_ s: Session) {
+    driveSession(s, [("key", "escape")]) { ok in
+        guard ok else { return }
         let mark = ["paused_at": Date().timeIntervalSince1970, "topic": s.topic] as [String: Any]
         if let data = try? JSONSerialization.data(withJSONObject: mark) {
             FileManager.default.createFile(atPath: pausedMark(s), contents: data)
@@ -5849,21 +5929,18 @@ func pauseSession(_ s: Session) {
     }
 }
 
-// 재개: 살아 있는 세션은 그 터미널에 이어서 진행하라는 요청을 넣고, 꺼진 세션은 새 pane 에서 이어 연다
-func resumePaused(_ s: Session) {
-    ghosttyQueue.async {
-        if s.pid > 0, kill(s.pid, 0) == 0, let id = ghosttyTerminalId(s),
-           ghosttySend(id, [("text", carryOnPrompt), ("wait", "0.2"), ("key", "enter")]) {
-            try? FileManager.default.removeItem(atPath: pausedMark(s))
-            return
-        }
-        DispatchQueue.main.async { resumeSession(s, carryOn: true) }
+// 재개: 살아 있는 세션은 그 터미널에 이어서 진행하라는 요청을 넣고, 꺼진 세션은 보드 새 탭에서 이어 연다
+@MainActor func resumePaused(_ s: Session) {
+    guard s.pid > 0, kill(s.pid, 0) == 0 else { return resumeSession(s, carryOn: true) }
+    driveSession(s, [("text", carryOnPrompt), ("wait", "0.2"), ("key", "enter")]) { ok in
+        if ok { try? FileManager.default.removeItem(atPath: pausedMark(s)) } else { resumeSession(s, carryOn: true) }
     }
 }
 
-// 중단: 확인을 받은 뒤 세션을 끝낸다. 터미널 세션은 Esc → /exit, 백그라운드 세션은 SIGTERM.
+// 중단: 확인을 받은 뒤 세션을 끝낸다. 터미널 세션(보드 탭·Ghostty)은 Esc → /exit, 그 밖의 터미널 세션과 보드 탭 안의
+// claude -p 는 SIGTERM. 진짜 백그라운드 세션에는 신호를 보내지 않는다(메뉴에도 없다 — 보드는 백그라운드 세션을 건드리지 않는다).
 // 대화 기록은 남으므로 종료 세션 메뉴의 "세션 다시 열기"로 이어 열 수 있다
-func stopSession(_ s: Session, confirm: Bool = true) {
+@MainActor func stopSession(_ s: Session, confirm: Bool = true) {
     if confirm {
     let alert = NSAlert()
     alert.messageText = "세션을 중단할까요?"
@@ -5875,12 +5952,9 @@ func stopSession(_ s: Session, confirm: Bool = true) {
     guard alert.runModal() == .alertFirstButtonReturn else { return }
     }
     try? FileManager.default.removeItem(atPath: pausedMark(s))
-    ghosttyQueue.async {
-        if canDrive(s), let id = ghosttyTerminalId(s),
-           ghosttySend(id, [("key", "escape"), ("wait", "0.4"), ("text", "/exit"), ("wait", "0.2"), ("key", "enter")]) {
-            return
-        }
-        if s.pid > 0 { kill(s.pid, SIGTERM) }
+    if TerminalHub.shared.place(s) == .background { return }
+    driveSession(s, [("key", "escape"), ("wait", "0.4"), ("text", "/exit"), ("wait", "0.2"), ("key", "enter")]) { ok in
+        if !ok, s.pid > 0 { kill(s.pid, SIGTERM) }
     }
 }
 
