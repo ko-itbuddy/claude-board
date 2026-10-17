@@ -1,25 +1,45 @@
 #!/bin/sh
 # Claude Board.app 을 빌드해 /Applications 에 설치한다 (배포판 pkg 와 같은 위치)
 # 알림 패널·hook 스크립트는 hook 이 실행하는 ~/.claude/notifier 에 설치한다
+# --dev: 시험 빌드 — 설치된 보드·hook 은 건드리지 않고 <저장소>/dist/dev/Claude Board Dev.app 만 만든다.
+#        번들 id 가 com.claude.board.dev 라 잠금 파일·분산 알림 이름이 달라 설치된 보드와 함께 띄울 수 있다
 set -e
 N="$(cd "$(dirname "$0")" && pwd)"
 APP="/Applications/Claude Board.app"
+NAME="Claude Board"
+BUNDLE_ID="com.claude.board"
+if [ "$1" = "--dev" ]; then
+  DEV=1
+  APP="$N/dist/dev/Claude Board Dev.app"
+  NAME="Claude Board Dev"
+  BUNDLE_ID="com.claude.board.dev"
+fi
 SIGN_ID="${CLAUDE_BOARD_SIGN_ID:-Claude Board Signing}"
 # pkg 로 설치한 앱은 root 소유라 그대로는 덮어쓸 수 없다 — 처음 한 번 관리자 비밀번호 창을 띄워 소유자를 나로 바꾼다
 if [ -e "$APP" ] && [ ! -w "$APP/Contents" ]; then
   osascript -e "do shell script \"chown -R $(id -un):staff '$APP'\" with administrator privileges"
 fi
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-swiftc -O "$N/ClaudeBoard.swift" -o "$APP/Contents/MacOS/ClaudeBoard"
+# 보드는 터미널 엔진(libghostty-spm) 때문에 SwiftPM 으로 빌드한다 — 첫 빌드는 엔진(약 77 MB)을 내려받아 1분 남짓 걸린다.
+# --disable-keychain 이 없으면 내려받기에서 키체인 조회로 멈춘다. 배포 빌드(make-dmg.sh)와 같은 .build 를 쓰므로 --triple 을 늘 적는다
+spm() { swift build -c release --disable-keychain --package-path "$N" --triple "$(uname -m)-apple-macosx14.0" "$@"; }
+spm
+BIN="$(spm --show-bin-path)"
+# 떠 있는 보드가 있어도 깨지지 않게 새 파일로 복사해 바꿔 끼운다
+cp "$BIN/ClaudeBoard" "$APP/Contents/MacOS/ClaudeBoard.new"
+mv "$APP/Contents/MacOS/ClaudeBoard.new" "$APP/Contents/MacOS/ClaudeBoard"
+# 엔진 리소스(terminfo·셸 통합) — .app 맨 위에 두면 서명이 거부되므로 Contents/Resources 에 두고 앱이 시작할 때 그 자리를 알려 준다
+rm -rf "$APP/Contents/Resources/GhosttyKit_GhosttyTerminal.bundle"
+cp -R "$BIN/GhosttyKit_GhosttyTerminal.bundle" "$APP/Contents/Resources/"
 cp "$N/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>Claude Board</string>
-  <key>CFBundleDisplayName</key><string>Claude Board</string>
-  <key>CFBundleIdentifier</key><string>com.claude.board</string>
+  <key>CFBundleName</key><string>$NAME</string>
+  <key>CFBundleDisplayName</key><string>$NAME</string>
+  <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
   <key>CFBundleExecutable</key><string>ClaudeBoard</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -39,6 +59,7 @@ else
 fi
 touch "$APP"
 echo "built: $APP"
+[ -n "$DEV" ] && exit 0
 # sessions 등 실행 상태는 그대로 둔다. 알림 패널은 떠 있는 패널이 있어도 깨지지 않게 새 파일로 빌드해 바꿔 끼운다
 R="$HOME/.claude/notifier"
 mkdir -p "$R/sessions"

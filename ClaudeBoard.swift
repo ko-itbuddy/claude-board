@@ -3,6 +3,7 @@
 import AppKit
 import Carbon.HIToolbox
 import CryptoKit
+import GhosttyTerminal
 import SwiftUI
 
 // MARK: - 데이터
@@ -5019,9 +5020,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // 셸 설정에서 --background 로 띄우면 창만 앞에 보이고 포커스는 터미널에 남긴다
         if CommandLine.arguments.contains("--background") { window.orderFrontRegardless() } else { showBoard() }
 
-        DistributedNotificationCenter.default().addObserver(forName: .init("claude-board.show"), object: nil,
+        DistributedNotificationCenter.default().addObserver(forName: .init("\(instanceName).show"), object: nil,
                                                             queue: .main) { _ in showBoard() }
-        DistributedNotificationCenter.default().addObserver(forName: .init("claude-board.action"), object: nil,
+        DistributedNotificationCenter.default().addObserver(forName: .init("\(instanceName).action"), object: nil,
                                                             queue: .main) { n in
             if let a = n.userInfo?["action"] as? String, let id = n.userInfo?["id"] as? String { performAction(a, id) }
         }
@@ -5165,11 +5166,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 
+// 시험 빌드(build-board.sh --dev, 번들 id com.claude.board.dev)는 설치된 보드와 함께 떠야 하므로 잠금 파일·분산 알림 이름을 따로 쓴다
+let instanceName = Bundle.main.bundleIdentifier == "com.claude.board.dev" ? "claude-board-dev" : "claude-board"
+
 // 명령줄 동작: claude-board --action pause|resume|stop|reopen|focus <세션 id>
 // 떠 있는 보드에 알림으로 넘긴다 — Ghostty 제어 권한을 가진 그 보드가 실행한다
 if let i = CommandLine.arguments.firstIndex(of: "--action"), i + 2 < CommandLine.arguments.count {
     DistributedNotificationCenter.default().postNotificationName(
-        .init("claude-board.action"), object: nil,
+        .init("\(instanceName).action"), object: nil,
         userInfo: ["action": CommandLine.arguments[i + 1], "id": CommandLine.arguments[i + 2]], deliverImmediately: true)
     exit(0)
 }
@@ -5188,14 +5192,33 @@ func performAction(_ action: String, _ id: String) {
 }
 
 // 이미 떠 있으면 새로 띄우지 않는다
-let lockPath = NSTemporaryDirectory() + "claude-board.lock"
+let lockPath = NSTemporaryDirectory() + "\(instanceName).lock"
 let lockFd = open(lockPath, O_CREAT | O_RDWR, 0o600)
 if lockFd >= 0, flock(lockFd, LOCK_EX | LOCK_NB) != 0 {
     // 이미 떠 있는 창을 앞으로 불러오고 끝낸다
-    DistributedNotificationCenter.default().postNotificationName(.init("claude-board.show"), object: nil,
+    DistributedNotificationCenter.default().postNotificationName(.init("\(instanceName).show"), object: nil,
                                                                  userInfo: nil, deliverImmediately: true)
     exit(0)
 }
+
+// 터미널 엔진의 리소스 번들(terminfo·셸 통합)은 .app 의 Contents/Resources 에 있다 — .app 맨 위는 서명이 거부한다.
+// SwiftPM 이 만든 Bundle.module 은 .app 맨 위와 빌드한 컴퓨터의 빌드 경로만 찾으므로(못 찾으면 첫 터미널에서 죽는다,
+// 빌드 경로가 남은 개발 Mac 에서는 멀쩡해 보인다), Bundle.module 이 한 번 정해지는 동안만 main 번들의 bundleURL 을
+// Contents/Resources 로 돌려준다. 한 번 정해지면 바뀌지 않으므로 첫 TerminalController 전에 한 번 부른다
+func resolveResourceBundleInApp() {
+    guard Bundle.main.bundlePath.hasSuffix(".app"), let res = Bundle.main.resourceURL else { return }
+    let sel = #selector(getter: Bundle.bundleURL)
+    guard let m = class_getInstanceMethod(Bundle.self, sel) else { return }
+    typealias Fn = @convention(c) (AnyObject, Selector) -> NSURL
+    let original = method_getImplementation(m)
+    let origFn = unsafeBitCast(original, to: Fn.self)
+    let main = Bundle.main
+    let block: @convention(block) (AnyObject) -> NSURL = { obj in obj === main ? res as NSURL : origFn(obj, sel) }
+    method_setImplementation(m, imp_implementationWithBlock(block))
+    _ = GhosttyRuntimeResources.directoryURL   // 여기서 Bundle.module 이 한 번 정해진다
+    method_setImplementation(m, original)
+}
+resolveResourceBundleInApp()
 
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)

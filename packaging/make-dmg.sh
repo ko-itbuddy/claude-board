@@ -27,10 +27,18 @@ build() {  # $1 소스, $2 결과 — 두 아키텍처로 빌드해 하나로 �
   lipo -create "$WORK/arm64" "$WORK/x86_64" -output "$2"
   rm -f "$WORK/arm64" "$WORK/x86_64"
 }
+# 보드는 터미널 엔진(libghostty-spm) 때문에 SwiftPM 으로 빌드한다 — $1 아키텍처. --arch 두 개(한 번에 universal)는 Xcode 가 필요해서
+# 아키텍처마다 따로 빌드해 합친다. --disable-keychain 이 없으면 엔진 내려받기에서 키체인 조회로 멈춘다
+spm() { a="$1"; shift; swift build -c release --disable-keychain --package-path "$N" --triple "$a-apple-macosx14.0" "$@"; }
 
 echo "1) 앱 빌드"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/notifier" "$STAGE" "$OUT"
-build "$N/ClaudeBoard.swift" "$APP/Contents/MacOS/ClaudeBoard"
+spm arm64
+spm x86_64
+lipo -create "$(spm arm64 --show-bin-path)/ClaudeBoard" "$(spm x86_64 --show-bin-path)/ClaudeBoard" \
+  -output "$APP/Contents/MacOS/ClaudeBoard"
+# 엔진 리소스(terminfo·셸 통합)는 아키텍처와 무관해 한 벌 — .app 맨 위는 서명이 거부하므로 Contents/Resources 에 둔다
+cp -R "$(spm arm64 --show-bin-path)/GhosttyKit_GhosttyTerminal.bundle" "$APP/Contents/Resources/"
 build "$N/ClaudeNotifier.swift" "$APP/Contents/Resources/notifier/claude-notifier"
 cp "$N/notify.py" "$N/state.py" "$N/board-tui.py" "$P/hooks.py" "$APP/Contents/Resources/notifier/"
 cp "$N/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"

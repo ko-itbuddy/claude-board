@@ -7,6 +7,8 @@
 !/LICENSE
 !/docs/
 !/ClaudeBoard.swift
+!/Package.swift
+!/Package.resolved
 !/ClaudeNotifier.swift
 !/ClaudeStatus.swift
 !/AppIcon.swift

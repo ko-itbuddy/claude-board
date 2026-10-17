@@ -10,19 +10,27 @@ Claude Code hook 이 Python 스크립트를 실행해 세션 상태를 파일로
 
 ## 명령
 
-Xcode 프로젝트·SwiftPM 이 없다. Swift 파일 하나가 실행 파일 하나이고 `swiftc` 로 바로 빌드한다. 테스트·린트 설정은 없다.
+Xcode 프로젝트는 없다. 보드(`ClaudeBoard.swift`)는 내장 터미널 엔진(libghostty-spm) 때문에 저장소 맨 위 `Package.swift` 의 SwiftPM 실행 타깃으로 빌드하고(소스는 그 파일 하나, Command Line Tools 만으로 된다),
+나머지 Swift 파일은 하나가 실행 파일 하나이고 `swiftc` 로 바로 빌드한다. 테스트·린트 설정은 없다.
+모든 `swift build`/`swift package` 에 `--disable-keychain`(빼면 엔진 내려받기에서 키체인 조회로 10분 넘게 멈춘다)과 `--triple`(배포 빌드와 같은 `.build` 를 쓰므로 생략한 빌드와 섞으면 오류)을 붙인다.
 
 ```sh
-# 빠른 확인 (ClaudeBoard.swift 약 4초)
-swiftc -typecheck ClaudeBoard.swift
+# 빠른 확인 — 보드는 import GhosttyTerminal 때문에 swiftc -typecheck 를 못 쓰고 빌드로 확인한다(첫 빌드는 엔진 약 77 MB 를 내려받아 1분 남짓, 그 뒤 약 20초)
+swift build -c release --disable-keychain --triple "$(uname -m)-apple-macosx14.0"
 swiftc -typecheck ClaudeNotifier.swift
 python3 -m py_compile state.py notify.py hooks.py board-tui.py   # 만들어진 __pycache__ 는 지운다
+
+# 시험 빌드 — 설치된 보드·hook 은 건드리지 않는다
+./build-board.sh --dev
+#  → dist/dev/Claude Board Dev.app (번들 id com.claude.board.dev — 잠금 파일·분산 알림 이름이 달라 설치된 보드와 함께 뜬다)
+#  → 띄우기: open "dist/dev/Claude Board Dev.app"   끄기: pkill -f "Claude Board Dev.app/Contents/MacOS"
 
 # 로컬 빌드·설치 — 실제 환경을 덮어쓴다
 ./build-board.sh
 #  → /Applications/Claude Board.app 을 다시 빌드하고(서명 인증서가 없으면 ad-hoc 서명)
 #  → ~/.claude/notifier/ 에 claude-notifier 와 Python 스크립트를 복사한다 (지금 도는 hook 이 바로 새 스크립트를 쓴다)
-#  → 떠 있는 보드는 다시 띄우지 않는다. 바꾼 앱을 보려면: pkill -x ClaudeBoard; open -a "Claude Board"
+#  → 떠 있는 보드는 다시 띄우지 않는다. 바꾼 앱을 보려면: pkill -f "Claude Board.app/Contents/MacOS"; open -a "Claude Board"
+#    (pkill -x ClaudeBoard 는 시험 빌드까지 끈다)
 
 # 배포 (관리자) — CHANGELOG.md 맨 위에 "## <버전> — <날짜>" 항목을 쓰고 commit·push 한 뒤
 packaging/release.sh <버전>   # make-dmg.sh 로 universal(arm64+x86_64) 빌드·서명 → gh release 생성
@@ -72,6 +80,8 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
 ### 패키징과 배포
 
 - Info.plist 는 `build-board.sh` 와 `packaging/make-dmg.sh` 안에 각각 heredoc 으로 있다. 키를 바꾸면 두 곳을 함께 고친다(버전은 make-dmg.sh 만 넣는다).
+- 엔진 리소스 번들 `GhosttyKit_GhosttyTerminal.bundle`(terminfo·셸 통합)은 `.app` 맨 위에 두면 서명이 거부되어 `Contents/Resources/` 에 둔다. SwiftPM 의 `Bundle.module` 은 그 자리를 못 찾으므로 앱이 시작할 때 `resolveResourceBundleInApp()` 이 알려 준다.
+  빌드 경로가 남은 개발 Mac 에서는 이게 깨져도 멀쩡해 보이고 사용자 Mac 에서만 첫 터미널을 열 때 죽는다 — 확인할 때는 `.build/<triple>/release/` 의 번들을 치우고 연다. 엔진 버전은 `exact:` 로 고정한다(2.2.2026101502 아래는 LGPL libintl 이 정적으로 들어 있다).
 - `hooks.py` 와 `packaging/hooks.py` 는 같은 내용의 사본이다. build-board.sh 는 앞의 것, make-dmg.sh 는 뒤의 것을 앱에 넣으므로 둘을 함께 고친다.
 - 설치 경로는 두 가지다: `packaging/install.sh`(curl 설치·업데이트, 보드의 업데이트 단추도 이것을 실행)와 dmg 안의 pkg(`pkg/scripts/postinstall` → `user-setup.sh`). 둘 다 사용자 설정은 앱 안의 `user-setup.sh` 가 맡는다.
 - 저장소 `suhojang/claude-board` 와 릴리스 파일 이름 `ClaudeBoard.zip`·`install.sh`·`VERSION` 은 `release.sh`·`install.sh`·`ClaudeBoard.swift`(`releaseRepo`) 가 함께 쓴다 — 이름을 바꾸면 이미 설치된 앱의 업데이트가 깨진다.
