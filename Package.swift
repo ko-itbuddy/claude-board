@@ -14,7 +14,10 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "ClaudeBoard",
-            dependencies: [.product(name: "GhosttyTerminal", package: "libghostty-spm")],
+            dependencies: [
+                .product(name: "GhosttyTerminal", package: "libghostty-spm"),
+                .product(name: "GhosttyTheme", package: "libghostty-spm"),   // 사용자 Ghostty 설정의 theme 이름을 색으로
+            ],
             path: ".",
             exclude: [
                 "windows", "packaging", "docs", "dist",

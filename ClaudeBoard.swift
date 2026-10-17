@@ -2,8 +2,10 @@
 // 상태 파일: ~/.claude/notifier/sessions/*.json (state.py 가 hook 에서 기록)
 import AppKit
 import Carbon.HIToolbox
+import Combine
 import CryptoKit
 import GhosttyTerminal
+import GhosttyTheme
 import SwiftUI
 
 // MARK: - 데이터
@@ -1915,15 +1917,15 @@ struct SessionMenu: View {
 
 // 누르면 클로저를 실행하는 메뉴 항목
 final class ActionItem: NSMenuItem {
-    private let run: () -> Void
-    init(_ title: String, enabled: Bool = true, run: @escaping () -> Void) {
+    private let run: @MainActor () -> Void
+    init(_ title: String, enabled: Bool = true, run: @escaping @MainActor () -> Void) {
         self.run = run
         super.init(title: title, action: #selector(fire), keyEquivalent: "")
         target = self
         isEnabled = enabled
     }
     required init(coder: NSCoder) { fatalError() }
-    @objc private func fire() { run() }
+    @objc private func fire() { MainActor.assumeIsolated { run() } }   // 메뉴 동작은 메인 스레드에서 온다
 }
 
 // 트리 연결선: 위에서 내려와 오른쪽으로 꺾이고, 마지막 줄이 아니면 아래로 계속 이어진다
@@ -3669,7 +3671,7 @@ final class PointerTracker: NSResponder, ObservableObject {
 
 // 투명 모드 — 카카오톡 PC 처럼 오른쪽 아래 슬라이더로 창 전체(글자 포함)의 투명도를 정한다.
 // 마우스를 올리거나 보드가 활성 창이 되면 불투명하게 보이고, 슬라이더를 움직이는 동안은 고른 투명도를 미리 보여 준다
-final class WindowOpacity: ObservableObject {
+@MainActor final class WindowOpacity: ObservableObject {
     static let shared = WindowOpacity()
     static let range: ClosedRange<Double> = 0.3...1
     @Published var level = min(max(UserDefaults.standard.object(forKey: "opacity") as? Double ?? 1, WindowOpacity.range.lowerBound),
@@ -3680,7 +3682,8 @@ final class WindowOpacity: ObservableObject {
 
     func apply() {
         guard let w = window else { return }
-        let solid = !previewing && (PointerTracker.shared.inside || w.isKeyWindow)
+        // 터미널을 펼친 동안에는 늘 불투명 — 화면 전체의 터미널이 비쳐 보이게 할 까닭이 없다
+        let solid = !previewing && (PointerTracker.shared.inside || w.isKeyWindow || TerminalHub.shared.expanded)
         let target = solid ? 1 : CGFloat(level)
         guard abs(w.alphaValue - target) > 0.001 else { return }
         NSAnimationContext.runAnimationGroup { ctx in
@@ -4224,6 +4227,607 @@ struct UpdateBanner: View {
     }
 }
 
+// MARK: - 내장 터미널
+
+// 보드가 직접 쥐는 터미널(pty). 펼치면 창이 화면의 쓸 수 있는 영역 전체로 넓어져 [터미널 | 경계 | 보드], 접으면 지금처럼 보드만 남는다.
+// 터미널 뷰는 창에서 빼지 않는다 — 창에 붙은 터미널이 하나도 없으면 엔진이 메일함 처리를 멈춰, 제목 변경이 쌓이면 pty 읽기가 막히고
+// 세션 출력이 멈춘다(실측 19초). 숨길 때는 실제 크기 그대로 isHidden + setSurfaceVisible(false)(isHidden 만 하면 계속 그린다).
+// 탭을 닫을 때는 controller 를 떼어 엔진 surface 를 내린다(그래야 셸이 끝난다)
+
+let paneDividerWidth: CGFloat = 8       // 터미널과 보드 사이 경계 — 끌어서 두 영역 폭을 바꾼다
+let terminalMinWidth: CGFloat = 480     // 펼쳤을 때 터미널 영역의 최소 폭
+let terminalTabBarHeight: CGFloat = 40
+let terminalAreaColor = NSColor(red: 0.071, green: 0.075, blue: 0.094, alpha: 1)   // 탭이 없을 때 터미널 영역 바탕
+let terminalBarColor = NSColor(red: 0.10, green: 0.10, blue: 0.13, alpha: 1)        // 탭 줄과 그 위 제목 막대 띠
+
+// 한글 조합 입력 고침 — 입력기는 조합 중 Return·Esc 에 "글자 확정" 과 "줄바꿈·취소 명령" 을 함께 보내는데 래퍼는 확정 글자가 있으면
+// 명령을 버려 Return 을 두 번 눌러야 한다(Ghostty.app 1.3.1 도 같다). 입력기가 실제로 그 명령을 보냈을 때만 원래 키를 수정키 그대로
+// 다시 보낸다 — 일본어 변환 확정처럼 명령이 없으면 그대로 둔다. 엔진 버전을 올리면 래퍼가 고쳤는지 다시 시험한다(고쳤으면 Enter 가 두 번 간다)
+final class BoardTerminalView: AppTerminalView {
+    private var composingAtKeyDown = false
+    private var insertedDuringKey = false
+    private var commandDuringKey: Selector?
+
+    private func mods(_ event: NSEvent) -> TerminalInputModifiers {
+        var m: TerminalInputModifiers = []
+        let f = event.modifierFlags
+        if f.contains(.shift) { m.insert(.shift) }
+        if f.contains(.control) { m.insert(.ctrl) }
+        if f.contains(.option) { m.insert(.alt) }
+        if f.contains(.command) { m.insert(.super_) }
+        return m
+    }
+
+    override func keyDown(with event: NSEvent) {
+        // 수정키가 붙은 Return(Shift+Enter 등): 래퍼는 확정 글자를 그 키 이벤트에 실어 보내 키 지정이 글자를 덮는다 →
+        // sendKey 로 조합 글자를 먼저(수정키 없는 이벤트로) 확정하고 키를 따로 보낸다
+        if hasMarkedText(), event.keyCode == 36 || event.keyCode == 76, !mods(event).isEmpty {
+            sendKey(.enter, modifiers: mods(event))
+            return
+        }
+        composingAtKeyDown = hasMarkedText()
+        insertedDuringKey = false
+        commandDuringKey = nil
+        super.keyDown(with: event)
+        defer { composingAtKeyDown = false; commandDuringKey = nil }
+        guard composingAtKeyDown, insertedDuringKey, let sel = commandDuringKey else { return }
+        let key: TerminalKey
+        switch sel {
+        case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertLineBreak(_:)),
+             #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)): key = .enter
+        case #selector(NSResponder.cancelOperation(_:)): key = .escape
+        default: return
+        }
+        sendKey(key, modifiers: mods(event))
+    }
+
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        if composingAtKeyDown { insertedDuringKey = true }
+        super.insertText(string, replacementRange: replacementRange)
+    }
+
+    override func doCommand(by selector: Selector) {
+        if composingAtKeyDown { commandDuringKey = selector }
+        super.doCommand(by: selector)
+    }
+}
+
+// 로그인 + 대화형 셸의 환경 — 보드가 셸 없이 바로 띄우는 명령(claude)에 넘긴다. Finder·Dock 으로 띄운 보드의 PATH 는 짧아
+// 사용자 hook 의 node 등을 못 찾고, 로그인 셸만으로는 대화형 설정에서 붙는 ~/.local/bin 이 빠진다.
+// VS Code 의 셸 환경 읽기와 같은 방식으로 시작할 때 한 번, 시간 제한(10초)을 두고 읽는다
+enum LoginEnvironment {
+    private(set) static var values: [String: String]?
+    // 터미널이 스스로 정하는 값과 그 셸에만 의미 있는 값은 넘기지 않는다
+    private static func dropped(_ key: String) -> Bool {
+        ["PWD", "OLDPWD", "SHLVL", "_", "COLORTERM"].contains(key) || key.hasPrefix("TERM") || key.hasPrefix("GHOSTTY_")
+    }
+
+    static func load() {
+        DispatchQueue.global(qos: .utility).async {
+            let shell = getpwuid(getuid()).map { String(cString: $0.pointee.pw_shell) } ?? "/bin/zsh"
+            let mark = "__CB_ENV_\(UUID().uuidString)__"
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: shell)
+            p.arguments = ["-i", "-l", "-c", "printf '%s' '\(mark)'; /usr/bin/env -0; printf '%s' '\(mark)'"]
+            p.standardInput = FileHandle.nullDevice
+            p.standardError = FileHandle.nullDevice
+            let pipe = Pipe()
+            p.standardOutput = pipe
+            guard (try? p.run()) != nil else { return }
+            // 셸이 띄운 데몬(gitstatusd 등)이 출력 파이프를 물고 남을 수 있어 끝(EOF)을 기다리지 않고 두 번째 표지까지만 읽는다
+            let deadline = Date().addingTimeInterval(10)
+            var data = Data()
+            let end = Data(mark.utf8)
+            let reader = pipe.fileHandleForReading
+            while Date() < deadline {
+                let chunk = reader.availableData
+                if chunk.isEmpty { break }
+                data.append(chunk)
+                if let first = data.range(of: end), data.range(of: end, in: first.upperBound ..< data.endIndex) != nil { break }
+            }
+            if p.isRunning { p.terminate() }
+            guard let first = data.range(of: end), let second = data.range(of: end, in: first.upperBound ..< data.endIndex) else { return }
+            var env: [String: String] = [:]
+            for entry in data[first.upperBound ..< second.lowerBound].split(separator: 0) {
+                guard let s = String(data: Data(entry), encoding: .utf8), let eq = s.firstIndex(of: "=") else { continue }
+                let key = String(s[..<eq])
+                if !dropped(key) { env[key] = String(s[s.index(after: eq)...]) }
+            }
+            guard env["PATH"] != nil else { return }
+            DispatchQueue.main.async { values = env }
+        }
+    }
+}
+
+// 터미널 설정은 보드가 직접 만든다 — 사용자 Ghostty 설정을 바탕으로 하되 theme 줄은 뺀다(엔진 번들에 테마 폴더가 없어 theme 한 줄 때문에
+// 파일 전체가 조용히 거부된다). 같은 이름 테마는 엔진의 테마 목록에서 찾아 넘긴다(넘기지 않으면 래퍼 기본 테마가 사용자 색을 덮는다)
+@MainActor func makeTerminalController() -> TerminalController {
+    let home = NSHomeDirectory()
+    // Ghostty 가 읽는 순서 — 뒤의 파일이 앞을 덮는다
+    let files = ["\(home)/.config/ghostty/config", "\(home)/.config/ghostty/config.ghostty",
+                 "\(home)/Library/Application Support/com.mitchellh.ghostty/config",
+                 "\(home)/Library/Application Support/com.mitchellh.ghostty/config.ghostty"]
+    var lines: [String] = []
+    var theme: String?
+    for f in files {
+        guard let text = try? String(contentsOfFile: f, encoding: .utf8) else { continue }
+        for line in text.components(separatedBy: .newlines) {
+            let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            if parts.count == 2, parts[0] == "theme" {
+                theme = parts[1].trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+                continue
+            }
+            // Ghostty.app 의 전역 단축키(빠른 터미널 등)는 보드 터미널과 상관없다
+            if parts.count == 2, parts[0] == "keybind", parts[1].hasPrefix("global:") { continue }
+            lines.append(line)
+        }
+    }
+    lines.append("keybind = shift+enter=text:\\x1b\\r")   // Shift+Enter = 사용자 Ghostty 와 같은 바이트(1b 0d) — 기본값은 CSI 27;2;13~
+    lines.append("keybind = super+q=unbind")              // ⌘Q 는 보드 종료로 — 엔진이 받으면 처리할 곳이 없어 삼킨다
+    let dir = NSTemporaryDirectory() + (Bundle.main.bundleIdentifier ?? instanceName)
+    try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    let path = dir + "/board-terminal.conf"
+    try? lines.joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
+    let c = TerminalController(configFilePath: path, theme: terminalTheme(theme))
+    // 한 줄이라도 거부되면 파일 전체가 조용히 기본값으로 돌아간다 — 원인을 찾을 수 있게 남긴다
+    if let issue = c.lastConfigurationIssue { boardLog("터미널 설정 거부됨: \(issue)") }
+    return c
+}
+
+// ~/.claude/notifier/board.log 에 한 줄 남긴다 — 보드는 그대로 동작해야 하는 문제(단축키 등록 실패 등)를 적는다
+func boardLog(_ message: String) {
+    if let h = FileHandle(forWritingAtPath: NSHomeDirectory() + "/.claude/notifier/board.log") {
+        h.seekToEndOfFile(); h.write("\(Date()) \(message)\n".data(using: .utf8)!); h.closeFile()
+    }
+}
+
+// theme 값: "이름" 또는 "light:이름,dark:이름". 목록에 없는 이름이면 래퍼 기본(보드 창은 어두우므로 Afterglow)
+func terminalTheme(_ spec: String?) -> TerminalTheme {
+    guard let spec else { return .default }
+    var light = spec, dark = spec
+    for part in spec.split(separator: ",") {
+        let kv = part.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+        guard kv.count == 2 else { continue }
+        if kv[0] == "light" { light = kv[1] } else if kv[0] == "dark" { dark = kv[1] }
+    }
+    guard let d = GhosttyThemeCatalog.theme(named: dark) ?? GhosttyThemeCatalog.theme(named: light) else { return .default }
+    let l = GhosttyThemeCatalog.theme(named: light) ?? d
+    return TerminalTheme(light: l.toTerminalConfiguration(), dark: d.toTerminalConfiguration())
+}
+
+// 보드 터미널 탭 하나
+final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceTitleDelegate, TerminalSurfaceCloseDelegate,
+                      TerminalSurfacePwdDelegate, TerminalSurfaceClipboardConfirmationDelegate {
+    let id = UUID()
+    let view: BoardTerminalView
+    @Published var title = ""
+    @Published var cwd: String
+
+    init(_ options: TerminalSurfaceOptions, frame: NSRect, controller: TerminalController) {
+        cwd = options.workingDirectory ?? NSHomeDirectory()
+        view = BoardTerminalView(frame: frame)
+        super.init()
+        view.autoresizingMask = [.width, .height]
+        view.delegate = self   // 약한 참조 — 허브가 탭을 쥔다
+        view.controller = controller
+        view.configuration = options
+    }
+
+    // 탭 이름 — 작업 경로의 폴더 이름
+    var name: String { cwd == NSHomeDirectory() ? "~" : (cwd as NSString).lastPathComponent }
+
+    func terminalDidChangeTitle(_ title: String) { self.title = title }
+    func terminalDidChangeWorkingDirectory(_ path: String) { cwd = path }
+    // 셸이 끝났거나(processAlive false) ⌘W 처럼 엔진이 닫기를 청했을 때
+    func terminalDidClose(processAlive: Bool) { TerminalHub.shared.close(self, confirm: processAlive) }
+
+    // 붙여넣기 보호(줄바꿈이 든 내용을 bracketed paste 가 꺼진 프로그램에)·프로그램의 클립보드 읽기(OSC 52)를 묻는다 —
+    // 처리기가 없으면 붙여넣기는 알림 없이 버려진다
+    func terminalDidRequestClipboardConfirmation(_ request: TerminalClipboardConfirmationRequest) {
+        let a = NSAlert()
+        switch request.kind {
+        case .paste:
+            a.messageText = "여러 줄을 붙여넣을까요?"
+            a.informativeText = "줄바꿈이 들어 있어 터미널의 프로그램이 줄마다 바로 실행할 수 있습니다.\n\n" + String(request.contents.prefix(400))
+            a.addButton(withTitle: "붙여넣기")
+        case .osc52Read:
+            a.messageText = "터미널의 프로그램이 클립보드를 읽으려고 합니다"
+            a.informativeText = "허용하면 지금 클립보드 내용이 그 프로그램에 전달됩니다."
+            a.addButton(withTitle: "허용")
+        case .osc52Write:
+            a.messageText = "터미널의 프로그램이 클립보드에 쓰려고 합니다"
+            a.informativeText = String(request.contents.prefix(400))
+            a.addButton(withTitle: "허용")
+        }
+        a.addButton(withTitle: "취소").keyEquivalent = "\u{1b}"   // NSAlert 는 영어 "Cancel" 에만 Esc 를 붙인다
+        a.beginSheetModal(for: window) { request.respond(allow: $0 == .alertFirstButtonReturn) }
+    }
+}
+
+@MainActor final class TerminalHub: ObservableObject {
+    static let shared = TerminalHub()
+    @Published private(set) var tabs: [BoardTab] = []
+    @Published private(set) var selected: UUID?
+    // 펼침 — 기본값은 펼침
+    @Published private(set) var expanded = UserDefaults.standard.object(forKey: "terminalExpanded") as? Bool ?? true
+    // 펼쳤을 때 보드 폭 — 경계를 끌어 바꾼 폭을 기억한다
+    var boardWidth = CGFloat(UserDefaults.standard.object(forKey: "boardPaneWidth") as? Double ?? Double(boardLaunchWidth))
+    weak var area: TerminalAreaView?
+    // 고른 탭·터미널 영역 바탕 — 엔진을 띄운 뒤에는 터미널 테마의 바탕색(탭이 터미널과 이어져 보이게)
+    @Published private(set) var background = terminalAreaColor
+    private var engine: TerminalController?
+
+    // 엔진은 첫 탭을 열 때 띄운다
+    var controller: TerminalController {
+        if let engine { return engine }
+        let c = makeTerminalController()
+        engine = c
+        let bg = c.backgroundColor
+        background = NSColor(red: CGFloat(bg.red) / 255, green: CGFloat(bg.green) / 255, blue: CGFloat(bg.blue) / 255, alpha: 1)
+        area?.container.layer?.backgroundColor = background.cgColor
+        return c
+    }
+
+    func setExpanded(_ on: Bool) {
+        expanded = on
+        UserDefaults.standard.set(on, forKey: "terminalExpanded")
+    }
+
+    @discardableResult
+    func open(_ options: TerminalSurfaceOptions) -> BoardTab? {
+        guard let area else { return nil }
+        area.superview?.layoutSubtreeIfNeeded()   // 크기가 0 인 뷰는 셸을 띄우지 않는다
+        let tab = BoardTab(options, frame: area.container.bounds, controller: controller)
+        tab.view.isHidden = true
+        area.container.addSubview(tab.view)
+        tabs.append(tab)
+        select(tab.id)
+        return tab
+    }
+
+    // "+ 새 세션" — 3단계에서 새 세션 창으로 바뀐다
+    func openShell(in dir: String) {
+        open(TerminalSurfaceOptions(backend: .exec, workingDirectory: dir))
+    }
+
+    func select(_ id: UUID) {
+        selected = id
+        applyVisibility()
+        focusSelected()
+    }
+
+    // 고른 탭만 그리고 나머지는 실제 크기 그대로 숨긴다. 접혀 있거나 창이 안 보이면(가려짐·최소화·닫힘·다른 데스크톱) 모두 그리지 않는다
+    func applyVisibility() {
+        let drawing = expanded && window.occlusionState.contains(.visible)
+        for t in tabs {
+            t.view.isHidden = t.id != selected
+            t.view.setSurfaceVisible(t.id == selected && drawing)
+        }
+        area?.empty.isHidden = !tabs.isEmpty
+    }
+
+    func focusSelected() {
+        guard expanded, let t = tabs.first(where: { $0.id == selected }) else { return }
+        window.makeFirstResponder(t.view)
+    }
+
+    // 탭의 × — ⌘W 와 같은 엔진 동작으로 보내 셸 프롬프트처럼 물을 필요가 없으면 바로, 프로그램이 돌고 있으면 물어서 닫는다
+    func requestClose(_ tab: BoardTab) {
+        if !tab.view.performBindingAction("close_surface") { close(tab, confirm: false) }
+    }
+
+    // 탭 닫기 — 프로그램이 아직 돌고 있으면 먼저 묻는다
+    func close(_ tab: BoardTab, confirm: Bool) {
+        guard tabs.contains(where: { $0 === tab }) else { return }
+        guard confirm else { remove(tab); return }
+        let a = NSAlert()
+        a.messageText = "탭을 닫을까요?"
+        a.informativeText = "\(tab.name) 탭에서 도는 프로그램이 함께 끝납니다."
+        a.addButton(withTitle: "닫기")
+        a.addButton(withTitle: "취소").keyEquivalent = "\u{1b}"
+        a.beginSheetModal(for: window) { if $0 == .alertFirstButtonReturn { self.remove(tab) } }
+    }
+
+    private func remove(_ tab: BoardTab) {
+        guard let i = tabs.firstIndex(where: { $0 === tab }) else { return }
+        tabs.remove(at: i)
+        // 엔진 surface 를 내려 셸·프로그램을 끝낸다 — 창에서 빼는 것만으로는 뷰가 바로 풀리지 않아 셸이 남는다(실측)
+        tab.view.controller = nil
+        tab.view.removeFromSuperview()
+        if selected == tab.id { selected = tabs.isEmpty ? nil : tabs[min(i, tabs.count - 1)].id }
+        applyVisibility()
+        focusSelected()
+    }
+}
+
+// 펼쳤을 때 보드 폭 — 창이 좁으면 터미널 최소 폭을 남기고 줄인다
+@MainActor func boardPaneWidth() -> CGFloat {
+    guard TerminalHub.shared.expanded else { return window.frame.width }
+    return max(boardMinWidth, min(TerminalHub.shared.boardWidth, window.frame.width - paneDividerWidth - terminalMinWidth))
+}
+
+let terminalExpandedMinSize = NSSize(width: boardMinWidth + paneDividerWidth + terminalMinWidth, height: 300)
+
+// 펼치기: 창을 화면의 쓸 수 있는 영역 전체로. 접기: 보드만 화면 오른쪽에 끈 폭으로.
+// 펼친 동안에는 "위에 고정" 을 쓰지 않는다 — 화면 전체를 덮은 창이 늘 위에 있으면 다른 앱을 쓸 수 없다
+@MainActor func setTerminalExpanded(_ on: Bool) {
+    let hub = TerminalHub.shared
+    guard hub.expanded != on, let vf = (window.screen ?? NSScreen.main)?.visibleFrame else { return }
+    hub.setExpanded(on)
+    if on {
+        window.contentMinSize = terminalExpandedMinSize
+        window.setFrame(vf, display: true)
+    } else {
+        // 숨는 터미널에 키 입력이 가지 않게 포커스를 거둔다
+        window.makeFirstResponder(nil)
+        window.contentMinSize = NSSize(width: miniWidth, height: miniMinHeight)
+        window.setFrame(NSRect(x: vf.maxX - hub.boardWidth, y: vf.minY, width: hub.boardWidth, height: vf.height), display: true)
+        saveRestoreFrame()
+    }
+    applyPin(UserDefaults.standard.bool(forKey: "pinned"))
+    window.contentView?.needsLayout = true
+    BoardFit.shared.update()
+    WindowOpacity.shared.apply()
+    hub.applyVisibility()
+    hub.focusSelected()
+}
+
+// ⌃⌥T·제목 막대 단추 — 펼쳐 있어도 보드가 앞에 없으면(다른 앱을 쓰는 중) 접지 않고 앞으로 꺼내 터미널에 포커스를 준다
+@MainActor func toggleTerminal() {
+    let hub = TerminalHub.shared
+    if hub.expanded, !(NSApp.isActive && window.isKeyWindow) {
+        showBoard()
+        hub.focusSelected()
+        return
+    }
+    setTerminalExpanded(!hub.expanded)
+    if hub.expanded { showBoard() }
+}
+
+// 창 내용: [터미널 영역 | 경계 | 보드]. 터미널 영역은 제목 막대 띠까지 덮고(창 바탕이 투명하다) 탭 줄은 그 아래에 둔다.
+// 접힌 동안에도 터미널 영역은 창에 붙은 채 펼쳤을 때 크기로 둔다 —
+// 크기가 0 이면 셸이 뜨지 않고, 크기가 바뀌면 안의 프로그램이 다시 그린다
+final class BoardRootView: NSView {
+    let terminal = TerminalAreaView()
+    let divider = PaneDivider()
+    let board: NSView
+
+    init(board: NSView) {
+        self.board = board
+        super.init(frame: .zero)
+        addSubview(terminal)
+        addSubview(divider)
+        addSubview(board)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() { super.layout(); place() }
+    override func resizeSubviews(withOldSize oldSize: NSSize) { place() }
+
+    private func place() {
+        guard let w = window else { return }
+        let below = w.contentLayoutRect.height   // 제목 막대 아래 높이
+        terminal.titlebar = bounds.height - below
+        if TerminalHub.shared.expanded {
+            let bw = boardPaneWidth(), tw = bounds.width - bw - paneDividerWidth
+            terminal.frame = NSRect(x: 0, y: 0, width: tw, height: bounds.height)
+            divider.frame = NSRect(x: tw, y: 0, width: paneDividerWidth, height: bounds.height)
+            board.frame = NSRect(x: bounds.width - bw, y: 0, width: bw, height: bounds.height)
+        } else {
+            var size = terminal.frame.size
+            if size.width < terminalMinWidth, let vf = (w.screen ?? NSScreen.main)?.visibleFrame {
+                size = NSSize(width: vf.width - TerminalHub.shared.boardWidth - paneDividerWidth, height: vf.height)
+            }
+            terminal.frame = NSRect(x: -size.width - 100, y: 0, width: size.width, height: size.height)
+            board.frame = bounds
+        }
+        terminal.isHidden = !TerminalHub.shared.expanded
+        divider.isHidden = !TerminalHub.shared.expanded
+    }
+}
+
+// 터미널 영역 — 맨 위 제목 막대 띠, 탭 줄, 아래에 탭마다 터미널 뷰(고른 것만 보임)
+final class TerminalAreaView: NSView {
+    let container = NSView()
+    let empty = NSHostingView(rootView: TerminalEmptyView())
+    private let tabBar = NSHostingView(rootView: TerminalTabBar(hub: TerminalHub.shared))
+    var titlebar: CGFloat = 0 { didSet { if titlebar != oldValue { needsLayout = true } } }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.backgroundColor = terminalBarColor.cgColor
+        container.wantsLayer = true
+        container.layer?.backgroundColor = terminalAreaColor.cgColor
+        tabBar.sizingOptions = []
+        empty.sizingOptions = []
+        addSubview(container)
+        addSubview(empty)
+        addSubview(tabBar)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        let top = bounds.height - titlebar
+        tabBar.frame = NSRect(x: 0, y: top - terminalTabBarHeight, width: bounds.width, height: terminalTabBarHeight)
+        container.frame = NSRect(x: 0, y: 0, width: bounds.width, height: max(0, top - terminalTabBarHeight))
+        empty.frame = container.frame
+    }
+}
+
+// 터미널과 보드 사이 경계 — 끌어서 보드 폭을 바꾸고, 놓으면 기억한다
+final class PaneDivider: NSView {
+    private var startX: CGFloat = 0
+    private var startWidth: CGFloat = 0
+    private var dragging = false { didSet { needsDisplay = true } }
+
+    override var mouseDownCanMoveWindow: Bool { false }   // 창은 배경을 끌어 옮길 수 있게 되어 있다
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .resizeLeftRight) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor(red: 0.11, green: 0.11, blue: 0.14, alpha: 1).setFill()
+        bounds.fill()
+        (dragging ? NSColor(red: 0.48, green: 0.64, blue: 0.97, alpha: 1) : NSColor(white: 0.36, alpha: 1)).setFill()
+        NSBezierPath(roundedRect: NSRect(x: bounds.midX - 1.5, y: bounds.midY - 22, width: 3, height: 44), xRadius: 1.5, yRadius: 1.5).fill()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        startX = event.locationInWindow.x
+        startWidth = boardPaneWidth()
+        dragging = true
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let hub = TerminalHub.shared
+        hub.boardWidth = max(boardMinWidth, min(startWidth - (event.locationInWindow.x - startX),
+                                                 (window?.frame.width ?? 0) - paneDividerWidth - terminalMinWidth))
+        superview?.needsLayout = true
+        BoardFit.shared.update()
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        dragging = false
+        UserDefaults.standard.set(Double(TerminalHub.shared.boardWidth), forKey: "boardPaneWidth")
+    }
+}
+
+struct TerminalTabBar: View {
+    @ObservedObject var hub: TerminalHub
+    @State private var newHover = false
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(hub.tabs) { t in TerminalTabButton(tab: t, selected: t.id == hub.selected, background: hub.background) }
+            Button { hub.openShell(in: NSHomeDirectory()) } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "plus").font(.system(size: 10, weight: .bold))
+                    Text("새 세션")
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.primary.opacity(newHover ? 1 : 0.8))
+                .padding(.horizontal, 11)
+                .frame(height: 26)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(newHover ? 0.08 : 0)))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.white.opacity(0.22), style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .clickable($newHover)
+            .padding(.leading, 6)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: terminalBarColor))
+        .overlay(alignment: .bottom) { Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1) }
+        .preferredColorScheme(.dark)
+    }
+}
+
+struct TerminalTabButton: View {
+    @ObservedObject var tab: BoardTab
+    let selected: Bool
+    let background: NSColor
+    @State private var hover = false
+    @State private var closeHover = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle().fill(Palette.color("idle")).frame(width: 8, height: 8)
+            Text(tab.name).font(.system(size: 13, weight: .semibold)).lineLimit(1).fixedSize()
+            Text(tab.title).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+            Spacer(minLength: 0)
+            Button { TerminalHub.shared.requestClose(tab) } label: {
+                Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(closeHover ? .primary : .secondary)
+                    .frame(width: 16, height: 16)
+                    .background(Circle().fill(Color.white.opacity(closeHover ? 0.14 : 0)))
+            }
+            .buttonStyle(.plain)
+            .opacity(hover || selected ? 1 : 0)
+            .onHover { closeHover = $0 }
+            .hint("탭 닫기")
+        }
+        .padding(.leading, 14).padding(.trailing, 8)
+        .frame(minWidth: 120, maxWidth: 250, maxHeight: .infinity)
+        .background(selected ? Color(nsColor: background) : Color.white.opacity(hover ? 0.04 : 0))
+        .overlay(alignment: .top) { Rectangle().fill(selected ? Palette.color("working") : .clear).frame(height: 2) }
+        .foregroundStyle(selected ? .primary : .secondary)
+        .contentShape(Rectangle())
+        .onTapGesture { TerminalHub.shared.select(tab.id) }
+        .onHover { hover = $0 }
+    }
+}
+
+// 탭이 하나도 없을 때
+struct TerminalEmptyView: View {
+    @State private var hover = false
+    var body: some View {
+        VStack(spacing: 12) {
+            Text("보드에서 띄운 세션이 없습니다").font(.system(size: 14, weight: .semibold))
+            Text("보드에서 시작하거나 이어 연 세션이 여기 탭으로 열립니다").font(.system(size: 12)).foregroundStyle(.secondary)
+            Button { TerminalHub.shared.openShell(in: NSHomeDirectory()) } label: {
+                HStack(spacing: 6) { Image(systemName: "plus"); Text("새 세션") }
+                    .font(.system(size: 12, weight: .semibold))
+                    .padding(.horizontal, 14).frame(height: 30)
+                    .background(Capsule().fill(Color.white.opacity(hover ? 0.16 : 0.1)))
+            }
+            .buttonStyle(.plain)
+            .clickable($hover)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .preferredColorScheme(.dark)
+    }
+}
+
+// 제목 막대의 "터미널" 단추 — 미니 제목 막대(폭 300)에는 자리가 없어 숨긴다
+struct TerminalToggleButton: View {
+    @ObservedObject private var hub = TerminalHub.shared
+    @State private var hover = false
+    var body: some View {
+        let on = hub.expanded
+        Button(action: toggleTerminal) {
+            HStack(spacing: 5) {
+                Image(systemName: "rectangle.leadinghalf.inset.filled")
+                Text(on ? "터미널 펼침" : "터미널 접힘").fixedSize()
+                Text("⌃⌥T").font(.system(size: 10, weight: .medium))
+                    .padding(.horizontal, 4)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(0.08)))
+            }
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(on ? Palette.color("working") : .primary.opacity(hover ? 1 : 0.8))
+            .padding(.horizontal, 8)
+            .frame(height: 20)
+            .background(Capsule().fill(on ? Palette.color("working").opacity(0.18) : Color.white.opacity(hover ? 0.30 : 0.18)))
+            .overlay(Capsule().stroke(on ? Palette.color("working").opacity(0.45) : Color.white.opacity(0.18), lineWidth: 0.5))
+            .frame(height: 28)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .clickable($hover)
+        .hint(on ? "터미널 접기 — 보드만 오른쪽에 남깁니다 (⌃⌥T)" : "터미널 펼치기 — 보드에서 띄운 세션을 왼쪽 탭에서 봅니다 (⌃⌥T)")
+        .fixedSize()
+    }
+}
+let terminalToggleWidth: CGFloat = 146
+var terminalToggleSink: AnyCancellable?
+
+@MainActor func addTerminalToggle() {
+    let vc = NSTitlebarAccessoryViewController()
+    let host = FirstClickHostingView(rootView: TerminalToggleButton())
+    host.frame = NSRect(x: 0, y: 0, width: terminalToggleWidth, height: 28)
+    vc.view = host
+    vc.layoutAttribute = .leading
+    window.addTitlebarAccessoryViewController(vc)
+    // 왼쪽 부속에는 vc.isHidden 이 듣지 않는다 — 뷰를 숨기고 폭을 0 으로 줄여 자리도 비운다
+    terminalToggleSink = BoardFit.shared.$tier.sink { t in
+        host.isHidden = t == .mini
+        host.frame.size.width = t == .mini ? 0 : terminalToggleWidth
+    }
+}
+
 // MARK: - 창
 
 var window: NSWindow!
@@ -4257,7 +4861,7 @@ let miniRowHeight: CGFloat = 26         // 미니의 경로 한 줄 높이 — �
 let fullListMin: CGFloat = 120          // 전체로 그리려면 남아야 하는 목록 칸 — 펼친 카드 하나쯤
 let mediumListMin: CGFloat = 56         // 중간으로 그리려면 남아야 하는 목록 칸 — 접힌 카드 하나
 
-final class BoardFit: ObservableObject {
+@MainActor final class BoardFit: ObservableObject {
     static let shared = BoardFit()
     @Published private(set) var tier: BoardTier = .full
     // 단계마다 목록 칸을 뺀 보드 내용 높이 — 그 단계로 그려졌을 때만 잴 수 있어 잰 값을 기억한다(재기 전엔 어림값)
@@ -4275,7 +4879,7 @@ final class BoardFit: ObservableObject {
         guard let w = window else { return }
         let h = w.frame.height, titlebar = h - w.contentLayoutRect.height   // 보드 내용은 제목 막대 아래에서 시작한다
         let fits = { (t: BoardTier, list: CGFloat) in h >= (self.fixed[t] ?? 0) + list + titlebar }
-        let t: BoardTier = w.frame.width < boardMinWidth ? .mini
+        let t: BoardTier = boardPaneWidth() < boardMinWidth ? .mini   // 터미널을 펼쳤으면 창이 아니라 보드 칸의 폭
             : fits(.full, fullListMin) ? .full : fits(.medium, mediumListMin) ? .medium : .mini
         guard t != tier else { return }
         tier = t
@@ -4288,7 +4892,8 @@ final class BoardFit: ObservableObject {
 func saveRestoreFrame() { UserDefaults.standard.set(NSStringFromRect(window.frame), forKey: "boardRestoreFrame") }
 
 // 최대축소 — 오른쪽 위 모서리는 그대로 두고 폭은 miniWidth, 높이는 경로 수(최대 6줄)에 맞춘다
-func enterMini(rows: Int) {
+@MainActor func enterMini(rows: Int) {
+    setTerminalExpanded(false)   // 터미널을 펼쳤으면 먼저 접는다 — 미니에서 돌아갈 위치는 접힌 보드
     saveRestoreFrame()
     let f = window.frame
     let h = miniMinHeight + CGFloat(min(max(rows, 2), 6) - 2) * miniRowHeight   // 최소 높이에 두 줄이 들어간다
@@ -4296,7 +4901,7 @@ func enterMini(rows: Int) {
 }
 
 // 미니에서 원래 크기로 — 기억한 위치가 없거나 지금 연결된 화면 밖이면 처음 크기로 오른쪽에 붙인다
-func leaveMini() {
+@MainActor func leaveMini() {
     if let s = UserDefaults.standard.string(forKey: "boardRestoreFrame") {
         let r = NSRectFromString(s)
         if r.width >= boardMinWidth, NSScreen.screens.contains(where: { $0.visibleFrame.intersects(r) }) {
@@ -4460,8 +5065,10 @@ struct MiniRow: View {
     }
 }
 
-// 처음 실행할 때의 크기(폭 boardLaunchWidth, 높이는 화면의 쓸 수 있는 높이 전체)로 되돌려 지금 화면의 오른쪽 끝에 붙인다
-func snapRight() {
+// 처음 실행할 때의 크기(폭 boardLaunchWidth, 높이는 화면의 쓸 수 있는 높이 전체)로 되돌려 지금 화면의 오른쪽 끝에 붙인다.
+// 터미널을 펼쳤으면 접는다 — "보드만 오른쪽에" 라는 뜻을 그대로 둔다(펼치기는 ⌃⌥T)
+@MainActor func snapRight() {
+    setTerminalExpanded(false)
     guard let vf = (window.screen ?? NSScreen.main)?.visibleFrame else { return }
     let f = NSRect(x: vf.maxX - boardLaunchWidth, y: vf.minY, width: boardLaunchWidth, height: vf.height)
     window.setFrame(f, display: true, animate: true)
@@ -4491,26 +5098,30 @@ struct SnapButton: View {
     }
 }
 
-// 전역 단축키 ⌃⌥B — 어느 앱에서든 보드를 처음 크기로 오른쪽에 붙이고 앞으로 꺼낸다(포커스는 지금 앱에 남긴다).
-// Carbon 단축키는 손쉬운 사용 권한이 필요 없다
-func registerSnapHotKey() {
+// 전역 단축키 — ⌃⌥B: 어느 앱에서든 보드를 처음 크기로 오른쪽에 붙이고 앞으로 꺼낸다(포커스는 지금 앱에 남긴다).
+// ⌃⌥T: 터미널 펼치기·접기(toggleTerminal). Carbon 단축키는 손쉬운 사용 권한이 필요 없다
+func registerHotKeys() {
     var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-    InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
+    InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
+        var key = EventHotKeyID()
+        GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
+                          MemoryLayout<EventHotKeyID>.size, nil, &key)
         DispatchQueue.main.async {
-            window.orderFrontRegardless()
-            snapRight()
+            if key.id == 2 {
+                toggleTerminal()
+            } else {
+                window.orderFrontRegardless()
+                snapRight()
+            }
         }
         return noErr
     }, 1, &spec, nil, nil)
-    var ref: EventHotKeyRef?
-    let id = EventHotKeyID(signature: OSType(0x43424F44), id: 1)   // 'CBOD'
-    let status = RegisterEventHotKey(UInt32(kVK_ANSI_B), UInt32(controlKey | optionKey), id, GetApplicationEventTarget(), 0, &ref)
-    if status != noErr {
+    for (code, n, name) in [(kVK_ANSI_B, UInt32(1), "⌃⌥B"), (kVK_ANSI_T, UInt32(2), "⌃⌥T")] {
+        var ref: EventHotKeyRef?
+        let id = EventHotKeyID(signature: OSType(0x43424F44), id: n)   // 'CBOD'
+        let status = RegisterEventHotKey(UInt32(code), UInt32(controlKey | optionKey), id, GetApplicationEventTarget(), 0, &ref)
         // 다른 앱이 먼저 잡은 단축키면 등록에 실패한다 — 보드는 그대로 동작하고 로그만 남긴다
-        let line = "\(Date()) 전역 단축키 ⌃⌥B 등록 실패 (\(status))\n"
-        if let h = FileHandle(forWritingAtPath: NSHomeDirectory() + "/.claude/notifier/board.log") {
-            h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); h.closeFile()
-        }
+        if status != noErr { boardLog("전역 단축키 \(name) 등록 실패 (\(status))") }
     }
 }
 
@@ -4910,11 +5521,12 @@ func resumeSession(_ s: Session, carryOn: Bool = false) {
     ghosttyQueue.async { _ = runScript(script) }
 }
 
-func applyPin(_ pinned: Bool) {
-    window.level = pinned ? .floating : .normal
+// 터미널을 펼친 동안에는 고정하지 않는다 — 화면 전체를 덮은 창이 늘 위에 있으면 다른 앱을 쓸 수 없다. 접으면 다시 고정
+@MainActor func applyPin(_ pinned: Bool) {
+    window.level = pinned && !TerminalHub.shared.expanded ? .floating : .normal
 }
 
-func setPinned(_ pinned: Bool) {
+@MainActor func setPinned(_ pinned: Bool) {
     UserDefaults.standard.set(pinned, forKey: "pinned")
     applyPin(pinned)
 }
@@ -4946,7 +5558,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.hidesOnDeactivate = false
         window.isReleasedWhenClosed = false   // 닫아도 앱은 남고, Dock·메뉴 막대 아이콘으로 다시 연다
-        window.title = "Claude 세션 보드"
+        window.title = instanceName == "claude-board" ? "Claude 세션 보드" : "Claude 세션 보드 (시험 빌드)"
 
         let blur = NSVisualEffectView()
         blur.material = .hudWindow
@@ -4964,8 +5576,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             host.topAnchor.constraint(equalTo: blur.topAnchor),
             host.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
         ])
-        window.contentView = blur
+        let root = BoardRootView(board: blur)
+        window.contentView = root
+        TerminalHub.shared.area = root.terminal
         PointerTracker.shared.attach(blur)
+        LoginEnvironment.load()
         // 손으로 바꿔도 자동 전환이 전환 시각을 알아야 한다 — 그 뒤 잠시 난 한도 오류는 이전 계정 토큰 탓이다
         accounts.onSwitch = { [usage, autoSwitcher] in
             usage.reset()
@@ -4973,15 +5588,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         let nc = NotificationCenter.default
         // 가려지거나 숨은 동안에는 늘 도는 애니메이션 시계를 멈춘다
+        // 터미널도 창이 안 보이는 동안(가려짐·최소화·닫힘·다른 데스크톱)은 그리지 않는다
         nc.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { _ in
             AmbientTicker.shared.running = window.occlusionState.contains(.visible)
+            MainActor.assumeIsolated { TerminalHub.shared.applyVisibility() }
         }
         // 투명 모드: 보드가 활성 창이 되면 불투명, 다른 앱으로 넘어가면 고른 투명도
         for n in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
-            nc.addObserver(forName: n, object: window, queue: .main) { _ in WindowOpacity.shared.apply() }
+            nc.addObserver(forName: n, object: window, queue: .main) { _ in MainActor.assumeIsolated { WindowOpacity.shared.apply() } }
         }
         // 미니 화면 크기보다 창을 더 줄이지 못하게 한다 — 그보다 크면 창 크기에 따라 전체·중간·미니로 그린다
-        window.contentMinSize = NSSize(width: miniWidth, height: miniMinHeight)
+        // 터미널을 펼쳤으면 터미널 최소 폭과 보드 최소 폭이 들어가는 크기까지
+        window.contentMinSize = TerminalHub.shared.expanded ? terminalExpandedMinSize : NSSize(width: miniWidth, height: miniMinHeight)
         window.delegate = sizeGuard   // contentMinSize 만으로는 손으로 줄일 때 막히지 않아 한 번 더 막는다
 
         // 저장된 창 위치 끝에 macOS 타일 배치 기록({"tilingState":…})이 붙어 있으면 창을 띄우는 순간 macOS 가 그 타일 크기로
@@ -4993,8 +5611,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if !window.setFrameUsingName("ClaudeBoard") { window.center() }
         window.setFrameAutosaveName("ClaudeBoard")   // 저장된 프레임을 다시 적용하므로 폭 조정은 이 뒤에 한다
         // 실행할 때는 가로 위치만 마지막 상태로 두고, 폭은 늘 boardLaunchWidth, 높이는 그 화면의 쓸 수 있는 높이 전체(메뉴 막대·Dock 제외)로 연다
-        // (화면 분할 상태가 섞여 전체 폭으로 열리는 것도 막는다). 미니로 두고 껐으면 그 크기·위치 그대로 연다
-        if !UserDefaults.standard.bool(forKey: "boardMini") {
+        // (화면 분할 상태가 섞여 전체 폭으로 열리는 것도 막는다). 미니로 두고 껐으면 그 크기·위치 그대로 연다.
+        // 터미널을 펼친 채로 껐으면(기본값) 화면의 쓸 수 있는 영역 전체로 연다
+        if TerminalHub.shared.expanded, let vf = (window.screen ?? NSScreen.main)?.visibleFrame {
+            window.setFrame(vf, display: false)
+        } else if !UserDefaults.standard.bool(forKey: "boardMini") {
             var f = window.frame
             f.size.width = boardLaunchWidth
             if let vf = (window.screen ?? NSScreen.main)?.visibleFrame {
@@ -5004,15 +5625,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             window.setFrame(f, display: false)
         }
         addSnapButton()
+        addTerminalToggle()
         addMiniTitlebar(store)
         BoardFit.shared.update()   // 창을 띄우기 전에 단계를 정한다 — 미니로 열 때 전체 화면이 한 번 비치지 않게
-        if BoardFit.shared.tier != .mini { saveRestoreFrame() }
+        // 미니에서 돌아갈 위치는 접힌 보드의 위치만 기억한다
+        if BoardFit.shared.tier != .mini, !TerminalHub.shared.expanded { saveRestoreFrame() }
         // 실행 크기를 정한 뒤부터 창 크기를 따라 단계를 고른다
-        nc.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: .main) { _ in BoardFit.shared.update() }
-        nc.addObserver(forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main) { _ in
-            if BoardFit.shared.tier != .mini { saveRestoreFrame() }
+        nc.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: .main) { _ in
+            MainActor.assumeIsolated { BoardFit.shared.update() }
         }
-        registerSnapHotKey()
+        nc.addObserver(forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main) { _ in
+            MainActor.assumeIsolated { if BoardFit.shared.tier != .mini, !TerminalHub.shared.expanded { saveRestoreFrame() } }
+        }
+        registerHotKeys()
         applyPin(UserDefaults.standard.bool(forKey: "pinned"))
         WindowOpacity.shared.apply()
         buildMainMenu()
@@ -5072,6 +5697,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         snap.keyEquivalent = "b"
         snap.keyEquivalentModifierMask = [.control, .option]
         windowMenu.addItem(snap)
+        let term = ActionItem("터미널 펼치기·접기") { toggleTerminal() }
+        term.keyEquivalent = "t"
+        term.keyEquivalentModifierMask = [.control, .option]
+        windowMenu.addItem(term)
         windowItem.submenu = windowMenu
         NSApp.mainMenu = main
     }
@@ -5123,7 +5752,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc func showBoardAction() { showBoard() }
 
-    @objc func togglePin() { setPinned(!UserDefaults.standard.bool(forKey: "pinned")) }
+    @objc func togglePin() { MainActor.assumeIsolated { setPinned(!UserDefaults.standard.bool(forKey: "pinned")) } }
 
     @objc func pickMascot(_ item: NSMenuItem) { UserDefaults.standard.set(item.representedObject as? String, forKey: "mascot") }
 
