@@ -63,16 +63,24 @@ CARRY_FLAG = {"--dangerously-skip-permissions", "--allow-dangerously-skip-permis
 
 
 def carry_args(argv):
-    out, i = [], 1
+    # 같은 플래그·같은 (이름, 값) 은 한 번만 넘긴다 — Claude Code 는 bypass 권한 모드로 이어 열 때
+    # --allow-dangerously-skip-permissions 를 스스로 하나 더 붙여 띄우므로, 그대로 넘기면 이어 열 때마다 하나씩 늘어난다
+    out, i, seen = [], 1, set()
     while i < len(argv):
         a = argv[i]
         name = a.split("=", 1)[0]
         if "=" in a and name in CARRY_ONE | CARRY_MANY:
-            out.append(a)
+            if a not in seen:
+                seen.add(a)
+                out.append(a)
         elif a in CARRY_FLAG:
-            out.append(a)
+            if a not in seen:
+                seen.add(a)
+                out.append(a)
         elif a in CARRY_ONE and i + 1 < len(argv):
-            out += [a, argv[i + 1]]
+            if (a, argv[i + 1]) not in seen:
+                seen.add((a, argv[i + 1]))
+                out += [a, argv[i + 1]]
             i += 1
         elif a in CARRY_MANY:
             out.append(a)
