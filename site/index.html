@@ -88,7 +88,9 @@ main > section.page.on { display: block }
 .hero .wrap { display: grid; gap: 40px }
 .hero .copy { display: grid; gap: 18px; justify-items: start; max-width: 760px }
 .badge { display: inline-flex; align-items: center; gap: 8px; font-size: .84rem; color: var(--fg); background: var(--surface); border: 1px solid var(--line2); padding: 5px 12px 5px 6px; border-radius: 999px; text-decoration: none }
-.badge b { background: var(--accent); color: var(--accent-ink); font-size: .74rem; padding: 2px 8px; border-radius: 999px }
+.badge b { flex: none; white-space: nowrap; background: var(--accent); color: var(--accent-ink); font-size: .74rem; padding: 2px 8px; border-radius: 999px }
+.badge > span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+@media (max-width: 600px) { .badge .long { display: none } }
 .hero h1 { font-size: clamp(2.3rem, 6.4vw, 4rem); font-weight: 700; letter-spacing: -.025em }
 .hero h1 span { color: var(--accent) }
 .hero .sub { font-size: clamp(1.02rem, 2vw, 1.2rem); color: var(--muted); max-width: 36em }
@@ -258,7 +260,7 @@ footer.site a:hover { color: var(--fg) }
 <section class="page" id="home" data-page>
   <div class="hero"><div class="wrap">
     <div class="copy">
-      <a class="badge" href="#terminal"><b>3.0.0</b>보드 안 터미널: 세션을 보드에서 바로 띄우고 이어 엽니다</a>
+      <a class="badge" href="#terminal" style="max-width:100%"><b>3.0.0</b><span>새 기능 보드 안 터미널<span class="long">: 세션을 보드에서 바로 띄우고 이어 엽니다</span></span></a>
       <h1>Claude Code 세션을<br><span>한 화면에서</span> 지휘하세요</h1>
       <p class="sub">여러 프로젝트에서 동시에 돌리는 Claude Code 를 하나의 보드로 모았습니다. 누가 일하고 있는지, 누가 승인을 기다리는지 한눈에 보고, 필요한 세션으로 바로 들어갑니다.</p>
       <div class="cta"><a class="btn primary" href="#install">무료로 설치하기</a><a class="btn ghost" href="#guide">사용 설명서 보기</a></div>
