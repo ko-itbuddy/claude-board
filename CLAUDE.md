@@ -35,7 +35,7 @@ claude plugin validate plugins/md-render --strict && claude plugin test plugins/
 #    (pkill -x ClaudeBoard 는 시험 빌드까지 끈다)
 
 # 배포 (관리자) — CHANGELOG.md 맨 위에 "## <버전> (<날짜>)" 항목을 쓰고 commit·push 한 뒤
-packaging/release.sh <버전>   # make-dmg.sh 로 universal(arm64+x86_64) 빌드·서명 → gh release 생성
+packaging/release.sh <버전>   # 버전은 시맨틱 버전 MAJOR.MINOR.PATCH(3.0.0 부터). make-dmg.sh 로 universal(arm64+x86_64) 빌드·서명 → gh release 생성
 ```
 
 `release.sh` 는 CHANGELOG 의 `## <버전>` 항목이 없으면 빌드 전에 멈추고, 그 항목을 릴리스 설명으로 쓴다. `gh auth login` 과 서명 인증서(`packaging/make-cert.sh` 로 만드는 "Claude Board Signing")가 필요하다.
