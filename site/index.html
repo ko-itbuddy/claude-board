@@ -139,6 +139,25 @@ main > section.page.on { display: block }
 @media (prefers-reduced-motion: no-preference) { .mock .st:not(.o):not(.i) { animation: spin 1.1s linear infinite } }
 @keyframes spin { to { transform: rotate(360deg) } }
 
+/* 펼치기·접기 움직이는 예시: 화면(stage) 기준 단위로 크기를 정해, 창이 움직여도 글자 크기와 터미널 폭은 그대로 */
+.demo { margin-top: 32px; display: grid; gap: 12px }
+.demo-stage { container-type: inline-size; position: relative; aspect-ratio: 16 / 9.5; border-radius: 16px; overflow: hidden; border: 1px solid var(--line2); background: radial-gradient(120% 90% at 30% 15%, #2b3352, #11131c 70%) }
+.demo-stage .menubar { position: absolute; inset: 0 0 auto; height: 4.4%; background: rgba(8,10,16,.65); font-size: max(6.5px, .95cqw); color: #cfd3de; display: flex; align-items: center; gap: 1.6em; padding: 0 1.4em }
+.demo-win.mock { position: absolute; top: 4.4%; bottom: 0; left: 0; right: 0; container-type: normal; font-size: max(6px, 1.02cqw); border-radius: .9em .9em 0 0; display: flex; flex-direction: column; transition: left .55s ease-in-out, right .55s ease-in-out }
+.demo-win .body { display: flex; flex: 1; min-height: 0 }
+.demo-win[data-side="left"] .body { flex-direction: row-reverse }
+.demo-win .term { flex: 1 1 auto; overflow: hidden }
+.demo-win .term .tabs, .demo-win .term .screen { width: calc(62cqw - .7em); flex: none }
+.demo-win .divider { flex: 0 0 .7em }
+.demo-win .board { flex: 0 0 38cqw; overflow: hidden }
+.demo-win.closed[data-side="right"] { left: calc(62% - .7em) }
+.demo-win.closed[data-side="left"] { right: calc(62% - .7em) }
+@media (prefers-reduced-motion: reduce) { .demo-win.mock { transition: none } }
+.demo-ctl { display: flex; flex-wrap: wrap; gap: 10px; align-items: center }
+.seg { display: inline-flex; border: 1px solid var(--line2); border-radius: 10px; padding: 3px; background: var(--surface); gap: 3px }
+.seg button { font: inherit; font-size: .88rem; border: 0; background: transparent; color: var(--muted); padding: 6px 14px; border-radius: 7px; cursor: pointer }
+.seg button[aria-pressed="true"] { background: var(--surface2); color: var(--fg) }
+
 /* 카드·그리드 */
 .grid { display: grid; gap: 16px; margin-top: 28px }
 .g3 { grid-template-columns: repeat(3, minmax(0, 1fr)) }
@@ -239,7 +258,7 @@ footer.site a:hover { color: var(--fg) }
 <section class="page" id="home" data-page>
   <div class="hero"><div class="wrap">
     <div class="copy">
-      <a class="badge" href="#terminal"><b>새 기능</b>보드 안 터미널: 세션을 보드에서 바로 띄우고 이어 엽니다</a>
+      <a class="badge" href="#terminal"><b>3.0</b>보드 안 터미널: 세션을 보드에서 바로 띄우고 이어 엽니다</a>
       <h1>Claude Code 세션을<br><span>한 화면에서</span> 지휘하세요</h1>
       <p class="sub">여러 프로젝트에서 동시에 돌리는 Claude Code 를 하나의 보드로 모았습니다. 누가 일하고 있는지, 누가 승인을 기다리는지 한눈에 보고, 필요한 세션으로 바로 들어갑니다.</p>
       <div class="cta"><a class="btn primary" href="#install">무료로 설치하기</a><a class="btn ghost" href="#guide">사용 설명서 보기</a></div>
@@ -272,7 +291,7 @@ footer.site a:hover { color: var(--fg) }
         </div>
         <div class="divider"></div>
         <div class="board">
-          <div class="bh">Claude Board <small>2.13</small></div>
+          <div class="bh">Claude Board <small>3.0</small></div>
           <div class="sc"><span style="color:var(--st-wait)">● 1</span><span style="color:var(--st-work)">● 2</span><span style="color:var(--st-idle)">● 2</span></div>
           <div class="use">
             <div><span>5시간</span><span style="color:var(--ok)">38%</span></div><i><b style="width:38%;background:var(--ok)"></b></i>
@@ -396,6 +415,45 @@ footer.site a:hover { color: var(--fg) }
         </div>
       </div>
       <div class="note"><b>탭 하나에 세션 하나</b><br>탭마다 상태 점, 경로 이름, 지금 하는 일이 보입니다. 탭에 마우스를 올리면 나오는 × 나 <kbd>⌘</kbd><kbd>W</kbd> 로 닫고, 프로그램이 돌고 있으면 먼저 묻습니다. 글꼴과 색은 Ghostty 설정을 따르고, 한글 조합 중 Return·Esc 도 한 번에 듣습니다.</div>
+    </div>
+
+    <div class="demo">
+      <div class="demo-stage" aria-label="펼치기·접기 애니메이션 예시: 터미널이 밀려 나왔다가 들어가고 보드는 화면 한쪽에 남는다" role="img">
+        <div class="menubar"><b>Claude Board</b><span>파일</span><span>편집</span><span>보기</span><span>윈도우</span></div>
+        <div class="demo-win mock" id="demoWin" data-side="right">
+          <div class="bar"><span class="tl r"></span><span class="tl y"></span><span class="tl g"></span><span class="pill" id="demoPill">터미널 펼침 ⌃⌥T</span></div>
+          <div class="body">
+            <div class="term">
+              <div class="tabs"><span class="tab on"><i class="dot w"></i>shop-api <em>주문 취소 시 재고…</em></span><span class="tab"><i class="dot i"></i>web-dashboard</span><span class="tab add">+ 새 세션</span></div>
+              <div class="screen">
+                <p class="you">› 주문 취소 시 재고를 복구하는 로직 추가해줘</p>
+                <p><span class="g">●</span> Read(src/orders/cancel.ts)</p>
+                <p class="dim">&nbsp;&nbsp;⎿ 84줄 읽음</p>
+                <p><span class="g">●</span> Update(src/inventory/restock.ts)</p>
+                <p class="dim">&nbsp;&nbsp;⎿ 12줄 추가, 3줄 삭제</p>
+                <p><span class="b">●</span> Bash(npm test -- orders)</p>
+                <p class="dim">&nbsp;&nbsp;⎿ 42 passed</p>
+                <p class="a">✻ 정리하는 중… (38s)</p>
+              </div>
+            </div>
+            <div class="divider"></div>
+            <div class="board">
+              <div class="bh">Claude Board</div>
+              <div class="sc"><span style="color:var(--st-wait)">● 1</span><span style="color:var(--st-work)">● 2</span><span style="color:var(--st-idle)">● 1</span></div>
+              <div class="grp hot"><div class="gh">shop-api<small>~/work/shop-api</small></div>
+                <div class="row"><i class="st"></i><div><b>주문 취소 시 재고 복구</b><small><span class="chip cb">CB</span> 47초</small></div></div>
+                <div class="row"><i class="st o"></i><div><b>결제 웹훅 서명 검증</b><small><span class="chip app">Ghostty</span> 승인 대기</small></div></div></div>
+              <div class="grp"><div class="gh">mobile-app<small>~/work/mobile-app</small></div>
+                <div class="row"><i class="st"></i><div><b>iOS 빌드 경고 정리</b><small><span class="chip bgc">$ claude -p</span></small></div></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="demo-ctl">
+        <button type="button" class="btn ghost sm" id="demoPlay">멈춤</button>
+        <div class="seg" role="group" aria-label="보드 위치"><button type="button" data-side="right" aria-pressed="true">보드 오른쪽</button><button type="button" data-side="left" aria-pressed="false">보드 왼쪽</button></div>
+      </div>
+      <p class="meta">펼치기·접기 애니메이션을 켠 모습입니다(0.55초). 움직이는 동안 터미널 화면은 크기를 그대로 둔 채 밀려 나가고 들어옵니다. 실제 앱의 기본값은 애니메이션 없이 바로 바뀝니다.</p>
     </div>
   </div></div>
 
@@ -635,7 +693,7 @@ footer.site a:hover { color: var(--fg) }
 </main>
 
 <footer class="site"><div class="wrap">
-  <div><a class="brand" href="#home" style="padding:0"><img src="images/icon.png" alt="">Claude Board</a><p style="margin-top:10px">Claude Code 세션을 한 화면에서 보고, 띄우고, 이어 여는 macOS 앱입니다. 이 설명서는 2.13 을 기준으로 합니다.</p><p style="margin-top:8px">Claude Board 는 Anthropic 의 공식 제품이 아닌 개인 오픈 소스 프로젝트입니다.</p></div>
+  <div><a class="brand" href="#home" style="padding:0"><img src="images/icon.png" alt="">Claude Board</a><p style="margin-top:10px">Claude Code 세션을 한 화면에서 보고, 띄우고, 이어 여는 macOS 앱입니다. 이 설명서는 3.0 을 기준으로 합니다.</p><p style="margin-top:8px">Claude Board 는 Anthropic 의 공식 제품이 아닌 개인 오픈 소스 프로젝트입니다.</p></div>
   <div><h4>설명서</h4><a href="#features">기능</a><a href="#terminal">보드 안 터미널</a><a href="#install">설치</a><a href="#guide">사용 설명서</a><a href="#keys">단축키</a><a href="#help">문제 해결</a></div>
   <div><h4>프로젝트</h4><a href="https://github.com/suhojang/claude-board">GitHub 저장소</a><a href="https://github.com/suhojang/claude-board/releases/latest">최신 릴리스</a><a href="https://github.com/suhojang/claude-board/blob/main/CHANGELOG.md">변경 기록</a><a href="https://github.com/suhojang/claude-board/blob/main/LICENSE">라이선스(Apache 2.0)</a></div>
 </div></footer>
@@ -662,6 +720,25 @@ footer.site a:hover { color: var(--fg) }
   toggle.addEventListener('click', () => {
     const open = menu.classList.toggle('open'); toggle.setAttribute('aria-expanded', String(open));
   });
+  // 펼치기·접기 예시: 펼침 3초 → 접힘 2.2초를 되풀이. 움직임 줄이기 설정이면 멈춘 채 시작
+  const win = document.getElementById('demoWin'), pill = document.getElementById('demoPill'), play = document.getElementById('demoPlay');
+  let playing = !matchMedia('(prefers-reduced-motion: reduce)').matches, timer = null;
+  function flip() {
+    const closed = win.classList.toggle('closed');
+    pill.textContent = closed ? '터미널 접힘 ⌃⌥T' : '터미널 펼침 ⌃⌥T';
+    timer = setTimeout(flip, closed ? 2200 : 3000);
+  }
+  function setPlaying(on) {
+    playing = on; clearTimeout(timer); play.textContent = on ? '멈춤' : '재생';
+    if (on) timer = setTimeout(flip, 1200);
+  }
+  play.addEventListener('click', () => setPlaying(!playing));
+  document.querySelectorAll('.seg button[data-side]').forEach((b) => b.addEventListener('click', () => {
+    win.dataset.side = b.dataset.side;
+    document.querySelectorAll('.seg button[data-side]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+  }));
+  setPlaying(playing);
+
   const btn = document.getElementById('copyBtn');
   btn.addEventListener('click', () => {
     const text = document.getElementById('installCmd').textContent;
