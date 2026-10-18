@@ -4625,59 +4625,6 @@ final class BoardTerminalView: AppTerminalView {
     }
 }
 
-// 로그인 + 대화형 셸의 환경 — 보드가 셸 없이 바로 띄우는 명령(claude)에 넘긴다. Finder·Dock 으로 띄운 보드의 PATH 는 짧아
-// 사용자 hook 의 node 등을 못 찾고, 로그인 셸만으로는 대화형 설정에서 붙는 ~/.local/bin 이 빠진다.
-// VS Code 의 셸 환경 읽기와 같은 방식으로 시작할 때 한 번, 시간 제한(10초)을 두고 읽는다
-enum LoginEnvironment {
-    private(set) static var values: [String: String]?
-    // 터미널이 스스로 정하는 값과 그 셸에만 의미 있는 값은 넘기지 않는다
-    private static func dropped(_ key: String) -> Bool {
-        ["PWD", "OLDPWD", "SHLVL", "_", "COLORTERM"].contains(key) || key.hasPrefix("TERM") || key.hasPrefix("GHOSTTY_")
-    }
-
-    static func load() {
-        DispatchQueue.global(qos: .utility).async {
-            // 읽든 못 읽든 끝나면 지난번 탭을 되살린다(명령 탭은 이 환경으로 띄우므로 그 뒤에) — 성공했으면 values 를 넣은 다음 차례로 돈다
-            defer { DispatchQueue.main.async { TerminalHub.shared.restoreTabs() } }
-            let shell = getpwuid(getuid()).map { String(cString: $0.pointee.pw_shell) } ?? "/bin/zsh"
-            let mark = "__CB_ENV_\(UUID().uuidString)__"
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: shell)
-            p.arguments = ["-i", "-l", "-c", "printf '%s' '\(mark)'; /usr/bin/env -0; printf '%s' '\(mark)'"]
-            p.standardInput = FileHandle.nullDevice
-            p.standardError = FileHandle.nullDevice
-            p.environment = ProcessInfo.processInfo.environment.filter { !inheritedSessionVariable($0.key) }
-            let pipe = Pipe()
-            p.standardOutput = pipe
-            guard (try? p.run()) != nil else { return }
-            // 셸이 띄운 데몬(gitstatusd 등)이 출력 파이프를 물고 남을 수 있어 끝(EOF)을 기다리지 않고 두 번째 표지까지만 읽는다
-            let deadline = Date().addingTimeInterval(10)
-            var data = Data()
-            let end = Data(mark.utf8)
-            let reader = pipe.fileHandleForReading
-            while Date() < deadline {
-                let chunk = reader.availableData
-                if chunk.isEmpty { break }
-                data.append(chunk)
-                if let first = data.range(of: end), data.range(of: end, in: first.upperBound ..< data.endIndex) != nil { break }
-            }
-            if p.isRunning { p.terminate() }
-            guard let first = data.range(of: end), let second = data.range(of: end, in: first.upperBound ..< data.endIndex) else { return }
-            var env: [String: String] = [:]
-            for entry in data[first.upperBound ..< second.lowerBound].split(separator: 0) {
-                guard let s = String(data: Data(entry), encoding: .utf8), let eq = s.firstIndex(of: "=") else { continue }
-                let key = String(s[..<eq])
-                if !dropped(key) { env[key] = String(s[s.index(after: eq)...]) }
-            }
-            guard env["PATH"] != nil else { return }
-            DispatchQueue.main.async {
-                values = env
-                TerminalHub.shared.envReady = true
-            }
-        }
-    }
-}
-
 // 터미널 설정은 보드가 직접 만든다 — 사용자 Ghostty 설정을 바탕으로 하되 theme 줄은 뺀다(엔진 번들에 테마 폴더가 없어 theme 한 줄 때문에
 // 파일 전체가 조용히 거부된다). 같은 이름 테마는 엔진의 테마 목록에서 찾아 넘긴다(넘기지 않으면 래퍼 기본 테마가 사용자 색을 덮는다)
 @MainActor func makeTerminalController() -> TerminalController {
@@ -4739,21 +4686,19 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
                       TerminalSurfacePwdDelegate, TerminalSurfaceClipboardConfirmationDelegate, TerminalSurfaceLifecycleDelegate {
     let id = UUID()
     let view: BoardTerminalView
-    let command: String?            // 셸 없이 띄운 명령(claude …) — nil 이면 셸 탭
-    let sessionId: String?          // 보드가 띄울 때 아는 세션 id(새 세션의 --session-id, 이어 연 세션)
-    let mdRenderOff: Bool           // 답변 꾸미기를 끄고 띄운 탭 — 이 탭의 세션 id 는 모두 끈 세션으로 기억한다
+    // 탭은 모두 로그인 셸이다. claude 탭은 보드가 그 셸에 claude 명령을 쳐 넣은 탭 — claude 가 끝나면 셸 프롬프트가 남는다(Ghostty 처럼)
+    var command: String?            // 보드가 셸에 넣은 claude 명령 — nil 이면 셸 탭(claude 가 끝나 셸만 남은 탭도)
+    var sessionId: String?          // 이 탭의 세션 id(새 세션의 --session-id, 이어 연 세션, tty 로 짝지은 지금 세션) — 끝난 뒤에도 남는다
+    var mdRenderOff = false         // 답변 꾸미기를 끄고 띄운 claude 탭 — 이 탭의 세션 id 는 모두 끈 세션으로 기억한다
     @Published var title = ""
     @Published var cwd: String
     @Published var session: Session?   // 이 탭에서 도는 세션(세션 파일의 tty 로 짝짓는다) — 탭의 상태 점·제목
-    @Published var exited = false      // 명령이 끝났다 — 엔진의 "Process exited" 화면 대신 [다시 열기][셸 열기] 막대
-    private var exitWatch: DispatchSourceProcess?
+    private var shellReady = false     // 셸이 첫 프롬프트를 띄웠다(셸 통합이 경로·제목을 알림)
+    private var pending: String?       // 셸이 뜨면 넣을 명령
+    private var typedAt = Date.distantPast
 
-    init(_ options: TerminalSurfaceOptions, frame: NSRect, controller: TerminalController, command: String? = nil, sessionId: String? = nil,
-         mdRenderOff: Bool = false) {
+    init(_ options: TerminalSurfaceOptions, frame: NSRect, controller: TerminalController) {
         cwd = options.workingDirectory ?? NSHomeDirectory()
-        self.command = command
-        self.sessionId = sessionId
-        self.mdRenderOff = mdRenderOff
         view = BoardTerminalView(frame: frame)
         super.init()
         view.autoresizingMask = [.width, .height]
@@ -4767,33 +4712,63 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
     // 세션 파일의 tty 와 같은 꼴(/dev/ 를 뗀 이름)
     var tty: String { (view.ttyName ?? "").replacingOccurrences(of: "/dev/", with: "") }
 
-    func terminalDidChangeTitle(_ title: String) { self.title = title }
-    func terminalDidChangeWorkingDirectory(_ path: String) { cwd = path }
+    // 셸 통합(엔진 리소스)이 첫 프롬프트에서 경로(OSC 7)·제목을 알린다 — 그때 셸이 입력을 받을 준비가 됐다
+    func terminalDidChangeTitle(_ title: String) { self.title = title; shellStarted() }
+    func terminalDidChangeWorkingDirectory(_ path: String) { cwd = path; shellStarted() }
     func terminalDidDetachSurface() {}
 
-    // 명령 탭: 엔진이 띄운 login 은 명령이 끝난 뒤에야 끝나므로 그 pid 를 지켜본다(엔진은 끝나도 닫힘 콜백을 주지 않는다)
+    // 경로·제목을 알리지 않는 셸(셸 통합이 없는 셸)에는 5초 뒤 미리 쳐 둔다 — 셸이 뜨면 쌓인 입력을 읽는다
     func terminalDidAttachSurface(_ surface: TerminalSurface) {
-        guard command != nil else { return }
-        watchExit(tries: 10)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.shellStarted() }
     }
 
-    private func watchExit(tries: Int) {
-        guard exitWatch == nil, !exited else { return }
-        guard let fg = view.foregroundPid, fg > 0 else {
-            if tries > 0 { DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.watchExit(tries: tries - 1) } }
+    private func shellStarted() {
+        guard !shellReady else { return }
+        shellReady = true
+        sendPending(tries: 30)
+    }
+
+    // 셸에 명령을 사람이 친 것처럼 넣는다(붙여넣기 + Return — 셸 기록에 남아 ↑ 로 보인다). 셸이 아직 뜨지 않았으면 뜬 뒤에
+    func type(_ command: String) {
+        pending = command
+        if shellReady { sendPending(tries: 30) }
+    }
+
+    // 셸의 줄 편집기가 입력을 읽기 시작하면(tty 의 정규 모드·되울림이 꺼짐) 넣는다 — 경로를 알린 직후(precmd)에 넣으면 tty 가
+    // 글자를 프롬프트 위에 한 번 더 찍는다(실측: 그때 정규 모드는 꺼졌지만 되울림은 켜져 있었다). 3초를 기다려도 그대로면 그냥 넣는다(셸이 뜨면 쌓인 입력을 읽는다)
+    private func sendPending(tries: Int) {
+        guard let c = pending else { return }
+        guard tries <= 0 || lineEditing else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.sendPending(tries: tries - 1) }
             return
         }
-        let leader = getsid(fg)
-        guard leader > 0 else { return }
-        let src = DispatchSource.makeProcessSource(identifier: leader, eventMask: .exit, queue: .main)
-        src.setEventHandler { [weak self] in self?.markExited() }
-        src.resume()
-        exitWatch = src
-        if kill(leader, 0) != 0 { markExited() }   // 이미 끝난 pid 에 건 감시는 울리지 않는다
+        pending = nil
+        typedAt = Date()
+        drive([("text", c), ("wait", "0.1"), ("key", "enter")]) { _ in }
     }
 
-    // pid 가 탭의 앞(포그라운드) 프로그램인가 — 그 프로세스 그룹이 tty 의 포그라운드 그룹이면. 보드가 띄운 claude 는 login 의 그룹,
-    // 셸에서 띄운 claude 는 제 작업 그룹이 포그라운드다. 셸 탭에서 & 로 띄운 claude -p 는 아니다(키를 넣으면 셸이 받는다)
+    private var lineEditing: Bool {
+        let fd = Darwin.open(view.ttyName ?? "", O_RDONLY | O_NOCTTY | O_NONBLOCK)
+        guard fd >= 0 else { return true }   // tty 를 못 열면 기다리지 않는다
+        defer { Darwin.close(fd) }
+        var t = termios()
+        return tcgetattr(fd, &t) != 0 || t.c_lflag & tcflag_t(ICANON | ECHO) == 0
+    }
+
+    // 보드가 넣은 claude 가 셸이 뜨기를 기다리거나 막 넣었거나(3초) 앞에서 돌고 있다
+    var runsClaude: Bool {
+        pending != nil || Date().timeIntervalSince(typedAt) < 3 || view.foregroundPid.map(isLiveClaude) == true
+    }
+
+    // 셸이 프롬프트에 있다(셸 위에 도는 프로그램이 없다) — 앞 프로세스 그룹이 셸 자신(엔진이 띄운 login 의 자식)이면
+    var atPrompt: Bool {
+        guard let fg = view.foregroundPid, fg > 0 else { return false }
+        let leader = getsid(fg)
+        return leader > 0 && fg != leader && parentPid(fg) == leader
+    }
+
+    // pid 가 탭의 앞(포그라운드) 프로그램인가 — 그 프로세스 그룹이 tty 의 포그라운드 그룹이면. 셸에서 띄운 claude 는 제 작업 그룹이
+    // 포그라운드다. 셸 탭에서 & 로 띄운 claude -p 는 아니다(키를 넣으면 셸이 받는다)
     func isForeground(_ pid: Int32) -> Bool {
         guard pid > 0, let fg = view.foregroundPid, fg > 0 else { return false }
         return getpgid(pid) == fg
@@ -4813,13 +4788,6 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
         drive(rest, done: done)
     }
 
-    private func markExited() {
-        exitWatch?.cancel()
-        exitWatch = nil
-        exited = true
-        TerminalHub.shared.applyVisibility()
-        TerminalHub.shared.saveTabs()   // 끝난 탭은 다시 뜰 때 되살리지 않는다
-    }
     // 셸이 끝났거나(processAlive false) ⌘W 처럼 엔진이 닫기를 청했을 때
     func terminalDidClose(processAlive: Bool) { TerminalHub.shared.close(self, confirm: processAlive) }
 
@@ -4867,7 +4835,6 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
     // 다른 터미널 세션의 앱 이름(칩) — 세션마다 한 번 조상 프로세스로 찾는다(AppleScript 없이)
     @Published private(set) var appNames: [String: String] = [:]
     private var modes: [Int32: String] = [:]   // 백그라운드 세션 pid → 실행 방식(-p, --bg …)
-    @Published var envReady = false   // 로그인 셸 환경을 읽었다 — 새 세션 창의 시작 단추
     // 보드 아래쪽에 잠깐 뜨는 안내 — 백그라운드 세션을 눌렀을 때 등
     @Published private(set) var notice: String?
     private var noticeHide: DispatchWorkItem?
@@ -4896,56 +4863,52 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
         UserDefaults.standard.set(on ? "left" : "right", forKey: "boardSide")
     }
 
-    // at 을 주면 그 자리의 탭을 바꿔 끼운다([다시 열기][셸 열기])
+    // 셸 탭 — 엔진이 사용자의 로그인 셸(passwd 의 셸)을 login 으로 띄운다. login 이 환경을 스스로 꾸리므로 환경 변수를 넘기지 않는다.
+    // 셸이 끝나면(exit) 엔진이 닫기를 청해 탭을 닫는다(terminalDidClose)
     @discardableResult
-    func open(_ options: TerminalSurfaceOptions, command: String? = nil, sessionId: String? = nil, mdRenderOff: Bool = false,
-              at index: Int? = nil) -> BoardTab? {
+    func openShell(in dir: String) -> BoardTab? {
         guard let area else { return nil }
         area.superview?.layoutSubtreeIfNeeded()   // 크기가 0 인 뷰는 셸을 띄우지 않는다
-        let tab = BoardTab(options, frame: area.container.bounds, controller: controller, command: command, sessionId: sessionId,
-                           mdRenderOff: mdRenderOff)
+        let tab = BoardTab(TerminalSurfaceOptions(backend: .exec, workingDirectory: dir), frame: area.container.bounds, controller: controller)
         tab.view.isHidden = true
         area.container.addSubview(tab.view)
-        if let index, index <= tabs.count { tabs.insert(tab, at: index) } else { tabs.append(tab) }
+        tabs.append(tab)
         select(tab.id)
         saveTabs()
         return tab
     }
 
-    // 셸 탭 — login 이 환경을 스스로 꾸리므로 환경 변수를 넘기지 않는다
-    @discardableResult
-    func openShell(in dir: String, at index: Int? = nil) -> BoardTab? {
-        open(TerminalSurfaceOptions(backend: .exec, workingDirectory: dir), at: index)
-    }
-
-    // 명령(claude …)을 셸 없이 보드 탭에서 띄운다. 엔진은 명령을 `login … bash -c "exec -l <명령>"` 으로 띄우는데 exec -l 이
-    // 첫 인자 앞에 - 를 붙여(ps 의 comm 이 -claude) hook 이 claude 를 못 알아본다 — /usr/bin/env 를 앞에 두면 - 는 env 에 붙고
-    // claude 는 제 이름으로 뜬다. 환경은 시작할 때 읽어 둔 로그인+대화형 셸 환경(PATH 등) — 못 읽었으면 띄우지 않는다.
+    // 명령(claude …)을 보드 새 탭에서 띄운다 — 그 작업 경로의 셸 탭을 열고 셸에 명령을 쳐 넣는다. claude 가 끝나면 그 셸 프롬프트로 돌아온다.
+    // 셸이 띄우므로 프로세스 이름이 claude 그대로(hook 이 알아봄)이고 셸 설정의 PATH 등을 그대로 쓴다.
     // reveal false — 다시 뜰 때 되살리는 탭은 접힌 보드를 펼치거나 앞으로 꺼내지 않는다.
     // mdRenderOff — 답변 꾸미기를 끈 탭(명령은 부르는 쪽이 mdRenderCommand 로 고쳐 넘긴다). 그 세션 id 를 끈 세션으로 기억한다
     @discardableResult
-    func launch(_ command: String, in dir: String, sessionId: String?, mdRenderOff: Bool = false, at index: Int? = nil,
-                reveal show: Bool = true) -> BoardTab? {
-        guard let env = LoginEnvironment.values else {
-            toast("셸 환경을 아직 읽지 못했습니다. 잠시 뒤 다시 시도해 주세요")
-            return nil
-        }
-        let opts = TerminalSurfaceOptions(backend: .exec, workingDirectory: dir, envVars: env, command: "/usr/bin/env " + command)
-        guard let tab = open(opts, command: command, sessionId: sessionId, mdRenderOff: mdRenderOff, at: index) else { return nil }
-        if mdRenderOff { rememberMdRenderOff(sessionId) }
+    func launch(_ command: String, in dir: String, sessionId: String?, mdRenderOff: Bool = false, reveal show: Bool = true) -> BoardTab? {
+        guard let tab = openShell(in: dir) else { return nil }
+        run(command, in: tab, sessionId: sessionId, mdRenderOff: mdRenderOff)
         if show { reveal(tab.id) }
         return tab
     }
 
+    // 탭의 셸에 claude 명령을 넣고 그 탭을 claude 탭으로 삼는다(새 탭, 셸 프롬프트로 남은 탭에서 이어 열기)
+    func run(_ command: String, in tab: BoardTab, sessionId: String?, mdRenderOff: Bool) {
+        tab.command = command
+        tab.sessionId = sessionId
+        tab.mdRenderOff = mdRenderOff
+        if mdRenderOff { rememberMdRenderOff(sessionId) }
+        tab.type(command)
+        saveTabs()
+    }
+
     // 쥔 탭 목록 — 보드 설정 terminalTabs 에 [cwd, command, session, resume, selected] 로 남긴다(셸 탭은 경로만).
     // 종료 때만이 아니라 바뀔 때마다(열기·닫기·세션 id 정해짐·끝남, 1초마다 짝지을 때 견줘서) 남긴다 — pkill·충돌로 꺼져도 다시 뜰 때 되살린다.
-    // 명령이 끝난 탭은 사용자가 끝낸 것이라 넣지 않는다. 되살리기 전에는 남기지 않는다(지난 목록을 빈 목록으로 덮지 않게)
+    // claude 가 끝나 셸만 남은 탭은 셸 탭으로 남긴다. 되살리기 전에는 남기지 않는다(지난 목록을 빈 목록으로 덮지 않게)
     private var restored = false
     private var savedTabs: [[String: String]]?
 
     func saveTabs() {
         guard restored else { return }
-        let list = tabs.filter { !$0.exited }.map { t -> [String: String] in
+        let list = tabs.map { t -> [String: String] in
             var e = ["cwd": t.cwd]
             if let command = t.command {
                 e["command"] = command
@@ -4964,12 +4927,11 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
         UserDefaults.standard.set(list, forKey: "terminalTabs")
     }
 
-    // 다시 뜰 때 — 지난번에 쥐고 있던 탭을 되살린다. 셸 탭은 그 경로에서 셸, 명령 탭은 세션 파일의 resume_cmd 로 이어 연다.
-    // 로그인 셸 환경을 읽은 뒤 한 번 부른다(LoginEnvironment.load). 못 읽었으면 되살리지도 남기지도 않아 목록은 다음 실행으로 넘어간다.
+    // 다시 뜰 때 — 지난번에 쥐고 있던 탭을 되살린다. 셸 탭은 그 경로에서 셸, claude 탭은 셸에 세션 파일의 resume_cmd 를 넣어 이어 연다.
+    // 보드가 뜰 때 한 번 부른다.
     // 업데이트처럼 보드를 끄고 바로 다시 띄우면 옛 탭의 claude 가 아직 끝나는 중일 수 있다 — 같은 세션을 두 프로세스가 쥐지 않게 최대 5초 기다린다
     func restoreTabs(waited: Double = 0) {
         guard !restored else { return }
-        guard LoginEnvironment.values != nil else { return boardLog("셸 환경을 읽지 못해 지난 탭을 되살리지 않았습니다") }
         let saved = UserDefaults.standard.array(forKey: "terminalTabs") as? [[String: String]] ?? []
         let running = saved.contains { e in
             e["session"].flatMap(sessionRecord).flatMap { ($0["pid"] as? NSNumber)?.int32Value }.map(isLiveClaude) ?? false
@@ -4996,7 +4958,7 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
     }
 
     // 되살릴 명령 탭의 (명령, 세션 id, 작업 경로). 대화가 남은 세션은 세션 파일의 resume_cmd(파일이 지워졌으면 남겨 둔 것),
-    // 대화 없이 끝난 세션(대화 기록 없음 — 보드가 세션 파일도 지운다)은 [다시 열기]처럼 처음 명령을 새 세션 id 로.
+    // 대화 없이 끝난 세션(대화 기록 없음 — 보드가 세션 파일도 지운다)은 처음 명령을 새 세션 id 로.
     // 세션 파일의 pid 가 아직 claude 로 살아 있으면(/bg·nohup 으로 떨어져 나갔거나 다른 터미널에서 이어 연 세션) 이어 열지 않는다 — nil.
     // 답변 꾸미기는 off(끈 탭·끈 세션)를 따라 mdRenderCommand 로 고친다 — 세션 파일이 없으면 남겨 둔 명령·resume_cmd 문자열로
     private func restoreCommand(_ e: [String: String], off: Bool) -> (String, String?, String)? {
@@ -5055,28 +5017,6 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
         focusSelected()
     }
 
-    // 명령이 끝난 탭의 [다시 열기] — 대화가 남은 세션이면 그 resume_cmd 로, 아니면 처음 명령으로 같은 자리에서
-    func relaunch(_ tab: BoardTab) {
-        guard let i = tabs.firstIndex(where: { $0 === tab }), let command = tab.command else { return }
-        let s = tab.sessionId.flatMap { id in store?.groups.flatMap(\.sessions).first { $0.id == id } }
-        let off = tab.mdRenderOff || isMdRenderOff(s?.id)   // 대화 없는 세션을 새 id 로 다시 띄워도 끈 탭이면 끈 채로
-        let next: (String, String?)
-        if let s {
-            next = (mdRenderCommand(s.resumeCmd.isEmpty ? "claude --resume \(s.id)" : s.resumeCmd, args: sessionRecord(s.id)?["args"] as? [String],
-                                    off: off), s.id)
-        } else { next = freshSessionCommand(mdRenderCommand(command, off: off)) }
-        guard launch(next.0, in: s?.cwd ?? tab.cwd, sessionId: next.1, mdRenderOff: off, at: i) != nil else { return }
-        remove(tab)
-    }
-
-    // 명령이 끝난 탭의 [셸 열기] — 그 작업 경로에서 셸
-    func openShellHere(_ tab: BoardTab) {
-        guard let i = tabs.firstIndex(where: { $0 === tab }) else { return }
-        guard openShell(in: tab.session?.cwd ?? tab.cwd, at: i) != nil else { return }
-        remove(tab)
-        focusSelected()
-    }
-
     func toast(_ text: String) {
         withAnimation(.easeOut(duration: 0.2)) { notice = text }
         noticeHide?.cancel()
@@ -5090,9 +5030,10 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
         withAnimation(.easeOut(duration: 0.2)) { notice = nil }
     }
 
-    // 세션이 어디서 도는가 — 보드 탭(그 안에서 시작된 claude -p 포함)·다른 터미널·백그라운드·끝남
+    // 세션이 어디서 도는가 — 보드 탭(그 안에서 시작된 claude -p 포함)·다른 터미널·백그라운드·끝남.
+    // 끝난 세션은 그 탭에서 claude 가 막 뜨는 중일 때만 탭 소속(이어 열기를 넣은 직후) — claude 가 끝나 셸만 남은 탭이면 끝남
     func place(_ s: Session) -> SessionPlace {
-        if let id = paired[s.id] ?? tabs.first(where: { $0.sessionId == s.id })?.id {
+        if let id = paired[s.id] ?? tabs.first(where: { $0.sessionId == s.id && (s.state != "ended" || $0.runsClaude) })?.id {
             return .tab(id, headless: tabOwnedHeadless.contains(s.id))
         }
         if s.state == "ended" { return .ended }
@@ -5113,14 +5054,18 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
             guard let t = byTty[s.tty] else { continue }
             map[s.id] = t.id
             main[t.id] = s
-            if let want = t.sessionId, want != s.id { boardLog("탭 세션 id 가 다름: 띄운 \(want) · 기록 \(s.id)") }
+            // /clear 등으로 id 가 바뀌었거나 셸에서 사람이 띄운 claude — 끝난 뒤에도 그 세션이 돌던 탭으로 찾는다(resumeSession)
+            if t.sessionId != s.id { t.sessionId = s.id }
         }
         var owned: Set<String> = []
         for s in sessions where s.state != "ended" && s.headless && s.pid > 0 {
             if let t = tabAncestor(s.pid, tabPids) { map[s.id] = t.id; owned.insert(s.id) }
         }
         for t in tabs {
-            let s = main[t.id] ?? t.sessionId.flatMap { id in sessions.first { $0.id == id } }
+            let running = main[t.id] != nil || t.runsClaude
+            // 보드가 넣은 claude 가 끝나 셸만 남았다 — 셸 탭으로(쥔 목록·상태 점). 끈 꾸미기는 끈 세션 기억에 이미 남아 있다
+            if !running, t.command != nil { t.command = nil; t.mdRenderOff = false }
+            let s = main[t.id] ?? (running ? t.sessionId.flatMap { id in sessions.first { $0.id == id } } : nil)
             if t.session != s { t.session = s }
             if t.mdRenderOff { rememberMdRenderOff(s?.id) }   // 끈 탭에서 세션 id 가 바뀌어도(/clear 등) 끈 채로 이어 열게
         }
@@ -5164,7 +5109,6 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
             t.view.setSurfaceVisible(t.id == selected && drawing)
         }
         area?.empty.isHidden = !tabs.isEmpty
-        area?.exitBar.isHidden = !(tabs.first { $0.id == selected }?.exited ?? false)
     }
 
     func focusSelected() {
@@ -5222,6 +5166,15 @@ func tabAncestor(_ pid: Int32, _ tabPids: [Int32: BoardTab]) -> BoardTab? {
         if let t = tabPids[p] { return t }
     }
     return nil
+}
+
+// 부모 pid — 읽지 못하면 0
+func parentPid(_ pid: Int32) -> Int32 {
+    var info = kinfo_proc()
+    var size = MemoryLayout<kinfo_proc>.stride
+    var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+    guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return 0 }
+    return info.kp_eproc.e_ppid
 }
 
 // 프로세스 실행 인자(sysctl KERN_PROCARGS2 — state.py proc_args 와 같은 방식). 읽지 못하면 빈 배열
@@ -5344,7 +5297,7 @@ struct ShutdownList: View {
 }
 
 // 새로 띄우는 claude 에 세션 id 를 붙인다(--session-id) — 보드가 그 세션을 미리 안다. claude 가 아니거나 이어 열기·이어 하기면 그대로.
-// 이미 --session-id 가 있으면 새 id 로 바꾼다([다시 열기]가 대화 없이 끝난 세션을 다시 띄울 때)
+// 이미 --session-id 가 있으면 새 id 로 바꾼다(되살리기가 대화 없이 끝난 세션을 다시 띄울 때)
 func freshSessionCommand(_ command: String) -> (String, String?) {
     let has = { (pattern: String) in command.range(of: pattern, options: .regularExpression) != nil }
     guard has(#"^\s*(\S*/)?claude(\s|$)"#), !has(#"(^|\s)(--resume|-r|--continue|-c)(=|\s|$)"#) else { return (command, nil) }
@@ -5414,7 +5367,7 @@ func mdRenderCommand(_ command: String, args: [String]? = nil, off: Bool) -> Str
 }
 
 // 새 세션 창에서 꾸미기를 끄고 띄운 세션 id — 보드 설정 mdRenderOff. 그 세션은 이어 열 때도 끈 채로 연다. 끈 탭의 세션 id 가 바뀌면
-// (/clear, [다시 열기]·되살리기가 대화 없는 세션을 새 id 로 띄움) 그 id 도 더한다(launch·pair). 보드가 시작할 때 세션 파일이 없어진 id 는 치운다
+// (/clear, 되살리기가 대화 없는 세션을 새 id 로 띄움) 그 id 도 더한다(launch·pair). 보드가 시작할 때 세션 파일이 없어진 id 는 치운다
 func isMdRenderOff(_ id: String?) -> Bool {
     guard let id else { return false }
     return UserDefaults.standard.stringArray(forKey: "mdRenderOff")?.contains(id) ?? false
@@ -5669,7 +5622,6 @@ final class PassiveHostingView<Content: View>: NSHostingView<Content> {
 final class TerminalAreaView: NSView {
     let container = NSView()
     let empty = PassiveHostingView(rootView: TerminalEmptyView())
-    let exitBar = PassiveHostingView(rootView: TerminalExitBar(hub: TerminalHub.shared))
     private let tabBar = PassiveHostingView(rootView: TerminalTabBar(hub: TerminalHub.shared))
     var titlebar: CGFloat = 0 { didSet { if titlebar != oldValue { needsLayout = true } } }
 
@@ -5681,11 +5633,8 @@ final class TerminalAreaView: NSView {
         container.layer?.backgroundColor = terminalAreaColor.cgColor
         tabBar.sizingOptions = []
         empty.sizingOptions = []
-        exitBar.sizingOptions = []
-        exitBar.isHidden = true
         addSubview(container)
         addSubview(empty)
-        addSubview(exitBar)
         addSubview(tabBar)
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -5696,7 +5645,6 @@ final class TerminalAreaView: NSView {
         tabBar.frame = NSRect(x: 0, y: top - terminalTabBarHeight, width: bounds.width, height: terminalTabBarHeight)
         container.frame = NSRect(x: 0, y: 0, width: bounds.width, height: max(0, top - terminalTabBarHeight))
         empty.frame = container.frame
-        exitBar.frame = NSRect(x: 0, y: 0, width: bounds.width, height: 56)
     }
 }
 
@@ -5781,7 +5729,7 @@ struct TerminalTabButton: View {
     var body: some View {
         HStack(spacing: 8) {
             // 짝지은 세션의 상태 색과 제목 — 셸 탭이나 아직 요청 전이면 터미널 제목
-            Circle().fill(Palette.color(tab.exited ? "ended" : tab.session?.state ?? "idle")).frame(width: 8, height: 8)
+            Circle().fill(Palette.color(tab.session?.state ?? "idle")).frame(width: 8, height: 8)
             Text(tab.name).font(.system(size: 13, weight: .semibold)).lineLimit(1).fixedSize()
             Text(tab.session.map(doing) ?? tab.title).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
             Spacer(minLength: 0)
@@ -5804,44 +5752,6 @@ struct TerminalTabButton: View {
         .contentShape(Rectangle())
         .onTapGesture { TerminalHub.shared.select(tab.id) }
         .onHover { hover = $0 }
-    }
-}
-
-// 명령(claude)이 끝난 탭의 아래 막대 — 끝난 화면 위에 [다시 열기][셸 열기]
-struct TerminalExitBar: View {
-    @ObservedObject var hub: TerminalHub
-    @State private var hover = false
-    @State private var shellHover = false
-
-    var body: some View {
-        if let tab = hub.tabs.first(where: { $0.id == hub.selected }) {
-            HStack(spacing: 10) {
-                Image(systemName: "stop.circle").foregroundStyle(.secondary)
-                Text("\(tab.session.map { $0.topic.isEmpty ? "세션" : $0.topic } ?? "명령") · 끝났습니다")
-                    .font(.system(size: 12, weight: .semibold)).lineLimit(1)
-                Spacer(minLength: 8)
-                Button { hub.relaunch(tab) } label: {
-                    Label("다시 열기", systemImage: "arrow.clockwise")
-                        .padding(.horizontal, 12).frame(height: 28)
-                        .background(Capsule().fill(Palette.color("working").opacity(hover ? 0.45 : 0.32)))
-                }
-                .buttonStyle(.plain).clickable($hover)
-                .hint("같은 대화를 이 탭에서 이어 엽니다")
-                Button { hub.openShellHere(tab) } label: {
-                    Label("셸 열기", systemImage: "terminal")
-                        .padding(.horizontal, 12).frame(height: 28)
-                        .background(Capsule().fill(Color.white.opacity(shellHover ? 0.18 : 0.1)))
-                }
-                .buttonStyle(.plain).clickable($shellHover)
-                .hint("이 작업 경로에서 셸을 엽니다")
-            }
-            .font(.system(size: 12, weight: .semibold))
-            .padding(.horizontal, 16)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: terminalBarColor).opacity(0.96))
-            .overlay(alignment: .top) { Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1) }
-            .preferredColorScheme(.dark)
-        }
     }
 }
 
@@ -5910,7 +5820,7 @@ struct NewSessionSheet: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("실행할 명령").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
                 TextField("", text: $command).font(.system(size: 13, design: .monospaced)).textFieldStyle(.roundedBorder)
-                Text("셸을 거치지 않고 바로 실행합니다. claude 면 보드가 --session-id 를 붙입니다")
+                Text("작업 경로의 셸에 쳐 넣어 실행합니다. claude 면 보드가 --session-id 를 붙입니다")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: 4) {
@@ -5920,12 +5830,11 @@ struct NewSessionSheet: View {
                     .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             HStack {
-                if !hub.envReady { Text("셸 환경을 읽는 중…").font(.system(size: 11)).foregroundStyle(.secondary) }
                 Spacer()
                 Button("취소", action: cancel).keyboardShortcut(.cancelAction)
                 Button("새 탭에서 시작") { start(command.trimmingCharacters(in: .whitespaces), dir, mdRender) }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!hub.envReady || command.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(command.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
         .padding(18)
@@ -6573,7 +6482,7 @@ func canDrive(_ s: Session) -> Bool {
 @MainActor func canDriveSession(_ s: Session) -> Bool {
     let hub = TerminalHub.shared
     switch hub.place(s) {
-    case .tab(let id, let headless): return !headless && hub.tabs.first { $0.id == id }.map { !$0.exited && $0.isForeground(s.pid) } == true
+    case .tab(let id, let headless): return !headless && hub.tabs.first { $0.id == id }.map { $0.isForeground(s.pid) } == true
     case .terminal: return canDrive(s)
     default: return false
     }
@@ -6583,7 +6492,7 @@ func canDrive(_ s: Session) -> Bool {
 // 보드 탭 세션은 그 탭에 직접, Ghostty 세션은 AppleScript. 넣을 수 없으면 done(false) — done 은 메인에서
 @MainActor func driveSession(_ s: Session, _ steps: [(String, String)], done: @escaping @MainActor (Bool) -> Void = { _ in }) {
     let hub = TerminalHub.shared
-    if case .tab(let id, false) = hub.place(s), let tab = hub.tabs.first(where: { $0.id == id }), !tab.exited, tab.isForeground(s.pid) {
+    if case .tab(let id, false) = hub.place(s), let tab = hub.tabs.first(where: { $0.id == id }), tab.isForeground(s.pid) {
         tab.drive(steps, done: done)
         return
     }
@@ -6750,7 +6659,8 @@ func transcriptPath(_ given: String?, _ cwd: String, _ id: String) -> String {
     return NSHomeDirectory() + "/.claude/projects/\(slug)/\(id).jsonl"
 }
 
-// 끝난 세션을 보드 새 탭에서 같은 작업 경로로 이어 연다. 대화 이력은 claude --resume 이 불러오고,
+// 끝난 세션을 보드 탭에서 같은 작업 경로로 이어 연다 — 그 세션이 마지막으로 돌던 탭이 같은 경로의 셸 프롬프트로 남아 있으면 그 탭에,
+// 아니면 새 탭에. 대화 이력은 claude --resume 이 불러오고,
 // 실행 인자·마지막 권한 모드·모델은 state.py 가 기록한 resume_cmd 에 담겨 있다(-p 는 넘기지 않아 대화형으로 열린다)
 @MainActor func resumeSession(_ s: Session, carryOn: Bool = false) {
     // 답변 꾸미기는 기본으로 켠다(보드 밖에서 시작한 세션도) — 새 세션 창에서 끄고 띄운 세션만 끈 채로. 재개 문구보다 앞에
@@ -6761,7 +6671,13 @@ func transcriptPath(_ given: String?, _ cwd: String, _ id: String) -> String {
         cmd += " '" + carryOnPrompt.replacingOccurrences(of: "'", with: "'\\''") + "'"
         try? FileManager.default.removeItem(atPath: pausedMark(s))
     }
-    TerminalHub.shared.launch(cmd, in: s.cwd, sessionId: s.id, mdRenderOff: off)
+    let hub = TerminalHub.shared
+    if let tab = hub.tabs.first(where: { $0.sessionId == s.id && $0.atPrompt && $0.cwd == s.cwd }) {
+        hub.run(cmd, in: tab, sessionId: s.id, mdRenderOff: off)
+        hub.reveal(tab.id)
+    } else {
+        hub.launch(cmd, in: s.cwd, sessionId: s.id, mdRenderOff: off)
+    }
 }
 
 // 세션을 한 번 눌렀을 때(목록·미니·알림 패널 "세션으로 이동") — 보드 탭이면 펼치고 그 탭으로, 끝난 세션은 보드 새 탭에서 이어 열기,
@@ -6843,7 +6759,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         PointerTracker.shared.attach(blur)
         _ = mdRenderDir   // 답변 꾸미기 플러그인을 ~/.claude/notifier 로 옮겨 둔다 — 되살릴 탭이 쓴다
         pruneMdRenderOff()
-        LoginEnvironment.load()
+        DispatchQueue.main.async { TerminalHub.shared.restoreTabs() }   // 지난번에 쥐고 있던 탭을 되살린다
         // 손으로 바꿔도 자동 전환이 전환 시각을 알아야 한다 — 그 뒤 잠시 난 한도 오류는 이전 계정 토큰 탓이다
         accounts.onSwitch = { [usage, autoSwitcher] in
             usage.reset()
@@ -7146,7 +7062,7 @@ resolveResourceBundleInApp()
 // Claude Code 세션 안에서 보드를 띄우면(open -a·업데이트 단추) 그 세션의 표지 변수(CLAUDECODE·CLAUDE_CODE_CHILD_SESSION·
 // CLAUDE_CODE_SESSION_ID 등)가 보드 환경에 그대로 들어온다(open 은 띄운 쪽 환경을 넘긴다, 실측). 보드 탭의 claude·셸이 그것을
 // 물려받으면 claude 가 자식 세션으로 여겨 대화 기록을 저장하지 않는다 — 시작할 때 지운다.
-// 사용자가 셸 설정에 둔 CLAUDE_* 값은 로그인 셸 환경을 읽을 때(셸 탭은 셸이 뜰 때) 다시 들어온다
+// 사용자가 셸 설정에 둔 CLAUDE_* 값은 탭의 셸이 뜰 때 다시 들어온다
 func inheritedSessionVariable(_ key: String) -> Bool {
     key.hasPrefix("CLAUDE") || key == "AI_AGENT" || key.hasPrefix("CODEX_COMPANION_")
 }
