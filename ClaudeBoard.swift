@@ -1760,6 +1760,7 @@ struct AccountChip: View {
 
     // 작업 중·승인 대기 세션이 있으면 이전 계정으로 일하는 중이라고 알리고 한 번 더 묻는다
     private func confirmSwitch(_ a: Account) {
+        guard TerminalHub.shared.slide == nil else { return whenPaneSettled { confirmSwitch(a) } }
         let working = busy()
         if !working.isEmpty {
             let names = working.prefix(5).map { s in
@@ -3812,7 +3813,8 @@ func runInTerminal(_ shellCmd: String) {
 }
 
 // 오른쪽 아래 독: Ghostty·iTerm2·터미널·Orca·herdr 를 바로 연다.
-// 평소엔 창 오른쪽 아래 끝의 탭만 보이다가 그 탭(창 오른쪽 끝 아래쪽)에 마우스를 대면 보드 위로 미끄러져 나오고, 독에서 벗어나면 다시 숨는다
+// 평소엔 창 오른쪽 아래 끝의 탭만 보이다가 그 탭(창 오른쪽 끝 아래쪽)에 마우스를 대면 보드 위로 미끄러져 나오고, 독에서 벗어나면 다시 숨는다.
+// 보드 위치가 왼쪽이면 보드의 왼쪽 끝(화면 바깥쪽)에 거울처럼 붙는다 — 오른쪽 끝은 터미널과의 경계라 경계를 잡으러 가다 열리지 않게
 struct EdgeDock: View {
     static let size: CGFloat = 36, gap: CGFloat = 8, pad: CGFloat = 8
     static let trigger: CGFloat = 16    // 창 오른쪽 끝에서 이 폭(탭 폭) 안에 마우스가 오면 연다
@@ -3824,6 +3826,7 @@ struct EdgeDock: View {
     static var triggerHeight: CGFloat { bottomInset + height + 12 }
     @ObservedObject private var pointer = PointerTracker.shared
     @ObservedObject private var store = TerminalAppStore.shared
+    @ObservedObject private var hub = TerminalHub.shared
     @State private var open = false
     @State private var overPanel = false
     @State private var closing: DispatchWorkItem?
@@ -3849,14 +3852,15 @@ struct EdgeDock: View {
     }
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
+        let edge: Edge = hub.boardOnLeft ? .leading : .trailing
+        ZStack(alignment: hub.boardOnLeft ? .bottomLeading : .bottomTrailing) {
             if open {
-                panel.transition(.move(edge: .trailing).combined(with: .opacity))
+                panel.transition(.move(edge: edge).combined(with: .opacity))
             } else {
-                tab.transition(.move(edge: .trailing).combined(with: .opacity))
+                tab.transition(.move(edge: edge).combined(with: .opacity))
             }
         }
-        .frame(maxHeight: .infinity, alignment: .bottom)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: hub.boardOnLeft ? .bottomLeading : .bottomTrailing)
         .padding(.bottom, Self.bottomInset)
         .animation(.spring(response: 0.32, dampingFraction: 0.86), value: open)
         .animation(.easeOut(duration: 0.2), value: pointer.inside)
@@ -3866,24 +3870,27 @@ struct EdgeDock: View {
     // 숨어 있을 때 창 오른쪽 아래 끝에 붙은 탭 — 여기에 마우스를 대면 터미널 독이 열린다는 표시.
     // 보드에 마우스가 들어오면 밝아지며 끝까지 튀어나온다. 열고 닫기는 창 전체 추적(PointerTracker)이 맡으므로 누르지는 않는다
     private var tab: some View {
-        let shape = UnevenRoundedRectangle(topLeadingRadius: 8, bottomLeadingRadius: 8)
+        let left = hub.boardOnLeft
+        let shape = left ? UnevenRoundedRectangle(bottomTrailingRadius: 8, topTrailingRadius: 8)
+                         : UnevenRoundedRectangle(topLeadingRadius: 8, bottomLeadingRadius: 8)
         return VStack(spacing: 6) {
-            Image(systemName: "chevron.left").font(.system(size: 8, weight: .heavy))
+            Image(systemName: left ? "chevron.right" : "chevron.left").font(.system(size: 8, weight: .heavy))
             Image(systemName: "terminal.fill").font(.system(size: 11, weight: .semibold))
         }
         .foregroundStyle(Color.white.opacity(pointer.inside ? 0.95 : 0.6))
         .frame(width: Self.trigger, height: 58)
         .background(shape.fill(Palette.accent.opacity(pointer.inside ? 0.5 : 0.25)))
         .overlay(shape.stroke(Color.white.opacity(0.18), lineWidth: 0.5))
-        .offset(x: pointer.inside ? 0 : 4)
+        .offset(x: pointer.inside ? 0 : left ? -4 : 4)
         .allowsHitTesting(false)
     }
 
     private var panel: some View {
+        let left = hub.boardOnLeft
         // hover 는 아이콘마다가 아니라 독 전체에서 받는다 — 아이콘이 커지며 추적 영역이 바뀌면 들어옴·나감이 2ms 마다 번갈아 와 보드가 멈춘다
-        VStack(spacing: Self.gap) {
+        return VStack(spacing: Self.gap) {
             ForEach(Array(terminalApps.enumerated()), id: \.element.id) { i, app in
-                LauncherButton(app: app, icon: store.icons[app.id], running: store.running.contains(app.id), hovered: hovered == i)
+                LauncherButton(app: app, icon: store.icons[app.id], running: store.running.contains(app.id), hovered: hovered == i, left: left)
             }
         }
         .padding(Self.pad)
@@ -3893,7 +3900,7 @@ struct EdgeDock: View {
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
         )
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.14), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.45), radius: 14, x: -3, y: 4)
+        .shadow(color: .black.opacity(0.45), radius: 14, x: left ? 3 : -3, y: 4)
         .contentShape(Rectangle())
         .onContinuousHover { phase in
             var i: Int?
@@ -3905,10 +3912,10 @@ struct EdgeDock: View {
         .onTapGesture { location in
             if let i = index(at: location.y) { TerminalAppStore.shared.open(terminalApps[i].id) }
         }
-        // 힌트는 독 왼쪽에 오버레이로 띄운다 — 아이콘을 옮겨 다니면 사라졌다 나타나지 않고 그 아이콘 높이로 미끄러진다
-        .overlay(alignment: .topTrailing) { hint.allowsHitTesting(false) }
+        // 힌트는 독 안쪽 옆(보드 쪽)에 오버레이로 띄운다 — 아이콘을 옮겨 다니면 사라졌다 나타나지 않고 그 아이콘 높이로 미끄러진다
+        .overlay(alignment: left ? .topLeading : .topTrailing) { hint.allowsHitTesting(false) }
         .animation(.spring(response: 0.26, dampingFraction: 0.86), value: hovered)
-        .padding(.trailing, 8)
+        .padding(left ? .leading : .trailing, 8)
     }
 
     @ViewBuilder private var hint: some View {
@@ -3932,9 +3939,10 @@ struct EdgeDock: View {
             .background(Capsule().fill(Color(red: 0.10, green: 0.10, blue: 0.15).opacity(0.96)))
             .overlay(Capsule().stroke(Color.white.opacity(0.14), lineWidth: 0.5))
             .shadow(color: .black.opacity(0.4), radius: 8, y: 2)
-            // 힌트 가운데를 그 아이콘 가운데 높이에, 오른쪽 끝을 독 왼쪽 8pt 앞에 둔다
-            .offset(x: -(Self.width + 8), y: Self.pad + CGFloat(i) * (Self.size + Self.gap) + (Self.size - Self.hintHeight) / 2)
-            .transition(.opacity.combined(with: .offset(x: 6)))
+            // 힌트 가운데를 그 아이콘 가운데 높이에, 오른쪽 끝을 독 왼쪽 8pt 앞에 둔다(보드가 왼쪽이면 왼쪽 끝을 독 오른쪽 8pt 뒤에)
+            .offset(x: hub.boardOnLeft ? Self.width + 8 : -(Self.width + 8),
+                    y: Self.pad + CGFloat(i) * (Self.size + Self.gap) + (Self.size - Self.hintHeight) / 2)
+            .transition(.opacity.combined(with: .offset(x: hub.boardOnLeft ? -6 : 6)))
         }
     }
 }
@@ -3968,7 +3976,10 @@ final class PointerTracker: NSResponder, ObservableObject {
         guard let v = view else { return }
         setInside(true)
         let p = v.convert(event.locationInWindow, from: nil)   // 왼쪽 아래가 원점
-        let edge = p.x >= v.bounds.maxX - EdgeDock.trigger && p.y - v.bounds.minY <= EdgeDock.triggerHeight
+        // 독은 보드의 화면 바깥쪽 끝에 있다 — 보드 위치가 왼쪽이면 왼쪽 끝
+        let outer = MainActor.assumeIsolated { TerminalHub.shared.boardOnLeft } ? p.x <= v.bounds.minX + EdgeDock.trigger
+                                                                                  : p.x >= v.bounds.maxX - EdgeDock.trigger
+        let edge = outer && p.y - v.bounds.minY <= EdgeDock.triggerHeight
         if edge != atEdge { atEdge = edge }
     }
 
@@ -4048,6 +4059,7 @@ struct LauncherButton: View {
     let icon: NSImage?
     let running: Bool
     let hovered: Bool
+    var left = false        // 보드 위치가 왼쪽이면 독도 왼쪽 끝이라 바깥쪽이 왼쪽
     var body: some View {
         let installed = icon != nil
         ZStack {
@@ -4065,10 +4077,10 @@ struct LauncherButton: View {
         .opacity(installed ? 1 : 0.35)
         .scaleEffect(installed && hovered ? 1.12 : 1)
         .animation(.spring(response: 0.25, dampingFraction: 0.6), value: hovered)
-        // 실행 중이면 Dock 처럼 바깥쪽(오른쪽)에 점
-        .overlay(alignment: .trailing) {
+        // 실행 중이면 Dock 처럼 바깥쪽(오른쪽, 보드가 왼쪽이면 왼쪽)에 점
+        .overlay(alignment: left ? .leading : .trailing) {
             Circle().fill(Color.white.opacity(running ? 0.8 : 0)).frame(width: 4, height: 4)
-                .offset(x: EdgeDock.pad / 2 + 2)
+                .offset(x: left ? -(EdgeDock.pad / 2 + 2) : EdgeDock.pad / 2 + 2)
         }
     }
 }
@@ -4401,8 +4413,8 @@ struct BoardView: View {
                 .onChange(of: geo.size.height) { _, h in tops.board = h; measure(tier) }
         })
         .background(Backdrop())
-        // 터미널 열기 독 — 보드 위에 겹쳐 뜨므로 아래 배치는 그대로다
-        .overlay(alignment: .trailing) { EdgeDock() }
+        // 터미널 열기 독 — 보드 위에 겹쳐 뜨므로 아래 배치는 그대로다. 붙는 쪽(보드 위치)은 독이 스스로 정한다
+        .overlay { EdgeDock() }
         .onChange(of: store.groups) { _, _ in
             if let f = filter, store.count(f) == 0 { withAnimation(foldSpring) { filter = nil } }
         }
@@ -4830,7 +4842,7 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
             a.addButton(withTitle: "허용")
         }
         a.addButton(withTitle: "취소").keyEquivalent = "\u{1b}"   // NSAlert 는 영어 "Cancel" 에만 Esc 를 붙인다
-        a.beginSheetModal(for: window) { request.respond(allow: $0 == .alertFirstButtonReturn) }
+        MainActor.assumeIsolated { whenPaneSettled { a.beginSheetModal(for: window) { request.respond(allow: $0 == .alertFirstButtonReturn) } } }
     }
 }
 
@@ -5021,6 +5033,10 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
     func newSessionSheet() {
         if !expanded { setTerminalExpanded(true) }
         showBoard()
+        whenPaneSettled { self.beginNewSessionSheet() }
+    }
+
+    private func beginNewSessionSheet() {
         let paths = (store?.groups.map(\.id) ?? []).filter { FileManager.default.fileExists(atPath: $0) }
         let current = tabs.first { $0.id == selected }.map { $0.session?.cwd ?? $0.cwd }
         let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 420), styleMask: [.titled], backing: .buffered, defer: false)
@@ -5170,7 +5186,7 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
         a.informativeText = "\(tab.name) 탭에서 도는 프로그램이 함께 끝납니다."
         a.addButton(withTitle: "닫기")
         a.addButton(withTitle: "취소").keyEquivalent = "\u{1b}"
-        a.beginSheetModal(for: window) { if $0 == .alertFirstButtonReturn { self.remove(tab) } }
+        whenPaneSettled { a.beginSheetModal(for: window) { if $0 == .alertFirstButtonReturn { self.remove(tab) } } }
     }
 
     private func remove(_ tab: BoardTab) {
@@ -5267,6 +5283,7 @@ func sessionRecord(_ id: String) -> [String: Any]? {
 // 시킨 일이라 이어 가기 문구로 다시 시킨다). 다시 뜰 때 이어 연 탭은 일시중지로 보이고 "세션 재개"로 이어 간다
 // (state.py 는 새 요청 때만 표지를 지운다). 돌려주는 값: nil = 취소, 아니면 새로 남긴 표지 파일
 @MainActor func confirmShutdown(update: Bool) -> [String]? {
+    TerminalHub.shared.slide?.finish()   // 확인 창은 바로 답해야 하므로 펼치기·접기 애니메이션을 끝 상태로 마치고 묻는다
     let busy = busyTabSessions()
     guard !busy.isEmpty else { TerminalHub.shared.saveTabs(); return [] }
     let a = NSAlert()
@@ -5432,7 +5449,8 @@ let terminalExpandedMinSize = NSSize(width: boardMinWidth + paneDividerWidth + t
     hub.slide?.finish()
     guard hub.expanded != on, let vf = (window.screen ?? NSScreen.main)?.visibleFrame else { return }
     let target = on ? vf : NSRect(x: hub.boardOnLeft ? vf.minX : vf.maxX - hub.boardWidth, y: vf.minY, width: hub.boardWidth, height: vf.height)
-    guard animated, window.isVisible, let root = window.contentView as? BoardRootView else {
+    // 시트가 붙어 있으면 애니메이션 없이 — 시트가 붙은 창은 프레임이 멈췄다 건너뛴다
+    guard animated, window.isVisible, window.attachedSheet == nil, let root = window.contentView as? BoardRootView else {
         hub.setExpanded(on)
         if !on { window.makeFirstResponder(nil) }   // 숨는 터미널에 키 입력이 가지 않게 포커스를 거둔다
         window.contentMinSize = on ? terminalExpandedMinSize : NSSize(width: miniWidth, height: miniMinHeight)
@@ -5490,6 +5508,7 @@ let terminalExpandedMinSize = NSSize(width: boardMinWidth + paneDividerWidth + t
     private var started: CFTimeInterval = 0
     private var link: CADisplayLink?
     private var done: (() -> Void)?
+    var after: [@MainActor () -> Void] = []   // 끝난 뒤 띄울 시트·확인 창(whenPaneSettled)
 
     init(from: NSRect, to: NSRect, board: (CGFloat, CGFloat), terminal: NSSize, done: @escaping () -> Void) {
         self.from = from
@@ -5529,7 +5548,16 @@ let terminalExpandedMinSize = NSSize(width: boardMinWidth + paneDividerWidth + t
         window.setFrame(to, display: true)
         if TerminalHub.shared.slide === self { TerminalHub.shared.slide = nil }
         done()
+        // 다음 차례에 — 그사이 새 애니메이션이 시작했으면 그것이 끝난 뒤로 다시 미룬다
+        for run in after { DispatchQueue.main.async { whenPaneSettled(run) } }
+        after = []
     }
+}
+
+// 시트·확인 창은 펼치기·접기 애니메이션이 끝난 뒤에 띄운다 — 도는 중에 붙이면 시트가 먼저 붙고 창 프레임이 0.3초쯤 멈췄다가
+// 건너뛴다(접는 중이면 접힌 창 가운데에 먼저 붙는다, 2026-10-18 실측). 애니메이션이 없으면 바로
+@MainActor func whenPaneSettled(_ run: @escaping @MainActor () -> Void) {
+    if let slide = TerminalHub.shared.slide { slide.after.append(run) } else { run() }
 }
 
 // 보드 위치 바꾸기(메뉴) — 바로 적용한다. 펼쳤으면 배치만 바뀌고, 접혔으면 같은 크기로 화면 반대쪽 끝으로 옮긴다(미니도 높이·위치 그대로).
@@ -6575,6 +6603,7 @@ func canDrive(_ s: Session) -> Bool {
 
 // 다른 터미널(Ghostty)에서 도는 세션을 보드로 — 그쪽을 /exit 로 끝내고, 끝나면 보드 새 탭에서 resume_cmd 로 이어 연다(대화 그대로)
 @MainActor func moveToBoard(_ s: Session) {
+    guard TerminalHub.shared.slide == nil else { return whenPaneSettled { moveToBoard(s) } }
     if s.state == "working" || s.state == "waiting" {
         let a = NSAlert()
         a.messageText = "보드로 옮길까요?"
@@ -6650,6 +6679,7 @@ let carryOnPrompt = "보드에서 일시중지했던 세션을 재개합니다. 
 // claude -p 는 SIGTERM. 진짜 백그라운드 세션에는 신호를 보내지 않는다(메뉴에도 없다 — 보드는 백그라운드 세션을 건드리지 않는다).
 // 대화 기록은 남으므로 종료 세션 메뉴의 "세션 다시 열기"로 이어 열 수 있다
 @MainActor func stopSession(_ s: Session, confirm: Bool = true) {
+    if confirm, TerminalHub.shared.slide != nil { return whenPaneSettled { stopSession(s, confirm: confirm) } }
     if confirm {
     let alert = NSAlert()
     alert.messageText = "세션을 중단할까요?"
