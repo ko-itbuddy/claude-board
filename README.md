@@ -6,6 +6,8 @@
 
 <p align="center"><img src="docs/images/hero.png" width="420" alt="승인 대기·작업 중·백그라운드·조용한 경로 카드가 보이는 Claude Board 보드 화면"></p>
 
+<p align="center"><a href="https://suhojang.github.io/claude-board/"><b>🌐 홈페이지 · 사용 설명서</b></a></p>
+
 버전별 변경은 [CHANGELOG.md](CHANGELOG.md), 모든 기능의 자세한 설명은 [설치 가이드](packaging/README.txt) 를 보세요.
 
 ## 🪟 Windows
