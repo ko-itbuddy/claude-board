@@ -2,7 +2,7 @@
 
 새 버전을 올릴 때 맨 위에 `## <버전> (<날짜>)` 항목을 먼저 씁니다. `packaging/release.sh` 가 `## ` 뒤의 버전 번호로 그 항목을 찾아 GitHub 릴리스 설명으로 그대로 씁니다.
 
-## 3.0.0 (출시 전)
+## 3.0.0 (2026-10-19)
 
 ### 추가
 - 보드 창 안에 터미널을 넣었습니다. 보드에서 새로 띄우거나 이어 연 Claude Code 세션은 보드 왼쪽 터미널의 탭(보드 탭)에서 돌고,
@@ -32,6 +32,7 @@
   새 세션 창의 "답변 마크다운 꾸미기" 체크로 끌 수 있고, 끈 세션은 다시 열어도 끈 채입니다. Ghostty 등 다른 터미널과 백그라운드 세션에는 붙지 않습니다.
   [deepskyblue86/claude-markdown-mod](https://github.com/deepskyblue86/claude-markdown-mod)(md-render, MIT)를 들여왔고, 보드가 `~/.claude/notifier/plugins/md-render/` 에 옮겨 두고 씁니다.
 - 앱에 함께 들어간 구성 요소(터미널 엔진 등)의 라이선스 고지를 앱 안 `Contents/Resources/THIRD_PARTY_NOTICES.txt` 에 넣었습니다.
+- 홈페이지와 사용 설명서를 열었습니다: [suhojang.github.io/claude-board](https://suhojang.github.io/claude-board/). 기능, 보드 안 터미널, 설치, 사용 설명서, 단축키, 문제 해결을 한곳에서 봅니다. README 맨 위 링크로도 갑니다.
 
 ### 바뀜
 - 세션을 한 번 누르면 보드 탭 세션은 터미널을 펼치고(접혀 있거나 미니 화면이어도) 그 탭으로 가 입력 칸에 포커스를 둡니다. 다른 터미널 세션은 예전처럼 한 번에 앱, 두 번에 그 세션의 탭입니다.
