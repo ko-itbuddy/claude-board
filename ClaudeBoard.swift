@@ -4581,6 +4581,9 @@ final class BoardTerminalView: AppTerminalView {
     private var insertedDuringKey = false
     private var commandDuringKey: Selector?
 
+    // 창은 배경을 끌어 옮길 수 있게 되어 있고 엔진 뷰는 불투명이 아니라 기본값이 true — 끌어서 글자를 고르면 창이 따라 움직였다(사용자 보고)
+    override var mouseDownCanMoveWindow: Bool { false }
+
     private func mods(_ event: NSEvent) -> TerminalInputModifiers {
         var m: TerminalInputModifiers = []
         let f = event.modifierFlags
@@ -4696,6 +4699,8 @@ func asciiKeyCharacters(_ keyCode: UInt16, shift: Bool) -> String? {
     lines.append("keybind = shift+enter=text:\\x1b\\r")   // Shift+Enter = 사용자 Ghostty 와 같은 바이트(1b 0d) — 기본값은 CSI 27;2;13~
     lines.append("keybind = super+q=unbind")              // ⌘Q 는 보드 종료로 — 엔진이 받으면 처리할 곳이 없어 삼킨다
     lines.append("keybind = super+t=unbind")              // ⌘T 는 보드의 새 세션(윈도우 메뉴)으로 — 엔진의 new_tab 도 처리할 곳이 없어 삼킨다
+    // ⌘1~⌘9 는 보드의 탭 고르기(윈도우 메뉴)로 — 엔진 기본값은 같은 키를 글자(super+1)와 물리 키(super+digit_1) 두 가지로 goto_tab·last_tab 에 묶는다
+    for n in 1...9 { lines.append("keybind = super+\(n)=unbind"); lines.append("keybind = super+digit_\(n)=unbind") }
     let dir = NSTemporaryDirectory() + (Bundle.main.bundleIdentifier ?? instanceName)
     try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
     let path = dir + "/board-terminal.conf"
@@ -7009,6 +7014,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let newSession = ActionItem("새 세션…") { TerminalHub.shared.newSessionSheet() }
         newSession.keyEquivalent = "t"
         windowMenu.addItem(newSession)
+        // ⌘1~⌘9 — 탭 줄 순서대로 그 탭으로(접혀 있으면 펼친다). 그 자리에 탭이 없으면 그대로. 엔진의 ⌘1~⌘9(goto_tab·last_tab)는 풀어 두었다
+        let tabMenu = NSMenu(title: "탭으로 가기")
+        for n in 1...9 {
+            let item = ActionItem("탭 \(n)") {
+                let hub = TerminalHub.shared
+                if hub.tabs.indices.contains(n - 1) { hub.reveal(hub.tabs[n - 1].id) }
+            }
+            item.keyEquivalent = "\(n)"
+            tabMenu.addItem(item)
+        }
+        windowMenu.addItem(withTitle: "탭으로 가기", action: nil, keyEquivalent: "").submenu = tabMenu
         windowMenu.addItem(.separator())
         // 보드 위치(오른쪽·왼쪽)와 펼치기·접기 애니메이션 — 체크 표시는 validateMenuItem 이 단다
         let sideMenu = NSMenu(title: "보드 위치")
