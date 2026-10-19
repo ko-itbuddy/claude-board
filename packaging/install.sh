@@ -63,8 +63,16 @@ main() {
 
   echo "3) 사용자 설정(알림 패널·hook·명령·자동 실행)"
   # 실행 중인 보드를 끄고 user-setup.sh 가 자동 실행 등록과 함께 새 앱을 띄운다.
-  # 보드의 업데이트 단추로 실행했어도 이 스크립트는 별도 프로세스 그룹이라 보드가 꺼져도 끝까지 돈다
-  pkill -x ClaudeBoard 2>/dev/null || true
+  # 보드의 업데이트 단추로 실행했어도 이 스크립트는 별도 프로세스 그룹이라 보드가 꺼져도 끝까지 돈다.
+  # macOS pkill 은 자기 조상을 빼고 찾는다 — 업데이트 단추로 돌면(출력이 파일) 보드가 이 스크립트의 조상이라 -a 로 함께 끈다.
+  # 터미널에서 손으로 돌릴 때는 -a 를 쓰지 않는다 — 보드 안 터미널이면 보드를 끄는 순간 이 스크립트도 함께 끊긴다
+  KEPT=""
+  if [ -t 1 ]; then
+    if ! pgrep -xq ClaudeBoard && pgrep -axq ClaudeBoard; then KEPT=1; fi
+    pkill -x ClaudeBoard 2>/dev/null || true
+  else
+    pkill -a -x ClaudeBoard 2>/dev/null || true
+  fi
   if ! bash "$APP/Contents/Resources/user-setup.sh" "$APP"; then
     open -a "$APP" || true
     echo "사용자 설정 중 실패했습니다. 위 메시지를 확인하고 다시 실행하세요." >&2
@@ -73,6 +81,9 @@ main() {
 
   echo
   echo "설치를 마쳤습니다."
+  if [ -n "$KEPT" ]; then
+    echo "보드 안 터미널에서 실행해 지금 보드는 다시 띄우지 않았습니다. 보드를 종료(⌘Q)하고 다시 열면 새 버전이 뜹니다."
+  fi
   if [ -n "$FIRST" ]; then
     echo "이미 실행 중인 Claude Code 세션은 다시 시작해야 hook 이 적용됩니다."
     echo "처음 알림·더블 클릭 때 macOS 가 'Ghostty 제어' 권한을 물으면 허용하세요."

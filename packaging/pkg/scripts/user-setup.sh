@@ -45,7 +45,8 @@ s = open(p).read()
 block = (
     "# >>> claude-board >>>\n"
     "# Ghostty 에서 셸이 시작될 때 보드 앱이 꺼져 있으면 함께 띄운다 (포커스는 터미널 유지)\n"
-    'if [[ "$TERM_PROGRAM" == "ghostty" ]] && ! pgrep -xq ClaudeBoard; then\n'
+    "# -a: 보드 안 터미널의 셸은 보드가 조상이라 -a 없이는 못 찾는다\n"
+    'if [[ "$TERM_PROGRAM" == "ghostty" ]] && ! pgrep -axq ClaudeBoard; then\n'
     f'  open -g -a "{os.environ["APP"]}" --args --background\n'
     "fi\n"
     "# <<< claude-board <<<\n"
