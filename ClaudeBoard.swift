@@ -3807,15 +3807,13 @@ final class CardTopsBox { var values: [String: CGFloat] = [:]; var viewport: CGF
 
 // 오른쪽 독의 터미널 열기 단추 — 설치된 앱은 그 앱 아이콘으로 열 수 있고, 없으면 흐리게 막아 둔다
 struct TerminalApp: Identifiable {
-    let id: String      // 번들 ID — 명령줄 도구는 명령 이름
+    let id: String      // 번들 ID
     let name: String
-    var cli = false     // 앱이 아니라 터미널 안에서 도는 명령(herdr) — 설치는 실행 파일로 판단하고, 누르면 터미널 새 창에서 실행한다
 }
 let terminalApps = [TerminalApp(id: "com.mitchellh.ghostty", name: "Ghostty"),
                     TerminalApp(id: "com.googlecode.iterm2", name: "iTerm2"),
                     TerminalApp(id: "com.apple.Terminal", name: "터미널"),
-                    TerminalApp(id: "com.stablyai.orca", name: "Orca"),
-                    TerminalApp(id: "herdr", name: "herdr", cli: true)]
+                    TerminalApp(id: "com.stablyai.orca", name: "Orca")]
 
 // 명령줄 도구를 찾는 곳 — 보드는 로그인 셸의 PATH 를 모르고 실행되므로 흔한 설치 위치를 직접 본다
 func findCommand(_ name: String) -> URL? {
@@ -3824,24 +3822,6 @@ func findCommand(_ name: String) -> URL? {
                 "/opt/homebrew/bin", "/usr/local/bin"]
     return dirs.map { URL(fileURLWithPath: "\($0)/\(name)") }
         .first { FileManager.default.isExecutableFile(atPath: $0.path) }
-}
-
-// herdr 처럼 앱 아이콘이 없는 명령줄 도구의 아이콘 — 어두운 사각형에 명령 첫 글자와 프롬프트
-func commandIcon(_ name: String) -> NSImage {
-    NSImage(size: NSSize(width: 64, height: 64), flipped: false) { r in
-        let box = NSBezierPath(roundedRect: r.insetBy(dx: 4, dy: 4), xRadius: 13, yRadius: 13)
-        NSGradient(starting: NSColor(red: 0.16, green: 0.24, blue: 0.20, alpha: 1),
-                   ending: NSColor(red: 0.07, green: 0.11, blue: 0.09, alpha: 1))?.draw(in: box, angle: -90)
-        NSColor.white.withAlphaComponent(0.18).setStroke()
-        box.lineWidth = 1.5
-        box.stroke()
-        let text = NSAttributedString(string: ">" + String(name.prefix(1)), attributes: [
-            .font: NSFont.monospacedSystemFont(ofSize: 26, weight: .heavy),
-            .foregroundColor: NSColor(red: 0.45, green: 0.95, blue: 0.60, alpha: 1)])
-        let sz = text.size()
-        text.draw(at: NSPoint(x: r.midX - sz.width / 2, y: r.midY - sz.height / 2))
-        return true
-    }
 }
 
 final class TerminalAppStore: ObservableObject {
@@ -3863,12 +3843,12 @@ final class TerminalAppStore: ObservableObject {
     func refresh() {
         var u: [String: URL] = [:]
         for a in terminalApps {
-            u[a.id] = a.cli ? findCommand(a.id) : NSWorkspace.shared.urlForApplication(withBundleIdentifier: a.id)
+            u[a.id] = NSWorkspace.shared.urlForApplication(withBundleIdentifier: a.id)
         }
         if u != urls {
             var ic: [String: NSImage] = [:]
             for a in terminalApps where u[a.id] != nil {
-                ic[a.id] = a.cli ? commandIcon(a.name) : NSWorkspace.shared.icon(forFile: u[a.id]!.path)
+                ic[a.id] = NSWorkspace.shared.icon(forFile: u[a.id]!.path)
             }
             icons = ic
             urls = u
@@ -3881,7 +3861,6 @@ final class TerminalAppStore: ObservableObject {
     }
     func open(_ id: String) {
         guard let url = urls[id] else { return }
-        if terminalApps.first(where: { $0.id == id })?.cli == true { runInTerminal(shellQuote(url.path)); return }
         let cfg = NSWorkspace.OpenConfiguration()
         cfg.activates = true
         NSWorkspace.shared.openApplication(at: url, configuration: cfg)
@@ -3915,7 +3894,7 @@ func runInTerminal(_ shellCmd: String) {
     ghosttyQueue.async { _ = runScript(script) }
 }
 
-// 오른쪽 아래 독: Ghostty·iTerm2·터미널·Orca·herdr 를 바로 연다.
+// 오른쪽 아래 독: Ghostty·iTerm2·터미널·Orca 를 바로 연다.
 // 평소엔 창 오른쪽 아래 끝의 탭만 보이다가 그 탭(창 오른쪽 끝 아래쪽)에 마우스를 대면 보드 위로 미끄러져 나오고, 독에서 벗어나면 다시 숨는다.
 // 보드 위치가 왼쪽이면 보드의 왼쪽 끝(화면 바깥쪽)에 거울처럼 붙는다 — 오른쪽 끝은 터미널과의 경계라 경계를 잡으러 가다 열리지 않게
 struct EdgeDock: View {
@@ -4029,7 +4008,7 @@ struct EdgeDock: View {
             HStack(spacing: 5) {
                 Image(systemName: installed ? (running ? "arrow.up.forward.app" : "plus.app") : "nosign")
                     .font(.system(size: 11, weight: .semibold))
-                Text(installed ? (app.cli ? "\(app.name) 실행 · 터미널 새 창" : running ? "\(app.name) 창으로 이동" : "\(app.name) 실행")
+                Text(installed ? (running ? "\(app.name) 창으로 이동" : "\(app.name) 실행")
                                : "\(app.name) · 설치되지 않음")
                     .boardFont(12, weight: .semibold)
                     .lineLimit(1)

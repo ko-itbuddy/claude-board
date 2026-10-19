@@ -127,7 +127,7 @@ setup.exe 로 설치했다면 **설정 > 앱 > 설치된 앱** 에서 Claude Boa
 | 터미널과 함께 띄우기 | Ghostty 를 열 때(`~/.zshrc` 줄) | Windows Terminal 이 새로 뜨면 숨은 보드를 다시 보이기 |
 | 앱 확인 | 개인 인증서 서명 확인 | 코드 서명 없음 — 설치 스크립트가 SHA256 으로 확인, setup.exe 는 SmartScreen 경고 |
 | 새 버전 확인 | 최신(Latest) 릴리스 | 릴리스 목록에서 `windows-v` 로 시작하는 태그 |
-| 터미널 독 | Ghostty · iTerm2 · 터미널 · Orca · herdr | Windows Terminal · PowerShell 7 · Windows PowerShell · 명령 프롬프트 · Git Bash |
+| 터미널 독 | Ghostty · iTerm2 · 터미널 · Orca | Windows Terminal · PowerShell 7 · Windows PowerShell · 명령 프롬프트 · Git Bash |
 
 ## 🛠️ 배포 (관리자)
 
