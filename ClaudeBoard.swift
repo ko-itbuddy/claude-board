@@ -4591,7 +4591,23 @@ final class BoardTerminalView: AppTerminalView {
         return m
     }
 
+    // ⌘ 단축키: 한글·러시아어 등 ASCII 가 아닌 입력기에서는 키 이벤트의 글자가 'ㅈ' 처럼 나와 엔진이 단축키(super+w 등, 글자로
+    // 맞춘다)인지 가리지 못할 수 있다 — 같은 키의 ASCII 글자로 다시 만든 이벤트로 묻는다. 엔진에 실제로 보내는 것은 아래 keyDown
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        super.performKeyEquivalent(with: asciiCommandEvent(event) ?? event)
+    }
+
     override func keyDown(with event: NSEvent) {
+        // ⌘ 단축키(위 performKeyEquivalent 가 다시 만든 이벤트도): 래퍼는 엔진에 넘기는 키의 글자를 지금 입력기로 다시 읽고('ㅈ')
+        // 한글 입력기는 ⌘ 키에 글자를 내지 않아 엔진이 super+ㅈ 로 받는다(2026-10-19 실측) → ⌘W 가 탭을 닫지 않고 claude 에는
+        // 'ㅈ' 로 보인다(사용자 보고). ASCII 자판의 같은 키로 보낸다 — ABC 에서와 같은 키 이벤트(kitty 로 ⌘J 가 같은 바이트, 실측)
+        if event.modifierFlags.contains(.command),
+           event.characters(byApplyingModifiers: [])?.unicodeScalars.contains(where: { !$0.isASCII }) == true,
+           let ch = asciiKeyCharacters(event.keyCode, shift: event.modifierFlags.contains(.shift))?.first,
+           let press = TerminalKeyPress(typing: ch, modifiers: mods(event)) {
+            sendKey(press)
+            return
+        }
         // 수정키가 붙은 Return(Shift+Enter 등): 래퍼는 확정 글자를 그 키 이벤트에 실어 보내 키 지정이 글자를 덮는다 →
         // sendKey 로 조합 글자를 먼저(수정키 없는 이벤트로) 확정하고 키를 따로 보낸다
         if hasMarkedText(), event.keyCode == 36 || event.keyCode == 76, !mods(event).isEmpty {
@@ -4625,6 +4641,35 @@ final class BoardTerminalView: AppTerminalView {
     }
 }
 
+// ⌘ 가 눌린 키 이벤트의 글자가 ASCII 가 아니면(한글·러시아어 입력기 등) 같은 키 번호의 ASCII 글자로 다시 만든 이벤트 — 글자는 지금의
+// ASCII 자판(ABC 등)에서 읽는다. 엔진의 메아리 중복 제거가 timestamp 를 견주므로 timestamp 는 그대로 둔다. 바꿀 것이 없으면 nil
+func asciiCommandEvent(_ event: NSEvent) -> NSEvent? {
+    guard event.type == .keyDown, event.modifierFlags.contains(.command),
+          let ign = event.charactersIgnoringModifiers, ign.unicodeScalars.contains(where: { !$0.isASCII }),
+          let ascii = asciiKeyCharacters(event.keyCode, shift: event.modifierFlags.contains(.shift)) else { return nil }
+    return NSEvent.keyEvent(with: .keyDown, location: event.locationInWindow, modifierFlags: event.modifierFlags,
+                            timestamp: event.timestamp, windowNumber: event.windowNumber, context: nil,
+                            characters: ascii, charactersIgnoringModifiers: ascii, isARepeat: event.isARepeat, keyCode: event.keyCode)
+}
+
+// 키 번호가 ASCII 자판에서 치는 글자(Shift 만 반영). 글자가 없거나 ASCII 가 아니면 nil
+func asciiKeyCharacters(_ keyCode: UInt16, shift: Bool) -> String? {
+    guard let source = TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue(),
+          let raw = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return nil }
+    let data = Unmanaged<CFData>.fromOpaque(raw).takeUnretainedValue()
+    guard let bytes = CFDataGetBytePtr(data) else { return nil }
+    var dead: UInt32 = 0
+    var chars = [UniChar](repeating: 0, count: 4)
+    var length = 0
+    let status = bytes.withMemoryRebound(to: UCKeyboardLayout.self, capacity: 1) {
+        UCKeyTranslate($0, keyCode, UInt16(kUCKeyActionDown), shift ? UInt32(shiftKey >> 8) : 0, UInt32(LMGetKbdType()),
+                       OptionBits(kUCKeyTranslateNoDeadKeysBit), &dead, chars.count, &length, &chars)
+    }
+    guard status == noErr, length > 0 else { return nil }
+    let s = String(utf16CodeUnits: chars, count: length)
+    return s.unicodeScalars.allSatisfy({ $0.isASCII && $0.value >= 0x20 && $0.value != 0x7F }) ? s : nil
+}
+
 // 터미널 설정은 보드가 직접 만든다 — 사용자 Ghostty 설정을 바탕으로 하되 theme 줄은 뺀다(엔진 번들에 테마 폴더가 없어 theme 한 줄 때문에
 // 파일 전체가 조용히 거부된다). 같은 이름 테마는 엔진의 테마 목록에서 찾아 넘긴다(넘기지 않으면 래퍼 기본 테마가 사용자 색을 덮는다)
 @MainActor func makeTerminalController() -> TerminalController {
@@ -4650,6 +4695,7 @@ final class BoardTerminalView: AppTerminalView {
     }
     lines.append("keybind = shift+enter=text:\\x1b\\r")   // Shift+Enter = 사용자 Ghostty 와 같은 바이트(1b 0d) — 기본값은 CSI 27;2;13~
     lines.append("keybind = super+q=unbind")              // ⌘Q 는 보드 종료로 — 엔진이 받으면 처리할 곳이 없어 삼킨다
+    lines.append("keybind = super+t=unbind")              // ⌘T 는 보드의 새 세션(윈도우 메뉴)으로 — 엔진의 new_tab 도 처리할 곳이 없어 삼킨다
     let dir = NSTemporaryDirectory() + (Bundle.main.bundleIdentifier ?? instanceName)
     try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
     let path = dir + "/board-terminal.conf"
@@ -4827,6 +4873,7 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
     @Published private(set) var boardOnLeft = UserDefaults.standard.string(forKey: "boardSide") == "left"
     // 펼치기·접기 애니메이션이 도는 중이면 그 애니메이션 — 그동안 BoardRootView 가 터미널 영역 크기를 고정한다
     var slide: PaneSlide?
+    var tabBarEnd: CGFloat = .infinity   // 탭 줄에서 탭·"새 세션" 단추가 끝나는 x — 그 오른쪽이 빈 곳
     weak var area: TerminalAreaView?
     weak var store: Store?
     // 세션 id → 그 세션이 도는 보드 탭(tty 로 짝지은 세션, 탭 안에서 시작된 claude -p) — 세션 목록을 다시 읽을 때마다 고친다
@@ -4999,6 +5046,7 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
     }
 
     private func beginNewSessionSheet() {
+        guard window.attachedSheet == nil else { return }   // 이미 새 세션 창(또는 다른 시트)이 떠 있으면 겹쳐 띄우지 않는다(⌘T 를 또 누름)
         let paths = (store?.groups.map(\.id) ?? []).filter { FileManager.default.fileExists(atPath: $0) }
         let current = tabs.first { $0.id == selected }.map { $0.session?.cwd ?? $0.cwd }
         let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 420), styleMask: [.titled], backing: .buffered, defer: false)
@@ -5550,6 +5598,39 @@ let terminalExpandedMinSize = NSSize(width: boardMinWidth + paneDividerWidth + t
     if hub.expanded { showBoard() }
 }
 
+// 창 크기 전환(터미널을 펼쳤을 때 제목 막대 더블클릭·초록 단추) — 창이 화면의 쓸 수 있는 영역(펼치기와 같은 기준)과 같으면 가로·세로
+// 60% 크기로 그 영역 가운데에, 그 밖의 크기면 그 영역 전체로. 크기는 기억하지 않는다(펼치기·다시 띄우기는 늘 화면 전체).
+// 시스템 설정 "제목 막대 더블클릭"과 상관없이 늘 이 동작이다
+@MainActor func toggleWindowSize() {
+    let hub = TerminalHub.shared
+    hub.slide?.finish()
+    guard hub.expanded, let vf = (window.screen ?? NSScreen.main)?.visibleFrame else { return }
+    let f = window.frame
+    let full = abs(f.minX - vf.minX) <= 2 && abs(f.minY - vf.minY) <= 2 && abs(f.width - vf.width) <= 2 && abs(f.height - vf.height) <= 2
+    var target = vf
+    if full {
+        // setFrame 은 최소 크기(SizeGuard)를 거치지 않으므로 직접 맞춘다
+        let min = window.frameRect(forContentRect: NSRect(origin: .zero, size: window.contentMinSize)).size
+        let w = max((vf.width * 0.6).rounded(), min.width), h = max((vf.height * 0.6).rounded(), min.height)
+        target = NSRect(x: (vf.midX - w / 2).rounded(), y: (vf.midY - h / 2).rounded(), width: w, height: h)
+    }
+    // 애니메이션 없이 — animate: true 는 프레임마다 터미널 크기가 바뀌어 pty 크기 변화가 0.34초에 11번 갔다(안의 claude 화면이
+    // 그때마다 다시 그려진다, 2026-10-19 실측). 펼치기·접기 애니메이션처럼 크기를 고정할 수 없는 전환이다
+    window.setFrame(target, display: true)
+}
+
+// 창 크기 전환을 받는 더블클릭 — 창 맨 위 제목 막대 띠의 빈 곳(터미널 쪽·보드 쪽)과 터미널 탭 줄의 빈 곳. 신호등 단추·제목 막대
+// 부속(붙이기·터미널 펼치기·최대축소 단추)은 창 내용 밖(제목 막대 뷰)에 있어 그 단추 동작만 한다. 제목 막대 띠도 SwiftUI 호스팅 뷰가
+// 먼저 받아 시스템의 더블클릭 확대가 일어나지 않으므로 앱 안 이벤트 감시로 받는다(2026-10-19 실측)
+@MainActor func isWindowSizeDoubleClick(_ e: NSEvent) -> Bool {
+    guard e.clickCount == 2, e.window === window, TerminalHub.shared.expanded,
+          let content = window.contentView, let frameView = content.superview,
+          let hit = frameView.hitTest(e.locationInWindow), hit.isDescendant(of: content) else { return false }
+    let band = window.frame.height - window.contentLayoutRect.height
+    if e.locationInWindow.y >= window.frame.height - band { return true }
+    return TerminalHub.shared.area?.isTabBarBlank(e.locationInWindow) == true
+}
+
 // 창 내용: [터미널 영역 | 경계 | 보드]. 터미널 영역은 제목 막대 띠까지 덮고(창 바탕이 투명하다) 탭 줄은 그 아래에 둔다.
 // 접힌 동안에도 터미널 영역은 창에 붙은 채 펼쳤을 때 크기로 둔다 —
 // 크기가 0 이면 셸이 뜨지 않고, 크기가 바뀌면 안의 프로그램이 다시 그린다
@@ -5639,6 +5720,12 @@ final class TerminalAreaView: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
+    // 탭 줄의 빈 곳(탭·"새 세션" 단추 오른쪽)인가 — 창 좌표
+    func isTabBarBlank(_ point: NSPoint) -> Bool {
+        let p = tabBar.convert(point, from: nil)
+        return tabBar.bounds.contains(p) && p.x > TerminalHub.shared.tabBarEnd
+    }
+
     override func layout() {
         super.layout()
         let top = bounds.height - titlebar
@@ -5686,6 +5773,11 @@ final class PaneDivider: NSView {
     }
 }
 
+struct TabBarEnd: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
 struct TerminalTabBar: View {
     @ObservedObject var hub: TerminalHub
     @State private var newHover = false
@@ -5709,10 +5801,14 @@ struct TerminalTabBar: View {
             .buttonStyle(.plain)
             .clickable($newHover)
             .padding(.leading, 6)
+            // 탭 줄의 빈 곳이 어디부터인지 — 그 오른쪽 더블클릭은 창 크기 전환(isWindowSizeDoubleClick)
+            .background(GeometryReader { g in Color.clear.preference(key: TabBarEnd.self, value: g.frame(in: .named("tabBar")).maxX) })
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .coordinateSpace(name: "tabBar")
+        .onPreferenceChange(TabBarEnd.self) { hub.tabBarEnd = $0 }
         .background(Color(nsColor: terminalBarColor))
         .overlay(alignment: .bottom) { Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1) }
         .preferredColorScheme(.dark)
@@ -5952,6 +6048,14 @@ final class SizeGuard: NSObject, NSWindowDelegate {
         let min = sender.frameRect(forContentRect: NSRect(origin: .zero, size: sender.contentMinSize)).size
         return NSSize(width: max(frameSize.width, min.width), height: max(frameSize.height, min.height))
     }
+    // 초록 단추(확대) — 터미널을 펼쳤으면 제목 막대 더블클릭과 같은 창 크기 전환. 접혔으면 시스템 확대 그대로
+    func windowShouldZoom(_ window: NSWindow, toFrame newFrame: NSRect) -> Bool {
+        return MainActor.assumeIsolated {
+            guard TerminalHub.shared.expanded else { return true }
+            toggleWindowSize()
+            return false
+        }
+    }
 }
 let sizeGuard = SizeGuard()
 let boardMinWidth: CGFloat = 360        // 전체·중간 화면이 무너지지 않는 폭 — 더 좁으면 미니로 그린다
@@ -5991,6 +6095,8 @@ let mediumListMin: CGFloat = 56         // 중간으로 그리려면 남아야 �
         let t: BoardTier = boardPaneWidth() < boardMinWidth ? .mini   // 터미널을 펼쳤으면 창이 아니라 보드 칸의 폭
             : fits(.full, fullListMin) ? .full : fits(.medium, mediumListMin) ? .medium : .mini
         guard t != tier else { return }
+        // 미니를 벗어남 — 되돌리기 단추가 아닌 길(손으로 키움·펼치기·처음 크기로 붙이기)이었으면 최대축소 때의 펼침 기억을 지운다
+        if tier == .mini { UserDefaults.standard.removeObject(forKey: "miniFromExpanded") }
         tier = t
         UserDefaults.standard.set(t == .mini, forKey: "boardMini")   // 미니로 둔 채 끄면 다음에도 그 크기로 연다
     }
@@ -6002,6 +6108,8 @@ func saveRestoreFrame() { UserDefaults.standard.set(NSStringFromRect(window.fram
 
 // 최대축소 — 보드 쪽 위 모서리(보드 위치가 오른쪽이면 오른쪽 위, 왼쪽이면 왼쪽 위)는 그대로 두고 폭은 miniWidth, 높이는 경로 수(최대 6줄)에 맞춘다
 @MainActor func enterMini(rows: Int) {
+    // 펼쳐 있었으면 기억해 두었다가 원래 크기로 되돌릴 때 다시 펼친다(다시 띄워도 맞게 보드 설정에). 손으로 미니를 벗어나면 지운다(BoardFit)
+    UserDefaults.standard.set(TerminalHub.shared.expanded, forKey: "miniFromExpanded")
     setTerminalExpanded(false, animated: false)   // 터미널을 펼쳤으면 먼저 접는다 — 미니에서 돌아갈 위치는 접힌 보드
     saveRestoreFrame()
     let f = window.frame
@@ -6010,8 +6118,14 @@ func saveRestoreFrame() { UserDefaults.standard.set(NSStringFromRect(window.fram
     window.setFrame(NSRect(x: x, y: f.maxY - h, width: miniWidth, height: h), display: true, animate: true)
 }
 
-// 미니에서 원래 크기로 — 기억한 위치가 없거나 지금 연결된 화면 밖이면 처음 크기로 보드 쪽 끝에 붙인다
+// 미니에서 원래 크기로 — 최대축소할 때 터미널을 펼쳐 있었으면 다시 펼친다. 아니면 접힌 보드 위치로(기억한 위치가 없거나
+// 지금 연결된 화면 밖이면 처음 크기로 보드 쪽 끝에 붙인다)
 @MainActor func leaveMini() {
+    if UserDefaults.standard.bool(forKey: "miniFromExpanded") {
+        UserDefaults.standard.removeObject(forKey: "miniFromExpanded")
+        setTerminalExpanded(true)
+        return
+    }
     if let s = UserDefaults.standard.string(forKey: "boardRestoreFrame") {
         let r = NSRectFromString(s)
         if r.width >= boardMinWidth, NSScreen.screens.contains(where: { $0.visibleFrame.intersects(r) }) {
@@ -6780,6 +6894,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // 터미널을 펼쳤으면 터미널 최소 폭과 보드 최소 폭이 들어가는 크기까지
         window.contentMinSize = TerminalHub.shared.expanded ? terminalExpandedMinSize : NSSize(width: miniWidth, height: miniMinHeight)
         window.delegate = sizeGuard   // contentMinSize 만으로는 손으로 줄일 때 막히지 않아 한 번 더 막는다
+        // 터미널을 펼쳤을 때 제목 막대·탭 줄 빈 곳 더블클릭 = 창 크기 전환(화면 전체 ↔ 60%). 그 클릭은 삼킨다
+        NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { e in
+            guard isWindowSizeDoubleClick(e) else { return e }
+            toggleWindowSize()
+            return nil
+        }
 
         // 저장된 창 위치 끝에 macOS 타일 배치 기록({"tilingState":…})이 붙어 있으면 창을 띄우는 순간 macOS 가 그 타일 크기로
         // 되돌린다(2026-10-16 확인 — 미니로 둔 300×144 가 화면 높이로, 폭 454 가 타일 폭 385 로 열렸다). 크기·위치 부분만 남긴다
@@ -6885,6 +7005,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         term.keyEquivalent = "t"
         term.keyEquivalentModifierMask = [.control, .option]
         windowMenu.addItem(term)
+        // 탭 줄의 "+ 새 세션" 과 같다(접혀 있으면 펼친다). 터미널에 포커스가 있어도 오도록 엔진의 ⌘T(new_tab)는 풀어 두었다
+        let newSession = ActionItem("새 세션…") { TerminalHub.shared.newSessionSheet() }
+        newSession.keyEquivalent = "t"
+        windowMenu.addItem(newSession)
         windowMenu.addItem(.separator())
         // 보드 위치(오른쪽·왼쪽)와 펼치기·접기 애니메이션 — 체크 표시는 validateMenuItem 이 단다
         let sideMenu = NSMenu(title: "보드 위치")
