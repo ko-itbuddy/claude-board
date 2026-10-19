@@ -1377,7 +1377,7 @@ struct KindLabel: View {
             : headless ? Color(red: 0.72, green: 0.55, blue: 1.00) : Color(red: 0.32, green: 0.78, blue: 0.86)
         let name = subagent ? "서브에이전트" : headless ? "백그라운드" : "터미널"
         Label(name, systemImage: subagent ? "person.2.fill" : headless ? "moon.stars.fill" : "terminal.fill")
-            .font(.system(size: 10, weight: .semibold))
+            .boardFont(10, weight: .semibold)
             .labelStyle(compact ? AnyLabelStyle(.iconOnly) : AnyLabelStyle(.titleAndIcon))
             .fixedSize()
             .hint(name)
@@ -1399,7 +1399,7 @@ struct PlaceChip: View {
 
     private func chip(_ text: String, _ bg: Color, _ fg: Color, mono: Bool = false, hint: String) -> some View {
         Text(text)
-            .font(.system(size: 10, weight: .semibold, design: mono ? .monospaced : .default))
+            .boardFont(10, weight: .semibold, design: mono ? .monospaced : .default)
             .foregroundStyle(fg)
             .padding(.horizontal, 6).padding(.vertical, 1.5)
             .background(Capsule().fill(bg))
@@ -1451,7 +1451,7 @@ struct ContextLabel: View {
             }
             Text(level == 2 ? "\(ctx.pct)%" : "\(ctx.pct)% · \(tokens(ctx.used))").monospacedDigit().contentTransition(.numericText())
         }
-        .font(.system(size: 10, weight: .semibold))
+        .boardFont(10, weight: .semibold)
         .foregroundStyle(c)
         .padding(.horizontal, 6)
         .padding(.vertical, 1.5)
@@ -1474,7 +1474,7 @@ struct ModelLabel: View {
                  : level == 1 ? brain.family : String(brain.family.prefix(1)))
             if brain.effortLevel > 0 { EffortBars(level: brain.effortLevel, color: c) }
         }
-        .font(.system(size: 10, weight: .semibold))
+        .boardFont(10, weight: .semibold)
         .foregroundStyle(c)
         .padding(.horizontal, 6)
         .padding(.vertical, 1.5)
@@ -1539,7 +1539,7 @@ struct UsagePanel: View {
         Label(usage.tokenExpired ? "로그인 토큰 갱신 전: 세션이 다음 요청을 보내면 보입니다"
               : usage.failed ? "사용량을 불러오지 못했습니다" : "사용량 불러오는 중…",
               systemImage: "gauge.with.dots.needle.33percent")
-            .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            .boardFont(11).foregroundStyle(.secondary).lineLimit(1)
     }
 
     // 간략 모드 한 줄 — 넓으면 이름·막대·비율, 좁으면 막대를 빼고, 더 좁으면 이름을 줄인다
@@ -1577,7 +1577,7 @@ struct UsagePanel: View {
             }
             if let n = accounts.notice {
                 Label(n.text, systemImage: n.error ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                    .font(.system(size: 10.5, weight: .medium))
+                    .boardFont(10.5, weight: .medium)
                     .foregroundStyle(n.error ? Color(red: 1.00, green: 0.58, blue: 0.45) : Color(red: 0.42, green: 0.85, blue: 0.60))
                     .lineLimit(2)
                     .padding(.top, compact ? 6 : 0)
@@ -1597,14 +1597,14 @@ struct UsagePanel: View {
             let c = Self.color(l.pct)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(l.label).font(.system(size: 12, weight: .semibold)).lineLimit(1).layoutPriority(1)
+                    Text(l.label).boardFont(12, weight: .semibold).lineLimit(1).layoutPriority(1)
                     Spacer(minLength: 4)
-                    Text(resetText(l.resets, now)).font(.system(size: 10.5)).foregroundStyle(.secondary)
+                    Text(resetText(l.resets, now)).boardFont(10.5).foregroundStyle(.secondary)
                         .monospacedDigit()
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                     Text("\(Int(l.pct.rounded()))%")
-                        .font(.system(size: 13, weight: .bold)).monospacedDigit()
+                        .boardFont(13, weight: .bold).monospacedDigit()
                         .foregroundStyle(c)
                         .frame(minWidth: 38, alignment: .trailing)
                         .contentTransition(.numericText())
@@ -1634,7 +1634,7 @@ struct CompactLimit: View {
         let c = UsagePanel.color(limit.pct)
         HStack(spacing: 4) {
             Text(level == 2 ? limit.tiny : limit.short)
-                .font(.system(size: 11, weight: .semibold))
+                .boardFont(11, weight: .semibold)
                 .foregroundStyle(.secondary)
             if level == 0 {
                 ZStack(alignment: .leading) {
@@ -1644,7 +1644,7 @@ struct CompactLimit: View {
                 .frame(width: 26, height: 4)
             }
             Text("\(Int(limit.pct.rounded()))%")
-                .font(.system(size: 12, weight: .bold)).monospacedDigit()
+                .boardFont(12, weight: .bold).monospacedDigit()
                 .foregroundStyle(c)
                 .contentTransition(.numericText())
         }
@@ -1689,12 +1689,12 @@ struct AccountChip: View {
                     .contentTransition(.symbolEffect(.replace))
                 if !compact {
                     Text(accounts.adding ? "로그인 기다리는 중…" : c?.email ?? "로그인 정보 없음")
-                        .font(.system(size: 11.5, weight: .semibold))
+                        .boardFont(11.5, weight: .semibold)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if !accounts.adding, let p = c?.plan, !p.isEmpty {
                         Text(p)
-                            .font(.system(size: 9.5, weight: .bold))
+                            .boardFont(9.5, weight: .bold)
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 5).padding(.vertical, 1)
                             .background(Capsule().fill(Color.white.opacity(0.08)))
@@ -1785,6 +1785,49 @@ struct AccountChip: View {
     }
 }
 
+// 정보 라벨을 HStack 처럼 늘어놓다가 줄 폭을 넘는 라벨부터 다음 줄로 — 세션·서브에이전트 줄의 가장 줄인 모양도 안 들어갈 때.
+// 폭을 정하지 않고 물으면(ViewThatFits 가 이상적인 크기를 잴 때) 한 줄 크기
+struct WrapRow: Layout {
+    let spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrange(proposal.width, subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for (v, p) in zip(subviews, arrange(bounds.width, subviews).points) {
+            v.place(at: CGPoint(x: bounds.minX + p.x, y: bounds.minY + p.y), proposal: .unspecified)
+        }
+    }
+
+    // 라벨마다 왼쪽 위 자리와 전체 크기. 줄 안에서는 HStack 처럼 세로 가운데에 맞춘다
+    private func arrange(_ width: CGFloat?, _ subviews: Subviews) -> (points: [CGPoint], size: CGSize) {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        var lines: [Range<Int>] = [], start = 0, x: CGFloat = 0
+        for (i, s) in sizes.enumerated() {
+            if let width, i > start, x + spacing + s.width > width {
+                lines.append(start..<i)
+                start = i
+            }
+            x = i == start ? s.width : x + spacing + s.width
+        }
+        if !sizes.isEmpty { lines.append(start..<sizes.count) }
+        var points = [CGPoint](repeating: .zero, count: sizes.count)
+        var y: CGFloat = 0, w: CGFloat = 0
+        for line in lines {
+            let h = line.map { sizes[$0].height }.max() ?? 0
+            var x: CGFloat = 0
+            for i in line {
+                points[i] = CGPoint(x: x, y: y + (h - sizes[i].height) / 2)
+                x += sizes[i].width + spacing
+            }
+            w = max(w, x - spacing)
+            y += h + 3
+        }
+        return (points, CGSize(width: w, height: max(0, y - 3)))
+    }
+}
+
 struct SessionRow: View {
     let s: Session
     let now: Date
@@ -1814,9 +1857,9 @@ struct SessionRow: View {
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: s.subagents)
     }
 
-    private func meta(level: Int) -> some View {
+    private func meta(level: Int, wrap: Bool = false) -> some View {
         let compact = level > 0
-        return HStack(spacing: 5) {
+        return (wrap ? AnyLayout(WrapRow(spacing: 5)) : AnyLayout(HStackLayout(spacing: 5))) {
             Text(s.state == "ended" ? "\(clock(s.updated)) 종료"
                  : s.state == "idle" ? "\(elapsed(s.since, now)) 전" : elapsed(s.since, now))
                 .monospacedDigit()
@@ -1842,7 +1885,7 @@ struct SessionRow: View {
             if let b = s.brain { ModelLabel(brain: b, level: level) }
             if let ctx = s.ctx { ContextLabel(ctx: ctx, level: level) }
         }
-        .font(.system(size: 11))
+        .boardFont(11)
         .foregroundStyle(.secondary)
     }
 
@@ -1864,7 +1907,7 @@ struct SessionRow: View {
                 // 첫 줄: 제목 + 오른쪽 단추들. 정보 라벨은 둘째 줄을 가로로 다 쓴다 — 창이 좁아도 넘치지 않게
                 HStack(alignment: .center, spacing: 8) {
                     Text(s.title)
-                        .font(.system(size: 13, weight: .medium))
+                        .boardFont(13, weight: .medium)
                         .foregroundStyle(s.state == "ended" ? .secondary : .primary)
                         .lineLimit(1)
                     Spacer(minLength: 4)
@@ -1881,17 +1924,19 @@ struct SessionRow: View {
                         .hint("목록에서 지우기")
                     }
                 }
-                // 다 들어가면 글자까지, 좁으면 종류 라벨은 아이콘만·하위 작업은 아이콘 + 개수만, 더 좁으면 컨텍스트 막대·토큰을 뺀다
+                // 다 들어가면 글자까지, 좁으면 종류 라벨은 아이콘만·하위 작업은 아이콘 + 개수만, 더 좁으면 컨텍스트 막대·토큰을 뺀다.
+                // 그래도 안 들어가면(보드 최소 폭·큰 보드 글자) 다음 줄로 넘긴다 — 한 줄을 고집하면 세션 줄이 넓어져 카드가 보드 밖으로 밀린다
                 ViewThatFits(in: .horizontal) {
                     meta(level: 0)
                     meta(level: 1)
                     meta(level: 2)
+                    meta(level: 2, wrap: true)
                 }
-                .font(.system(size: 11))
+                .boardFont(11)
                 .foregroundStyle(.secondary)
                 if s.state == "waiting", !s.message.isEmpty {
                     Label(s.message, systemImage: "hand.raised.fill")
-                        .font(.system(size: 11, weight: .medium))
+                        .boardFont(11, weight: .medium)
                         .foregroundStyle(c)
                         .lineLimit(2)
                         .transition(.move(edge: .top).combined(with: .opacity))
@@ -2167,6 +2212,7 @@ struct SessionMenuView: View {
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.14), lineWidth: 0.5))
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .preferredColorScheme(.dark)
+        .boardFont(13)   // 글자 크기를 따로 정하지 않은 글자(단추 제목 등)도 보드 글자 비율을 따른다
         .accessibilityElement(children: .contain)
         .accessibilityLabel("세션 메뉴")
     }
@@ -2175,14 +2221,14 @@ struct SessionMenuView: View {
     private func header(_ s: Session) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(s.title)
-                .font(.system(size: 13, weight: .semibold))
+                .boardFont(13, weight: .semibold)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 6) {
                 Circle().fill(Palette.color(s.state)).frame(width: 7, height: 7)
-                Text(Palette.name(s.state)).font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.color(s.state)).fixedSize()
+                Text(Palette.name(s.state)).boardFont(11, weight: .semibold).foregroundStyle(Palette.color(s.state)).fixedSize()
                 PlaceChip(s: s, place: model.place, appName: model.appName, mode: model.mode)
-                Text((s.cwd as NSString).lastPathComponent).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                Text((s.cwd as NSString).lastPathComponent).boardFont(11).foregroundStyle(.secondary).lineLimit(1)
             }
         }
         .padding(.horizontal, 14)
@@ -2201,8 +2247,8 @@ struct SessionMenuView: View {
                     .frame(width: 26, height: 26)
                     .background(RoundedRectangle(cornerRadius: 7).fill(item.tint.opacity(on ? 0.26 : 0.14)))
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(item.title).font(.system(size: 13, weight: .semibold)).foregroundStyle(item.destructive ? item.tint : .primary)
-                    Text(item.detail).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text(item.title).boardFont(13, weight: .semibold).foregroundStyle(item.destructive ? item.tint : .primary)
+                    Text(item.detail).boardFont(11).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
             }
@@ -2348,7 +2394,7 @@ struct AllMuteButton: View {
                 }
                 Image(systemName: muted ? "bell.slash.fill" : "bell.fill")
             }
-            .font(.system(size: 11, weight: .semibold))
+            .boardFont(11, weight: .semibold)
             .foregroundStyle(muted ? c : hover ? .primary : .secondary)
             .contentTransition(.symbolEffect(.replace))
             .padding(.horizontal, 8)
@@ -2378,13 +2424,13 @@ struct KindSection: View {
                 .rotationEffect(.degrees(collapsed ? 0 : 90))
                 .frame(width: 8)
             Image(systemName: headless ? "moon.stars.fill" : "terminal.fill").font(.system(size: 9, weight: .semibold))
-            Text(headless ? "백그라운드" : "터미널").font(.system(size: 10.5, weight: .semibold))
+            Text(headless ? "백그라운드" : "터미널").boardFont(10.5, weight: .semibold)
             ForEach(["waiting", "working", "paused", "idle"], id: \.self) { st in
                 let n = sessions.filter { $0.state == st }.count
                 if n > 0 {
                     HStack(spacing: 3) {
                         Circle().fill(Palette.color(st)).frame(width: 6, height: 6)
-                        Text("\(n)").font(.system(size: 10, weight: .semibold)).monospacedDigit()
+                        Text("\(n)").boardFont(10, weight: .semibold).monospacedDigit()
                             .foregroundStyle(.secondary)
                             .contentTransition(.numericText())
                     }
@@ -2428,7 +2474,7 @@ struct SubToggle: View {
                 }
             }
             .fixedSize()
-            .font(.system(size: 10, weight: .semibold))
+            .boardFont(10, weight: .semibold)
             .foregroundStyle(c)
             .padding(.horizontal, 6)
             .padding(.vertical, 1.5)
@@ -2463,16 +2509,17 @@ struct SubagentRow: View {
             StateIcon(state: sub.boardState).scaleEffect(0.8)
             VStack(alignment: .leading, spacing: 2) {
                 Text(sub.desc.isEmpty ? sub.type : sub.desc)
-                    .font(.system(size: 12, weight: .medium))
+                    .boardFont(12, weight: .medium)
                     .foregroundStyle(done ? .secondary : .primary)
                     .lineLimit(1)
-                // 좁으면 라벨을 아이콘만, 더 좁으면 에이전트 종류·도구 이름을 뺀다 — 글자가 잘게 끊기지 않게
+                // 좁으면 라벨을 아이콘만, 더 좁으면 에이전트 종류·도구 이름을 뺀다 — 글자가 잘게 끊기지 않게. 그래도 안 들어가면 다음 줄로
                 ViewThatFits(in: .horizontal) {
                     meta(level: 0)
                     meta(level: 1)
                     meta(level: 2)
+                    meta(level: 2, wrap: true)
                 }
-                .font(.system(size: 10.5))
+                .boardFont(10.5)
                 .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
@@ -2485,9 +2532,9 @@ struct SubagentRow: View {
  
     }
 
-    private func meta(level: Int) -> some View {
+    private func meta(level: Int, wrap: Bool = false) -> some View {
         let done = sub.state == "done"
-        return HStack(spacing: 5) {
+        return (wrap ? AnyLayout(WrapRow(spacing: 5)) : AnyLayout(HStackLayout(spacing: 5))) {
             KindLabel(subagent: true, compact: level > 0)
             if level < 2, !sub.type.isEmpty { Text(sub.type).fixedSize() }
             if level < 2 { Text("·") }
@@ -2505,6 +2552,21 @@ struct SubagentRow: View {
                     .hint(sub.tool)
             }
         }
+    }
+}
+
+// 경로 카드 폴더 모서리 표지 — 펼친 터미널이 지금 이 경로를 보이고 있다(아이콘은 제목 막대의 터미널 단추와 같은 쪽).
+// 글자는 붙이지 않는다 — 좁은 보드에서 카드 이름이 잘리고 바로 아래 "터미널" 구역 머리글과 겹쳐 읽힌다. 설명은 폴더 아이콘 힌트에
+struct TerminalHereMark: View {
+    let boardOnLeft: Bool
+    var body: some View {
+        Image(systemName: boardOnLeft ? "rectangle.trailinghalf.inset.filled" : "rectangle.leadinghalf.inset.filled")
+            .font(.system(size: 8, weight: .bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 4).padding(.vertical, 2.5)
+            .background(Capsule().fill(Color(nsColor: terminalBarColor)))
+            .overlay(Capsule().stroke(Color.white.opacity(0.7), lineWidth: 1))
+            .fixedSize()
     }
 }
 
@@ -2556,6 +2618,7 @@ struct GroupCard: View {
 
     var body: some View {
         let c = Palette.color(g.urgent)
+        let here = hub.expanded && hub.workspace == workspaceKey(g.id)   // 펼친 터미널이 이 경로를 보이는 중
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 Image(systemName: "chevron.right")
@@ -2576,20 +2639,23 @@ struct GroupCard: View {
                 }
                 .frame(width: 30, height: 30)
                 .background(RoundedRectangle(cornerRadius: 8).fill(c.opacity(0.16)))
-                .hint(collapsed ? g.active.first.map { "\(Palette.name($0.state)) · 누르면 펼치기" } ?? "작업 경로 · 누르면 펼치기"
-                      : "작업 경로 · 누르면 접기")
+                // 펼친 터미널이 지금 보이는 경로 — 상태 색과 헷갈리지 않게 흰 표지를 폴더 모서리에(카드 이름 폭을 줄이지 않게)
+                .overlay(alignment: .bottomTrailing) { if here { TerminalHereMark(boardOnLeft: hub.boardOnLeft).offset(x: 6, y: 5) } }
+                .hint((here ? "터미널에서 지금 보는 경로 · " : "")
+                      + (collapsed ? g.active.first.map { "\(Palette.name($0.state)) · 누르면 펼치기" } ?? "작업 경로 · 누르면 펼치기"
+                         : "작업 경로 · 누르면 접기"))
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(g.name).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                    Text(g.name).boardFont(15, weight: .semibold).lineLimit(1)
                     // 접혀 있으면 경로 대신 지금 하는 일을 상태 색으로 — 여럿이면 나머지 개수를 붙인다
                     if collapsed, let top = g.active.first {
                         HStack(spacing: 4) {
                             Text("\(Palette.name(top.state)) · \(doing(top))").lineLimit(1)
                             if g.active.count > 1 { Text("+\(g.active.count - 1)").fixedSize() }
                         }
-                        .font(.system(size: 11, weight: .medium))
+                        .boardFont(11, weight: .medium)
                         .foregroundStyle(Palette.color(top.state))
                     } else {
-                        Text(g.path).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                        Text(g.path).boardFont(11).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
                     }
                 }
                 Spacer()
@@ -2606,7 +2672,7 @@ struct GroupCard: View {
                         if n > 0 {
                             HStack(spacing: 3) {
                                 Circle().fill(Palette.color(st)).frame(width: 6, height: 6)
-                                Text("\(n)").font(.system(size: 11, weight: .semibold)).monospacedDigit()
+                                Text("\(n)").boardFont(11, weight: .semibold).monospacedDigit()
                                     .contentTransition(.numericText())
                             }
                             .hint("\(Palette.name(st)) \(n)개")
@@ -2622,7 +2688,10 @@ struct GroupCard: View {
             .padding(.bottom, collapsed ? 0 : 2)
             .contentShape(Rectangle())
             .clickable($hover)
-            .onTapGesture { withAnimation(foldSpring) { toggle() } }
+            .onTapGesture {
+                withAnimation(foldSpring) { toggle() }
+                hub.showWorkspace(g.id)   // 그 경로에 보드 탭이 있으면 터미널도 그 경로로(접힌 터미널은 펼치지 않는다)
+            }
             .contextMenu {
                 Button(pinned ? "상단 고정 풀기" : "상단에 고정", action: togglePin)
                 Button("목록에서 지우기", role: .destructive, action: remove)
@@ -2665,7 +2734,7 @@ struct GroupCard: View {
                                 .rotationEffect(.degrees(endedOpen ? 90 : 0))
                                 .frame(width: 8)
                             Text("종료된 세션 \(ended.count)개")
-                                .font(.system(size: 11, weight: .medium))
+                                .boardFont(11, weight: .medium)
                                 .contentTransition(.numericText())
                             Spacer()
                             if endedHover {
@@ -2755,7 +2824,7 @@ struct ClearEndedButton: View {
         Button(action: action) {
             HStack(spacing: 3) {
                 Image(systemName: "trash").font(.system(size: 9, weight: .bold))
-                if hover { Text("모두 지우기").font(.system(size: 10, weight: .semibold)) }
+                if hover { Text("모두 지우기").boardFont(10, weight: .semibold) }
             }
             .foregroundStyle(hover ? Color.red : .primary.opacity(0.8))
             .padding(.horizontal, 7)
@@ -2793,6 +2862,38 @@ extension View {
 
     // 마우스를 올리면 곧 뜨는 짧은 설명 — 시스템 툴팁(.help) 대신 쓴다
     func hint(_ text: String) -> some View { modifier(HintArea(text: text)) }
+
+    // 보드 글자 — 크기에 보드 글자 비율(BoardFontScale)을 곱한다. 보드 창의 SwiftUI 글자는 이것으로 쓴다(아이콘은 .font 그대로)
+    func boardFont(_ size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default) -> some View {
+        modifier(BoardFont(size: size, weight: weight, design: design))
+    }
+}
+
+// MARK: - 보드 글자 크기
+
+// 보드 글자 비율 — 보드 설정 boardFontScale(기본 1, 80%~150%, 10%씩. 윈도우 메뉴 ⌥⌘+·⌥⌘-·⌥⌘0).
+// 바뀌면 .boardFont 를 쓴 글자만 다시 그려진다 — 펼친 카드 같은 화면 상태는 그대로다(뿌리에 .id 를 바꾸는 방식은 @State 가 풀린다)
+@MainActor final class BoardFontScale: ObservableObject {
+    static let shared = BoardFontScale()
+    @Published private(set) var scale = CGFloat(min(1.5, max(0.8, UserDefaults.standard.object(forKey: "boardFontScale") as? Double ?? 1)))
+
+    // step: +1 크게, -1 작게, nil 원래 크기. 바뀐 비율을 보드 아래쪽에 잠깐 알린다
+    func change(_ step: Int?) {
+        let tenths = step.map { min(15, max(8, Int((scale * 10).rounded()) + $0)) } ?? 10
+        scale = CGFloat(tenths) / 10
+        UserDefaults.standard.set(Double(tenths) / 10, forKey: "boardFontScale")
+        TerminalHub.shared.toast("보드 글자 \(tenths * 10)%")
+    }
+}
+
+struct BoardFont: ViewModifier {
+    @ObservedObject var fontScale = BoardFontScale.shared
+    let size: CGFloat
+    let weight: Font.Weight
+    let design: Font.Design
+    func body(content: Content) -> some View {
+        content.font(.system(size: size * fontScale.scale, weight: weight, design: design))
+    }
 }
 
 // MARK: - 힌트
@@ -2873,7 +2974,7 @@ struct HintLabel: View {
     var body: some View {
         // 터미널 독의 힌트와 같은 색
         Text(text)
-            .font(.system(size: 11, weight: .medium))
+            .boardFont(11, weight: .medium)
             .foregroundStyle(Color.white.opacity(0.92))
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 8)
@@ -2904,7 +3005,7 @@ struct SummaryChip: View {
     var body: some View {
         HStack(spacing: 5) {
             Circle().fill(Palette.color(state)).frame(width: 7, height: 7)
-            Text("\(n)").font(.system(size: 12, weight: .bold)).monospacedDigit().contentTransition(.numericText())
+            Text("\(n)").boardFont(12, weight: .bold).monospacedDigit().contentTransition(.numericText())
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 4)
@@ -3062,6 +3163,7 @@ struct Foreman: View {
     let now: Date
     var compact = false     // 미니 화면 — 말풍선은 한 줄, 캐릭터는 조금 작게
     @StateObject private var clock = ForemanClock()
+    @ObservedObject private var fontScale = BoardFontScale.shared
     @AppStorage("mascot") private var mascot: Mascot = .tralalero
 
     // 승인 대기가 없으면 돌아가는 말 끝에 캐릭터 유행어를 한 번 끼운다
@@ -3081,7 +3183,7 @@ struct Foreman: View {
         }
         HStack(alignment: .center, spacing: 2) {
             Text(q.text)
-                .font(.system(size: 11, weight: .bold))
+                .boardFont(11, weight: .bold)
                 .foregroundStyle(.white)
                 .multilineTextAlignment(.leading)
                 .lineLimit(compact ? 1 : 2)
@@ -3089,7 +3191,8 @@ struct Foreman: View {
                 .padding(.leading, 9).padding(.trailing, 16).padding(.vertical, 5)
                 .background(SpeechBubble().fill(tint.opacity(0.92)))
                 .overlay(SpeechBubble().stroke(Color.white.opacity(0.18), lineWidth: 0.6))
-                .frame(maxWidth: compact ? 230 : 170, alignment: .trailing)
+                // 보드 글자를 키우면 제목(layoutPriority)이 자리를 다 가져가 말풍선이 글자 없이 좁아졌다 — 키웠을 때만 몇 글자는 보이게 최소 폭
+                .frame(minWidth: compact || fontScale.scale <= 1 ? nil : 100, maxWidth: compact ? 230 : 170, alignment: .trailing)
                 .id(q.text)
                 .transition(.asymmetric(
                     insertion: .scale(scale: 0.4, anchor: .trailing).combined(with: .opacity),
@@ -3928,7 +4031,7 @@ struct EdgeDock: View {
                     .font(.system(size: 11, weight: .semibold))
                 Text(installed ? (app.cli ? "\(app.name) 실행 · 터미널 새 창" : running ? "\(app.name) 창으로 이동" : "\(app.name) 실행")
                                : "\(app.name) · 설치되지 않음")
-                    .font(.system(size: 12, weight: .semibold))
+                    .boardFont(12, weight: .semibold)
                     .lineLimit(1)
                     .contentTransition(.opacity)
             }
@@ -4036,8 +4139,8 @@ struct OpacitySlider: View {
             .tint(Palette.accent)
             .frame(width: compact ? 48 : 84)
             Text("\(Int((opacity.level * 100).rounded()))%")
-                .font(.system(size: 10, weight: .semibold)).monospacedDigit()
-                .frame(width: 32, alignment: .trailing)
+                .boardFont(10, weight: .semibold).monospacedDigit()
+                .fixedSize().frame(minWidth: 32, alignment: .trailing)   // 보드 글자를 키우면 "100%" 가 32 에 안 들어가 두 줄이 됐다
         }
         .foregroundStyle(.secondary)
         .opacity(hover ? 1 : 0.6)
@@ -4169,11 +4272,11 @@ struct BoardView: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 Image(nsImage: appIcon).resizable().interpolation(.high).frame(width: 24, height: 24)
-                Text("Claude Board").font(.system(size: 19, weight: .bold)).lineLimit(1)
+                Text("Claude Board").boardFont(19, weight: .bold).lineLimit(1)
                 if !updater.current.isEmpty {
                     // build-board.sh 로 만든 개발용 빌드는 버전이 1.0 이다
                     Text(updater.current == "1.0" ? "dev" : updater.current)
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .boardFont(12, weight: .semibold, design: .monospaced)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background(Capsule().fill(Color.white.opacity(0.08)))
@@ -4190,7 +4293,7 @@ struct BoardView: View {
                         .hint("설치된 Claude Code 버전")
                 }
             }
-            .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+            .boardFont(12).foregroundStyle(.secondary).lineLimit(1)
         }
     }
 
@@ -4256,7 +4359,7 @@ struct BoardView: View {
                     Image(systemName: pinned ? "pin.fill" : "pin.slash")
                         .rotationEffect(.degrees(pinned ? 0 : 45))
                 }
-                .font(.system(size: 11, weight: .semibold))
+                .boardFont(11, weight: .semibold)
                 .foregroundStyle(pinned ? Palette.accent : .secondary)
                 .padding(.horizontal, 9)
                 .frame(height: 24)
@@ -4281,6 +4384,7 @@ struct BoardView: View {
             }
             TerminalNotice(hub: TerminalHub.shared)
         }
+        .boardFont(13)   // 글자 크기를 따로 정하지 않은 글자(단추 제목 등)도 보드 글자 비율을 따른다
     }
 
     private var board: some View {
@@ -4310,9 +4414,9 @@ struct BoardView: View {
             if store.groups.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "moon.zzz.fill").font(.system(size: 30)).foregroundStyle(.secondary)
-                    Text("아직 기록된 세션이 없습니다").font(.system(size: 14, weight: .medium))
+                    Text("아직 기록된 세션이 없습니다").boardFont(14, weight: .medium)
                     Text("Claude Code 세션에서 요청을 보내면 여기에 나타납니다")
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                        .boardFont(12).foregroundStyle(.secondary)
                 }
                 // 창이 낮으면 안내가 줄어들며 잘린다 — 줄지 않으면 보드가 넘쳐 아래 투명도 슬라이더가 밀려난다
                 .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
@@ -4323,10 +4427,10 @@ struct BoardView: View {
                 if let f = filter {
                     HStack(spacing: 6) {
                         Circle().fill(Palette.color(f)).frame(width: 7, height: 7)
-                        Text("\(Palette.name(f))만 보는 중").font(.system(size: 12, weight: .semibold))
+                        Text("\(Palette.name(f))만 보는 중").boardFont(12, weight: .semibold)
                         Spacer()
                         Button("모두 보기") { withAnimation(foldSpring) { filter = nil } }
-                            .buttonStyle(.plain).font(.system(size: 12, weight: .semibold)).foregroundStyle(Palette.accent)
+                            .buttonStyle(.plain).boardFont(12, weight: .semibold).foregroundStyle(Palette.accent)
                     }
                     .padding(.horizontal, 10).padding(.vertical, 6)
                     .background(RoundedRectangle(cornerRadius: 8).fill(Palette.color(f).opacity(0.12)))
@@ -4373,7 +4477,7 @@ struct BoardView: View {
                             HStack(spacing: 5) {
                                 Image(systemName: "chevron.down").font(.system(size: 10, weight: .bold))
                                 Text(b.waiting ? "아래에 경로 \(b.n)개 더 · 승인 대기 있음" : "아래에 경로 \(b.n)개 더")
-                                    .font(.system(size: 11, weight: .semibold))
+                                    .boardFont(11, weight: .semibold)
                             }
                             .foregroundStyle(b.waiting ? Color.black.opacity(0.85) : Color.white.opacity(0.9))
                             .padding(.horizontal, 10).padding(.vertical, 5)
@@ -4536,20 +4640,20 @@ struct UpdateBanner: View {
             Text(notice?.text ?? (updater.failed ? "업데이트하지 못했습니다 · ~/.claude/notifier/update.log"
                  : updater.running ? "업데이트 중… 끝나면 보드가 다시 열립니다"
                  : "새 버전 \(updater.latest ?? "") 이 나왔습니다"))
-                .font(.system(size: 12, weight: .semibold)).lineLimit(1).truncationMode(.middle)
+                .boardFont(12, weight: .semibold).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 6)
             if updater.running {
                 ProgressView().controlSize(.small)
             } else if notice == nil {
                 // 무엇이 바뀌었는지 — 브라우저에서 GitHub 의 CHANGELOG.md 를 연다
                 Button("변경 내용") { NSWorkspace.shared.open(changelogURL) }
-                    .buttonStyle(.plain).font(.system(size: 12, weight: .semibold))
+                    .buttonStyle(.plain).boardFont(12, weight: .semibold)
                     .foregroundStyle(notesHover ? .primary : .secondary)
                     .clickable($notesHover)
                     .hint("GitHub 에서 CHANGELOG.md 를 엽니다")
                 Rectangle().fill(Color.white.opacity(0.14)).frame(width: 0.5, height: 10).padding(.horizontal, 2)
                 Button(updater.failed ? "다시 시도" : "업데이트") { updater.run() }
-                    .buttonStyle(.plain).font(.system(size: 12, weight: .semibold))
+                    .buttonStyle(.plain).boardFont(12, weight: .semibold)
                     .foregroundStyle(tint.opacity(hover ? 1 : 0.85))
                     .clickable($hover)
                     .hint("새 버전을 받아 바꿔 끼웁니다. 끝나면 보드가 다시 열립니다")
@@ -4570,8 +4674,27 @@ struct UpdateBanner: View {
 let paneDividerWidth: CGFloat = 8       // 터미널과 보드 사이 경계 — 끌어서 두 영역 폭을 바꾼다
 let terminalMinWidth: CGFloat = 480     // 펼쳤을 때 터미널 영역의 최소 폭
 let terminalTabBarHeight: CGFloat = 40
+let terminalWorkspaceBarHeight: CGFloat = 32   // 탭 줄 위 경로 줄 — 탭이 있을 때만
 let terminalAreaColor = NSColor(red: 0.071, green: 0.075, blue: 0.094, alpha: 1)   // 탭이 없을 때 터미널 영역 바탕
 let terminalBarColor = NSColor(red: 0.10, green: 0.10, blue: 0.13, alpha: 1)        // 탭 줄과 그 위 제목 막대 띠
+
+// 작업 경로를 견주는 꼴 — /tmp ↔ /private/tmp 같은 링크, 끝 / 차이로 같은 폴더가 어긋나지 않게(없는 경로는 글자만 다듬는다).
+// 보드 카드는 1초마다 다시 그려지므로 경로마다 한 번만 푼다
+var workspaceKeys: [String: String] = [:]
+func workspaceKey(_ path: String) -> String {
+    if let k = workspaceKeys[path] { return k }
+    let k = (path as NSString).resolvingSymlinksInPath
+    workspaceKeys[path] = k
+    return k
+}
+
+// 경로 줄 이름 — 폴더 이름(홈은 ~). 같은 이름이 둘 이상이면 부모 폴더를 붙여 가른다
+func workspaceLabel(_ ws: String, among list: [String]) -> String {
+    func name(_ p: String) -> String { p == NSHomeDirectory() ? "~" : (p as NSString).lastPathComponent }
+    let n = name(ws)
+    guard ws != NSHomeDirectory(), list.filter({ name($0) == n }).count > 1 else { return n }
+    return ((ws as NSString).deletingLastPathComponent as NSString).lastPathComponent + "/" + n
+}
 
 // 한글 조합 입력 고침 — 입력기는 조합 중 Return·Esc 에 "글자 확정" 과 "줄바꿈·취소 명령" 을 함께 보내는데 래퍼는 확정 글자가 있으면
 // 명령을 버려 Return 을 두 번 눌러야 한다(Ghostty.app 1.3.1 도 같다). 입력기가 실제로 그 명령을 보냈을 때만 원래 키를 수정키 그대로
@@ -4583,6 +4706,14 @@ final class BoardTerminalView: AppTerminalView {
 
     // 창은 배경을 끌어 옮길 수 있게 되어 있고 엔진 뷰는 불투명이 아니라 기본값이 true — 끌어서 글자를 고르면 창이 따라 움직였다(사용자 보고)
     override var mouseDownCanMoveWindow: Bool { false }
+
+    // 키보드 초점을 받았다(화면을 누르면 래퍼의 mouseDown 이 첫 응답자로 세운다, ⌘[ 등으로 옮겨도) — 그 탭의 고른 화면으로 삼는다
+    var onFocus: (() -> Void)?
+    override func becomeFirstResponder() -> Bool {
+        let ok = super.becomeFirstResponder()
+        if ok { onFocus?() }
+        return ok
+    }
 
     private func mods(_ event: NSEvent) -> TerminalInputModifiers {
         var m: TerminalInputModifiers = []
@@ -4676,14 +4807,9 @@ func asciiKeyCharacters(_ keyCode: UInt16, shift: Bool) -> String? {
 // 터미널 설정은 보드가 직접 만든다 — 사용자 Ghostty 설정을 바탕으로 하되 theme 줄은 뺀다(엔진 번들에 테마 폴더가 없어 theme 한 줄 때문에
 // 파일 전체가 조용히 거부된다). 같은 이름 테마는 엔진의 테마 목록에서 찾아 넘긴다(넘기지 않으면 래퍼 기본 테마가 사용자 색을 덮는다)
 @MainActor func makeTerminalController() -> TerminalController {
-    let home = NSHomeDirectory()
-    // Ghostty 가 읽는 순서 — 뒤의 파일이 앞을 덮는다
-    let files = ["\(home)/.config/ghostty/config", "\(home)/.config/ghostty/config.ghostty",
-                 "\(home)/Library/Application Support/com.mitchellh.ghostty/config",
-                 "\(home)/Library/Application Support/com.mitchellh.ghostty/config.ghostty"]
     var lines: [String] = []
     var theme: String?
-    for f in files {
+    for f in ghosttyConfigFiles {
         guard let text = try? String(contentsOfFile: f, encoding: .utf8) else { continue }
         for line in text.components(separatedBy: .newlines) {
             let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
@@ -4701,14 +4827,65 @@ func asciiKeyCharacters(_ keyCode: UInt16, shift: Bool) -> String? {
     lines.append("keybind = super+t=unbind")              // ⌘T 는 보드의 새 세션(윈도우 메뉴)으로 — 엔진의 new_tab 도 처리할 곳이 없어 삼킨다
     // ⌘1~⌘9 는 보드의 탭 고르기(윈도우 메뉴)로 — 엔진 기본값은 같은 키를 글자(super+1)와 물리 키(super+digit_1) 두 가지로 goto_tab·last_tab 에 묶는다
     for n in 1...9 { lines.append("keybind = super+\(n)=unbind"); lines.append("keybind = super+digit_\(n)=unbind") }
+    // 화면 나누기 키(Ghostty 와 같은 키)와 Ghostty 의 탭 옮기기 키는 보드의 윈도우 메뉴(화면 나누기·탭으로 가기)로 — 엔진 기본값은 new_split·
+    // goto_split·resize_split·equalize_splits·toggle_split_zoom·previous_tab·next_tab 에 묶는데 래퍼에 받는 곳이 없다(보드가 화면 트리를 직접 쥔다).
+    // ⌘W(close_surface)는 엔진이 받아 그 화면의 닫기를 청한다(terminalDidClose)
+    for k in ["arrow_left", "arrow_right", "arrow_up", "arrow_down"] {
+        lines.append("keybind = super+alt+\(k)=unbind")
+        lines.append("keybind = super+ctrl+\(k)=unbind")
+    }
+    for k in ["super+d", "super+shift+d", "super+[", "super+]", "super+ctrl+=", "super+shift+enter",
+              "super+shift+[", "super+shift+]", "ctrl+tab", "ctrl+shift+tab"] { lines.append("keybind = \(k)=unbind") }
+    // ⌘=·⌘+·⌘- 는 보드의 터미널 글자 크기(윈도우 > 글자 크기), ⌘0 은 세션 보드 보기로 — 엔진 기본값은 이 넷을 글자 크기 키(increase·decrease·
+    // reset_font_size)로 묶는다(Ghostty 1.3.1 +list-keybinds --default). "super+==unbind" 처럼 써도 +validate-config 를 통과한다
+    for k in ["=", "+", "-", "0"] { lines.append("keybind = super+\(k)=unbind") }
     let dir = NSTemporaryDirectory() + (Bundle.main.bundleIdentifier ?? instanceName)
     try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
     let path = dir + "/board-terminal.conf"
     try? lines.joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
-    let c = TerminalController(configFilePath: path, theme: terminalTheme(theme))
+    let c = TerminalController(configSource: .file(path), theme: terminalTheme(theme), terminalConfiguration: terminalFontConfiguration())
     // 한 줄이라도 거부되면 파일 전체가 조용히 기본값으로 돌아간다 — 원인을 찾을 수 있게 남긴다
     if let issue = c.lastConfigurationIssue { boardLog("터미널 설정 거부됨: \(issue)") }
     return c
+}
+
+// 사용자 Ghostty 설정 파일 — Ghostty 가 읽는 순서(뒤의 파일이 앞을 덮는다)
+let ghosttyConfigFiles = ["\(NSHomeDirectory())/.config/ghostty/config", "\(NSHomeDirectory())/.config/ghostty/config.ghostty",
+                          "\(NSHomeDirectory())/Library/Application Support/com.mitchellh.ghostty/config",
+                          "\(NSHomeDirectory())/Library/Application Support/com.mitchellh.ghostty/config.ghostty"]
+
+// 사용자 Ghostty 설정에서 그 키의 마지막 값(따옴표는 뗀다) — 없으면 nil
+func ghosttyConfigValue(_ key: String) -> String? {
+    var value: String?
+    for f in ghosttyConfigFiles {
+        guard let text = try? String(contentsOfFile: f, encoding: .utf8) else { continue }
+        for line in text.components(separatedBy: .newlines) {
+            let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            if parts.count == 2, parts[0] == key { value = parts[1].trimmingCharacters(in: CharacterSet(charactersIn: "\"")) }
+        }
+    }
+    return value
+}
+
+// 사용자 Ghostty 설정의 글자 크기(마지막 font-size 줄) — 없으면 엔진 기본(macOS 13). 터미널 글자 크기를 처음 바꿀 때의 기준
+func ghosttyConfigFontSize() -> Double { ghosttyConfigValue("font-size").flatMap(Double.init) ?? 13 }
+
+// 나눈 화면 가운데 고르지 않은 화면의 불투명도 — Ghostty 의 unfocused-split-opacity(기본 0.7, 0.15~1)
+let unfocusedSplitOpacity = CGFloat(min(1, max(0.15, ghosttyConfigValue("unfocused-split-opacity").flatMap(Double.init) ?? 0.7)))
+
+// 나눈 화면 사이 경계 색 — Ghostty 의 split-divider-color(#RRGGBB). 없으면 Ghostty 처럼 터미널 바탕색을 어둡게
+func splitDividerColor(background: NSColor) -> NSColor {
+    if let v = ghosttyConfigValue("split-divider-color"), let n = UInt32(v.replacingOccurrences(of: "#", with: ""), radix: 16), v.count >= 6 {
+        return NSColor(red: CGFloat(n >> 16 & 0xFF) / 255, green: CGFloat(n >> 8 & 0xFF) / 255, blue: CGFloat(n & 0xFF) / 255, alpha: 1)
+    }
+    return background.blended(withFraction: 0.4, of: .black) ?? background
+}
+
+// 보드가 정한 터미널 글자 크기(보드 설정 terminalFontSize) — 래퍼가 사용자 설정 → 이것 → 테마 순으로 한 설정을 만들어 모든 탭에 준다.
+// 없으면 빈 설정(사용자 Ghostty 설정 크기)
+func terminalFontConfiguration() -> TerminalConfiguration {
+    guard let size = UserDefaults.standard.object(forKey: "terminalFontSize") as? Double else { return TerminalConfiguration() }
+    return TerminalConfiguration().fontSize(Float(size))
 }
 
 // ~/.claude/notifier/board.log 에 한 줄 남긴다 — 보드는 그대로 동작해야 하는 문제(단축키 등록 실패 등)를 적는다
@@ -4732,18 +4909,19 @@ func terminalTheme(_ spec: String?) -> TerminalTheme {
     return TerminalTheme(light: l.toTerminalConfiguration(), dark: d.toTerminalConfiguration())
 }
 
-// 보드 터미널 탭 하나
-final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceTitleDelegate, TerminalSurfaceCloseDelegate,
-                      TerminalSurfacePwdDelegate, TerminalSurfaceClipboardConfirmationDelegate, TerminalSurfaceLifecycleDelegate {
+// 보드 터미널 화면 하나(엔진 surface 하나) — 탭은 화면 하나 이상을 나눠(split) 보인다(Ghostty 처럼). 셸·claude 명령·세션 짝짓기는 화면 단위다
+final class BoardSurface: NSObject, ObservableObject, Identifiable, TerminalSurfaceTitleDelegate, TerminalSurfaceCloseDelegate,
+                          TerminalSurfacePwdDelegate, TerminalSurfaceClipboardConfirmationDelegate, TerminalSurfaceLifecycleDelegate {
     let id = UUID()
     let view: BoardTerminalView
-    // 탭은 모두 로그인 셸이다. claude 탭은 보드가 그 셸에 claude 명령을 쳐 넣은 탭 — claude 가 끝나면 셸 프롬프트가 남는다(Ghostty 처럼)
-    var command: String?            // 보드가 셸에 넣은 claude 명령 — nil 이면 셸 탭(claude 가 끝나 셸만 남은 탭도)
-    var sessionId: String?          // 이 탭의 세션 id(새 세션의 --session-id, 이어 연 세션, tty 로 짝지은 지금 세션) — 끝난 뒤에도 남는다
-    var mdRenderOff = false         // 답변 꾸미기를 끄고 띄운 claude 탭 — 이 탭의 세션 id 는 모두 끈 세션으로 기억한다
+    weak var tab: BoardTab?         // 이 화면이 든 탭
+    // 화면은 모두 로그인 셸이다. claude 화면은 보드가 그 셸에 claude 명령을 쳐 넣은 화면 — claude 가 끝나면 셸 프롬프트가 남는다(Ghostty 처럼)
+    var command: String?            // 보드가 셸에 넣은 claude 명령 — nil 이면 셸 화면(claude 가 끝나 셸만 남은 화면도)
+    var sessionId: String?          // 이 화면의 세션 id(새 세션의 --session-id, 이어 연 세션, tty 로 짝지은 지금 세션) — 끝난 뒤에도 남는다
+    var mdRenderOff = false         // 답변 꾸미기를 끄고 띄운 claude 화면 — 이 화면의 세션 id 는 모두 끈 세션으로 기억한다
     @Published var title = ""
     @Published var cwd: String
-    @Published var session: Session?   // 이 탭에서 도는 세션(세션 파일의 tty 로 짝짓는다) — 탭의 상태 점·제목
+    @Published var session: Session?   // 이 화면에서 도는 세션(세션 파일의 tty 로 짝짓는다) — 탭의 상태 점·제목
     private var shellReady = false     // 셸이 첫 프롬프트를 띄웠다(셸 통합이 경로·제목을 알림)
     private var pending: String?       // 셸이 뜨면 넣을 명령
     private var typedAt = Date.distantPast
@@ -4752,14 +4930,13 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
         cwd = options.workingDirectory ?? NSHomeDirectory()
         view = BoardTerminalView(frame: frame)
         super.init()
-        view.autoresizingMask = [.width, .height]
-        view.delegate = self   // 약한 참조 — 허브가 탭을 쥔다
+        view.delegate = self   // 약한 참조 — 탭이 화면을 쥔다
         view.controller = controller
         view.configuration = options
+        view.onFocus = { [weak self] in if let self { TerminalHub.shared.surfaceFocused(self) } }
     }
 
-    // 탭 이름 — 작업 경로의 폴더 이름
-    var name: String { cwd == NSHomeDirectory() ? "~" : (cwd as NSString).lastPathComponent }
+    var folderName: String { cwd == NSHomeDirectory() ? "~" : (cwd as NSString).lastPathComponent }
     // 세션 파일의 tty 와 같은 꼴(/dev/ 를 뗀 이름)
     var tty: String { (view.ttyName ?? "").replacingOccurrences(of: "/dev/", with: "") }
 
@@ -4818,14 +4995,14 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
         return leader > 0 && fg != leader && parentPid(fg) == leader
     }
 
-    // pid 가 탭의 앞(포그라운드) 프로그램인가 — 그 프로세스 그룹이 tty 의 포그라운드 그룹이면. 셸에서 띄운 claude 는 제 작업 그룹이
-    // 포그라운드다. 셸 탭에서 & 로 띄운 claude -p 는 아니다(키를 넣으면 셸이 받는다)
+    // pid 가 화면의 앞(포그라운드) 프로그램인가 — 그 프로세스 그룹이 tty 의 포그라운드 그룹이면. 셸에서 띄운 claude 는 제 작업 그룹이
+    // 포그라운드다. 셸 화면에서 & 로 띄운 claude -p 는 아니다(키를 넣으면 셸이 받는다)
     func isForeground(_ pid: Int32) -> Bool {
         guard pid > 0, let fg = view.foregroundPid, fg > 0 else { return false }
         return getpgid(pid) == fg
     }
 
-    // 탭의 프로그램에 키·글자를 넣는다(driveSession 의 단계) — 키는 키 경로, 글자는 붙여넣기
+    // 화면의 프로그램에 키·글자를 넣는다(driveSession 의 단계) — 키는 키 경로, 글자는 붙여넣기
     func drive(_ steps: [(String, String)], done: @escaping @MainActor (Bool) -> Void) {
         guard let (kind, value) = steps.first else { return done(true) }
         let rest = Array(steps.dropFirst())
@@ -4865,10 +5042,135 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
     }
 }
 
+enum SplitDirection { case left, right, up, down }
+
+// 탭의 화면 나누기 트리(Ghostty 의 SplitTree 와 같은 꼴) — 잎은 화면 하나, 가지는 둘로 나눈 것: right 면 왼쪽|오른쪽(⌘D), 아니면 위/아래(⇧⌘D),
+// ratio 는 앞쪽(왼쪽·위)의 몫. 경계를 끌거나 ⌃⌘방향키로 ratio 가 바뀐다. 나누기·닫기는 마디를 그 자리에서 바꾼다(부모가 쥔 마디 그대로)
+final class SplitNode {
+    private(set) var surface: BoardSurface?       // 잎이면 그 화면
+    private(set) var children: [SplitNode] = []   // 가지면 [앞, 뒤]
+    private(set) var right = true
+    var ratio: CGFloat = 0.5
+    private(set) weak var parent: SplitNode?
+
+    init(_ surface: BoardSurface) { self.surface = surface }
+    init(right: Bool, ratio: CGFloat, _ a: SplitNode, _ b: SplitNode) {
+        self.right = right
+        self.ratio = ratio
+        children = [a, b]
+        a.parent = self
+        b.parent = self
+    }
+
+    // 화면들 — 트리 순서(왼쪽·위가 앞). ⌘[·⌘] 가 이 순서로 돈다
+    var surfaces: [BoardSurface] { surface.map { [$0] } ?? children.flatMap(\.surfaces) }
+
+    func leaf(_ s: BoardSurface) -> SplitNode? { surface === s ? self : children.lazy.compactMap { $0.leaf(s) }.first }
+
+    // 이 잎을 둘로 — 앞은 지금 화면, 뒤(오른쪽·아래)는 새 화면, 50:50
+    func split(_ s: BoardSurface, right: Bool) {
+        guard let old = surface else { return }
+        surface = nil
+        self.right = right
+        ratio = 0.5
+        children = [SplitNode(old), SplitNode(s)]
+        children.forEach { $0.parent = self }
+    }
+
+    // 이 잎을 빼고 부모 자리를 형제가 차지한다. 돌려주는 값은 그다음 고를 화면 — 형제 쪽에서 뺀 화면에 가장 가까운 것
+    // (앞이 빠지면 형제의 첫 화면, 뒤가 빠지면 형제의 마지막 화면). 탭의 마지막 화면(부모 없음)이면 nil
+    func remove() -> BoardSurface? {
+        guard let p = parent, let i = p.children.firstIndex(where: { $0 === self }) else { return nil }
+        let sib = p.children[1 - i]
+        p.surface = sib.surface
+        p.right = sib.right
+        p.ratio = sib.ratio
+        p.children = sib.children
+        p.children.forEach { $0.parent = p }
+        return i == 0 ? p.surfaces.first : p.surfaces.last
+    }
+
+    // ⌃⌘= — 몫을 같은 방향으로 나눈 화면 수대로(Ghostty 의 equalize_splits 와 같은 무게)
+    func equalize() {
+        guard children.count == 2 else { return }
+        let a = children[0].weight(right), b = children[1].weight(right)
+        ratio = CGFloat(a) / CGFloat(a + b)
+        children.forEach { $0.equalize() }
+    }
+    private func weight(_ dir: Bool) -> Int { children.count == 2 && right == dir ? children[0].weight(dir) + children[1].weight(dir) : 1 }
+
+    // 화면마다 자리와 가지마다 (가지 자리, 경계 선 자리) — 경계 선 1pt 를 빼고 몫대로 나눈다. 좌표는 AppKit(아래가 0)
+    func layout(in r: NSRect, _ frames: inout [(BoardSurface, NSRect)], _ lines: inout [(SplitNode, NSRect, NSRect)]) {
+        if let surface { frames.append((surface, r)); return }
+        guard children.count == 2 else { return }
+        if right {
+            let w = max(0, ((r.width - 1) * ratio).rounded())
+            children[0].layout(in: NSRect(x: r.minX, y: r.minY, width: w, height: r.height), &frames, &lines)
+            lines.append((self, r, NSRect(x: r.minX + w, y: r.minY, width: 1, height: r.height)))
+            children[1].layout(in: NSRect(x: r.minX + w + 1, y: r.minY, width: max(0, r.width - w - 1), height: r.height), &frames, &lines)
+        } else {
+            let h = max(0, ((r.height - 1) * ratio).rounded())
+            children[0].layout(in: NSRect(x: r.minX, y: r.maxY - h, width: r.width, height: h), &frames, &lines)
+            lines.append((self, r, NSRect(x: r.minX, y: r.maxY - h - 1, width: r.width, height: 1)))
+            children[1].layout(in: NSRect(x: r.minX, y: r.minY, width: r.width, height: max(0, r.height - h - 1)), &frames, &lines)
+        }
+    }
+
+    // 몫을 바꾼다 — 양쪽 화면이 80pt 아래로 줄지 않게(length 는 이 가지의 폭·높이)
+    func setRatio(_ value: CGFloat, length: CGFloat) {
+        let m = min(0.5, 80 / max(length, 1))
+        ratio = min(max(value, m), 1 - m)
+    }
+}
+
+// 보드 터미널 탭 하나 — 화면 나누기 트리 하나와 그 가운데 고른 화면. 탭 이름·⌘ 번호·경로 줄·카드 강조는 탭 단위다
+@MainActor final class BoardTab: ObservableObject, Identifiable {
+    let id = UUID()
+    // 탭의 작업 경로(경로 줄의 묶음, workspaceKey 꼴) — 탭을 연 경로(이어 열면 세션 기록의 cwd). 셸에서 cd 해도 바뀌지 않는다(cwd 는 따라간다)
+    let workspace: String
+    let root: SplitNode
+    @Published var focused: BoardSurface   // 고른 화면 — 키 입력·탭의 "지금 하는 일"·⌘D 로 나눌 화면
+    @Published var zoomed = false          // 고른 화면 하나 크게 보기(⇧⌘↩) — 나머지 화면은 숨긴다
+    @Published var customName: String? // 사용자가 붙인 탭 이름(⇧⌘R) — 없으면 폴더 이름. 쥔 탭 목록에 남아 다시 떠도 그대로
+    @Published var renaming = false    // 탭 이름 칸을 고치는 중
+    private var watching: [ObjectIdentifier: AnyCancellable] = [:]
+
+    init(_ root: SplitNode, focused: BoardSurface? = nil, workspace: String) {
+        self.root = root
+        self.focused = focused ?? root.surfaces[0]
+        self.workspace = workspaceKey(workspace)
+        root.surfaces.forEach(watch)
+    }
+
+    var surfaces: [BoardSurface] { root.surfaces }
+
+    // 화면의 제목·경로·세션이 바뀌면 탭 줄도 다시 그린다
+    func watch(_ s: BoardSurface) {
+        s.tab = self
+        watching[ObjectIdentifier(s)] = s.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+    }
+    func unwatch(_ s: BoardSurface) { watching[ObjectIdentifier(s)] = nil }
+
+    // 탭 이름 — 사용자가 붙인 이름, 없으면 폴더 이름: 화면이 하나면 그 화면 셸의 경로(cd 를 따라감, 예전 그대로),
+    // 나눈 탭이면 탭을 연 경로로 고정(고른 화면이 다른 폴더여도 그대로 — 사용자 결정)
+    var name: String { customName ?? folderName }
+    var folderName: String {
+        guard surfaces.count > 1 else { return focused.folderName }
+        return workspace == NSHomeDirectory() ? "~" : (workspace as NSString).lastPathComponent
+    }
+    // 탭 줄의 상태 점 — 화면들의 세션 가운데 가장 급한 상태(세션이 없으면 대기)
+    var state: String { surfaces.compactMap(\.session).min { $0.rank < $1.rank }?.state ?? "idle" }
+}
+
 @MainActor final class TerminalHub: ObservableObject {
     static let shared = TerminalHub()
-    @Published private(set) var tabs: [BoardTab] = []
+    @Published private(set) var tabs: [BoardTab] = []   // 같은 경로의 탭끼리 붙여 둔다(openShell)
     @Published private(set) var selected: UUID?
+    // 지금 경로 — 고른 탭의 작업 경로(select). 탭 줄은 이 경로의 탭만 보인다
+    @Published private(set) var workspace: String?
+    private var lastTab: [String: UUID] = [:]   // 경로마다 마지막에 고른 탭 — 경로를 바꾸면 그 탭으로
+    // 경로 줄의 상태 점 — 경로마다 그 탭들의 세션 가운데 가장 급한 상태(짝지을 때 고친다)
+    @Published private(set) var workspaceStates: [String: String] = [:]
     // 펼침 — 기본값은 펼침
     @Published private(set) var expanded = UserDefaults.standard.object(forKey: "terminalExpanded") as? Bool ?? true
     // 펼쳤을 때 보드 폭 — 경계를 끌어 바꾼 폭을 기억한다
@@ -4879,6 +5181,11 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
     // 펼치기·접기 애니메이션이 도는 중이면 그 애니메이션 — 그동안 BoardRootView 가 터미널 영역 크기를 고정한다
     var slide: PaneSlide?
     var tabBarEnd: CGFloat = .infinity   // 탭 줄에서 탭·"새 세션" 단추가 끝나는 x — 그 오른쪽이 빈 곳
+    var workspaceBarEnd: CGFloat = .infinity   // 경로 줄에서 경로 항목이 끝나는 x — 그 오른쪽이 빈 곳
+    // ⌘ 를 잠깐 누르고 있다(앱 안 flagsChanged·keyDown 감시) — 그동안 탭 줄에 ⌘번호와 이름 바꾸기 단축키를 보인다. 앱이 비활성이 되면 끈다
+    @Published private(set) var commandHeld = false
+    private var commandDown = false
+    private var commandShow: DispatchWorkItem?
     weak var area: TerminalAreaView?
     weak var store: Store?
     // 세션 id → 그 세션이 도는 보드 탭(tty 로 짝지은 세션, 탭 안에서 시작된 claude -p) — 세션 목록을 다시 읽을 때마다 고친다
@@ -4892,6 +5199,7 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
     private var noticeHide: DispatchWorkItem?
     // 고른 탭·터미널 영역 바탕 — 엔진을 띄운 뒤에는 터미널 테마의 바탕색(탭이 터미널과 이어져 보이게)
     @Published private(set) var background = terminalAreaColor
+    private var dividerColor = NSColor.gray   // 나눈 화면 사이 경계 색 — 엔진을 띄울 때 정한다
     private var engine: TerminalController?
 
     // 엔진은 첫 탭을 열 때 띄운다
@@ -4901,6 +5209,7 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
         engine = c
         let bg = c.backgroundColor
         background = NSColor(red: CGFloat(bg.red) / 255, green: CGFloat(bg.green) / 255, blue: CGFloat(bg.blue) / 255, alpha: 1)
+        dividerColor = splitDividerColor(background: background)
         area?.container.layer?.backgroundColor = background.cgColor
         return c
     }
@@ -4910,106 +5219,222 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
         UserDefaults.standard.set(on, forKey: "terminalExpanded")
     }
 
+    // 터미널 글자 크기(윈도우 > 글자 크기, ⌘+·⌘-) — step +1·-1 은 1pt씩(Ghostty 와 같음, 8~40), nil 은 원래 크기(보드 설정을 지워 Ghostty 설정 크기로).
+    // 열린 탭 모두 바로 바뀐다 — 엔진 설정을 다시 읽히면 글자 크기를 손대지 않은 surface 는 설정 크기를 따른다(탭마다 키로 바꾸는 엔진 단축키는 풀어 두었다).
+    // 새로 여는 탭·다시 뜰 때 되살린 탭도 같은 설정이다
+    func changeTerminalFont(_ step: Int?) {
+        let d = UserDefaults.standard
+        if let step {
+            let now = d.object(forKey: "terminalFontSize") as? Double ?? ghosttyConfigFontSize()
+            d.set(min(40, max(8, now + Double(step))), forKey: "terminalFontSize")
+        } else {
+            d.removeObject(forKey: "terminalFontSize")
+        }
+        engine?.setTerminalConfiguration(terminalFontConfiguration())   // 사용자 설정·테마는 래퍼가 그대로 다시 얹는다
+        toast("터미널 글자 \(String(format: "%g", d.object(forKey: "terminalFontSize") as? Double ?? ghosttyConfigFontSize()))pt")
+    }
+
     func setBoardOnLeft(_ on: Bool) {
         boardOnLeft = on
         UserDefaults.standard.set(on ? "left" : "right", forKey: "boardSide")
     }
 
     // 셸 탭 — 엔진이 사용자의 로그인 셸(passwd 의 셸)을 login 으로 띄운다. login 이 환경을 스스로 꾸리므로 환경 변수를 넘기지 않는다.
-    // 셸이 끝나면(exit) 엔진이 닫기를 청해 탭을 닫는다(terminalDidClose)
+    // 셸이 끝나면(exit) 엔진이 닫기를 청해 그 화면을 닫는다(terminalDidClose — 탭의 마지막 화면이면 탭째)
     @discardableResult
     func openShell(in dir: String) -> BoardTab? {
-        guard let area else { return nil }
-        area.superview?.layoutSubtreeIfNeeded()   // 크기가 0 인 뷰는 셸을 띄우지 않는다
-        let tab = BoardTab(TerminalSurfaceOptions(backend: .exec, workingDirectory: dir), frame: area.container.bounds, controller: controller)
-        tab.view.isHidden = true
-        area.container.addSubview(tab.view)
-        tabs.append(tab)
+        guard area != nil else { return nil }
+        let tab = BoardTab(SplitNode(makeSurface(in: dir)), workspace: dir)
+        add(tab)
+        return tab
+    }
+
+    // 화면 하나 — 그 폴더의 로그인 셸. 창에 붙일 때 셸이 뜬다
+    private func makeSurface(in dir: String) -> BoardSurface {
+        BoardSurface(TerminalSurfaceOptions(backend: .exec, workingDirectory: dir), frame: .zero, controller: controller)
+    }
+
+    // 탭을 탭 목록에 넣고 화면들을 창에 붙인 뒤 고른다 — 자리를 먼저 정하고 붙인다(크기가 0 인 뷰는 셸을 띄우지 않는다)
+    private func add(_ tab: BoardTab) {
+        guard let area else { return }
+        area.workspaceBarShown = true             // 첫 탭이면 경로 줄이 생겨 터미널 칸이 줄어든다 — 탭을 만들기 전에 맞춘다
+        area.superview?.layoutSubtreeIfNeeded()
+        // 같은 경로 탭들의 끝에(새 경로면 맨 끝에) — 경로끼리 붙어 있어 경로 줄 순서가 앞 탭을 닫아도 그대로다
+        if let last = tabs.lastIndex(where: { $0.workspace == tab.workspace }) { tabs.insert(tab, at: last + 1) } else { tabs.append(tab) }
+        layoutSurfaces()
+        tab.surfaces.forEach(attach)
         select(tab.id)
         saveTabs()
-        return tab
+    }
+
+    // 화면 뷰를 터미널 칸 맨 아래에(경계 뷰는 그 위) 숨긴 채 붙인다 — 보이기는 applyVisibility
+    private func attach(_ s: BoardSurface) {
+        s.view.isHidden = true
+        area?.container.addSubview(s.view, positioned: .below, relativeTo: nil)
+    }
+
+    // 경로 줄의 경로들 — 탭 목록에 처음 나타난 순서
+    var workspaces: [String] {
+        var list: [String] = []
+        for t in tabs where !list.contains(t.workspace) { list.append(t.workspace) }
+        return list
+    }
+
+    func tabs(in ws: String?) -> [BoardTab] { tabs.filter { $0.workspace == ws } }
+
+    // 경로에서 보일 탭 — 그 경로에서 마지막에 고른 탭(닫혔으면 첫 탭). 탭이 없으면 nil
+    private func shownTab(_ ws: String) -> UUID? {
+        if let id = lastTab[ws], tabs.contains(where: { $0.id == id }) { return id }
+        return tabs.first { $0.workspace == ws }?.id
+    }
+
+    // 경로 줄 항목·보드 카드 머리를 눌렀을 때 — 그 경로에 탭이 있으면 그 경로로(마지막에 고른 탭). 터미널 포커스는 펼쳐 있을 때만(select).
+    // 접혀 있으면 펼치지 않고 바꿔만 둔다 — 펼치면 그 경로가 보인다
+    func showWorkspace(_ path: String) {
+        if let id = shownTab(workspaceKey(path)) { select(id) }
+    }
+
+    // ⌃⌥↑·⌃⌥↓ — 경로 줄의 앞·뒤 경로로(끝에서는 반대쪽 끝으로, 접혀 있으면 펼친다)
+    func stepWorkspace(_ step: Int) {
+        let list = workspaces
+        guard !list.isEmpty else { return }
+        let i = workspace.flatMap { list.firstIndex(of: $0) } ?? 0
+        if let id = shownTab(list[(i + step + list.count) % list.count]) { reveal(id) }
     }
 
     // 명령(claude …)을 보드 새 탭에서 띄운다 — 그 작업 경로의 셸 탭을 열고 셸에 명령을 쳐 넣는다. claude 가 끝나면 그 셸 프롬프트로 돌아온다.
     // 셸이 띄우므로 프로세스 이름이 claude 그대로(hook 이 알아봄)이고 셸 설정의 PATH 등을 그대로 쓴다.
-    // reveal false — 다시 뜰 때 되살리는 탭은 접힌 보드를 펼치거나 앞으로 꺼내지 않는다.
     // mdRenderOff — 답변 꾸미기를 끈 탭(명령은 부르는 쪽이 mdRenderCommand 로 고쳐 넘긴다). 그 세션 id 를 끈 세션으로 기억한다
-    @discardableResult
-    func launch(_ command: String, in dir: String, sessionId: String?, mdRenderOff: Bool = false, reveal show: Bool = true) -> BoardTab? {
-        guard let tab = openShell(in: dir) else { return nil }
-        run(command, in: tab, sessionId: sessionId, mdRenderOff: mdRenderOff)
-        if show { reveal(tab.id) }
-        return tab
+    func launch(_ command: String, in dir: String, sessionId: String?, mdRenderOff: Bool = false) {
+        guard let tab = openShell(in: dir) else { return }
+        run(command, in: tab.focused, sessionId: sessionId, mdRenderOff: mdRenderOff)
+        reveal(tab.id)
     }
 
-    // 탭의 셸에 claude 명령을 넣고 그 탭을 claude 탭으로 삼는다(새 탭, 셸 프롬프트로 남은 탭에서 이어 열기)
-    func run(_ command: String, in tab: BoardTab, sessionId: String?, mdRenderOff: Bool) {
-        tab.command = command
-        tab.sessionId = sessionId
-        tab.mdRenderOff = mdRenderOff
+    // 화면의 셸에 claude 명령을 넣고 그 화면을 claude 화면으로 삼는다(새 탭, 셸 프롬프트로 남은 화면에서 이어 열기, 다시 뜰 때 되살리기)
+    func run(_ command: String, in s: BoardSurface, sessionId: String?, mdRenderOff: Bool) {
+        s.command = command
+        s.sessionId = sessionId
+        s.mdRenderOff = mdRenderOff
         if mdRenderOff { rememberMdRenderOff(sessionId) }
-        tab.type(command)
+        s.type(command)
         saveTabs()
     }
 
-    // 쥔 탭 목록 — 보드 설정 terminalTabs 에 [cwd, command, session, resume, selected] 로 남긴다(셸 탭은 경로만).
-    // 종료 때만이 아니라 바뀔 때마다(열기·닫기·세션 id 정해짐·끝남, 1초마다 짝지을 때 견줘서) 남긴다 — pkill·충돌로 꺼져도 다시 뜰 때 되살린다.
-    // claude 가 끝나 셸만 남은 탭은 셸 탭으로 남긴다. 되살리기 전에는 남기지 않는다(지난 목록을 빈 목록으로 덮지 않게)
+    // 쥔 탭 목록 — 보드 설정 terminalTabs 에 탭마다 [workspace, name, selected, last] 와 화면 값 [cwd, command, mdoff, session, resume] 을 남긴다
+    // (셸 화면은 경로만). 화면이 하나인 탭은 화면 값을 탭 항목에 바로 넣어 3.0.x 목록과 같은 꼴이고, 나눈 탭은 root 에 화면 트리
+    // (가지 {split: right|down, ratio, a, b}, 잎은 화면 값 — 고른 화면에 focused)를 넣는다. 크게 보기는 남기지 않는다.
+    // workspace 는 탭의 작업 경로, selected 는 고른 탭(곧 지금 경로), last 는 경로마다 마지막에 고른 탭.
+    // 종료 때만이 아니라 바뀔 때마다(열기·닫기·나누기·경계 옮기기·화면 고르기·세션 id 정해짐·끝남, 1초마다 짝지을 때 견줘서) 남긴다 —
+    // pkill·충돌로 꺼져도 다시 뜰 때 되살린다. claude 가 끝나 셸만 남은 화면은 셸 화면으로 남긴다. 되살리기 전에는 남기지 않는다(지난 목록을 빈 목록으로 덮지 않게)
     private var restored = false
-    private var savedTabs: [[String: String]]?
+    private var savedTabs: NSArray?
 
     func saveTabs() {
         guard restored else { return }
-        let list = tabs.map { t -> [String: String] in
-            var e = ["cwd": t.cwd]
-            if let command = t.command {
-                e["command"] = command
-                if t.mdRenderOff { e["mdoff"] = "1" }   // 대화 없이 꺼져 세션 파일·끈 세션 기억이 치워져도 끈 채로 되살린다
-                // 탭 안에서 /clear 등으로 세션 id 가 바뀌면 tty 로 짝지은 세션이 지금 것이다
-                if let id = t.session?.id ?? t.sessionId {
-                    e["session"] = id
-                    if let s = t.session, s.id == id, !s.resumeCmd.isEmpty { e["resume"] = s.resumeCmd }
-                }
-            }
+        let list = tabs.map { t -> [String: Any] in
+            var e: [String: Any] = ["workspace": t.workspace]
+            if let n = t.customName { e["name"] = n }
             if t.id == selected { e["selected"] = "1" }
+            if lastTab[t.workspace] == t.id { e["last"] = "1" }
+            if let s = t.root.surface { for (k, v) in entry(s) { e[k] = v } } else { e["root"] = savedNode(t.root, focused: t.focused) }
             return e
-        }
-        guard list != savedTabs else { return }
+        } as NSArray
+        guard !list.isEqual(savedTabs) else { return }
         savedTabs = list
         UserDefaults.standard.set(list, forKey: "terminalTabs")
     }
 
-    // 다시 뜰 때 — 지난번에 쥐고 있던 탭을 되살린다. 셸 탭은 그 경로에서 셸, claude 탭은 셸에 세션 파일의 resume_cmd 를 넣어 이어 연다.
-    // 보드가 뜰 때 한 번 부른다.
+    // 화면 값 — 셸 화면은 경로만, claude 화면은 명령·세션까지
+    private func entry(_ s: BoardSurface) -> [String: String] {
+        var e = ["cwd": s.cwd]
+        if let command = s.command {
+            e["command"] = command
+            if s.mdRenderOff { e["mdoff"] = "1" }   // 대화 없이 꺼져 세션 파일·끈 세션 기억이 치워져도 끈 채로 되살린다
+            // 화면 안에서 /clear 등으로 세션 id 가 바뀌면 tty 로 짝지은 세션이 지금 것이다
+            if let id = s.session?.id ?? s.sessionId {
+                e["session"] = id
+                if let ss = s.session, ss.id == id, !ss.resumeCmd.isEmpty { e["resume"] = ss.resumeCmd }
+            }
+        }
+        return e
+    }
+
+    private func savedNode(_ n: SplitNode, focused: BoardSurface) -> [String: Any] {
+        if let s = n.surface {
+            var e: [String: Any] = entry(s)
+            if s === focused { e["focused"] = "1" }
+            return e
+        }
+        return ["split": n.right ? "right" : "down", "ratio": Double(n.ratio),
+                "a": savedNode(n.children[0], focused: focused), "b": savedNode(n.children[1], focused: focused)]
+    }
+
+    // 다시 뜰 때 — 지난번에 쥐고 있던 탭을 나눈 모양 그대로 되살린다. 셸 화면은 그 경로에서 셸, claude 화면은 셸에 세션 파일의 resume_cmd 를 넣어 이어 연다.
+    // 작업 경로는 남겨 둔 것, 없으면(3.0.x 목록) 되살릴 때 여는 경로. 지금 경로·경로마다 마지막 탭도 되살린다. 보드가 뜰 때 한 번 부른다.
     // 업데이트처럼 보드를 끄고 바로 다시 띄우면 옛 탭의 claude 가 아직 끝나는 중일 수 있다 — 같은 세션을 두 프로세스가 쥐지 않게 최대 5초 기다린다
     func restoreTabs(waited: Double = 0) {
         guard !restored else { return }
-        let saved = UserDefaults.standard.array(forKey: "terminalTabs") as? [[String: String]] ?? []
-        let running = saved.contains { e in
-            e["session"].flatMap(sessionRecord).flatMap { ($0["pid"] as? NSNumber)?.int32Value }.map(isLiveClaude) ?? false
+        let saved = UserDefaults.standard.array(forKey: "terminalTabs") as? [[String: Any]] ?? []
+        let running = saved.flatMap { leaves($0["root"] as? [String: Any] ?? $0) }.contains { e in
+            (e["session"] as? String).flatMap(sessionRecord).flatMap { ($0["pid"] as? NSNumber)?.int32Value }.map(isLiveClaude) ?? false
         }
         if running, waited < 5 {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { self.restoreTabs(waited: waited + 0.25) }
             return
         }
         var pick: UUID?
+        var lasts: [BoardTab] = []
         for e in saved {
-            guard let cwd = e["cwd"] else { continue }
-            var tab: BoardTab?
-            if e["command"] != nil {
-                let off = e["mdoff"] != nil || isMdRenderOff(e["session"])
-                if let (cmd, id, dir) = restoreCommand(e, off: off) { tab = launch(cmd, in: dir, sessionId: id, mdRenderOff: off, reveal: false) }
-            } else {
-                tab = openShell(in: FileManager.default.fileExists(atPath: cwd) ? cwd : NSHomeDirectory())
-            }
-            if let tab, e["selected"] != nil { pick = tab.id }
+            var focused: BoardSurface?
+            guard let (root, dir) = restoreNode(e["root"] as? [String: Any] ?? e, focused: &focused) else { continue }
+            let tab = BoardTab(root, focused: focused, workspace: e["workspace"] as? String ?? dir)
+            tab.customName = e["name"] as? String
+            add(tab)
+            if e["selected"] != nil { pick = tab.id }
+            if e["last"] != nil { lasts.append(tab) }
         }
         restored = true
-        if let pick { select(pick) }
+        // 탭을 열 때마다 고른 것은 지우고 남겨 둔 표시로 — 표시가 없는 경로(3.0.x 목록)는 첫 탭
+        lastTab = [:]
+        for t in lasts { lastTab[t.workspace] = t.id }
+        if let id = pick ?? selected { select(id) }
         saveTabs()
     }
 
-    // 되살릴 명령 탭의 (명령, 세션 id, 작업 경로). 대화가 남은 세션은 세션 파일의 resume_cmd(파일이 지워졌으면 남겨 둔 것),
+    // 남겨 둔 화면 트리의 잎(화면 값)들
+    private func leaves(_ n: [String: Any]) -> [[String: Any]] {
+        guard let a = n["a"] as? [String: Any], let b = n["b"] as? [String: Any] else { return [n] }
+        return leaves(a) + leaves(b)
+    }
+
+    // 남겨 둔 화면 트리를 다시 만든다(3.0.x 목록의 탭 항목은 잎 하나) — 셸 화면은 그 경로(없으면 홈)에서 셸, claude 화면은 셸에 이어 열
+    // 명령을 넣는다(restoreCommand). 되살리지 않는 화면은 빼고 형제가 그 자리를 차지한다. 돌려주는 경로는 첫 화면을 연 폴더 —
+    // 작업 경로를 남기지 않은 3.0.x 목록에서는 이것이 탭의 경로다(명령 탭은 restoreCommand 의 경로, 셸 탭은 cwd 또는 홈)
+    private func restoreNode(_ n: [String: Any], focused: inout BoardSurface?) -> (SplitNode, String)? {
+        if let a = n["a"] as? [String: Any], let b = n["b"] as? [String: Any] {
+            let ra = restoreNode(a, focused: &focused), rb = restoreNode(b, focused: &focused)
+            guard let ra, let rb else { return ra ?? rb }
+            return (SplitNode(right: n["split"] as? String != "down", ratio: CGFloat(n["ratio"] as? Double ?? 0.5), ra.0, rb.0), ra.1)
+        }
+        let e = n.compactMapValues { $0 as? String }
+        guard let cwd = e["cwd"] else { return nil }
+        let s: BoardSurface, dir: String
+        if e["command"] != nil {
+            let off = e["mdoff"] != nil || isMdRenderOff(e["session"])
+            guard let (cmd, id, d) = restoreCommand(e, off: off) else { return nil }
+            dir = d
+            s = makeSurface(in: dir)
+            run(cmd, in: s, sessionId: id, mdRenderOff: off)
+        } else {
+            dir = FileManager.default.fileExists(atPath: cwd) ? cwd : NSHomeDirectory()
+            s = makeSurface(in: dir)
+        }
+        if e["focused"] != nil { focused = s }
+        return (SplitNode(s), dir)
+    }
+
+    // 되살릴 명령 화면의 (명령, 세션 id, 작업 경로). 대화가 남은 세션은 세션 파일의 resume_cmd(파일이 지워졌으면 남겨 둔 것),
     // 대화 없이 끝난 세션(대화 기록 없음 — 보드가 세션 파일도 지운다)은 처음 명령을 새 세션 id 로.
     // 세션 파일의 pid 가 아직 claude 로 살아 있으면(/bg·nohup 으로 떨어져 나갔거나 다른 터미널에서 이어 연 세션) 이어 열지 않는다 — nil.
     // 답변 꾸미기는 off(끈 탭·끈 세션)를 따라 mdRenderCommand 로 고친다 — 세션 파일이 없으면 남겨 둔 명령·resume_cmd 문자열로
@@ -5043,7 +5468,7 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
         launch(cmd, in: dir, sessionId: id, mdRenderOff: !mdRender)
     }
 
-    // "+ 새 세션" 창 — 작업 폴더는 보드에 있는 경로(지금 탭의 경로를 먼저 고른다) + 다른 폴더
+    // "+ 새 세션" 창 — 작업 폴더는 보드에 있는 경로(지금 경로를 먼저 고른다) + 다른 폴더
     func newSessionSheet() {
         if !expanded { setTerminalExpanded(true) }
         showBoard()
@@ -5053,19 +5478,26 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
     private func beginNewSessionSheet() {
         guard window.attachedSheet == nil else { return }   // 이미 새 세션 창(또는 다른 시트)이 떠 있으면 겹쳐 띄우지 않는다(⌘T 를 또 누름)
         let paths = (store?.groups.map(\.id) ?? []).filter { FileManager.default.fileExists(atPath: $0) }
-        let current = tabs.first { $0.id == selected }.map { $0.session?.cwd ?? $0.cwd }
+        // 지금 경로와 같은 보드 경로(창의 줄은 보드 경로 글자 그대로 견준다). 보드에 없으면 첫 경로
+        let current = workspace.flatMap { ws in paths.first { workspaceKey($0) == ws } }
         let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 420), styleMask: [.titled], backing: .buffered, defer: false)
         let end = { window.endSheet(sheet) }
         sheet.contentViewController = NSHostingController(rootView: NewSessionSheet(
-            paths: paths, initial: current.flatMap { paths.contains($0) ? $0 : nil } ?? paths.first ?? NSHomeDirectory(),
+            paths: paths, initial: current ?? paths.first ?? NSHomeDirectory(),
             cancel: end, start: { cmd, dir, md in end(); self.startSession(cmd, in: dir, mdRender: md) }))
         window.beginSheet(sheet)
     }
 
-    // 탭을 보이게 한다 — 접혀 있거나 미니면 펼치고, 그 탭을 고르고, 보드를 앞으로 꺼내 터미널에 포커스
+    // 탭을 보이게 한다 — 접혀 있거나 미니면 펼치고, 그 탭을 고르고, 보드를 앞으로 꺼내 터미널에 포커스.
+    // id 가 화면이면(세션 줄 클릭 — place 의 화면) 그 탭의 그 화면을 고른다(크게 보는 중이면 푼다)
     func reveal(_ id: UUID) {
         if !expanded { setTerminalExpanded(true) }
-        select(id)
+        if let s = surface(id), let t = s.tab {
+            if t.focused !== s { t.zoomed = false; t.focused = s }
+            select(t.id)
+        } else {
+            select(id)
+        }
         showBoard()
         focusSelected()
     }
@@ -5083,47 +5515,52 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
         withAnimation(.easeOut(duration: 0.2)) { notice = nil }
     }
 
-    // 세션이 어디서 도는가 — 보드 탭(그 안에서 시작된 claude -p 포함)·다른 터미널·백그라운드·끝남.
-    // 끝난 세션은 그 탭에서 claude 가 막 뜨는 중일 때만 탭 소속(이어 열기를 넣은 직후) — claude 가 끝나 셸만 남은 탭이면 끝남
+    // 세션이 어디서 도는가 — 보드 탭의 화면(그 안에서 시작된 claude -p 포함)·다른 터미널·백그라운드·끝남.
+    // 끝난 세션은 그 화면에서 claude 가 막 뜨는 중일 때만 탭 소속(이어 열기를 넣은 직후) — claude 가 끝나 셸만 남은 화면이면 끝남
     func place(_ s: Session) -> SessionPlace {
-        if let id = paired[s.id] ?? tabs.first(where: { $0.sessionId == s.id && (s.state != "ended" || $0.runsClaude) })?.id {
+        if let id = paired[s.id] ?? surfaces.first(where: { $0.sessionId == s.id && (s.state != "ended" || $0.runsClaude) })?.id {
             return .tab(id, headless: tabOwnedHeadless.contains(s.id))
         }
         if s.state == "ended" { return .ended }
         return s.headless ? .background : .terminal
     }
 
-    // 세션 목록을 다시 읽을 때마다 탭과 짝짓는다. tty 가 같으면 그 탭의 세션, headless 세션은 조상에 탭의 claude 가 있으면
-    // 그 탭 소속(탭이 닫히면 함께 끝난다 — Claude 가 Bash 도구로 띄운 claude -p 등). 끝난 세션은 같은 세션 id 로 연 탭만
+    // 세션 목록을 다시 읽을 때마다 탭의 화면들과 짝짓는다. tty 가 같으면 그 화면의 세션, headless 세션은 조상에 화면의 claude 가 있으면
+    // 그 화면 소속(화면이 닫히면 함께 끝난다 — Claude 가 Bash 도구로 띄운 claude -p 등). 끝난 세션은 같은 세션 id 로 연 화면만
     func pair(_ sessions: [Session]) {
-        var byTty: [String: BoardTab] = [:]
-        for t in tabs where !t.tty.isEmpty { byTty[t.tty] = t }
+        let all = surfaces
+        var byTty: [String: BoardSurface] = [:]
+        for t in all where !t.tty.isEmpty { byTty[t.tty] = t }
         var map: [String: UUID] = [:]
-        // 탭의 맨 위 프로세스(엔진이 띄운 login — 그 tty 의 세션 리더). 셸 탭에서 사람이 띄운 claude -p 도 그 아래에 있다
-        var tabPids: [Int32: BoardTab] = [:]
-        for t in tabs { if let fg = t.view.foregroundPid, fg > 0, getsid(fg) > 0 { tabPids[getsid(fg)] = t } }
+        // 화면의 맨 위 프로세스(엔진이 띄운 login — 그 tty 의 세션 리더). 셸 화면에서 사람이 띄운 claude -p 도 그 아래에 있다
+        var tabPids: [Int32: BoardSurface] = [:]
+        for t in all { if let fg = t.view.foregroundPid, fg > 0, getsid(fg) > 0 { tabPids[getsid(fg)] = t } }
         var main: [UUID: Session] = [:]
         for s in sessions where s.state != "ended" && !s.tty.isEmpty {
             guard let t = byTty[s.tty] else { continue }
             map[s.id] = t.id
             main[t.id] = s
-            // /clear 등으로 id 가 바뀌었거나 셸에서 사람이 띄운 claude — 끝난 뒤에도 그 세션이 돌던 탭으로 찾는다(resumeSession)
+            // /clear 등으로 id 가 바뀌었거나 셸에서 사람이 띄운 claude — 끝난 뒤에도 그 세션이 돌던 화면으로 찾는다(resumeSession)
             if t.sessionId != s.id { t.sessionId = s.id }
         }
         var owned: Set<String> = []
         for s in sessions where s.state != "ended" && s.headless && s.pid > 0 {
             if let t = tabAncestor(s.pid, tabPids) { map[s.id] = t.id; owned.insert(s.id) }
         }
-        for t in tabs {
+        for t in all {
             let running = main[t.id] != nil || t.runsClaude
-            // 보드가 넣은 claude 가 끝나 셸만 남았다 — 셸 탭으로(쥔 목록·상태 점). 끈 꾸미기는 끈 세션 기억에 이미 남아 있다
+            // 보드가 넣은 claude 가 끝나 셸만 남았다 — 셸 화면으로(쥔 목록·상태 점). 끈 꾸미기는 끈 세션 기억에 이미 남아 있다
             if !running, t.command != nil { t.command = nil; t.mdRenderOff = false }
             let s = main[t.id] ?? (running ? t.sessionId.flatMap { id in sessions.first { $0.id == id } } : nil)
             if t.session != s { t.session = s }
-            if t.mdRenderOff { rememberMdRenderOff(s?.id) }   // 끈 탭에서 세션 id 가 바뀌어도(/clear 등) 끈 채로 이어 열게
+            if t.mdRenderOff { rememberMdRenderOff(s?.id) }   // 끈 화면에서 세션 id 가 바뀌어도(/clear 등) 끈 채로 이어 열게
         }
         if map != paired { paired = map }
         if owned != tabOwnedHeadless { tabOwnedHeadless = owned }
+        // 경로 줄의 상태 점 — 그 경로 탭들의 모든 화면에서 승인 대기 > 작업 중 > 그 밖(세션이 없으면 대기)
+        var states: [String: String] = [:]
+        for ws in workspaces { states[ws] = tabs(in: ws).flatMap(\.surfaces).compactMap(\.session).min { $0.rank < $1.rank }?.state ?? "idle" }
+        if states != workspaceStates { workspaceStates = states }
         saveTabs()   // 세션 id·resume_cmd·셸 경로·고른 탭이 바뀌었으면 남긴다
         // 다른 터미널 세션의 앱 이름 — 조상 프로세스로만(AppleScript 를 쓰는 ownerApp 은 부르지 않는다)
         var names = appNames
@@ -5147,52 +5584,282 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
         return m.isEmpty ? nil : m
     }
 
+    // 탭 고르기 — 그 탭의 경로가 지금 경로가 된다(세션 줄 클릭·이어 열기·새 세션도 이 길로 그 경로에 간다). 경로마다 마지막 탭을 기억한다
     func select(_ id: UUID) {
         selected = id
+        if let t = tabs.first(where: { $0.id == id }) {
+            lastTab[t.workspace] = id
+            if workspace != t.workspace { workspace = t.workspace }
+        }
         applyVisibility()
         focusSelected()
     }
 
-    // 고른 탭만 그리고 나머지는 실제 크기 그대로 숨긴다. 접혀 있거나 창이 안 보이면(가려짐·최소화·닫힘·다른 데스크톱) 모두 그리지 않는다
+    // 고른 탭의 화면만(크게 보는 중이면 고른 화면만) 그리고 나머지는 실제 크기 그대로 숨긴다. 접혀 있거나 창이 안 보이면(가려짐·최소화·
+    // 닫힘·다른 데스크톱) 모두 그리지 않는다. 나눈 탭에서 고르지 않은 화면은 Ghostty 처럼 흐리게(unfocused-split-opacity)
     func applyVisibility() {
         // 접는 애니메이션 동안에는 터미널이 밀려 나가는 모습이 보이도록 그린다
         let drawing = (expanded || slide != nil) && window.occlusionState.contains(.visible)
         for t in tabs {
-            t.view.isHidden = t.id != selected
-            t.view.setSurfaceVisible(t.id == selected && drawing)
+            let dim = t.surfaces.count > 1 && !t.zoomed
+            for s in t.surfaces {
+                let shown = t.id == selected && (!t.zoomed || s === t.focused)
+                s.view.isHidden = !shown
+                s.view.setSurfaceVisible(shown && drawing)
+                let alpha = dim && s !== t.focused ? unfocusedSplitOpacity : 1
+                if s.view.alphaValue != alpha { s.view.alphaValue = alpha }
+            }
         }
         area?.empty.isHidden = !tabs.isEmpty
+        area?.workspaceBarShown = !tabs.isEmpty
+        layoutSurfaces()
     }
 
+    // 화면 자리 — 탭마다 트리대로 터미널 칸을 나눈다(보이지 않는 탭도 실제 크기 그대로 둔다). 크게 보는 탭은 고른 화면이 칸 전체.
+    // 고른 탭의 경계는 끌 수 있는 뷰로 화면들 위에 둔다. 칸 크기가 바뀔 때·트리나 고른 탭이 바뀔 때 부른다
+    func layoutSurfaces() {
+        guard let area else { return }
+        let bounds = area.container.bounds
+        var shown: [(SplitNode, NSRect, NSRect)] = []
+        for t in tabs {
+            var frames: [(BoardSurface, NSRect)] = [], lines: [(SplitNode, NSRect, NSRect)] = []
+            t.root.layout(in: bounds, &frames, &lines)
+            for (s, r) in frames {
+                let f = t.zoomed && s === t.focused ? bounds : r
+                if s.view.frame != f { s.view.frame = f }   // 같은 크기를 다시 넣어도 엔진이 크기를 다시 맞춘다
+            }
+            if t.id == selected, !t.zoomed { shown = lines }
+        }
+        area.container.showDividers(shown, color: dividerColor)
+    }
+
+    // 이름을 고치는 탭이면 입력 칸에서 포커스를 뺏지 않는다(그 탭을 눌렀을 때, 펼치기 애니메이션이 끝났을 때)
     func focusSelected() {
-        guard expanded, let t = tabs.first(where: { $0.id == selected }) else { return }
-        window.makeFirstResponder(t.view)
+        guard expanded, let t = selectedTab, !t.renaming else { return }
+        window.makeFirstResponder(t.focused.view)
     }
 
-    // 탭의 × — ⌘W 와 같은 엔진 동작으로 보내 셸 프롬프트처럼 물을 필요가 없으면 바로, 프로그램이 돌고 있으면 물어서 닫는다
+    var selectedTab: BoardTab? { tabs.first { $0.id == selected } }
+    var surfaces: [BoardSurface] { tabs.flatMap(\.surfaces) }
+    func surface(_ id: UUID) -> BoardSurface? { surfaces.first { $0.id == id } }
+
+    // 화면이 키보드 초점을 받았다(누름·⌘[ 등) — 그 탭의 고른 화면으로. 크게 보기는 여기서 풀지 않는다(화면을 옮기는 쪽이 푼다)
+    func surfaceFocused(_ s: BoardSurface) {
+        guard let t = s.tab, t.focused !== s, tabs.contains(where: { $0 === t }) else { return }
+        t.focused = s
+        applyVisibility()
+        saveTabs()
+    }
+
+    // 화면 나누기 키(윈도우 > 화면 나누기)는 터미널을 보이며 한다 — 접혀 있으면 펼치고 보드를 앞으로
+    private func showTerminal() {
+        if !expanded { setTerminalExpanded(true) }
+        showBoard()
+    }
+
+    // ⌘D·⇧⌘D — 고른 화면을 둘로 나눠 뒤쪽(오른쪽·아래)에 같은 폴더의 셸을 연다(Ghostty 처럼 50:50, 새 화면에 포커스, 크게 보기는 풀린다).
+    // 폴더는 고른 화면 셸의 지금 경로(OSC 7), 그 폴더가 없으면 탭의 경로. claude 는 띄우지 않는다
+    func split(right: Bool) {
+        guard let t = selectedTab, let node = t.root.leaf(t.focused) else { return }
+        showTerminal()
+        let cwd = t.focused.cwd
+        let s = makeSurface(in: FileManager.default.fileExists(atPath: cwd) ? cwd : t.workspace)
+        node.split(s, right: right)
+        t.watch(s)
+        t.zoomed = false
+        t.focused = s
+        layoutSurfaces()
+        attach(s)
+        applyVisibility()
+        focusSelected()
+        saveTabs()
+    }
+
+    // ⌘[·⌘] — 트리 순서(왼쪽·위가 앞)로 앞·뒤 화면(끝에서는 반대쪽 끝으로)
+    func focusSurface(step: Int) {
+        guard let t = selectedTab, t.surfaces.count > 1 else { return }
+        let list = t.surfaces, i = list.firstIndex { $0 === t.focused } ?? 0
+        moveFocus(t, to: list[(i + step + list.count) % list.count])
+    }
+
+    // ⌥⌘방향키 — 그 방향에 있는 화면 가운데 가장 가까운 것(두 화면의 왼쪽 위 모서리 사이 거리 — Ghostty 와 같은 방식). 없으면 그대로
+    func focusSurface(_ d: SplitDirection) {
+        guard let t = selectedTab, let area else { return }
+        var frames: [(BoardSurface, NSRect)] = [], lines: [(SplitNode, NSRect, NSRect)] = []
+        t.root.layout(in: area.container.bounds, &frames, &lines)
+        guard let me = frames.first(where: { $0.0 === t.focused })?.1 else { return }
+        let found = frames.filter { f in
+            switch d {
+            case .left: return f.1.maxX <= me.minX
+            case .right: return f.1.minX >= me.maxX
+            case .up: return f.1.minY >= me.maxY
+            case .down: return f.1.maxY <= me.minY
+            }
+        }.min { hypot($0.1.minX - me.minX, $0.1.maxY - me.maxY) < hypot($1.1.minX - me.minX, $1.1.maxY - me.maxY) }
+        if let found { moveFocus(t, to: found.0) }
+    }
+
+    // 다른 화면으로 — 크게 보기는 풀린다(Ghostty 와 같게)
+    private func moveFocus(_ t: BoardTab, to s: BoardSurface) {
+        showTerminal()
+        t.zoomed = false
+        t.focused = s
+        applyVisibility()
+        focusSelected()
+        saveTabs()
+    }
+
+    // ⌃⌘방향키 — 고른 화면에서 가장 가까운, 그 방향으로 나눈 경계를 그 방향으로 10pt 옮긴다(Ghostty 의 resize_split:<방향>,10).
+    // 크게 보는 중이면 그대로
+    func resizeSplit(_ d: SplitDirection) {
+        guard let t = selectedTab, !t.zoomed, let area else { return }
+        let across = d == .left || d == .right
+        var node = t.root.leaf(t.focused)?.parent
+        while let n = node, n.right != across { node = n.parent }
+        var frames: [(BoardSurface, NSRect)] = [], lines: [(SplitNode, NSRect, NSRect)] = []
+        t.root.layout(in: area.container.bounds, &frames, &lines)
+        guard let node, let r = lines.first(where: { $0.0 === node })?.1 else { return }
+        let length = across ? r.width : r.height
+        node.setRatio(node.ratio + (d == .left || d == .up ? -10 : 10) / max(length, 1), length: length)
+        showTerminal()
+        layoutSurfaces()
+        saveTabs()
+    }
+
+    // ⌃⌘= — 고른 탭의 나눈 크기를 고르게(같은 방향으로 나눈 화면 수대로)
+    func equalizeSplits() {
+        guard let t = selectedTab, t.surfaces.count > 1 else { return }
+        t.root.equalize()
+        showTerminal()
+        layoutSurfaces()
+        saveTabs()
+    }
+
+    // ⇧⌘↩ — 고른 화면 하나 크게 보기 켜고 끄기(화면이 둘 이상일 때만). 크게 보는 동안 탭 줄에 표시
+    func toggleZoom() {
+        guard let t = selectedTab, t.surfaces.count > 1 else { return }
+        showTerminal()
+        t.zoomed.toggle()
+        applyVisibility()
+        focusSelected()
+    }
+
+    // ⌃⌥←·⌃⌥→(Ghostty 의 탭 키 ⇧⌘[·⇧⌘]·⌃⇧⇥·⌃⇥ 도) — 탭 줄에서 왼쪽·오른쪽 탭으로(지금 경로 안에서, 끝에서는 반대쪽 끝으로, 접혀 있으면 펼친다)
+    func stepTab(_ step: Int) {
+        let list = tabs(in: workspace)
+        guard !list.isEmpty else { return }
+        let i = list.firstIndex { $0.id == selected } ?? 0
+        reveal(list[(i + step + list.count) % list.count].id)
+    }
+
+    // ⇧⌘R — 고른 탭의 이름 자리를 입력 칸으로 바꾼다. 접혀 있으면 펼친 뒤(⌘1~⌘9 의 reveal 과 같이)
+    func beginRename() {
+        guard let t = tabs.first(where: { $0.id == selected }) else { return }
+        if !expanded { setTerminalExpanded(true) }
+        showBoard()
+        t.renaming = true
+    }
+
+    // 이름 바꾸기 끝 — name 이 nil 이면 취소(Esc). 비우거나 폴더 이름과 같게 저장하면 사용자 이름을 지워 폴더 이름(자동)으로 돌아간다.
+    // 저장·취소 모두 터미널에 포커스를 돌려준다
+    func endRename(_ tab: BoardTab, name: String?) {
+        guard tab.renaming else { return }
+        tab.renaming = false
+        if let name {
+            let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            tab.customName = n.isEmpty || n == tab.folderName ? nil : n
+            saveTabs()
+        }
+        focusSelected()
+    }
+
+    // ⌘ 를 누름·놓음(flagsChanged 마다 오므로 ⌘ 가 바뀔 때만 본다) — 0.4초 누르고 있으면 보이고, 놓거나 앱이 비활성이 되면 바로 끈다
+    func commandFlag(_ down: Bool) {
+        guard down != commandDown else { return }
+        commandDown = down
+        commandShow?.cancel()
+        commandShow = nil
+        if down {
+            let w = DispatchWorkItem { [weak self] in self?.commandHeld = true }
+            commandShow = w
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: w)
+        } else if commandHeld {
+            commandHeld = false
+        }
+    }
+
+    // 보이기 전에 다른 키를 눌렀다(⌘C 등) — 이번 누름에는 보이지 않는다. 이미 보이면 놓을 때까지 둔다(⌘2·⌥⌘→ 로 탭을 옮기는 동안)
+    func commandKeyDown() {
+        commandShow?.cancel()
+        commandShow = nil
+    }
+
+    // 탭의 × — 화면이 하나면 ⌘W 와 같은 엔진 동작으로 보내 셸 프롬프트처럼 물을 필요가 없으면 바로, 프로그램이 돌고 있으면 물어서 닫는다.
+    // 나눈 탭은 탭째 닫는다 — 셸 프롬프트가 아닌(프로그램이 도는) 화면이 하나라도 있으면 한 번 묻는다
     func requestClose(_ tab: BoardTab) {
-        if !tab.view.performBindingAction("close_surface") { close(tab, confirm: false) }
+        if let s = tab.root.surface {
+            if !s.view.performBindingAction("close_surface") { close(s, confirm: false) }
+            return
+        }
+        let busy = tab.surfaces.filter { !$0.atPrompt }.count
+        guard busy > 0 else { return remove(tab) }
+        confirmClose("탭을 닫을까요?", "\(tab.name) 탭의 화면 \(busy)개에서 도는 프로그램이 함께 끝납니다.") { self.remove(tab) }
     }
 
-    // 탭 닫기 — 프로그램이 아직 돌고 있으면 먼저 묻는다
-    func close(_ tab: BoardTab, confirm: Bool) {
-        guard tabs.contains(where: { $0 === tab }) else { return }
-        guard confirm else { remove(tab); return }
+    // 화면 닫기(셸이 끝남·⌘W) — 프로그램이 아직 돌고 있으면 먼저 묻는다. 탭의 마지막 화면이면 탭을 닫는다
+    func close(_ s: BoardSurface, confirm: Bool) {
+        guard let t = s.tab, tabs.contains(where: { $0 === t }) else { return }
+        guard confirm else { remove(s); return }
+        if t.surfaces.count == 1 {
+            confirmClose("탭을 닫을까요?", "\(t.name) 탭에서 도는 프로그램이 함께 끝납니다.") { self.remove(s) }
+        } else {
+            confirmClose("화면을 닫을까요?", "\(t.name) 탭의 이 화면에서 도는 프로그램이 함께 끝납니다.") { self.remove(s) }
+        }
+    }
+
+    private func confirmClose(_ title: String, _ text: String, then run: @escaping @MainActor () -> Void) {
         let a = NSAlert()
-        a.messageText = "탭을 닫을까요?"
-        a.informativeText = "\(tab.name) 탭에서 도는 프로그램이 함께 끝납니다."
+        a.messageText = title
+        a.informativeText = text
         a.addButton(withTitle: "닫기")
         a.addButton(withTitle: "취소").keyEquivalent = "\u{1b}"
-        whenPaneSettled { a.beginSheetModal(for: window) { if $0 == .alertFirstButtonReturn { self.remove(tab) } } }
+        whenPaneSettled { a.beginSheetModal(for: window) { if $0 == .alertFirstButtonReturn { run() } } }
+    }
+
+    // 화면 하나를 뺀다 — 탭의 마지막 화면이면 탭째. 고른 화면이었으면 옆 화면(형제 쪽에서 가장 가까운 것)을 고르고 크게 보기는 풀린다
+    private func remove(_ s: BoardSurface) {
+        guard let t = s.tab, let node = t.root.leaf(s) else { return }
+        guard let next = node.remove() else { return remove(t) }
+        t.unwatch(s)
+        // 엔진 surface 를 내려 셸·프로그램을 끝낸다
+        s.view.controller = nil
+        s.view.removeFromSuperview()
+        if t.focused === s { t.zoomed = false; t.focused = next }
+        t.objectWillChange.send()
+        applyVisibility()
+        if t.id == selected { focusSelected() }
+        saveTabs()
     }
 
     private func remove(_ tab: BoardTab) {
         guard let i = tabs.firstIndex(where: { $0 === tab }) else { return }
+        let ws = tab.workspace
+        let at = tabs(in: ws).firstIndex { $0 === tab } ?? 0   // 경로 안에서의 자리
+        let order = workspaces                                 // 닫기 전 경로 줄
         tabs.remove(at: i)
         // 엔진 surface 를 내려 셸·프로그램을 끝낸다 — 창에서 빼는 것만으로는 뷰가 바로 풀리지 않아 셸이 남는다(실측)
-        tab.view.controller = nil
-        tab.view.removeFromSuperview()
-        if selected == tab.id { selected = tabs.isEmpty ? nil : tabs[min(i, tabs.count - 1)].id }
+        for s in tab.surfaces {
+            s.view.controller = nil
+            s.view.removeFromSuperview()
+        }
+        if lastTab[ws] == tab.id { lastTab[ws] = nil }
+        if selected == tab.id {
+            // 같은 경로의 옆 탭 → 그 경로에 탭이 없으면 경로 줄에서 옆 경로(그 경로의 마지막 탭) → 다른 경로도 없으면 빈 화면
+            let rest = tabs(in: ws), others = order.filter { $0 != ws }
+            let next = !rest.isEmpty ? rest[min(at, rest.count - 1)].id
+                : others.isEmpty ? nil : shownTab(others[min(order.firstIndex(of: ws) ?? 0, others.count - 1)])
+            if let next { select(next) } else { selected = nil; workspace = nil }
+        }
         applyVisibility()
         focusSelected()
         saveTabs()
@@ -5201,14 +5868,14 @@ final class BoardTab: NSObject, ObservableObject, Identifiable, TerminalSurfaceT
 
 // 세션이 도는 곳 — 칩·클릭 흐름·카드 구역이 쓴다
 enum SessionPlace: Equatable {
-    case tab(UUID, headless: Bool)   // 보드 탭(headless = 그 탭 안에서 시작된 claude -p)
+    case tab(UUID, headless: Bool)   // 보드 탭의 화면(headless = 그 화면 안에서 시작된 claude -p)
     case terminal                    // 다른 터미널 앱
     case background                  // claude -p·--bg 등 터미널 없이 도는 세션
     case ended
 }
 
-// pid 의 조상 가운데 탭의 맨 위 프로세스가 있으면 그 탭
-func tabAncestor(_ pid: Int32, _ tabPids: [Int32: BoardTab]) -> BoardTab? {
+// pid 의 조상 가운데 화면의 맨 위 프로세스가 있으면 그 화면
+func tabAncestor(_ pid: Int32, _ tabPids: [Int32: BoardSurface]) -> BoardSurface? {
     var p = pid
     for _ in 0..<12 where p > 1 {
         var info = kinfo_proc()
@@ -5309,7 +5976,7 @@ func sessionRecord(_ id: String) -> [String: Any]? {
     let hub = TerminalHub.shared
     var mains: [String: Session] = [:]
     for (s, _) in busyTabSessions() {
-        guard case .tab(let id, _) = hub.place(s), let main = hub.tabs.first(where: { $0.id == id })?.session,
+        guard case .tab(let id, _) = hub.place(s), let main = hub.surface(id)?.session,
               main.state != "ended", hub.mode(main) == nil else { continue }   // 셸 탭에서 친 claude -p 처럼 주 세션이 -p 면 남기지 않는다
         mains[main.id] = main
     }
@@ -5704,12 +6371,14 @@ final class PassiveHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
-// 터미널 영역 — 맨 위 제목 막대 띠, 탭 줄, 아래에 탭마다 터미널 뷰(고른 것만 보임)
+// 터미널 영역 — 맨 위 제목 막대 띠, 경로 줄(탭이 있을 때), 탭 줄(지금 경로의 탭), 아래에 탭마다 화면 뷰들(고른 탭의 것만 보임)
 final class TerminalAreaView: NSView {
-    let container = NSView()
+    let container = SurfaceContainerView()
     let empty = PassiveHostingView(rootView: TerminalEmptyView())
+    private let workspaceBar = PassiveHostingView(rootView: TerminalWorkspaceBar(hub: TerminalHub.shared))
     private let tabBar = PassiveHostingView(rootView: TerminalTabBar(hub: TerminalHub.shared))
     var titlebar: CGFloat = 0 { didSet { if titlebar != oldValue { needsLayout = true } } }
+    var workspaceBarShown = false { didSet { if workspaceBarShown != oldValue { needsLayout = true } } }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -5717,27 +6386,91 @@ final class TerminalAreaView: NSView {
         layer?.backgroundColor = terminalBarColor.cgColor
         container.wantsLayer = true
         container.layer?.backgroundColor = terminalAreaColor.cgColor
+        workspaceBar.sizingOptions = []
         tabBar.sizingOptions = []
         empty.sizingOptions = []
         addSubview(container)
         addSubview(empty)
+        addSubview(workspaceBar)
         addSubview(tabBar)
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    // 탭 줄의 빈 곳(탭·"새 세션" 단추 오른쪽)인가 — 창 좌표
+    // 탭 줄의 빈 곳(탭·"새 세션" 단추 오른쪽)이나 경로 줄의 빈 곳(경로 항목 오른쪽)인가 — 창 좌표
     func isTabBarBlank(_ point: NSPoint) -> Bool {
         let p = tabBar.convert(point, from: nil)
-        return tabBar.bounds.contains(p) && p.x > TerminalHub.shared.tabBarEnd
+        if tabBar.bounds.contains(p) { return p.x > TerminalHub.shared.tabBarEnd }
+        let q = workspaceBar.convert(point, from: nil)
+        return workspaceBarShown && workspaceBar.bounds.contains(q) && q.x > TerminalHub.shared.workspaceBarEnd
     }
 
     override func layout() {
         super.layout()
         let top = bounds.height - titlebar
-        tabBar.frame = NSRect(x: 0, y: top - terminalTabBarHeight, width: bounds.width, height: terminalTabBarHeight)
-        container.frame = NSRect(x: 0, y: 0, width: bounds.width, height: max(0, top - terminalTabBarHeight))
+        let ws = workspaceBarShown ? terminalWorkspaceBarHeight : 0
+        workspaceBar.frame = NSRect(x: 0, y: top - ws, width: bounds.width, height: ws)
+        workspaceBar.isHidden = !workspaceBarShown
+        tabBar.frame = NSRect(x: 0, y: top - ws - terminalTabBarHeight, width: bounds.width, height: terminalTabBarHeight)
+        container.frame = NSRect(x: 0, y: 0, width: bounds.width, height: max(0, top - ws - terminalTabBarHeight))
         empty.frame = container.frame
     }
+}
+
+// 터미널 칸 — 탭마다 화면 뷰들과 그 위에 고른 탭의 나눈 경계. 칸 크기가 바뀌면 화면 자리를 다시 나눈다
+final class SurfaceContainerView: NSView {
+    private var dividers: [ObjectIdentifier: SplitDividerView] = [:]
+
+    override func resizeSubviews(withOldSize oldSize: NSSize) { TerminalHub.shared.layoutSurfaces() }
+
+    // 고른 탭의 경계들(가지, 가지 자리, 선 자리) — 끄는 동안 경계 뷰가 바뀌지 않게 가지마다 같은 뷰를 쓴다
+    func showDividers(_ lines: [(SplitNode, NSRect, NSRect)], color: NSColor) {
+        var keep: [ObjectIdentifier: SplitDividerView] = [:]
+        for (node, area, line) in lines {
+            let key = ObjectIdentifier(node)
+            let v = dividers[key] ?? SplitDividerView()
+            if v.superview == nil { addSubview(v) }   // 화면 뷰들 위에
+            v.node = node
+            v.area = area
+            v.color = color
+            // 잡는 자리는 선 양옆으로 3pt 씩 더(Ghostty 처럼 보이는 선은 1pt)
+            let f = node.right ? line.insetBy(dx: -3, dy: 0) : line.insetBy(dx: 0, dy: -3)
+            if v.frame != f { v.frame = f; window?.invalidateCursorRects(for: v) }
+            keep[key] = v
+        }
+        for (key, v) in dividers where keep[key] == nil { v.removeFromSuperview() }
+        dividers = keep
+    }
+}
+
+// 나눈 화면 사이 경계 — 끌면 그 가지의 몫이 바뀌고(화면이 80pt 아래로 줄지 않게) 놓으면 남긴다
+final class SplitDividerView: NSView {
+    weak var node: SplitNode?
+    var area: NSRect = .zero   // 그 가지가 차지하는 자리(터미널 칸 좌표)
+    var color = NSColor.gray { didSet { if color != oldValue { needsDisplay = true } } }
+
+    override var mouseDownCanMoveWindow: Bool { false }   // 창은 배경을 끌어 옮길 수 있게 되어 있다
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: node?.right == false ? .resizeUpDown : .resizeLeftRight) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        color.setFill()
+        (node?.right == false ? NSRect(x: 0, y: bounds.midY - 0.5, width: bounds.width, height: 1)
+                              : NSRect(x: bounds.midX - 0.5, y: 0, width: 1, height: bounds.height)).fill()
+    }
+
+    override func mouseDown(with event: NSEvent) {}
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let node, let p = superview?.convert(event.locationInWindow, from: nil) else { return }
+        if node.right {
+            node.setRatio((p.x - area.minX) / max(area.width - 1, 1), length: area.width)
+        } else {
+            node.setRatio((area.maxY - p.y) / max(area.height - 1, 1), length: area.height)
+        }
+        TerminalHub.shared.layoutSurfaces()
+    }
+
+    override func mouseUp(with event: NSEvent) { TerminalHub.shared.saveTabs() }
 }
 
 // 터미널과 보드 사이 경계 — 끌어서 보드 폭을 바꾸고, 놓으면 기억한다
@@ -5789,13 +6522,19 @@ struct TerminalTabBar: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            ForEach(hub.tabs) { t in TerminalTabButton(tab: t, selected: t.id == hub.selected, background: hub.background) }
+            // 지금 경로의 탭만
+            ForEach(Array(hub.tabs(in: hub.workspace).enumerated()), id: \.element.id) { i, t in
+                // ⌘ 를 누르고 있으면 탭 줄 순서의 ⌘번호(⌘1~⌘9, 열 번째 탭부터는 없음)
+                TerminalTabButton(tab: t, selected: t.id == hub.selected, background: hub.background,
+                                  shortcut: hub.commandHeld && i < 9 ? i + 1 : nil, commandHeld: hub.commandHeld)
+            }
+            // 새 세션 — 글자 대신 + 와 단축키(⌘T), 이름은 마우스를 올리면
             Button { hub.newSessionSheet() } label: {
-                HStack(spacing: 5) {
+                HStack(spacing: 4) {
                     Image(systemName: "plus").font(.system(size: 10, weight: .bold))
-                    Text("새 세션")
+                    Text("⌘T").boardFont(11, weight: .medium).opacity(0.75)
                 }
-                .font(.system(size: 12, weight: .semibold))
+                .boardFont(12, weight: .semibold)
                 .foregroundStyle(.primary.opacity(newHover ? 1 : 0.8))
                 .padding(.horizontal, 11)
                 .frame(height: 26)
@@ -5805,6 +6544,7 @@ struct TerminalTabBar: View {
             }
             .buttonStyle(.plain)
             .clickable($newHover)
+            .hint("새 세션")
             .padding(.leading, 6)
             // 탭 줄의 빈 곳이 어디부터인지 — 그 오른쪽 더블클릭은 창 크기 전환(isWindowSizeDoubleClick)
             .background(GeometryReader { g in Color.clear.preference(key: TabBarEnd.self, value: g.frame(in: .named("tabBar")).maxX) })
@@ -5817,6 +6557,62 @@ struct TerminalTabBar: View {
         .background(Color(nsColor: terminalBarColor))
         .overlay(alignment: .bottom) { Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1) }
         .preferredColorScheme(.dark)
+        .boardFont(13)   // 글자 크기를 따로 정하지 않은 글자(단추 제목 등)도 보드 글자 비율을 따른다
+    }
+}
+
+// 경로 줄 — 탭이 있는 작업 경로들(탭 목록에 처음 나타난 순서). 항목은 상태 점(그 경로 탭들의 세션 가운데 가장 급한 상태)·폴더 이름·탭 수,
+// 누르면 그 경로로(마지막에 고른 탭). 빈 곳 더블클릭은 탭 줄처럼 창 크기 전환. 경로를 닫는 단추는 두지 않는다
+struct TerminalWorkspaceBar: View {
+    @ObservedObject var hub: TerminalHub
+
+    var body: some View {
+        let list = hub.workspaces
+        HStack(spacing: 0) {
+            HStack(spacing: 4) {
+                ForEach(list, id: \.self) { ws in
+                    WorkspaceButton(label: workspaceLabel(ws, among: list), path: ws, count: hub.tabs(in: ws).count,
+                                    state: hub.workspaceStates[ws] ?? "idle", current: ws == hub.workspace, background: hub.background)
+                }
+            }
+            // 경로 줄의 빈 곳이 어디부터인지 — 탭 줄과 따로 그리는 호스팅 뷰라 같은 키로 잰다
+            .background(GeometryReader { g in Color.clear.preference(key: TabBarEnd.self, value: g.frame(in: .named("workspaceBar")).maxX) })
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .coordinateSpace(name: "workspaceBar")
+        .onPreferenceChange(TabBarEnd.self) { hub.workspaceBarEnd = $0 }
+        .background(Color(nsColor: terminalBarColor))
+        .preferredColorScheme(.dark)
+        .boardFont(13)   // 글자 크기를 따로 정하지 않은 글자도 보드 글자 비율을 따른다
+    }
+}
+
+struct WorkspaceButton: View {
+    let label: String
+    let path: String
+    let count: Int
+    let state: String
+    let current: Bool        // 지금 경로 — 탭 줄의 고른 탭처럼 터미널 바탕색에 작업 중 색 테두리
+    let background: NSColor
+    @State private var hover = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle().fill(Palette.color(state)).frame(width: 7, height: 7)
+            Text(label).boardFont(12, weight: .semibold).lineLimit(1)
+            Text("\(count)").boardFont(11, weight: .semibold).monospacedDigit().foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 24)
+        .background(RoundedRectangle(cornerRadius: 7).fill(current ? Color(nsColor: background) : Color.white.opacity(hover ? 0.06 : 0)))
+        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(current ? Palette.color("working").opacity(0.5) : .clear, lineWidth: 1))
+        .foregroundStyle(current ? .primary : .secondary)
+        .contentShape(Rectangle())
+        .onTapGesture { TerminalHub.shared.showWorkspace(path) }
+        .clickable($hover)
+        .hint(path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
     }
 }
 
@@ -5824,26 +6620,49 @@ struct TerminalTabButton: View {
     @ObservedObject var tab: BoardTab
     let selected: Bool
     let background: NSColor
+    let shortcut: Int?       // ⌘ 를 누르고 있는 동안 × 자리에 보일 ⌘번호
+    let commandHeld: Bool
     @State private var hover = false
     @State private var closeHover = false
 
     var body: some View {
         HStack(spacing: 8) {
-            // 짝지은 세션의 상태 색과 제목 — 셸 탭이나 아직 요청 전이면 터미널 제목
-            Circle().fill(Palette.color(tab.session?.state ?? "idle")).frame(width: 8, height: 8)
-            Text(tab.name).font(.system(size: 13, weight: .semibold)).lineLimit(1).fixedSize()
-            Text(tab.session.map(doing) ?? tab.title).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
-            Spacer(minLength: 0)
-            Button { TerminalHub.shared.requestClose(tab) } label: {
-                Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(closeHover ? .primary : .secondary)
-                    .frame(width: 16, height: 16)
-                    .background(Circle().fill(Color.white.opacity(closeHover ? 0.14 : 0)))
+            // 상태 색은 화면들의 세션 가운데 가장 급한 것, 제목은 고른 화면의 세션 — 셸 화면이나 아직 요청 전이면 그 화면의 터미널 제목
+            Circle().fill(Palette.color(tab.state)).frame(width: 8, height: 8)
+            if tab.renaming {
+                TabNameField(tab: tab).frame(width: 120)
+            } else {
+                Text(tab.name).boardFont(13, weight: .semibold).lineLimit(1).fixedSize()
             }
-            .buttonStyle(.plain)
-            .opacity(hover || selected ? 1 : 0)
-            .onHover { closeHover = $0 }
-            .hint("탭 닫기")
+            // 고른 화면 하나 크게 보는 중(⇧⌘↩)
+            if tab.zoomed {
+                Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(Palette.color("working"))
+                    .hint("화면 하나 크게 보는 중: ⇧⌘↩ 로 되돌립니다")
+            }
+            // ⌘ 를 누르고 있는 동안 고른 탭은 지금 하는 일 대신 이름 바꾸기 단축키
+            if commandHeld && selected {
+                Text("⇧⌘R 이름 바꾸기").boardFont(11).foregroundStyle(.secondary).lineLimit(1)
+            } else {
+                Text(tab.focused.session.map(doing) ?? tab.focused.title).boardFont(12).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            if let n = shortcut {
+                // 폭은 × 와 같게 두어 탭 폭이 흔들리지 않게(글자는 넘쳐 그린다)
+                Text("⌘\(n)").boardFont(10, weight: .semibold).foregroundStyle(.secondary)
+                    .fixedSize().frame(width: 16, height: 16)
+            } else {
+                Button { TerminalHub.shared.requestClose(tab) } label: {
+                    Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(closeHover ? .primary : .secondary)
+                        .frame(width: 16, height: 16)
+                        .background(Circle().fill(Color.white.opacity(closeHover ? 0.14 : 0)))
+                }
+                .buttonStyle(.plain)
+                .opacity(hover || selected ? 1 : 0)
+                .onHover { closeHover = $0 }
+                .hint("탭 닫기")
+            }
         }
         .padding(.leading, 14).padding(.trailing, 8)
         .frame(minWidth: 120, maxWidth: 250, maxHeight: .infinity)
@@ -5851,8 +6670,52 @@ struct TerminalTabButton: View {
         .overlay(alignment: .top) { Rectangle().fill(selected ? Palette.color("working") : .clear).frame(height: 2) }
         .foregroundStyle(selected ? .primary : .secondary)
         .contentShape(Rectangle())
-        .onTapGesture { TerminalHub.shared.select(tab.id) }
+        .onTapGesture { if !tab.renaming { TerminalHub.shared.select(tab.id) } }
         .onHover { hover = $0 }
+    }
+}
+
+// 탭 이름 입력 칸 — 탭 줄은 키 초점을 받지 않는 호스팅 뷰(PassiveHostingView)라 AppKit 입력 칸을 직접 첫 응답자로 세운다
+// (처음 값은 지금 이름, 첫 응답자가 되면 전체 선택). Return 저장, Esc 취소, 다른 곳을 눌러 포커스를 잃으면 저장
+struct TabNameField: NSViewRepresentable {
+    let tab: BoardTab
+
+    func makeNSView(context: Context) -> NSTextField {
+        let f = NSTextField(string: tab.name)
+        f.isBordered = false
+        f.drawsBackground = false
+        f.focusRingType = .none
+        f.font = .systemFont(ofSize: 13 * BoardFontScale.shared.scale, weight: .semibold)   // 탭 이름 글자와 같게(보드 글자 비율)
+        f.cell?.isScrollable = true
+        f.cell?.wraps = false
+        f.delegate = context.coordinator
+        DispatchQueue.main.async { f.window?.makeFirstResponder(f) }   // 창에 붙은 뒤에
+        return f
+    }
+
+    func updateNSView(_ f: NSTextField, context: Context) {}
+    func makeCoordinator() -> Coordinator { Coordinator(tab: tab) }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        let tab: BoardTab
+        init(tab: BoardTab) { self.tab = tab }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            switch selector {
+            case #selector(NSResponder.insertNewline(_:)): end(control.stringValue)
+            case #selector(NSResponder.cancelOperation(_:)): end(nil)
+            default: return false
+            }
+            return true
+        }
+
+        // 포커스를 잃음 — 포커스가 옮겨 가는 도중이라 끝난 뒤에 저장한다(저장이 다시 포커스를 옮긴다). Return·Esc 로 이미 끝났으면 아무 일 없다
+        func controlTextDidEndEditing(_ note: Notification) {
+            let name = (note.object as? NSTextField)?.stringValue
+            DispatchQueue.main.async { self.end(name) }
+        }
+
+        private func end(_ name: String?) { MainActor.assumeIsolated { TerminalHub.shared.endRename(tab, name: name) } }
     }
 }
 
@@ -5864,6 +6727,7 @@ struct NewSessionSheet: View {
     let cancel: () -> Void
     let start: (String, String, Bool) -> Void   // 명령, 작업 폴더, 답변 마크다운 꾸미기
     @ObservedObject private var hub = TerminalHub.shared
+    @ObservedObject private var fontScale = BoardFontScale.shared
     @State private var dir: String
     @State private var others: [String] = []
     @State private var command = defaultSessionCommand
@@ -5884,8 +6748,8 @@ struct NewSessionSheet: View {
                 Image(systemName: on ? "largecircle.fill.circle" : "circle")
                     .foregroundStyle(on ? Palette.color("working") : .secondary)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text((p as NSString).lastPathComponent).font(.system(size: 13, weight: .semibold))
-                    Text(p.replacingOccurrences(of: NSHomeDirectory(), with: "~")).font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text((p as NSString).lastPathComponent).boardFont(13, weight: .semibold)
+                    Text(p.replacingOccurrences(of: NSHomeDirectory(), with: "~")).boardFont(11).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle)
                 }
                 Spacer(minLength: 0)
@@ -5909,26 +6773,27 @@ struct NewSessionSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("새 세션").font(.system(size: 16, weight: .bold))
+            Text("새 세션").boardFont(16, weight: .bold)
             VStack(alignment: .leading, spacing: 6) {
-                Text("작업 폴더 (보드에 있는 경로)").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                Text("작업 폴더 (보드에 있는 경로)").boardFont(12, weight: .semibold).foregroundStyle(.secondary)
                 ScrollView {
                     VStack(spacing: 2) { ForEach(paths + others, id: \.self) { row($0) } }
                 }
-                .frame(height: min(CGFloat(paths.count + others.count) * 46, 230))   // 스크롤 영역은 높이를 정해 주지 않으면 0 으로 접힌다
+                // 스크롤 영역은 높이를 정해 주지 않으면 0 으로 접힌다. 줄 높이는 보드 글자 비율을 따른다(150% 에서 둘째 줄이 잘렸다)
+                .frame(height: min(CGFloat(paths.count + others.count) * 46, 230) * fontScale.scale)
                 Button("다른 폴더 고르기…", action: pick)
             }
             VStack(alignment: .leading, spacing: 6) {
-                Text("실행할 명령").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
-                TextField("", text: $command).font(.system(size: 13, design: .monospaced)).textFieldStyle(.roundedBorder)
+                Text("실행할 명령").boardFont(12, weight: .semibold).foregroundStyle(.secondary)
+                TextField("", text: $command).boardFont(13, design: .monospaced).textFieldStyle(.roundedBorder)
                 Text("작업 경로의 셸에 쳐 넣어 실행합니다. claude 면 보드가 --session-id 를 붙입니다")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .boardFont(11).foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: 4) {
-                Toggle("답변 마크다운 꾸미기", isOn: $mdRender).toggleStyle(.checkbox).font(.system(size: 13))
+                Toggle("답변 마크다운 꾸미기", isOn: $mdRender).toggleStyle(.checkbox).boardFont(13)
                     .disabled(mdRenderDir == nil)
                 Text("답변이 끝나면 제목·굵게·인라인 코드·목록 등을 색으로 다시 그립니다(md-render). claude 면 --plugin-dir 로 붙입니다")
-                    .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .boardFont(11).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             HStack {
                 Spacer()
@@ -5940,6 +6805,7 @@ struct NewSessionSheet: View {
         }
         .padding(18)
         .frame(width: 460)
+        .boardFont(13)   // 글자 크기를 따로 정하지 않은 글자(단추 제목 등)도 보드 글자 비율을 따른다
     }
 }
 
@@ -5950,7 +6816,7 @@ struct TerminalNotice: View {
     var body: some View {
         if let text = hub.notice {
             HStack(alignment: .top, spacing: 10) {
-                Text(text).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
+                Text(text).boardFont(12).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
                 Button { hub.dismissNotice() } label: {
                     Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
@@ -5975,11 +6841,11 @@ struct TerminalEmptyView: View {
     @State private var hover = false
     var body: some View {
         VStack(spacing: 12) {
-            Text("보드에서 띄운 세션이 없습니다").font(.system(size: 14, weight: .semibold))
-            Text("보드에서 시작하거나 이어 연 세션이 여기 탭으로 열립니다").font(.system(size: 12)).foregroundStyle(.secondary)
+            Text("보드에서 띄운 세션이 없습니다").boardFont(14, weight: .semibold)
+            Text("보드에서 시작하거나 이어 연 세션이 여기 탭으로 열립니다").boardFont(12).foregroundStyle(.secondary)
             Button { TerminalHub.shared.newSessionSheet() } label: {
                 HStack(spacing: 6) { Image(systemName: "plus"); Text("새 세션") }
-                    .font(.system(size: 12, weight: .semibold))
+                    .boardFont(12, weight: .semibold)
                     .padding(.horizontal, 14).frame(height: 30)
                     .background(Capsule().fill(Color.white.opacity(hover ? 0.16 : 0.1)))
             }
@@ -5988,6 +6854,7 @@ struct TerminalEmptyView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .preferredColorScheme(.dark)
+        .boardFont(13)   // 글자 크기를 따로 정하지 않은 글자(단추 제목 등)도 보드 글자 비율을 따른다
     }
 }
 
@@ -6118,7 +6985,8 @@ func saveRestoreFrame() { UserDefaults.standard.set(NSStringFromRect(window.fram
     setTerminalExpanded(false, animated: false)   // 터미널을 펼쳤으면 먼저 접는다 — 미니에서 돌아갈 위치는 접힌 보드
     saveRestoreFrame()
     let f = window.frame
-    let h = miniMinHeight + CGFloat(min(max(rows, 2), 6) - 2) * miniRowHeight   // 최소 높이에 두 줄이 들어간다
+    // 최소 높이에 두 줄이 들어간다. 보드 글자를 키웠으면 그만큼 높인다(150% 에서 둘째 줄이 아래 줄에 가려졌다)
+    let h = (miniMinHeight + CGFloat(min(max(rows, 2), 6) - 2) * miniRowHeight) * max(1, BoardFontScale.shared.scale)
     let x = TerminalHub.shared.boardOnLeft ? f.minX : f.maxX - miniWidth
     window.setFrame(NSRect(x: x, y: f.maxY - h, width: miniWidth, height: h), display: true, animate: true)
 }
@@ -6228,7 +7096,7 @@ struct MiniBoard: View {
                 Foreman(groups: store.groups, limits: usage.limits, now: store.now, compact: true)
             }
             if store.groups.isEmpty {
-                Text("아직 기록된 세션이 없습니다").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text("아직 기록된 세션이 없습니다").boardFont(11).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
             } else {
                 ScrollView(showsIndicators: false) {
@@ -6263,7 +7131,7 @@ struct MiniRow: View {
         let live = top ?? g.sessions.first { $0.state != "ended" }
         HStack(spacing: 8) {
             StateIcon(state: g.urgent).scaleEffect(0.8).frame(width: 15, height: 15)
-            Text(g.name).font(.system(size: 12, weight: .semibold)).lineLimit(1).layoutPriority(1)
+            Text(g.name).boardFont(12, weight: .semibold).lineLimit(1).layoutPriority(1)
             HStack(spacing: 4) {
                 // 줄에 보이는 세션이 터미널에서 도는지 백그라운드로 도는지 — 아이콘만
                 if let s = top ?? first { KindLabel(headless: s.headless, compact: true) }
@@ -6276,7 +7144,7 @@ struct MiniRow: View {
                         .lineLimit(1).foregroundStyle(.secondary)
                 }
             }
-            .font(.system(size: 11))
+            .boardFont(11)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 8)
@@ -6601,7 +7469,7 @@ func canDrive(_ s: Session) -> Bool {
 @MainActor func canDriveSession(_ s: Session) -> Bool {
     let hub = TerminalHub.shared
     switch hub.place(s) {
-    case .tab(let id, let headless): return !headless && hub.tabs.first { $0.id == id }.map { $0.isForeground(s.pid) } == true
+    case .tab(let id, let headless): return !headless && hub.surface(id).map { $0.isForeground(s.pid) } == true
     case .terminal: return canDrive(s)
     default: return false
     }
@@ -6611,8 +7479,8 @@ func canDrive(_ s: Session) -> Bool {
 // 보드 탭 세션은 그 탭에 직접, Ghostty 세션은 AppleScript. 넣을 수 없으면 done(false) — done 은 메인에서
 @MainActor func driveSession(_ s: Session, _ steps: [(String, String)], done: @escaping @MainActor (Bool) -> Void = { _ in }) {
     let hub = TerminalHub.shared
-    if case .tab(let id, false) = hub.place(s), let tab = hub.tabs.first(where: { $0.id == id }), tab.isForeground(s.pid) {
-        tab.drive(steps, done: done)
+    if case .tab(let id, false) = hub.place(s), let surface = hub.surface(id), surface.isForeground(s.pid) {
+        surface.drive(steps, done: done)
         return
     }
     guard hub.place(s) == .terminal, canDrive(s) else { return done(false) }
@@ -6778,7 +7646,7 @@ func transcriptPath(_ given: String?, _ cwd: String, _ id: String) -> String {
     return NSHomeDirectory() + "/.claude/projects/\(slug)/\(id).jsonl"
 }
 
-// 끝난 세션을 보드 탭에서 같은 작업 경로로 이어 연다 — 그 세션이 마지막으로 돌던 탭이 같은 경로의 셸 프롬프트로 남아 있으면 그 탭에,
+// 끝난 세션을 보드 탭에서 같은 작업 경로로 이어 연다 — 그 세션이 마지막으로 돌던 화면이 같은 경로의 셸 프롬프트로 남아 있으면 그 화면에,
 // 아니면 새 탭에. 대화 이력은 claude --resume 이 불러오고,
 // 실행 인자·마지막 권한 모드·모델은 state.py 가 기록한 resume_cmd 에 담겨 있다(-p 는 넘기지 않아 대화형으로 열린다)
 @MainActor func resumeSession(_ s: Session, carryOn: Bool = false) {
@@ -6791,15 +7659,15 @@ func transcriptPath(_ given: String?, _ cwd: String, _ id: String) -> String {
         try? FileManager.default.removeItem(atPath: pausedMark(s))
     }
     let hub = TerminalHub.shared
-    if let tab = hub.tabs.first(where: { $0.sessionId == s.id && $0.atPrompt && $0.cwd == s.cwd }) {
-        hub.run(cmd, in: tab, sessionId: s.id, mdRenderOff: off)
-        hub.reveal(tab.id)
+    if let surface = hub.surfaces.first(where: { $0.sessionId == s.id && $0.atPrompt && $0.cwd == s.cwd }) {
+        hub.run(cmd, in: surface, sessionId: s.id, mdRenderOff: off)
+        hub.reveal(surface.id)
     } else {
         hub.launch(cmd, in: s.cwd, sessionId: s.id, mdRenderOff: off)
     }
 }
 
-// 세션을 한 번 눌렀을 때(목록·미니·알림 패널 "세션으로 이동") — 보드 탭이면 펼치고 그 탭으로, 끝난 세션은 보드 새 탭에서 이어 열기,
+// 세션을 한 번 눌렀을 때(목록·미니·알림 패널 "세션으로 이동") — 보드 탭이면 펼치고 그 탭의 그 화면으로, 끝난 세션은 보드 새 탭에서 이어 열기,
 // 백그라운드 세션은 안내만, 다른 터미널 세션은 지금처럼 그 터미널로(두 번 누르면 그 세션의 터미널 창까지)
 @MainActor func openSession(_ s: Session, double: Bool = false) {
     let hub = TerminalHub.shared
@@ -6905,6 +7773,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             toggleWindowSize()
             return nil
         }
+        // ⌘ 를 잠깐 누르고 있으면 탭 줄에 ⌘번호·이름 바꾸기 단축키를 보인다(⌘C 처럼 바로 다른 키를 치면 보이지 않는다).
+        // ⌘Tab 등으로 앱이 비활성이 되면 놓는 신호가 오지 않으므로 끈다
+        NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { e in
+            if e.type == .keyDown { TerminalHub.shared.commandKeyDown() } else { TerminalHub.shared.commandFlag(e.modifierFlags.contains(.command)) }
+            return e
+        }
+        nc.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { TerminalHub.shared.commandFlag(false) }
+        }
 
         // 저장된 창 위치 끝에 macOS 타일 배치 기록({"tilingState":…})이 붙어 있으면 창을 띄우는 순간 macOS 가 그 타일 크기로
         // 되돌린다(2026-10-16 확인 — 미니로 둔 300×144 가 화면 높이로, 폭 454 가 타일 폭 385 로 열렸다). 크기·위치 부분만 남긴다
@@ -6996,6 +7873,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         appMenu.addItem(withTitle: "Claude Board 종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
 
+        // 편집 — 첫 응답자에게 보낸다(target nil). 탭 이름 칸·새 세션 창 명령 칸의 ⌘A·⌘C·⌘V 는 이 메뉴가 있어야 듣는다.
+        // 터미널에 포커스가 있으면 엔진이 묶은 ⌘C·⌘V·⌘A·⌘Z·⇧⌘Z 는 뷰의 performKeyEquivalent 가 메뉴보다 먼저 받는다
+        let editItem = NSMenuItem()
+        main.addItem(editItem)
+        let editMenu = NSMenu(title: "편집")
+        // 실행 취소·복귀는 직접 보낸다 — target nil 이면 AppKit 이 제목을 앱 언어(지역 선언이 없어 영어)의 "Undo …" 로 바꿔 쓴다(실측).
+        // 앱 지역을 ko 로 선언하면 고쳐지지만 엔진이 셸 LANG 을 앱 로캘로 정해 터미널까지 바뀐다. 할 것이 없어도 꺼지지 않는다
+        for (title, sel, mods) in [("실행 취소", "undo:", NSEvent.ModifierFlags.command), ("실행 복귀", "redo:", [.command, .shift])] {
+            let item = ActionItem(title) { NSApp.sendAction(Selector(sel), to: nil, from: nil) }
+            item.keyEquivalent = "z"
+            item.keyEquivalentModifierMask = mods
+            editMenu.addItem(item)
+        }
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "잘라내기", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "복사하기", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "붙여넣기", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "모두 선택", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = editMenu
+
         let windowItem = NSMenuItem()
         main.addItem(windowItem)
         let windowMenu = NSMenu(title: "윈도우")
@@ -7014,17 +7911,89 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let newSession = ActionItem("새 세션…") { TerminalHub.shared.newSessionSheet() }
         newSession.keyEquivalent = "t"
         windowMenu.addItem(newSession)
-        // ⌘1~⌘9 — 탭 줄 순서대로 그 탭으로(접혀 있으면 펼친다). 그 자리에 탭이 없으면 그대로. 엔진의 ⌘1~⌘9(goto_tab·last_tab)는 풀어 두었다
+        // ⌘1~⌘9 — 탭 줄(지금 경로의 탭) 순서대로 그 탭으로(접혀 있으면 펼친다). 그 자리에 탭이 없으면 그대로. 엔진의 ⌘1~⌘9(goto_tab·last_tab)는 풀어 두었다
         let tabMenu = NSMenu(title: "탭으로 가기")
         for n in 1...9 {
             let item = ActionItem("탭 \(n)") {
-                let hub = TerminalHub.shared
-                if hub.tabs.indices.contains(n - 1) { hub.reveal(hub.tabs[n - 1].id) }
+                let hub = TerminalHub.shared, list = hub.tabs(in: hub.workspace)
+                if list.indices.contains(n - 1) { hub.reveal(list[n - 1].id) }
             }
             item.keyEquivalent = "\(n)"
             tabMenu.addItem(item)
         }
+        tabMenu.addItem(.separator())
+        func arrow(_ key: Int) -> String { String(Character(UnicodeScalar(key)!)) }
+        func keyItem(_ menu: NSMenu, _ title: String, _ key: String, _ mods: NSEvent.ModifierFlags, hidden: Bool = false,
+                     run: @escaping @MainActor () -> Void) {
+            let item = ActionItem(title, run: run)
+            item.keyEquivalent = key
+            item.keyEquivalentModifierMask = mods
+            item.isHidden = hidden
+            item.allowsKeyEquivalentWhenHidden = hidden
+            menu.addItem(item)
+        }
+        // ⌃⌥←·⌃⌥→ — 탭 줄에서 왼쪽·오른쪽 탭으로(지금 경로 안에서, 끝에서는 반대쪽 끝으로, 접혀 있으면 펼친다). Ghostty 의 탭 키
+        // ⇧⌘[·⇧⌘]·⌃⇧⇥·⌃⇥ 도 숨긴 항목으로 받는다(엔진의 같은 키 previous_tab·next_tab 은 풀어 두었다)
+        keyItem(tabMenu, "이전 탭", arrow(NSLeftArrowFunctionKey), [.control, .option]) { TerminalHub.shared.stepTab(-1) }
+        keyItem(tabMenu, "다음 탭", arrow(NSRightArrowFunctionKey), [.control, .option]) { TerminalHub.shared.stepTab(1) }
+        keyItem(tabMenu, "이전 탭", "{", [.command, .shift], hidden: true) { TerminalHub.shared.stepTab(-1) }
+        keyItem(tabMenu, "다음 탭", "}", [.command, .shift], hidden: true) { TerminalHub.shared.stepTab(1) }
+        keyItem(tabMenu, "이전 탭", "\u{19}", [.control, .shift], hidden: true) { TerminalHub.shared.stepTab(-1) }
+        keyItem(tabMenu, "다음 탭", "\t", [.control], hidden: true) { TerminalHub.shared.stepTab(1) }
+        tabMenu.addItem(.separator())
+        // ⌃⌥↑·⌃⌥↓ — 경로 줄에서 앞·뒤 경로로(그 경로에서 마지막에 고른 탭, 끝에서는 반대쪽 끝으로, 접혀 있으면 펼친다)
+        keyItem(tabMenu, "이전 경로", arrow(NSUpArrowFunctionKey), [.control, .option]) { TerminalHub.shared.stepWorkspace(-1) }
+        keyItem(tabMenu, "다음 경로", arrow(NSDownArrowFunctionKey), [.control, .option]) { TerminalHub.shared.stepWorkspace(1) }
         windowMenu.addItem(withTitle: "탭으로 가기", action: nil, keyEquivalent: "").submenu = tabMenu
+        // 화면 나누기 — Ghostty 와 같은 키. 보드가 탭마다 화면 트리를 쥐고, 엔진의 같은 키는 풀어 두었다(⌘W 는 엔진이 그 화면을 닫는다)
+        let splitMenu = NSMenu(title: "화면 나누기")
+        keyItem(splitMenu, "오른쪽으로 나누기", "d", [.command]) { TerminalHub.shared.split(right: true) }
+        keyItem(splitMenu, "아래로 나누기", "d", [.command, .shift]) { TerminalHub.shared.split(right: false) }
+        splitMenu.addItem(.separator())
+        keyItem(splitMenu, "이전 화면", "[", [.command]) { TerminalHub.shared.focusSurface(step: -1) }
+        keyItem(splitMenu, "다음 화면", "]", [.command]) { TerminalHub.shared.focusSurface(step: 1) }
+        let directions: [(String, Int, SplitDirection)] = [("위로", NSUpArrowFunctionKey, .up), ("아래로", NSDownArrowFunctionKey, .down),
+                                                          ("왼쪽으로", NSLeftArrowFunctionKey, .left), ("오른쪽으로", NSRightArrowFunctionKey, .right)]
+        for (name, key, d) in directions {
+            keyItem(splitMenu, "\(name) 화면 고르기", arrow(key), [.command, .option]) { TerminalHub.shared.focusSurface(d) }
+        }
+        splitMenu.addItem(.separator())
+        for (name, key, d) in directions {
+            keyItem(splitMenu, "경계를 \(name) 옮기기", arrow(key), [.command, .control]) { TerminalHub.shared.resizeSplit(d) }
+        }
+        keyItem(splitMenu, "크기 고르게", "=", [.command, .control]) { TerminalHub.shared.equalizeSplits() }
+        splitMenu.addItem(.separator())
+        keyItem(splitMenu, "화면 하나 크게 보기", "\r", [.command, .shift]) { TerminalHub.shared.toggleZoom() }
+        windowMenu.addItem(withTitle: "화면 나누기", action: nil, keyEquivalent: "").submenu = splitMenu
+        // ⇧⌘R — 고른 탭의 이름을 탭 안에서 고친다(접혀 있으면 펼친다). 탭이 없으면 그대로. 엔진 기본값은 이 키를 묶지 않는다
+        let rename = ActionItem("탭 이름 바꾸기") { TerminalHub.shared.beginRename() }
+        rename.keyEquivalent = "r"
+        rename.keyEquivalentModifierMask = [.command, .shift]
+        windowMenu.addItem(rename)
+        // 글자 크기 — 터미널(모든 탭, 1pt씩)과 보드(10%씩)를 따로 정한다. 둘 다 다시 켜도 남는다. 엔진의 ⌘+·⌘=·⌘-·⌘0 은 풀어 두어
+        // 터미널 포커스에서도 여기로 온다. ⌘0 은 이미 "세션 보드 보기" 라 터미널 원래 크기는 단축키가 없다
+        let fontMenu = NSMenu(title: "글자 크기")
+        // 보이는 항목은 +, 같은 키의 = (Shift 없이)는 숨긴 항목으로 받는다
+        func sizeItem(_ title: String, _ key: String, _ mods: NSEvent.ModifierFlags, hidden: Bool = false, run: @escaping @MainActor () -> Void) {
+            let item = ActionItem(title, run: run)
+            item.keyEquivalent = key
+            item.keyEquivalentModifierMask = mods
+            item.isHidden = hidden
+            item.allowsKeyEquivalentWhenHidden = hidden
+            fontMenu.addItem(item)
+        }
+        sizeItem("터미널 글자 크게", "+", [.command]) { TerminalHub.shared.changeTerminalFont(1) }
+        sizeItem("터미널 글자 크게", "=", [.command], hidden: true) { TerminalHub.shared.changeTerminalFont(1) }
+        sizeItem("터미널 글자 작게", "-", [.command]) { TerminalHub.shared.changeTerminalFont(-1) }
+        sizeItem("터미널 글자 원래 크기", "", []) { TerminalHub.shared.changeTerminalFont(nil) }
+        fontMenu.addItem(.separator())
+        sizeItem("보드 글자 크게", "+", [.command, .option]) { BoardFontScale.shared.change(1) }
+        sizeItem("보드 글자 크게", "=", [.command, .option], hidden: true) { BoardFontScale.shared.change(1) }
+        // ⌥⇧⌘= 는 Shift 까지 넣은 항목에만 맞는다 — 없으면 AppKit 이 ⌥ 를 빼고 "터미널 글자 크게"(⌘+)로 보냈다(실측)
+        sizeItem("보드 글자 크게", "+", [.command, .option, .shift], hidden: true) { BoardFontScale.shared.change(1) }
+        sizeItem("보드 글자 작게", "-", [.command, .option]) { BoardFontScale.shared.change(-1) }
+        sizeItem("보드 글자 원래 크기", "0", [.command, .option]) { BoardFontScale.shared.change(nil) }
+        windowMenu.addItem(withTitle: "글자 크기", action: nil, keyEquivalent: "").submenu = fontMenu
         windowMenu.addItem(.separator())
         // 보드 위치(오른쪽·왼쪽)와 펼치기·접기 애니메이션 — 체크 표시는 validateMenuItem 이 단다
         let sideMenu = NSMenu(title: "보드 위치")
