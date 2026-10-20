@@ -38,6 +38,7 @@ struct Session: Identifiable, Equatable {
     let paused: Bool        // 보드에서 일시중지한 세션 — sessions/<id>.paused 가 있다
     let muted: Bool         // 보드에서 알림을 끈 세션 — sessions/<id>.mute 가 있으면 notify.py 가 패널을 띄우지 않는다
     let limitAt: Date?      // 사용 한도에 걸려 응답이 끊긴 시각 — state.py 가 기록하고, 세션이 다시 움직이면 지운다
+    let name: String?       // Claude Code 의 세션 이름(ClaudeNames — pid 로 찾음). 끝난 세션·못 읽으면 nil
 
     var rank: Int { ["waiting": 0, "working": 1, "paused": 2, "idle": 2, "ended": 3][state] ?? 9 }
     var title: String { topic.isEmpty ? (message.isEmpty ? "요청 전" : message) : topic }
@@ -184,6 +185,43 @@ final class InterruptReader {
     }
 
     func prune(keep: Set<String>) { parsed = parsed.filter { keep.contains($0.key) } }
+}
+
+// Claude Code 의 세션 이름 — Claude Code 는 도는 세션마다 ~/.claude/sessions/<pid>.json 에 name(자동 이름은 "<작업 폴더 이름>-<16진수 두 글자>",
+// --name·/rename 으로 바꾼 이름)과 status(idle·busy, 승인 창·질문 창이 떠 있으면 waiting)를 쓰고, 끝나면(/exit·탭 닫기의 SIGHUP) 지운다
+// (2.1.304 실측). hook 입력에는 이름이 없어 이 파일로만 안다. 세션 파일의 pid 로 찾는다 — /clear 해도 pid·이름은 그대로다
+final class ClaudeNames {
+    static let shared = ClaudeNames()
+    private let dir = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/sessions")
+    private var cache: [Int32: (mtime: Date, j: [String: Any]?)] = [:]
+
+    private func path(_ pid: Int32) -> String { (dir as NSString).appendingPathComponent("\(pid).json") }
+
+    // 1초마다 읽는 카드 라벨·탭 줄 — 파일이 바뀔 때만 다시 푼다
+    func name(_ pid: Int32) -> String? {
+        guard pid > 0, let m = mtime(path(pid)) else { cache[pid] = nil; return nil }
+        if cache[pid]?.mtime != m {
+            cache[pid] = (m, FileManager.default.contents(atPath: path(pid)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
+        }
+        return (cache[pid]?.j?["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    // 지금 status — 이름 바꾸기를 치기 직전에 보므로 캐시 없이 읽는다. 파일·값이 없으면 nil
+    func status(_ pid: Int32) -> String? {
+        guard pid > 0, let data = FileManager.default.contents(atPath: path(pid)) else { return nil }
+        return ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["status"] as? String
+    }
+
+    // 쓰고 있는 이름 — 파일의 pid 가 살아 있는 claude 인 것만(강제로 죽은 claude 의 파일은 남을 수 있다). pid → 이름
+    func live() -> [Int32: String] {
+        var out: [Int32: String] = [:]
+        for f in (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? [] where f.hasSuffix(".json") {
+            if let pid = Int32(f.dropLast(5)), isLiveClaude(pid), let n = name(pid) { out[pid] = n }
+        }
+        return out
+    }
+
+    func prune(keep: Set<Int32>) { cache = cache.filter { keep.contains($0.key) } }
 }
 
 // 세션별 컨텍스트 사용량을 읽는다.
@@ -1219,8 +1257,10 @@ final class Store: ObservableObject {
                                     shells: shellCount,
                                     paused: paused,
                                     muted: muted,
-                                    limitAt: ((j["limit_hit"] as? [String: Any])?["at"] as? Double).map { Date(timeIntervalSince1970: $0) }))
+                                    limitAt: ((j["limit_hit"] as? [String: Any])?["at"] as? Double).map { Date(timeIntervalSince1970: $0) },
+                                    name: state == "ended" ? nil : ClaudeNames.shared.name(pid)))
         }
+        ClaudeNames.shared.prune(keep: Set(sessions.map(\.pid)))
         models.prune(keep: brainPaths)
         interrupts.prune(keep: brainPaths)
         records = records.filter { seen.contains($0.key) }
@@ -1472,6 +1512,26 @@ struct PlaceChip: View {
                 chip("보드에서 이어 열기", Color.white.opacity(0.08), .secondary, hint: "누르면 보드 새 탭에서 이 대화를 이어 엽니다")
             }
         }
+    }
+}
+
+// 세션 이름 라벨 — Claude Code 의 세션 이름(세션끼리 메시지를 보낼 때 주소). 보드 탭 세션은 탭 줄 이름과 같다.
+// 긴 이름은 가운데를 줄여 끝의 번호(-2 등)가 보이게 한다
+struct SessionNameLabel: View {
+    let name: String
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "tag").font(.system(size: 8, weight: .semibold))
+            Text(name.count > 24 ? "\(name.prefix(11))…\(name.suffix(11))" : name)
+        }
+        .boardFont(10, weight: .semibold)
+        .foregroundStyle(Color.white.opacity(0.72))
+        .padding(.horizontal, 6)
+        .padding(.vertical, 1.5)
+        .background(Capsule().fill(Color.white.opacity(0.08)))
+        .fixedSize()
+        .overlay(Capsule().stroke(Color.white.opacity(0.14), lineWidth: 0.5))
+        .hint("세션 이름 \(name)")
     }
 }
 
@@ -1903,7 +1963,7 @@ struct SessionRow: View {
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: s.subagents)
     }
 
-    private func meta(level: Int, wrap: Bool = false) -> some View {
+    private func meta(level: Int, wrap: Bool = false, name: Bool = true) -> some View {
         let compact = level > 0
         return (wrap ? AnyLayout(WrapRow(spacing: 5)) : AnyLayout(HStackLayout(spacing: 5))) {
             Text(s.state == "ended" ? "\(clock(s.updated)) 종료"
@@ -1912,6 +1972,8 @@ struct SessionRow: View {
                 .fixedSize()
                 .contentTransition(.numericText())
             PlaceChip(s: s, place: hub.place(s), appName: hub.appNames[s.id], mode: s.state == "ended" ? nil : hub.mode(s))
+            // 세션 이름 — 자리가 모자라면 먼저 뺀다(아래 ViewThatFits). 미니 화면은 세션 줄이 없어 보이지 않는다
+            if name, let n = s.name { SessionNameLabel(name: n) }
             // 터미널·백그라운드 구분은 작업경로 카드 안 구역 머리글이 맡는다
             if !s.subagents.isEmpty || s.shells > 0 || s.ctx != nil || s.brain != nil { Text("·") }
             if !s.subagents.isEmpty {
@@ -1970,13 +2032,14 @@ struct SessionRow: View {
                         .hint("목록에서 지우기")
                     }
                 }
-                // 다 들어가면 글자까지, 좁으면 종류 라벨은 아이콘만·하위 작업은 아이콘 + 개수만, 더 좁으면 컨텍스트 막대·토큰을 뺀다.
+                // 다 들어가면 글자까지, 좁으면 종류 라벨은 아이콘만·하위 작업은 아이콘 + 개수만, 그래도 좁으면 세션 이름을 빼고, 더 좁으면 컨텍스트 막대·토큰을 뺀다.
                 // 그래도 안 들어가면(보드 최소 폭·큰 보드 글자) 다음 줄로 넘긴다 — 한 줄을 고집하면 세션 줄이 넓어져 카드가 보드 밖으로 밀린다
                 ViewThatFits(in: .horizontal) {
                     meta(level: 0)
                     meta(level: 1)
-                    meta(level: 2)
-                    meta(level: 2, wrap: true)
+                    meta(level: 1, name: false)
+                    meta(level: 2, name: false)
+                    meta(level: 2, wrap: true, name: false)
                 }
                 .boardFont(11)
                 .foregroundStyle(.secondary)
@@ -4961,7 +5024,7 @@ final class BoardSurface: NSObject, ObservableObject, Identifiable, TerminalSurf
     @Published var cwd: String
     @Published var session: Session?   // 이 화면에서 도는 세션(세션 파일의 tty 로 짝짓는다) — 탭의 상태 점·제목
     private var shellReady = false     // 셸이 첫 프롬프트를 띄웠다(셸 통합이 경로·제목을 알림)
-    private var pending: String?       // 셸이 뜨면 넣을 명령
+    private var pending: (() -> String)?   // 셸이 뜨면 넣을 명령 — 넣을 때 만든다(세션 이름은 그때 쓰는 이름을 보고 고른다)
     private var typedAt = Date.distantPast
 
     init(_ options: TerminalSurfaceOptions, frame: NSRect, controller: TerminalController) {
@@ -4995,7 +5058,7 @@ final class BoardSurface: NSObject, ObservableObject, Identifiable, TerminalSurf
     }
 
     // 셸에 명령을 사람이 친 것처럼 넣는다(붙여넣기 + Return — 셸 기록에 남아 ↑ 로 보인다). 셸이 아직 뜨지 않았으면 뜬 뒤에
-    func type(_ command: String) {
+    func type(_ command: @escaping () -> String) {
         pending = command
         if shellReady { sendPending(tries: 30) }
     }
@@ -5003,14 +5066,14 @@ final class BoardSurface: NSObject, ObservableObject, Identifiable, TerminalSurf
     // 셸의 줄 편집기가 입력을 읽기 시작하면(tty 의 정규 모드·되울림이 꺼짐) 넣는다 — 경로를 알린 직후(precmd)에 넣으면 tty 가
     // 글자를 프롬프트 위에 한 번 더 찍는다(실측: 그때 정규 모드는 꺼졌지만 되울림은 켜져 있었다). 3초를 기다려도 그대로면 그냥 넣는다(셸이 뜨면 쌓인 입력을 읽는다)
     private func sendPending(tries: Int) {
-        guard let c = pending else { return }
+        guard let make = pending else { return }
         guard tries <= 0 || lineEditing else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.sendPending(tries: tries - 1) }
             return
         }
         pending = nil
         typedAt = Date()
-        drive([("text", c), ("wait", "0.1"), ("key", "enter")]) { _ in }
+        drive([("text", make()), ("wait", "0.1"), ("key", "enter")]) { _ in }
     }
 
     private var lineEditing: Bool {
@@ -5192,6 +5255,9 @@ final class SplitNode {
     // 탭 이름 — 사용자가 붙인 이름, 없으면 폴더 이름: 화면이 하나면 그 화면 셸의 경로(cd 를 따라감, 예전 그대로),
     // 나눈 탭이면 탭을 연 경로로 고정(고른 화면이 다른 폴더여도 그대로 — 사용자 결정)
     var name: String { customName ?? folderName }
+    // 탭 줄에 보이는 이름 — 화면이 하나이고 그 화면에 claude 세션이 돌면 그 세션의 Claude Code 이름(번호가 붙었거나 /rename 한 이름도
+    // 그대로 — 탭과 세션 이름이 같은 글자로 보이게), 아니면 name. 나눈 탭은 name 그대로
+    var shownName: String { surfaces.count == 1 ? focused.session?.name ?? name : name }
     var folderName: String {
         guard surfaces.count > 1 else { return focused.folderName }
         return workspace == NSHomeDirectory() ? "~" : (workspace as NSString).lastPathComponent
@@ -5368,14 +5434,89 @@ final class SplitNode {
         reveal(tab.id)
     }
 
-    // 화면의 셸에 claude 명령을 넣고 그 화면을 claude 화면으로 삼는다(새 탭, 셸 프롬프트로 남은 화면에서 이어 열기, 다시 뜰 때 되살리기)
+    // 화면의 셸에 claude 명령을 넣고 그 화면을 claude 화면으로 삼는다(새 탭, 셸 프롬프트로 남은 화면에서 이어 열기, 다시 뜰 때 되살리기).
+    // 세션 이름(--name)은 셸에 칠 때 붙인다 — 되살릴 때는 그때야 탭과 탭 이름이 생긴다. 쥔 탭 목록의 명령에는 남기지 않는다(되살릴 때 다시 고른다)
     func run(_ command: String, in s: BoardSurface, sessionId: String?, mdRenderOff: Bool) {
         s.command = command
         s.sessionId = sessionId
         s.mdRenderOff = mdRenderOff
         if mdRenderOff { rememberMdRenderOff(sessionId) }
-        s.type(command)
+        s.type { [weak self, weak s] in
+            MainActor.assumeIsolated { s.flatMap { s in self?.named(command, in: s) } ?? command }
+        }
         saveTabs()
+    }
+
+    // 세션 이름(사용자 결정 2026-10-20) — 보드 탭 claude 는 탭 이름(⇧⌘R 이름, 없으면 폴더 이름)을 세션 이름으로 쓰고, 그 이름을 쓰는 다른
+    // 세션이 있으면 -2, -3 … 을 붙인다(나눈 탭의 화면들도 이렇게 나뉜다). Claude Code 는 같은 이름도 그대로 받으므로(2.1.304 실측) 보드가 고른다.
+    // 탭 줄·카드 라벨은 고른 번호가 아니라 늘 ~/.claude/sessions 의 이름을 보인다
+    private var reservedNames: [UUID: (name: String, at: Date)] = [:]   // 화면 → 방금 --name 으로 붙여 아직 파일이 없을 수 있는 이름(15초)
+    private var pendingRenames: [UUID: (name: String, typed: Bool)] = [:]   // 화면 → 미뤄 둔 이름 바꾸기(typed — 글은 쳤고 Return 만 남음)
+    private var renameBusy: Set<UUID> = []   // 이름 바꾸기를 치는 중인 화면
+
+    // 쓰는 이름 = 살아 있는 claude 의 이름 + 방금 붙인 이름 + 미뤄 둔 이름 바꾸기 + taken. 그 화면 자신의 것(지금 도는 claude 의 이름·제 몫)은
+    // 빼고 본다. 대소문자는 가리지 않는다(Claude Code 는 가리지 않고 둘 다 받지만 세션끼리 부르는 주소라 헷갈리지 않게)
+    private func pickName(_ base: String, for s: BoardSurface, taken: Set<String> = []) -> String {
+        let own = s.session?.pid
+        var used = Set(ClaudeNames.shared.live().filter { $0.key != own }.values.map { $0.lowercased() })
+        for (id, r) in reservedNames where id != s.id && Date().timeIntervalSince(r.at) < 15 { used.insert(r.name.lowercased()) }
+        for (id, r) in pendingRenames where id != s.id { used.insert(r.name.lowercased()) }
+        used.formUnion(taken.map { $0.lowercased() })
+        var name = base, i = 2
+        while used.contains(name.lowercased()) { name = "\(base)-\(i)"; i += 1 }
+        return name
+    }
+
+    // 셸에 칠 claude 명령에 --name <이름> 을 claude 바로 뒤에 붙인다(셸에 치므로 shlexQuote — 한글·공백 이름). claude 가 아니거나
+    // 사용자가 -n·--name 을 적었으면 그대로. --resume 과 함께 주면 --name 이 이긴다(실측 — 없으면 예전 대화 이름을 되살린다)
+    private func named(_ command: String, in s: BoardSurface) -> String {
+        guard let r = command.range(of: #"^\s*(\S*/)?claude(?=\s|$)"#, options: .regularExpression),
+              command.range(of: #"(^|\s)(-n|--name)(=|\s|$)"#, options: .regularExpression) == nil else { return command }
+        let name = pickName(s.tab?.name ?? s.folderName, for: s)
+        reservedNames[s.id] = (name, Date())
+        return command.replacingCharacters(in: r.upperBound..<r.upperBound, with: " --name " + shlexQuote(name))
+    }
+
+    // ⇧⌘R 로 바꾼 탭 이름을 그 탭의 claude 세션들에 — 화면마다 /rename <이름>(나눈 탭은 번호로 나뉜다, 사용자 결정). 셸만 남은 화면·
+    // claude -p 는 빼고, 이미 그 이름이면 치지 않는다. 치는 것은 applyRenames
+    private func renameSessions(_ tab: BoardTab) {
+        tab.surfaces.forEach { pendingRenames[$0.id] = nil }
+        var taken: Set<String> = []
+        for s in tab.surfaces {
+            guard let ss = s.session, ss.state != "ended", s.isForeground(ss.pid), mode(ss) == nil else { continue }
+            let target = pickName(tab.name, for: s, taken: taken)
+            taken.insert(target)
+            if ClaudeNames.shared.name(ss.pid) != target { pendingRenames[s.id] = (target, false) }
+        }
+        applyRenames()
+    }
+
+    // 미뤄 둔 이름 바꾸기를 친다(⇧⌘R 직후, 그 뒤 세션 목록을 읽을 때마다). 승인 창·질문 창이 떠 있을 때 치면 Return 이 그 창에 들어가
+    // 도구 실행을 허락해 버릴 수 있다 — 세션이 작업 중·대기일 때만 치고(승인 대기·일시중지는 미룬다), 글을 붙인 뒤 Return 직전에 지금
+    // 파일로 한 번 더 본다. 그 사이 창이 떴으면 Return 만 남겨 두었다가 창이 닫히면 친다(빈 입력 칸의 Return 은 아무 일도 하지 않는다).
+    // 사용자가 입력 칸에 쓰던 글이 있으면 섞일 수 있다(사용자가 알고 고름)
+    func applyRenames() {
+        for (id, r) in pendingRenames where !renameBusy.contains(id) {
+            guard let s = surface(id), let ss = s.session, ss.state != "ended", s.isForeground(ss.pid) else { pendingRenames[id] = nil; continue }
+            guard renameSafe(ss) else { continue }
+            renameBusy.insert(id)
+            s.drive(r.typed ? [] : [("text", "/rename " + r.name), ("wait", "0.2")]) { [weak self] _ in
+                guard let self else { return }
+                self.renameBusy.remove(id)
+                guard self.pendingRenames[id]?.name == r.name else { return }   // 그 사이 다시 바꿨거나 화면이 닫혔다
+                guard let now = s.session, self.renameSafe(now) else { self.pendingRenames[id] = (r.name, true); return }
+                s.drive([("key", "enter")]) { _ in }
+                self.pendingRenames[id] = nil
+            }
+        }
+    }
+
+    // 이름 바꾸기를 쳐도 되는가 — 보드 상태가 작업 중·대기이고 승인 창·질문 창이 없다. 보드 상태는 1초마다 읽은 것이라 Claude Code 의
+    // status(창을 띄우면 바로 waiting, Esc 로 닫으면 idle — 2.1.304 실측)를 지금 읽어 본다. status 가 없으면 hook 이 쓴 세션 파일의 상태를 지금
+    private func renameSafe(_ s: Session) -> Bool {
+        guard s.state == "working" || s.state == "idle" else { return false }
+        if let status = ClaudeNames.shared.status(s.pid) { return status != "waiting" }
+        return sessionRecord(s.id)?["state"] as? String != "waiting"
     }
 
     // 쥔 탭 목록 — 보드 설정 terminalTabs 에 탭마다 [workspace, name, selected, last] 와 화면 값 [cwd, command, mdoff, session, resume] 을 남긴다
@@ -5628,6 +5769,8 @@ final class SplitNode {
             }
         }
         if names != appNames { appNames = names }
+        reservedNames = reservedNames.filter { Date().timeIntervalSince($0.value.at) < 15 }
+        if !pendingRenames.isEmpty { applyRenames() }   // 승인 대기를 벗어난 세션의 미뤄 둔 이름 바꾸기
     }
 
     // 세션의 실행 방식 — 프로세스 인자에서(-p·--print → -p, --bg·--background → --bg, 대화형이면 nil). 끝난 세션은 읽을 수 없다
@@ -5818,14 +5961,18 @@ final class SplitNode {
     }
 
     // 이름 바꾸기 끝 — name 이 nil 이면 취소(Esc). 비우거나 폴더 이름과 같게 저장하면 사용자 이름을 지워 폴더 이름(자동)으로 돌아간다.
-    // 저장·취소 모두 터미널에 포커스를 돌려준다
+    // 입력 칸의 처음 값(탭 줄에 보이던 이름)을 고치지 않고 저장하면 그대로 둔다 — 번호가 붙은 세션 이름이 사용자 이름으로 남지 않게.
+    // 바꾸면 그 탭의 claude 세션 이름도 바꾼다(renameSessions). 저장·취소 모두 터미널에 포커스를 돌려준다
     func endRename(_ tab: BoardTab, name: String?) {
         guard tab.renaming else { return }
         tab.renaming = false
         if let name {
             let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
-            tab.customName = n.isEmpty || n == tab.folderName ? nil : n
-            saveTabs()
+            if n != tab.shownName {
+                tab.customName = n.isEmpty || n == tab.folderName ? nil : n
+                saveTabs()
+                renameSessions(tab)
+            }
         }
         focusSelected()
     }
@@ -5853,7 +6000,7 @@ final class SplitNode {
         guard let t = s.tab, tabs.contains(where: { $0 === t }) else { return }
         guard confirm else { remove(s); return }
         if t.surfaces.count == 1 {
-            confirmClose("탭을 닫을까요?", "\(t.name) 탭에서 도는 프로그램이 함께 끝납니다.") { self.remove(s) }
+            confirmClose("탭을 닫을까요?", "\(t.shownName) 탭에서 도는 프로그램이 함께 끝납니다.") { self.remove(s) }
         } else {
             confirmClose("화면을 닫을까요?", "\(t.name) 탭의 이 화면에서 도는 프로그램이 함께 끝납니다.") { self.remove(s) }
         }
@@ -6675,7 +6822,7 @@ struct TerminalTabButton: View {
             if tab.renaming {
                 TabNameField(tab: tab).frame(width: 120)
             } else {
-                Text(tab.name).boardFont(13, weight: .semibold).lineLimit(1).fixedSize()
+                Text(tab.shownName).boardFont(13, weight: .semibold).lineLimit(1).fixedSize()
             }
             // 고른 화면 하나 크게 보는 중(⇧⌘↩)
             if tab.zoomed {
@@ -6720,12 +6867,12 @@ struct TerminalTabButton: View {
 }
 
 // 탭 이름 입력 칸 — 탭 줄은 키 초점을 받지 않는 호스팅 뷰(PassiveHostingView)라 AppKit 입력 칸을 직접 첫 응답자로 세운다
-// (처음 값은 지금 이름, 첫 응답자가 되면 전체 선택). Return 저장, Esc 취소, 다른 곳을 눌러 포커스를 잃으면 저장
+// (처음 값은 탭 줄에 보이는 이름, 첫 응답자가 되면 전체 선택). Return 저장, Esc 취소, 다른 곳을 눌러 포커스를 잃으면 저장
 struct TabNameField: NSViewRepresentable {
     let tab: BoardTab
 
     func makeNSView(context: Context) -> NSTextField {
-        let f = NSTextField(string: tab.name)
+        let f = NSTextField(string: tab.shownName)
         f.isBordered = false
         f.drawsBackground = false
         f.focusRingType = .none

@@ -66,6 +66,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
 | `sessions/<sid>.paused` | 보드 (일시중지 때, 업데이트·종료로 끊기는 보드 탭 세션에도) | state.py (새 요청이 오면 지움), 보드 (일시중지 카드·재개) |
 | `plugins/md-render/` | 보드 (시작할 때 앱 안 사본에서 바뀐 파일만 옮김. Claude Code 가 안에 `tsconfig.json`·`.claude-plugin/types/` 를 더 씀, `Uninstall.command` 가 지움) | 보드 탭 claude (`--plugin-dir`) |
 | `context/<sid>.json` | 사용자의 상태줄 스크립트 (이 저장소에 없음) | 보드 (컨텍스트 사용량·effort) |
+| `~/.claude/sessions/<pid>.json` (이 폴더 밖, `name`·`status` …) | Claude Code (도는 세션마다, 끝나면 지움) | 보드 (카드 세션 이름 라벨·탭 줄 이름, 이름 바꾸기 전 승인 창 확인 `status`) |
 | `/tmp/.claude-usage-cache.json` | 보드·상태줄 스크립트가 함께 씀 | 보드 |
 
 ### 실행 파일
@@ -77,7 +78,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
   창 크기에 따라 `BoardTier`(full·medium·mini)로 그린다. `$TMPDIR/claude-board.lock` 을 `flock` 해 한 번만 뜨고, 두 번째 실행은 `claude-board.show` 분산 알림만 보내고 끝난다.
   `--action pause|resume|stop|reopen|focus <세션 id>` 는 떠 있는 보드에 `claude-board.action` 분산 알림으로 넘긴다(메뉴와 같은 함수).
   `// MARK: - 내장 터미널` — 창 내용은 `BoardRootView`([터미널 영역 │ `PaneDivider` │ 보드]). `TerminalHub` 가 탭(`BoardTab`)을 쥐고,
-  claude 는 셸 없이 `/usr/bin/env <명령>` 으로 띄운다(새 세션은 `--session-id`). `pair` 가 세션 파일의 `tty` = 탭 tty(headless 는 pid 조상이 탭)로 짝짓고
+  claude 는 셸 없이 `/usr/bin/env <명령>` 으로 띄운다(새 세션은 `--session-id`, 모든 길에 탭 이름을 `--name` 으로 붙이고 ⇧⌘R 은 `/rename` — `named`·`applyRenames`). `pair` 가 세션 파일의 `tty` = 탭 tty(headless 는 pid 조상이 탭)로 짝짓고
   `place` 가 보드 탭·다른 터미널·백그라운드·끝남을 가른다 — 세션 파일 약속은 그대로. 쥔 탭 목록은 UserDefaults `terminalTabs` 에 바뀔 때마다 남기고 다시 뜰 때 `restoreTabs` 가 resume_cmd 로 이어 연다.
   `BoardTerminalView`(한글 조합 중 Return·Esc 고침 — 엔진을 올리면 다시 시험), `LoginEnvironment`(시작할 때 사용자 셸을 `-i -l` 로 띄워 읽은 환경을 탭 claude 에 넘김),
   `confirmShutdown`(업데이트·종료 전 확인, 끊기는 탭의 주 세션에 `.paused`), `driveSession`(보드 탭은 탭에 직접, Ghostty 는 AppleScript),
