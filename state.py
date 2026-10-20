@@ -269,7 +269,8 @@ def update(path, sid, state, data, sub_event):
     elif not sub_event and event in ("UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionStart"):
         rec.pop("limit_hit", None)
     changed = rec.get("state") != state
-    if changed:
+    # Esc 로 끊으면 hook 이 오지 않아 다음 요청은 작업 중 → 작업 중이다 — 새 요청이면 시작 시각을 새로 잡는다
+    if changed or event == "UserPromptSubmit":
         rec.update(state=state, since=now)
     if state == "idle" and data.get("last_assistant_message"):
         rec["last_message"] = " ".join(data["last_assistant_message"].split())[:200]

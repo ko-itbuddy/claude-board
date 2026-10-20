@@ -4,6 +4,7 @@
 사용법: python3 notify.py stop | notification   (hook 입력 JSON 은 stdin)
 패널은 분리된 프로세스로 띄우고 곧바로 종료하므로 Claude Code 를 기다리게 하지 않는다.
 """
+import datetime
 import json
 import os
 import re
@@ -38,6 +39,43 @@ def last_assistant_text(transcript_path):
         if text:
             return text
     return ""
+
+
+def interrupted_at(transcript):
+    """Esc 로 끊긴 세션이면 끊은 시각(epoch 초), 아니면 None.
+    Claude Code 는 사용자가 응답을 끊으면 Stop hook 을 부르지 않아 세션 파일이 작업 중·승인 대기로 남는다.
+    대화 기록 끝의 마지막 대화 줄이 중단 표시([Request interrupted by user], … for tool use])인지 본다 — 보드(InterruptReader)와 같은 규칙."""
+    try:
+        with open(transcript, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 256_000))
+            data = f.read()
+    except (OSError, TypeError):
+        return None
+    if b"[Request interrupted by user" not in data:
+        return None
+    # 중단 뒤에는 cost-state·last-prompt 같은 대화 아닌 줄이 붙고, ! 명령·슬래시 명령 출력은 < 로 시작하는 사용자 줄로 남는다
+    for line in reversed(data.splitlines()):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        kind = entry.get("type") if isinstance(entry, dict) else None
+        if kind not in ("user", "assistant") or entry.get("isSidechain") or entry.get("isMeta"):
+            continue
+        content = (entry.get("message") or {}).get("content")
+        if isinstance(content, list):
+            content = content[0].get("text") if content and isinstance(content[0], dict) else None
+        text = content if isinstance(content, str) else ""
+        if kind == "user" and text.startswith("<"):
+            continue
+        if kind == "user" and text.startswith("[Request interrupted by user"):
+            try:
+                return datetime.datetime.fromisoformat(entry["timestamp"].replace("Z", "+00:00")).timestamp()
+            except (KeyError, AttributeError, ValueError):
+                return os.path.getmtime(transcript)
+        return None
+    return None
 
 
 def plain(text):
@@ -76,6 +114,10 @@ def session_summary(current_id, current_state):
                 continue
             except PermissionError:
                 pass
+        # Esc 로 끊긴 다른 세션은 입력을 기다리는 중이다
+        if rec.get("session_id") != current_id and state in ("working", "waiting") \
+                and interrupted_at(rec.get("transcript_path")) is not None:
+            state = "idle"
         if state in counts:
             counts[state] += 1
     if not seen and current_id:

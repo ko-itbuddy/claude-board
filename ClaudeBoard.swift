@@ -149,6 +149,42 @@ final class ModelReader {
     func prune(keep: Set<String>) { parsed = parsed.filter { keep.contains($0.key) } }
 }
 
+// Esc 로 끊은 응답 — Claude Code 는 사용자가 끊으면 Stop hook 을 부르지 않아 세션 파일이 작업 중·승인 대기로 남는다.
+// 대화 기록 끝의 마지막 대화 줄이 중단 표시([Request interrupted by user], … for tool use])면 그 시각을 돌려준다
+final class InterruptReader {
+    private var parsed: [String: (mtime: Date, at: Date?)] = [:]
+
+    func read(_ path: String) -> Date? {
+        guard let changed = mtime(path) else { return nil }
+        if let c = parsed[path], c.mtime == changed { return c.at }
+        var at: Date? = nil
+        if let h = FileHandle(forReadingAtPath: path) {
+            let end = (try? h.seekToEnd()) ?? 0
+            try? h.seek(toOffset: end > 256_000 ? end - 256_000 : 0)
+            let data = (try? h.readToEnd()) ?? Data()
+            try? h.close()
+            // 중단 표시가 없으면 JSON 을 풀지 않는다 — 작업 중 세션은 대부분 여기서 끝난다
+            if data.range(of: Data("[Request interrupted by user".utf8)) != nil {
+                // 중단 뒤에는 cost-state·last-prompt 같은 대화 아닌 줄이 붙고, ! 명령·슬래시 명령 출력은 < 로 시작하는 사용자 줄로 남는다
+                for line in data.split(separator: UInt8(ascii: "\n")).reversed() {
+                    guard let j = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
+                          let type = j["type"] as? String, type == "user" || type == "assistant",
+                          (j["isSidechain"] as? Bool) != true, (j["isMeta"] as? Bool) != true else { continue }
+                    let content = (j["message"] as? [String: Any])?["content"]
+                    let text = content as? String ?? (content as? [[String: Any]])?.first?["text"] as? String ?? ""
+                    if type == "user", text.hasPrefix("<") { continue }
+                    if type == "user", text.hasPrefix("[Request interrupted by user") { at = isoDate(j["timestamp"] as? String) ?? changed }
+                    break
+                }
+            }
+        }
+        parsed[path] = (changed, at)
+        return at
+    }
+
+    func prune(keep: Set<String>) { parsed = parsed.filter { keep.contains($0.key) } }
+}
+
 // 세션별 컨텍스트 사용량을 읽는다.
 // 1순위: 상태줄 스크립트가 남긴 ~/.claude/notifier/context/<세션 ID>.json (Claude Code 화면의 값과 같다)
 // 2순위: 상태줄이 없는 백그라운드 세션은 대화 기록 끝의 마지막 응답 usage 로 계산한다
@@ -952,6 +988,7 @@ final class Store: ObservableObject {
     private var timer: Timer?
     private let contexts = ContextReader()
     private let models = ModelReader()
+    private let interrupts = InterruptReader()
     // 백그라운드 셸 수 — ps 를 메인 스레드에서 돌리면 클릭 처리가 밀리므로 뒤에서 세고 다음 reload 가 쓴다
     private var shellCounts: [Int32: Int] = [:]
     private var shellsBusy = false
@@ -1126,6 +1163,12 @@ final class Store: ObservableObject {
                 try? fm.removeItem(atPath: path)
                 continue
             }
+            // Esc 로 끊긴 세션은 입력을 기다리는 중이다 — 그 뒤에도 도는 서브에이전트·셸이 있으면 아래에서 다시 작업 중이 된다
+            var since = Date(timeIntervalSince1970: j["since"] as? Double ?? 0)
+            if state == "working" || state == "waiting", let at = interrupts.read(transcript) {
+                state = "idle"
+                since = at
+            }
             // 응답은 끝났어도 서브에이전트나 백그라운드 셸이 돌고 있으면 작업 중으로 보인다
             let pid = (j["pid"] as? NSNumber)?.int32Value ?? 0
             let subDir = ((transcript.hasSuffix(".jsonl") ? String(transcript.dropLast(6)) : transcript) as NSString)
@@ -1159,7 +1202,7 @@ final class Store: ObservableObject {
             sessions.append(Session(id: j["session_id"] as? String ?? name,
                                     cwd: j["cwd"] as? String ?? "?",
                                     state: state,
-                                    since: Date(timeIntervalSince1970: j["since"] as? Double ?? 0),
+                                    since: since,
                                     updated: updated,
                                     headless: j["headless"] as? Bool ?? false,
                                     tty: j["tty"] as? String ?? "",
@@ -1177,6 +1220,7 @@ final class Store: ObservableObject {
                                     limitAt: ((j["limit_hit"] as? [String: Any])?["at"] as? Double).map { Date(timeIntervalSince1970: $0) }))
         }
         models.prune(keep: brainPaths)
+        interrupts.prune(keep: brainPaths)
         records = records.filter { seen.contains($0.key) }
         MainActor.assumeIsolated { TerminalHub.shared.pair(sessions) }   // 1초 타이머·알림 관찰자 모두 메인 스레드
         expandNewlyWaiting(sessions)
@@ -4784,7 +4828,8 @@ func asciiKeyCharacters(_ keyCode: UInt16, shift: Bool) -> String? {
 }
 
 // 터미널 설정은 보드가 직접 만든다 — 사용자 Ghostty 설정을 바탕으로 하되 theme 줄은 뺀다(엔진 번들에 테마 폴더가 없어 theme 한 줄 때문에
-// 파일 전체가 조용히 거부된다). 같은 이름 테마는 엔진의 테마 목록에서 찾아 넘긴다(넘기지 않으면 래퍼 기본 테마가 사용자 색을 덮는다)
+// 파일 전체가 조용히 거부된다). 같은 이름 테마는 엔진의 테마 목록에서 찾아 넘긴다(넘기지 않으면 래퍼 기본 테마가 사용자 색을 덮는다).
+// 보드에서 고른 테마(보드 설정 terminalTheme, 윈도우 > 터미널 테마…)가 있으면 Ghostty 설정의 theme 대신 그것
 @MainActor func makeTerminalController() -> TerminalController {
     var lines: [String] = []
     var theme: String?
@@ -4822,7 +4867,8 @@ func asciiKeyCharacters(_ keyCode: UInt16, shift: Bool) -> String? {
     try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
     let path = dir + "/board-terminal.conf"
     try? lines.joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
-    let c = TerminalController(configSource: .file(path), theme: terminalTheme(theme), terminalConfiguration: terminalFontConfiguration())
+    let c = TerminalController(configSource: .file(path), theme: terminalTheme(UserDefaults.standard.string(forKey: "terminalTheme") ?? theme),
+                               terminalConfiguration: terminalFontConfiguration())
     // 한 줄이라도 거부되면 파일 전체가 조용히 기본값으로 돌아간다 — 원인을 찾을 수 있게 남긴다
     if let issue = c.lastConfigurationIssue { boardLog("터미널 설정 거부됨: \(issue)") }
     return c
@@ -4874,19 +4920,30 @@ func boardLog(_ message: String) {
     }
 }
 
-// theme 값: "이름" 또는 "light:이름,dark:이름". 목록에 없는 이름이면 래퍼 기본(보드 창은 어두우므로 Afterglow)
-func terminalTheme(_ spec: String?) -> TerminalTheme {
-    guard let spec else { return .default }
+// theme 값: "이름" 또는 "light:이름,dark:이름" → 엔진 목록의 라이트·다크 테마(한쪽만 있으면 둘 다 그것). 목록에 없는 이름이면 nil
+func themeDefinitions(_ spec: String?) -> (light: GhosttyThemeDefinition, dark: GhosttyThemeDefinition)? {
+    guard let spec else { return nil }
     var light = spec, dark = spec
     for part in spec.split(separator: ",") {
         let kv = part.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
         guard kv.count == 2 else { continue }
         if kv[0] == "light" { light = kv[1] } else if kv[0] == "dark" { dark = kv[1] }
     }
-    guard let d = GhosttyThemeCatalog.theme(named: dark) ?? GhosttyThemeCatalog.theme(named: light) else { return .default }
-    let l = GhosttyThemeCatalog.theme(named: light) ?? d
-    return TerminalTheme(light: l.toTerminalConfiguration(), dark: d.toTerminalConfiguration())
+    guard let d = GhosttyThemeCatalog.theme(named: dark) ?? GhosttyThemeCatalog.theme(named: light) else { return nil }
+    return (GhosttyThemeCatalog.theme(named: light) ?? d, d)
 }
+
+// 엔진에 넘길 테마 — 목록에 없는 이름이면 래퍼 기본(보드 창은 어두우므로 Afterglow)
+func terminalTheme(_ spec: String?) -> TerminalTheme {
+    guard let t = themeDefinitions(spec) else { return .default }
+    return TerminalTheme(light: t.light.toTerminalConfiguration(), dark: t.dark.toTerminalConfiguration())
+}
+
+// "Ghostty 설정 따르기" 일 때 보이는 테마 이름 — 보드 창은 늘 다크라 Ghostty 설정 theme 의 다크 쪽. 없거나 목록에 없으면 래퍼 기본
+func ghosttyThemeName() -> String { themeDefinitions(ghosttyConfigValue("theme"))?.dark.name ?? "기본 테마(Afterglow)" }
+
+// 밝은 바탕인가 — 엔진의 GhosttyThemeDefinition.isDark 와 같은 휘도 식(0.299R+0.587G+0.114B 가 0.5 이상이면 밝음)
+func isLightColor(_ c: NSColor) -> Bool { 0.299 * c.redComponent + 0.587 * c.greenComponent + 0.114 * c.blueComponent >= 0.5 }
 
 // 보드 터미널 화면 하나(엔진 surface 하나) — 탭은 화면 하나 이상을 나눠(split) 보인다(Ghostty 처럼). 셸·claude 명령·세션 짝짓기는 화면 단위다
 final class BoardSurface: NSObject, ObservableObject, Identifiable, TerminalSurfaceTitleDelegate, TerminalSurfaceCloseDelegate,
@@ -5161,10 +5218,8 @@ final class SplitNode {
     var slide: PaneSlide?
     var tabBarEnd: CGFloat = .infinity   // 탭 줄에서 탭·"새 세션" 단추가 끝나는 x — 그 오른쪽이 빈 곳
     var workspaceBarEnd: CGFloat = .infinity   // 경로 줄에서 경로 항목이 끝나는 x — 그 오른쪽이 빈 곳
-    // ⌘ 를 잠깐 누르고 있다(앱 안 flagsChanged·keyDown 감시) — 그동안 탭 줄에 ⌘번호와 이름 바꾸기 단축키를 보인다. 앱이 비활성이 되면 끈다
+    // ⌘ 를 누르고 있다(앱 안 flagsChanged 감시) — 그동안 탭 줄에 ⌘번호와 이름 바꾸기 단축키를 보인다. 앱이 비활성이 되면 끈다
     @Published private(set) var commandHeld = false
-    private var commandDown = false
-    private var commandShow: DispatchWorkItem?
     weak var area: TerminalAreaView?
     weak var store: Store?
     // 세션 id → 그 세션이 도는 보드 탭(tty 로 짝지은 세션, 탭 안에서 시작된 claude -p) — 세션 목록을 다시 읽을 때마다 고친다
@@ -5186,11 +5241,19 @@ final class SplitNode {
         if let engine { return engine }
         let c = makeTerminalController()
         engine = c
+        // 엔진은 라이트로 시작하고 화면이 창에 붙을 때에야 창 외관(늘 다크)을 따른다 — 바탕색을 읽기 전에 다크로 맞춘다.
+        // 안 그러면 라이트·다크 바탕이 다른 테마(theme 줄이 없을 때의 래퍼 기본 등)에서 탭·경로 줄만 라이트 바탕으로 남는다
+        c.setColorScheme(.dark)
+        readBackground(c)
+        return c
+    }
+
+    // 고른 탭·경로 칸·터미널 칸 바탕과 나눈 화면 경계 색을 엔진의 지금 바탕색으로 — 엔진을 띄울 때, 테마를 바꿀 때
+    private func readBackground(_ c: TerminalController) {
         let bg = c.backgroundColor
         background = NSColor(red: CGFloat(bg.red) / 255, green: CGFloat(bg.green) / 255, blue: CGFloat(bg.blue) / 255, alpha: 1)
         dividerColor = splitDividerColor(background: background)
         area?.container.layer?.backgroundColor = background.cgColor
-        return c
     }
 
     func setExpanded(_ on: Bool) {
@@ -5211,6 +5274,19 @@ final class SplitNode {
         }
         engine?.setTerminalConfiguration(terminalFontConfiguration())   // 사용자 설정·테마는 래퍼가 그대로 다시 얹는다
         toast("터미널 글자 \(String(format: "%g", d.object(forKey: "terminalFontSize") as? Double ?? ghosttyConfigFontSize()))pt")
+    }
+
+    // 터미널 테마(윈도우 > 터미널 테마…) — 보드 설정 terminalTheme(테마 이름). nil 은 지워 Ghostty 설정의 theme 을 따른다.
+    // 열린 탭 모두 바로 바뀌고 고른 탭·경로 칸 바탕·경계 색도 다시 읽는다. 엔진을 아직 띄우지 않았으면 설정만 남아 처음 띄울 때 쓴다
+    func setTerminalTheme(_ name: String?) {
+        let d = UserDefaults.standard
+        if let name { d.set(name, forKey: "terminalTheme") } else { d.removeObject(forKey: "terminalTheme") }
+        if let engine {
+            engine.setTheme(terminalTheme(name ?? ghosttyConfigValue("theme")))
+            readBackground(engine)
+            layoutSurfaces()   // 나눈 화면 경계 색
+        }
+        toast("터미널 테마 \(name ?? "Ghostty 설정 따르기(\(ghosttyThemeName()))")")
     }
 
     func setBoardOnLeft(_ on: Bool) {
@@ -5752,25 +5828,10 @@ final class SplitNode {
         focusSelected()
     }
 
-    // ⌘ 를 누름·놓음(flagsChanged 마다 오므로 ⌘ 가 바뀔 때만 본다) — 0.4초 누르고 있으면 보이고, 놓거나 앱이 비활성이 되면 바로 끈다
+    // ⌘ 를 누름·놓음(flagsChanged 마다 오므로 ⌘ 가 바뀔 때만 본다) — 누르는 즉시 보이고(⌘C 를 칠 때도 잠깐 보인다, 사용자 결정), 놓거나 앱이 비활성이 되면 끈다
     func commandFlag(_ down: Bool) {
-        guard down != commandDown else { return }
-        commandDown = down
-        commandShow?.cancel()
-        commandShow = nil
-        if down {
-            let w = DispatchWorkItem { [weak self] in self?.commandHeld = true }
-            commandShow = w
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: w)
-        } else if commandHeld {
-            commandHeld = false
-        }
-    }
-
-    // 보이기 전에 다른 키를 눌렀다(⌘C 등) — 이번 누름에는 보이지 않는다. 이미 보이면 놓을 때까지 둔다(⌘2·⌥⌘→ 로 탭을 옮기는 동안)
-    func commandKeyDown() {
-        commandShow?.cancel()
-        commandShow = nil
+        guard down != commandHeld else { return }
+        commandHeld = down
     }
 
     // 탭의 × — 화면이 하나면 ⌘W 와 같은 엔진 동작으로 보내 셸 프롬프트처럼 물을 필요가 없으면 바로, 프로그램이 돌고 있으면 물어서 닫는다.
@@ -6588,6 +6649,7 @@ struct WorkspaceButton: View {
         .background(RoundedRectangle(cornerRadius: 7).fill(current ? Color(nsColor: background) : Color.white.opacity(hover ? 0.06 : 0)))
         .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(current ? Palette.color("working").opacity(0.5) : .clear, lineWidth: 1))
         .foregroundStyle(current ? .primary : .secondary)
+        .environment(\.colorScheme, current && isLightColor(background) ? .light : .dark)   // 밝은 테마 바탕이면 글자를 어둡게
         .contentShape(Rectangle())
         .onTapGesture { TerminalHub.shared.showWorkspace(path) }
         .clickable($hover)
@@ -6648,6 +6710,7 @@ struct TerminalTabButton: View {
         .background(selected ? Color(nsColor: background) : Color.white.opacity(hover ? 0.04 : 0))
         .overlay(alignment: .top) { Rectangle().fill(selected ? Palette.color("working") : .clear).frame(height: 2) }
         .foregroundStyle(selected ? .primary : .secondary)
+        .environment(\.colorScheme, selected && isLightColor(background) ? .light : .dark)   // 밝은 테마 바탕이면 글자·아이콘을 어둡게
         .contentShape(Rectangle())
         .onTapGesture { if !tab.renaming { TerminalHub.shared.select(tab.id) } }
         .onHover { hover = $0 }
@@ -6785,6 +6848,199 @@ struct NewSessionSheet: View {
         .padding(18)
         .frame(width: 460)
         .boardFont(13)   // 글자 크기를 따로 정하지 않은 글자(단추 제목 등)도 보드 글자 비율을 따른다
+    }
+}
+
+// 터미널 테마 창(윈도우 > 터미널 테마…) — 엔진에 든 테마(485개)를 검색·미리보기하고 고른다. 한 번에 하나만(열려 있으면 앞으로).
+// 줄을 누르거나 ↑↓ 로 옮기면 바로 그 테마로 바꾼다(열린 탭 모두). Return·닫기 단추·창 닫기는 그대로 두고 닫고, Esc 는 창을 열 때의
+// 설정으로 되돌리고 닫는다. 키는 SessionMenuPanel 처럼 앱 안 이벤트 감시로 검색 칸보다 먼저 받는다(한글 조합 중이면 입력기 몫)
+@MainActor final class ThemePicker: ObservableObject {
+    static let shared = ThemePicker()
+    // 이름순(대소문자 무시). GhosttyThemeCatalog.search("") 는 빈 글자를 Foundation 의 contains 로 견주어 하나도 돌려주지 않는다(실측)
+    let themes = GhosttyThemeCatalog.allThemes.sorted { $0.name.caseInsensitiveCompare($1.name) == .orderedAscending }
+    @Published var query = ""
+    @Published private(set) var current: String?    // 지금 쓰는 테마(보드 설정 terminalTheme) — nil 은 "Ghostty 설정 따르기"
+    private(set) var followed: GhosttyThemeDefinition?   // Ghostty 설정을 따를 때의 테마(색 띠·미리보기) — 열 때 읽는다
+    private(set) var followedName = ""
+    private var original: String?                    // 창을 열 때의 설정 — Esc 로 돌아간다
+    private var win: NSWindow?
+    private var monitor: Any?
+    private var observer: NSObjectProtocol?
+
+    // 보이는 줄 — nil 은 "Ghostty 설정 따르기"(검색어가 있으면 숨긴다). 이름 대소문자 무시 부분 일치
+    var rows: [GhosttyThemeDefinition?] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        return q.isEmpty ? [nil] + themes : themes.filter { $0.name.localizedCaseInsensitiveContains(q) }
+    }
+
+    func definition(_ name: String?) -> GhosttyThemeDefinition? { name.map { n in themes.first { $0.name == n } } ?? followed }
+
+    func open() {
+        if let win { win.makeKeyAndOrderFront(nil); return }
+        original = UserDefaults.standard.string(forKey: "terminalTheme")
+        current = original
+        query = ""
+        followed = themeDefinitions(ghosttyConfigValue("theme"))?.dark ?? GhosttyThemeCatalog.theme(named: "Afterglow")
+        followedName = ghosttyThemeName()
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 540), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        w.title = "터미널 테마"
+        w.appearance = NSAppearance(named: .darkAqua)
+        w.level = window.level   // 위에 고정한 보드(.floating)에 가리지 않게 — 고정하지 않았으면 다른 앱 위에 남지 않게 보통 층
+        w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        w.isReleasedWhenClosed = false
+        w.contentViewController = NSHostingController(rootView: ThemePickerView(model: self))
+        w.setContentSize(NSSize(width: 420, height: 540))   // 붙이는 순간 창이 아직 그리지 않은 뷰 크기(0)로 줄어든다 — 그대로 띄우면 키 창이 못 된다
+        // 보드 쪽 끝에 붙여 연다 — 펼친 터미널이 가려지지 않게
+        let f = window.frame
+        w.setFrameOrigin(NSPoint(x: TerminalHub.shared.boardOnLeft ? f.minX + 20 : f.maxX - w.frame.width - 20, y: f.midY - w.frame.height / 2))
+        win = w
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in self?.handle(e) ?? e }
+        observer = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.closed() }
+        }
+        w.makeKeyAndOrderFront(nil)
+    }
+
+    private func handle(_ e: NSEvent) -> NSEvent? {
+        guard let win, e.window === win, !e.modifierFlags.contains(.command) else { return e }
+        if (win.firstResponder as? NSTextView)?.hasMarkedText() == true { return e }
+        switch e.keyCode {
+        case 125: move(1)
+        case 126: move(-1)
+        case 36, 76: close(revert: false)   // Return·Enter
+        case 53: close(revert: true)        // Esc
+        default: return e
+        }
+        return nil
+    }
+
+    // ↑↓ — 보이는 줄에서 한 줄씩(끝에서 멈춘다). 지금 것이 안 보이면 첫 줄·끝 줄로
+    func move(_ d: Int) {
+        let names = rows.map { $0?.name }
+        guard !names.isEmpty else { return }
+        if let i = names.firstIndex(of: current) { pick(names[max(0, min(names.count - 1, i + d))]) } else { pick(d > 0 ? names[0] : names[names.count - 1]) }
+    }
+
+    func pick(_ name: String?) {
+        guard name != current else { return }
+        current = name
+        TerminalHub.shared.setTerminalTheme(name)
+    }
+
+    func close(revert: Bool) {
+        if revert, current != original { TerminalHub.shared.setTerminalTheme(original) }
+        win?.close()   // 정리는 closed
+    }
+
+    // 창이 닫혔다(Return·Esc·닫기 단추·창 닫기 단추·⌘W)
+    private func closed() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+        monitor = nil
+        observer = nil
+        win = nil
+        if NSApp.isActive, window.isVisible { window.makeKey() }   // 키 창·터미널 포커스를 보드로 돌린다
+    }
+}
+
+// 테마 정의의 색 글자(RRGGBB, 앞의 # 은 있어도 된다) → 색. 없거나 읽지 못하면 회색
+func themeColor(_ hex: String?) -> Color {
+    guard let hex, let n = UInt32(hex.replacingOccurrences(of: "#", with: "").prefix(6), radix: 16) else { return .gray }
+    return Color(red: Double(n >> 16 & 0xFF) / 255, green: Double(n >> 8 & 0xFF) / 255, blue: Double(n & 0xFF) / 255)
+}
+
+struct ThemePickerView: View {
+    @ObservedObject var model: ThemePicker
+    @FocusState private var searching: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("테마 이름 검색", text: $model.query)
+                .textFieldStyle(.roundedBorder)
+                .focused($searching)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 1) { ForEach(model.rows, id: \.?.name) { row($0) } }.padding(4)
+                }
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.04)))
+                .onAppear { proxy.scrollTo(model.current, anchor: .center) }
+                .onChange(of: model.current) { _, name in proxy.scrollTo(name) }   // ↑↓ 로 옮긴 줄이 보이게(보이면 그대로)
+            }
+            preview(model.definition(model.current))
+            HStack {
+                Text("↑↓ 고르기 · Return 닫기 · Esc 되돌리고 닫기").boardFont(11).foregroundStyle(.secondary)
+                Spacer()
+                Button("닫기") { model.close(revert: false) }
+            }
+        }
+        .padding(14)
+        .frame(width: 420, height: 540)
+        .background(Color(red: 0.11, green: 0.11, blue: 0.17))
+        .preferredColorScheme(.dark)
+        .boardFont(13)   // 글자 크기를 따로 정하지 않은 글자(단추 제목 등)도 보드 글자 비율을 따른다
+        .onAppear { DispatchQueue.main.async { searching = true } }
+    }
+
+    // 이름(+ "Ghostty 설정 따르기" 는 지금 그것이 무엇인지), 지금 쓰는 것에 체크, 오른쪽에 바탕색 칩 + palette 0~7 칩
+    private func row(_ t: GhosttyThemeDefinition?) -> some View {
+        let on = t?.name == model.current
+        let colors = t ?? model.followed
+        return HStack(spacing: 8) {
+            Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(Palette.color("working"))
+                .opacity(on ? 1 : 0).frame(width: 12)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(t?.name ?? "Ghostty 설정 따르기").boardFont(13, weight: on ? .semibold : .regular).lineLimit(1)
+                if t == nil { Text(model.followedName).boardFont(11).foregroundStyle(.secondary).lineLimit(1) }
+            }
+            Spacer(minLength: 8)
+            HStack(spacing: 3) {
+                RoundedRectangle(cornerRadius: 3).fill(themeColor(colors?.background)).frame(width: 18, height: 14)
+                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.white.opacity(0.2), lineWidth: 0.5))
+                HStack(spacing: 0) {
+                    ForEach(0..<8, id: \.self) { i in Rectangle().fill(themeColor(colors?.palette[i])).frame(width: 9, height: 14) }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: 7).fill(on ? Palette.color("working").opacity(0.18) : .clear))
+        .contentShape(Rectangle())
+        .onTapGesture { model.pick(t?.name) }
+    }
+
+    // 고른 테마의 색으로 그린 터미널 견본 — 프롬프트, 색 있는 ls 출력, diff 의 - · + 줄, 커서
+    private func preview(_ t: GhosttyThemeDefinition?) -> some View {
+        let fg = themeColor(t?.foreground)
+        func p(_ i: Int) -> Color { themeColor(t?.palette[i] ?? t?.foreground) }
+        func prompt(_ command: String) -> some View {
+            HStack(spacing: 0) {
+                Text("~/claude-board").foregroundStyle(p(4))
+                Text(" on ").foregroundStyle(fg)
+                Text("main").foregroundStyle(p(5))
+                Text(" ❯ ").foregroundStyle(p(2))
+                Text(command).foregroundStyle(fg)
+            }
+        }
+        return VStack(alignment: .leading, spacing: 2) {
+            prompt("ls")
+            HStack(spacing: 0) {
+                Text("docs  plugins").foregroundStyle(p(4)).bold()
+                Text("  build-board.sh").foregroundStyle(p(2))
+                Text("  README.md").foregroundStyle(fg)
+            }
+            prompt("git diff --cached")
+            Text("- let theme = \"Ghostty\"").foregroundStyle(p(1))
+            Text("+ let theme = \"\(t?.name ?? "")\"").foregroundStyle(p(2)).lineLimit(1)
+            HStack(spacing: 0) {
+                prompt("")
+                Text(" ").background(themeColor(t?.cursorColor ?? t?.foreground))
+            }
+        }
+        .boardFont(12, design: .monospaced)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10).fill(themeColor(t?.background)))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.14), lineWidth: 0.5))
     }
 }
 
@@ -7752,10 +8008,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             toggleWindowSize()
             return nil
         }
-        // ⌘ 를 잠깐 누르고 있으면 탭 줄에 ⌘번호·이름 바꾸기 단축키를 보인다(⌘C 처럼 바로 다른 키를 치면 보이지 않는다).
+        // ⌘ 를 누르고 있으면 탭 줄에 ⌘번호·이름 바꾸기 단축키를 보인다.
         // ⌘Tab 등으로 앱이 비활성이 되면 놓는 신호가 오지 않으므로 끈다
-        NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { e in
-            if e.type == .keyDown { TerminalHub.shared.commandKeyDown() } else { TerminalHub.shared.commandFlag(e.modifierFlags.contains(.command)) }
+        NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { e in
+            TerminalHub.shared.commandFlag(e.modifierFlags.contains(.command))
             return e
         }
         nc.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { _ in
@@ -7973,6 +8229,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         sizeItem("보드 글자 작게", "-", [.command, .option]) { BoardFontScale.shared.change(-1) }
         sizeItem("보드 글자 원래 크기", "0", [.command, .option]) { BoardFontScale.shared.change(nil) }
         windowMenu.addItem(withTitle: "글자 크기", action: nil, keyEquivalent: "").submenu = fontMenu
+        // 터미널 테마 — 엔진에 든 테마를 고르는 창(보드 설정 terminalTheme, 고르지 않았으면 Ghostty 설정의 theme). 단축키 없음
+        windowMenu.addItem(ActionItem("터미널 테마…") { ThemePicker.shared.open() })
         windowMenu.addItem(.separator())
         // 보드 위치(오른쪽·왼쪽)와 펼치기·접기 애니메이션 — 체크 표시는 validateMenuItem 이 단다
         let sideMenu = NSMenu(title: "보드 위치")

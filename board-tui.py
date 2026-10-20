@@ -4,6 +4,7 @@
 사용법: claude-board   (Ghostty 분할 창에 띄워 두는 용도, q 로 종료)
 상태 파일은 state.py 가 hook 에서 기록하는 ~/.claude/notifier/sessions/*.json 이다.
 """
+import datetime
 import json
 import re
 import os
@@ -117,6 +118,43 @@ def alive(pid):
         return True
 
 
+def interrupted_at(transcript):
+    """Esc 로 끊긴 세션이면 끊은 시각(epoch 초), 아니면 None.
+    Claude Code 는 사용자가 응답을 끊으면 Stop hook 을 부르지 않아 세션 파일이 작업 중·승인 대기로 남는다.
+    대화 기록 끝의 마지막 대화 줄이 중단 표시([Request interrupted by user], … for tool use])인지 본다 — 보드(InterruptReader)와 같은 규칙."""
+    try:
+        with open(transcript, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 256_000))
+            data = f.read()
+    except (OSError, TypeError):
+        return None
+    if b"[Request interrupted by user" not in data:
+        return None
+    # 중단 뒤에는 cost-state·last-prompt 같은 대화 아닌 줄이 붙고, ! 명령·슬래시 명령 출력은 < 로 시작하는 사용자 줄로 남는다
+    for line in reversed(data.splitlines()):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        kind = entry.get("type") if isinstance(entry, dict) else None
+        if kind not in ("user", "assistant") or entry.get("isSidechain") or entry.get("isMeta"):
+            continue
+        content = (entry.get("message") or {}).get("content")
+        if isinstance(content, list):
+            content = content[0].get("text") if content and isinstance(content[0], dict) else None
+        text = content if isinstance(content, str) else ""
+        if kind == "user" and text.startswith("<"):
+            continue
+        if kind == "user" and text.startswith("[Request interrupted by user"):
+            try:
+                return datetime.datetime.fromisoformat(entry["timestamp"].replace("Z", "+00:00")).timestamp()
+            except (KeyError, AttributeError, ValueError):
+                return os.path.getmtime(transcript)
+        return None
+    return None
+
+
 def load():
     now = time.time()
     sessions = []
@@ -134,6 +172,11 @@ def load():
             continue
         if s.get("state") != "ended" and not alive(s.get("pid")):
             s["state"] = "ended"
+        # Esc 로 끊긴 세션은 입력을 기다리는 중이다 — 대기 시간은 끊은 때부터 센다
+        if s.get("state") in ("working", "waiting"):
+            at = interrupted_at(s.get("transcript_path"))
+            if at is not None:
+                s.update(state="idle", since=at)
         if s.get("state") == "ended" and now - s.get("updated", 0) > 1800:
             try:
                 os.remove(os.path.join(SESSIONS, name))
