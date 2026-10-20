@@ -280,6 +280,7 @@ pub fn apply(mut rec: Record, state_arg: &str, data: &Record, now: f64, env: &dy
         set(&mut rec, "topic", head);
     }
 
+    let notification = event == Some("Notification");
     if sub_event {
         track_subagent(&mut rec, data, &state, now, env);
         // 서브에이전트의 도구 호출은 세션 상태를 바꾸지 않는다 — 승인 요청만 세션도 승인 대기로 올리고,
@@ -304,9 +305,16 @@ pub fn apply(mut rec: Record, state_arg: &str, data: &Record, now: f64, env: &dy
                 }
             }
         }
+    } else if notification
+        && data.get("notification_type").and_then(Value::as_str) == Some("permission_prompt")
+        && rec.get("state").and_then(Value::as_str) == Some("idle")
+    {
+        // 쉬고 있는 세션은 스스로 승인을 묻지 않으므로 서브에이전트의 승인 요청이다 — 서브에이전트가 다시 움직이면 대기로 돌린다
+        set(&mut rec, "state_before_sub_wait", "idle");
     }
 
-    if !sub_event {
+    // 승인 알림(Notification)은 서브에이전트의 승인 요청이어도 agent_id 없이 오므로 되돌릴 상태를 지우지 않는다
+    if !sub_event && !notification {
         rec.shift_remove("state_before_sub_wait");
     }
     // 사용 한도에 걸려 응답이 끊긴 세션 — 보드가 계정을 자동 전환한 뒤 이어서 진행시킨다.
@@ -671,6 +679,33 @@ mod tests {
         assert_eq!(out.record["subagents"]["a"]["ended"], 50.0);
         assert_eq!(out.record["subagents"]["b"]["ended"], 1.0);
         assert_eq!(out.title.as_deref(), Some("⚫ p"));
+    }
+
+    #[test]
+    fn subagent_permission_wait_survives_notification() {
+        let env = fake();
+        let sub = |name: &str| obj(json!({"session_id": "s", "hook_event_name": name, "agent_id": "a1", "tool_name": "Bash"}));
+        let main = |name: &str| obj(json!({"session_id": "s", "hook_event_name": name, "tool_name": "Bash"}));
+        let noti = obj(json!({"session_id": "s", "hook_event_name": "Notification",
+                              "message": "Claude needs your permission", "notification_type": "permission_prompt"}));
+        let run = |start: &str, steps: &[(&Record, &str, &str)]| {
+            let mut rec = obj(json!({"pid": 42, "args": [], "state": start}));
+            for (i, (data, arg, want)) in steps.iter().enumerate() {
+                rec = apply(rec, arg, data, i as f64, &env).record;
+                assert_eq!(rec["state"], *want, "{start} 에서 {i} 번째");
+            }
+        };
+        // 서브에이전트 승인 뒤 알림(agent_id 없음)이 와도 승인이 끝나면 요청 전 상태로 돌아간다
+        run("idle", &[(&sub("PermissionRequest"), "waiting", "waiting"), (&noti, "waiting", "waiting"),
+                      (&sub("PostToolUse"), "working", "idle")]);
+        run("working", &[(&sub("PermissionRequest"), "waiting", "waiting"), (&noti, "waiting", "waiting"),
+                         (&sub("PostToolUse"), "working", "working")]);
+        // 쉬는 세션에 승인 알림만 오면 서브에이전트의 승인이다
+        run("idle", &[(&noti, "waiting", "waiting"), (&sub("PostToolUse"), "working", "idle")]);
+        // 메인 자신의 승인은 다른 서브에이전트가 움직여도 풀리지 않는다
+        run("working", &[(&main("PermissionRequest"), "waiting", "waiting"), (&noti, "waiting", "waiting"),
+                         (&sub("PostToolUse"), "working", "waiting"), (&main("PostToolUse"), "working", "working")]);
+        run("working", &[(&noti, "waiting", "waiting"), (&sub("PostToolUse"), "working", "waiting")]);
     }
 
     #[test]

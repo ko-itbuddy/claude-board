@@ -237,6 +237,7 @@ def update(path, sid, state, data, sub_event):
     if topic_changed:
         rec["topic"] = prompt[:40]
 
+    notification = data.get("hook_event_name") == "Notification"
     if sub_event:
         track_subagent(rec, data, state, now)
         # 서브에이전트의 도구 호출은 세션 상태를 바꾸지 않는다 — 승인 요청만 세션도 승인 대기로 올리고,
@@ -252,8 +253,12 @@ def update(path, sid, state, data, sub_event):
         for sub in rec.get("subagents", {}).values():
             if sub.get("state") != "done":
                 sub.update(state="done", ended=now)
+    elif notification and data.get("notification_type") == "permission_prompt" and rec.get("state") == "idle":
+        # 쉬고 있는 세션은 스스로 승인을 묻지 않으므로 서브에이전트의 승인 요청이다 — 서브에이전트가 다시 움직이면 대기로 돌린다
+        rec["state_before_sub_wait"] = "idle"
 
-    if not sub_event:
+    # 승인 알림(Notification)은 서브에이전트의 승인 요청이어도 agent_id 없이 오므로 되돌릴 상태를 지우지 않는다
+    if not sub_event and not notification:
         rec.pop("state_before_sub_wait", None)
     # 보드에서 일시중지한 세션에 새 요청이 들어오면 재개된 것이다
     if data.get("hook_event_name") == "UserPromptSubmit":

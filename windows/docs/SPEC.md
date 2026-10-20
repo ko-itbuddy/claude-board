@@ -147,7 +147,8 @@ stdin JSON 하나를 읽는다. 어떤 오류도 Claude Code 를 막지 않게 *
    - 서브에이전트 이벤트(`agent_id` 있음): subagents 기록(`track_subagent` — `state.py:146-174` 그대로: SubagentStop 은 done+ended+last_message, 그 밖은 ended 를 지우고 waiting/running·tool 갱신, `subagents/agent-<id>.meta.json` 의 description·`requestShape=="background"` 를 처음 한 번 읽음, done 후 3600초 지난 것 삭제).
      세션 상태는 바꾸지 않는다. 단 승인 요청(waiting)이면 세션을 waiting 으로 올리고 이전 상태를 `state_before_sub_wait` 에 둔다. 그 뒤 서브에이전트가 다시 움직이면(세션이 waiting 이고 그 키가 있으면) 이전 상태로 돌린다.
    - `ended` 면 끝나지 않은 서브에이전트를 모두 done+ended.
-   - 서브에이전트 이벤트가 아니면 `state_before_sub_wait` 를 지운다.
+   - `Notification` + `notification_type == "permission_prompt"` 이고 기록 상태가 `idle` 이면 `state_before_sub_wait = "idle"`. 쉬고 있는 세션은 스스로 승인을 묻지 않으므로 서브에이전트의 승인 요청이다.
+   - 서브에이전트 이벤트도 `Notification` 도 아니면 `state_before_sub_wait` 를 지운다. `Notification` 은 서브에이전트의 승인 요청이어도 `agent_id` 없이 온다(Claude Code 2.1.304 확인).
    - `UserPromptSubmit` 이면 `<sid>.paused` 를 지운다.
    - `StopFailure` + `error == "rate_limit"` 이고 `last_assistant_message`(공백 정리)가 정규식 `hit your|usage limit`(대소문자 무시)에 맞으면 `limit_hit = {at: now, message: 앞 200}`.
      서브에이전트가 아닌 `UserPromptSubmit`·`PreToolUse`·`PostToolUse`·`Stop`·`SessionStart` 면 `limit_hit` 를 지운다.
