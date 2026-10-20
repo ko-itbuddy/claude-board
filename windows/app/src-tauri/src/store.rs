@@ -163,15 +163,15 @@ impl Store {
 
         let mut changed = self.expand_newly_waiting(&sessions, settings);
 
-        // 경로별로 묶고, 그룹 안은 급한 순 → 최근 상태 변화 순
-        let mut by_cwd: HashMap<String, Vec<Session>> = HashMap::new();
+        // 프로젝트 경로별로 묶고, 그룹 안은 급한 순 → 최근 상태 변화 순
+        let mut by_dir: HashMap<String, Vec<Session>> = HashMap::new();
         for s in sessions {
-            by_cwd.entry(s.cwd.clone()).or_default().push(s);
+            by_dir.entry(s.project_dir.clone()).or_default().push(s);
         }
         let mut visible: Vec<Group> = Vec::new();
-        for (cwd, mut list) in by_cwd {
+        for (dir, mut list) in by_dir {
             list.sort_by(|a, b| a.rank().cmp(&b.rank()).then(b.since_s.partial_cmp(&a.since_s).unwrap_or(std::cmp::Ordering::Equal)));
-            let g = Group { name: last_name(&cwd), path: display_path(&cwd, &self.home), id: cwd, sessions: list };
+            let g = Group { name: last_name(&dir), path: display_path(&dir, &self.home), id: dir, sessions: list };
             // 지운 뒤 새 활동이 없는 작업 경로는 빼고, 새 활동이 생긴 작업 경로는 지운 목록에서 꺼낸다
             if let Some(&at) = settings.hidden_groups.get(&g.id) {
                 if g.sessions.iter().all(|s| s.updated_s <= at) {
@@ -213,6 +213,7 @@ impl Store {
         }
         let sid = j.get("session_id").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| name.trim_end_matches(".json").to_string());
         let cwd = j.get("cwd").and_then(Value::as_str).unwrap_or("?").to_string();
+        let project_dir = j.get("project_dir").and_then(Value::as_str).filter(|d| !d.is_empty()).map_or_else(|| cwd.clone(), str::to_string);
         let transcript = transcript_path(j.get("transcript_path").and_then(Value::as_str), &cwd, &sid, &self.claude_dir);
         // 질문 없이 끝난 세션은 대화 기록 파일이 없어 이어 열 수 없으므로 목록에서 뺀다
         if state == "ended" && (now - updated > ENDED_KEEP || !transcript.exists()) {
@@ -292,6 +293,7 @@ impl Store {
             pid,
             pid_ctime: num(j.get("pid_ctime")),
             file: path.to_path_buf(),
+            project_dir,
             resume_args,
             since_s: since,
             updated_s: updated,
@@ -306,7 +308,7 @@ impl Store {
         let opened: HashSet<&str> = waiting
             .iter()
             .filter(|s| !self.waiting_ids.contains(&s.id))
-            .map(|s| s.cwd.as_str())
+            .map(|s| s.project_dir.as_str())
             .filter(|c| settings.collapsed.iter().any(|x| x == c))
             .collect();
         self.waiting_ids = waiting.iter().map(|s| s.id.clone()).collect();
@@ -506,6 +508,28 @@ mod tests {
         fs::remove_file(f.sessions.join("c1.json")).unwrap();
         st.reload(&mut s, &Probe::default(), &|_| true, false, NOW + 4.0);
         assert!(!s.auto_folded.contains_key("/w/c"));
+    }
+
+    #[test]
+    fn groups_by_project_dir() {
+        let f = Fake::new();
+        // 워크트리에 들어가 cwd 가 바뀐 세션도 claude 를 띄운 폴더의 카드에, project_dir 이 없는 예전 기록은 cwd 의 카드에
+        f.session("p1", json!({"state": "idle", "cwd": "/w/repo", "project_dir": "/w/repo", "updated": NOW - 10.0, "since": NOW - 10.0}), true);
+        f.session("p2", json!({"state": "idle", "cwd": "/w/repo/.claude/worktrees/t1", "project_dir": "/w/repo", "updated": NOW - 5.0, "since": NOW - 5.0}), true);
+        f.session("p3", json!({"state": "idle", "cwd": "/w/repo", "updated": NOW - 1.0, "since": NOW - 1.0}), true);
+        let mut st = f.store();
+        let mut s = Settings { collapsed: vec!["/w/repo".into()], ..Settings::default() };
+        let r = st.reload(&mut s, &Probe::default(), &|_| true, false, NOW);
+        assert_eq!(r.groups.iter().map(|g| (g.id.as_str(), g.name.as_str(), g.sessions.len())).collect::<Vec<_>>(), [("/w/repo", "repo", 3)]);
+        // 세션 하나의 cwd 는 그대로
+        let p2 = r.groups[0].sessions.iter().find(|x| x.id == "p2").unwrap();
+        assert_eq!((p2.cwd.as_str(), p2.project_dir.as_str()), ("/w/repo/.claude/worktrees/t1", "/w/repo"));
+        assert_eq!(s.collapsed, ["/w/repo"]);
+        // 워크트리 안 세션이 새로 승인 대기가 되면 접힌 프로젝트 카드를 편다
+        f.session("p4", json!({"state": "waiting", "cwd": "/w/repo/.claude/worktrees/t2", "project_dir": "/w/repo", "updated": NOW + 1.0, "since": NOW + 1.0}), true);
+        let r = st.reload(&mut s, &Probe::default(), &|_| true, false, NOW + 2.0);
+        assert!(s.collapsed.is_empty());
+        assert!(r.settings_changed);
     }
 
     #[test]

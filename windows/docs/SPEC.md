@@ -69,6 +69,7 @@ hook 사본을 바꿀 때는 실행 중인 exe 를 덮어쓸 수 없으므로 `c
 | 필드 | 뜻 | Windows |
 |---|---|---|
 | `session_id`, `cwd`, `project`(= cwd 의 마지막 이름) | | `project` 는 `\`·`/` 모두 구분자로 본다 |
+| `project_dir` | claude 를 띄운 프로젝트 폴더(hook 환경 변수 `CLAUDE_PROJECT_DIR`). `cwd` 는 Claude 가 하위 폴더로 cd 하거나 워크트리에 들어가면 바뀌지만 이 값은 그대로다 — Claude Code 2.1.304 실측: hook 입력 `cwd` 가 `repo` → `repo/sub` → `repo/.claude/worktrees/t1` 로 바뀌는 동안 `CLAUDE_PROJECT_DIR` 은 끝까지 `repo`. 보드·TUI 는 이것으로 카드를 묶고, 이 필드가 없는 예전 기록은 `cwd` 로 묶는다 | 같음 |
 | `state` | `working`·`waiting`·`idle`·`ended` | 같음 |
 | `since` | state 가 마지막으로 바뀐 시각(초, 소수) | 같음 |
 | `updated` | 마지막 hook 시각 | 같음 |
@@ -141,6 +142,7 @@ stdin JSON 하나를 읽는다. 어떤 오류도 Claude Code 를 막지 않게 *
    - 기록에 `pid` 가 없거나, 이벤트가 `SessionStart` 거나, 기록된 pid 가 살아 있지 않으면: Claude 프로세스를 다시 찾아 `pid`·`pid_ctime`·`tty`(null)·`headless`·`started=now`·`args` 를 새로 쓴다. 이미 있는데 `args` 만 없으면 args 만 채운다.
    - `transcript_path` 가 오면 갱신. 서브에이전트 이벤트가 아니면 `permission_mode`·`model`(빈 문자열이 아닌 문자열일 때만) 갱신.
    - `cwd = data.cwd or rec.cwd or 현재 폴더`, `project`, `session_id`, `updated=now`.
+   - `project_dir = 환경 변수 CLAUDE_PROJECT_DIR(비어 있지 않으면) or rec.project_dir or cwd` — 서브에이전트 이벤트까지 모든 hook 에서, `updated` 바로 뒤 키로(state.py 와 같은 순서).
    - `prompt` 를 공백 정리 → 비어 있지 않고 `<` 로 시작하지 않고 앞 40자가 기존 topic 과 다르면 topic 교체(`topic_changed`).
    - 서브에이전트 이벤트(`agent_id` 있음): subagents 기록(`track_subagent` — `state.py:146-174` 그대로: SubagentStop 은 done+ended+last_message, 그 밖은 ended 를 지우고 waiting/running·tool 갱신, `subagents/agent-<id>.meta.json` 의 description·`requestShape=="background"` 를 처음 한 번 읽음, done 후 3600초 지난 것 삭제).
      세션 상태는 바꾸지 않는다. 단 승인 요청(waiting)이면 세션을 waiting 으로 올리고 이전 상태를 `state_before_sub_wait` 에 둔다. 그 뒤 서브에이전트가 다시 움직이면(세션이 waiting 이고 그 키가 있으면) 이전 상태로 돌린다.
@@ -190,7 +192,7 @@ uninstall: `uninstall-hooks` → Run 값 삭제 → 실행 중인 ClaudeBoard.ex
 
 ### 3.8 `tui` — `board-tui.py` 이식
 
-crossterm 으로 같은 화면: 경로별 카드(테두리 색 = 가장 급한 상태), 상태별 표시(작업 중 스피너 `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`, 승인 대기 `◉/○` 깜빡임, 대기 `✓`, 종료 `✕`), 경과 시간, topic, 백그라운드 표시, 승인 대기 메시지 줄, 아래 상태별 개수, 0.12초 다시 그리기·1초 다시 읽기, `q` 종료, `t` 테마 순환(4종, `notifier\board-theme` 에 저장), 한글 폭 2칸. 종료 후 30분 넘은 ended 세션 파일은 지운다(`board-tui.py:107-129`).
+crossterm 으로 같은 화면: 프로젝트 경로별 카드(`project_dir`, 없으면 `cwd`. 테두리 색 = 가장 급한 상태), 상태별 표시(작업 중 스피너 `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`, 승인 대기 `◉/○` 깜빡임, 대기 `✓`, 종료 `✕`), 경과 시간, topic, 백그라운드 표시, 승인 대기 메시지 줄, 아래 상태별 개수, 0.12초 다시 그리기·1초 다시 읽기, `q` 종료, `t` 테마 순환(4종, `notifier\board-theme` 에 저장), 한글 폭 2칸. 종료 후 30분 넘은 ended 세션 파일은 지운다(`board-tui.py:107-129`).
 
 ## 4. 알림 패널 — `ClaudeBoard.exe --notify …` (`ClaudeNotifier.swift`)
 
@@ -215,9 +217,9 @@ crossterm 으로 같은 화면: 경로별 카드(테두리 색 = 가장 급한 �
 - `<sid>.paused` 가 있고 ended 가 아니면 `paused`. `<sid>.mute` 가 있으면 muted.
 - ended 가 아니면 모델·effort: transcript 의 마지막 assistant 줄(§5.2). 상태줄 기록의 effort 가 신선하면 그것으로 덮는다.
 - 컨텍스트: §5.3. topic·last_message 에서 `#*\`` 기호를 지운다.
-- 정렬·묶기: cwd 별 그룹. 그룹 안은 rank(waiting 0, working 1, paused·idle 2, ended 3) 오름차순, 같으면 since 최신 먼저.
+- 정렬·묶기: `project_dir`(없거나 빈 문자열이면 `cwd`) 별 그룹 — 그룹 id·이름·경로가 이 값이다. 세션 하나의 `cwd`(와 그 이름)는 그대로 둔다. 그룹 안은 rank(waiting 0, working 1, paused·idle 2, ended 3) 오름차순, 같으면 since 최신 먼저.
   그룹 순서: 고정(pinned) 순서 → 가장 급한 rank → 가장 최근 updated.
-- 지운 그룹(hiddenGroups: cwd→지운 시각): 모든 세션 updated 가 그 시각 이하면 숨기고, 새 활동이 있으면 목록에서 빼고 다시 보인다.
+- 지운 그룹(hiddenGroups: 그룹 id→지운 시각): 모든 세션 updated 가 그 시각 이하면 숨기고, 새 활동이 있으면 목록에서 빼고 다시 보인다.
 - 조용한 카드 자동 접기: waiting·working 이 없고 마지막 updated 가 30분 넘은 그룹을 한 번 접는다(autoFolded 에 그때의 마지막 활동 시각을 적어, 사람이 다시 펴면 새 활동 전에는 또 접지 않는다).
 - 새로 승인 대기가 된 세션의 그룹은 접혀 있으면 편다.
 - `mute-all` 존재 여부.
@@ -263,7 +265,7 @@ macOS 키체인 대신:
 - 세션으로 이동(더블 클릭): 콘솔에 붙어 `GetConsoleWindow` → 보이면 그 창, 아니면 소유 창(`GW_OWNER`)·조상 프로세스의 보이는 최상위 창 → 최소화면 복원 후 앞으로(`AllowSetForegroundWindow`/`SetForegroundWindow`, 막히면 `AttachThreadInput` 방식). Windows Terminal 이면 탭까지: 그 콘솔 제목을 표지 `CBFOCUS-<8자>` 로 잠깐 바꾸고 UI Automation 으로 이름이 그 표지인 TabItem 을 찾아 `SelectionItemPattern.Select` 한 뒤 제목을 되돌린다(`ClaudeBoard.swift:4831-4875` 와 같은 생각).
 - 한 번 클릭 = 그 세션의 터미널 앱 창만 앞으로(위 창 찾기의 결과), 모르면 Windows Terminal(없으면 아무것도 안 함).
 - 이어 열기(종료 세션 더블 클릭·"세션 다시 열기"): `resume_args`(없으면 `["--resume", "<id>"]`), carryOn 이면 문구를 인자 하나로 뒤에 붙이고 `.paused` 삭제.
-  **셸(cmd.exe·PowerShell·wt.exe 명령줄)을 거치지 않는다** — `claude.exe`(PATH 또는 `%USERPROFILE%\.local\bin\claude.exe`)를 인자 배열로 `CREATE_NEW_CONSOLE` 로 직접 띄우고 작업 폴더는 cwd. Windows 11 에서 기본 터미널이 Windows Terminal 이면 그 안에 열린다. claude 가 끝나면 창도 닫힌다(macOS 는 셸 pane 이 남는다 — 안전을 위해 다르게 한다).
+  **셸(cmd.exe·PowerShell·wt.exe 명령줄)을 거치지 않는다** — `claude.exe`(PATH 또는 `%USERPROFILE%\.local\bin\claude.exe`)를 인자 배열로 `CREATE_NEW_CONSOLE` 로 직접 띄우고 작업 폴더는 `project_dir`(없으면 cwd — 보드 카드의 경로). Windows 11 에서 기본 터미널이 Windows Terminal 이면 그 안에 열린다. claude 가 끝나면 창도 닫힌다(macOS 는 셸 pane 이 남는다 — 안전을 위해 다르게 한다).
 - 명령을 새 터미널 창에서 실행(`runInTerminal`, 계정 추가): 같은 방식 — `claude.exe auth login --claudeai [--email <이메일>]` 를 환경변수 `CLAUDE_CONFIG_DIR=<로그인 폴더>` 만 더해 `CREATE_NEW_CONSOLE` 로 직접 띄운다. 홈 폴더에서 시작. 끝난 뒤 안내는 보드의 안내 문구가 맡는다.
 - `--action pause|resume|stop|reopen|focus <id>` 로 실행되면 떠 있는 보드에 넘긴다(단일 실행 플러그인의 인자 전달) — stop 은 확인 없이.
 
@@ -276,7 +278,7 @@ macOS 키체인 대신:
 
 ### 5.9 보드 설정 저장 (macOS UserDefaults 대응)
 
-`board-settings.json`(Tauri app config dir) 한 파일, 백엔드가 단일 출처. 키: `collapsed[]`, `endedOpen[]`, `pinnedGroups[]`, `hiddenGroups{cwd:시각}`, `autoFolded{cwd:시각}`, `kindCollapsed[]`("<cwd>|term"·"<cwd>|bg"), `subCollapsed[]`(세션 id), `usageCompact`, `pinned`(항상 위, 기본 true), `mascot`(기본 `tralalero`), `opacity`(0.3~1, 기본 1), `autoSwitch`(기본 false), `autoSwitchLast`, `autoSwitchFull{id:시각}`, `boardMini`, `boardRestoreFrame{x,y,w,h}`, `windowFrame`.
+`board-settings.json`(Tauri app config dir) 한 파일, 백엔드가 단일 출처. 키: `collapsed[]`, `endedOpen[]`, `pinnedGroups[]`, `hiddenGroups{그룹 id:시각}`, `autoFolded{그룹 id:시각}`, `kindCollapsed[]`("<그룹 id>|term"·"<그룹 id>|bg"), `subCollapsed[]`(세션 id), `usageCompact`, `pinned`(항상 위, 기본 true), `mascot`(기본 `tralalero`), `opacity`(0.3~1, 기본 1), `autoSwitch`(기본 false), `autoSwitchLast`, `autoSwitchFull{id:시각}`, `boardMini`, `boardRestoreFrame{x,y,w,h}`, `windowFrame`.
 
 ### 5.10 창·트레이·단축키
 
@@ -316,7 +318,7 @@ interface Snapshot {
   claudeVersion: string | null;
   terminals: { id: string; name: string; installed: boolean; running: boolean }[];
 }
-interface Group { id: string /* cwd */; name: string; path: string /* 홈을 ~ 로 */; sessions: Session[] }
+interface Group { id: string /* project_dir, 없으면 cwd */; name: string; path: string /* 홈을 ~ 로 */; sessions: Session[] }
 interface Session {
   id: string; cwd: string; state: State; since: number; updated: number; headless: boolean;
   title: string /* topic 또는 message 또는 "요청 전" */; topic: string; message: string;
@@ -337,6 +339,7 @@ interface Account { id: string; email: string; org: string; plan: string; expire
 `session_action(action: "activate"|"focus"|"resume"|"pause"|"resume_paused"|"stop", id)` · `switch_account(id)` · `add_account(email?)` · `cancel_add_account` · `remove_account(id)` · `set_auto_switch(bool)` ·
 `check_update(manual)` · `run_update` · `open_changelog` · `set_pinned(bool)` · `set_mascot(kind)` · `set_opacity(v)` · `set_notify_position(pos)` · `open_terminal(id)` ·
 `enter_mini(rows)` · `leave_mini` · `snap_right` · `hide_board` · `minimize_board` · `log(text)`.
+그룹을 가리키는 명령 인자 `cwd` 는 그룹 id(§5.1 의 묶음 열쇠)다.
 확인 대화상자(계정 전환·세션 중단)는 백엔드가 네이티브 대화상자(`tauri-plugin-dialog`)로 띄운다.
 
 ### 6.3 알림 패널 — 프론트 경로 `/notify`, 백엔드가 인자를 `get_notify_options` 로 준다. 내용 높이 `notify_ready(height)`(백엔드가 그 높이로 자리를 잡고 보인다), 마우스 `notify_hover(inside)`, 클릭 `notify_clicked`(백엔드가 보드를 띄움), 닫힘 애니메이션이 끝나면 `notify_finish`(백엔드가 슬롯을 놓고 프로세스를 끝냄). 카운트다운은 프론트가 한다.

@@ -20,6 +20,7 @@ func mtime(_ path: String) -> Date? {
 struct Session: Identifiable, Equatable {
     let id: String
     let cwd: String
+    let projectDir: String  // claude 를 띄운 폴더(state.py 의 project_dir, 없으면 cwd) — cd·워크트리에도 그대로라 카드는 이것으로 묶는다
     let state: String
     let since: Date
     let updated: Date
@@ -78,7 +79,7 @@ struct Sub: Identifiable, Equatable {
 }
 
 struct Group: Identifiable, Equatable {
-    let id: String          // cwd
+    let id: String          // 세션들의 projectDir
     let sessions: [Session]
     var name: String { (id as NSString).lastPathComponent }
     var path: String { id.replacingOccurrences(of: NSHomeDirectory(), with: "~") }
@@ -980,7 +981,7 @@ enum Palette {
 final class Store: ObservableObject {
     @Published var groups: [Group] = []
     @Published var now = Date()
-    // 접힌 그룹의 cwd — 앱을 다시 켜도 유지한다
+    // 접힌 그룹의 경로(Group.id) — 앱을 다시 켜도 유지한다
     @Published var collapsed = Set(UserDefaults.standard.stringArray(forKey: "collapsed") ?? [])
     // 전체 알림 끄기 — ~/.claude/notifier/mute-all 이 있으면 notify.py 가 모든 세션의 알림을 띄우지 않는다
     @Published var allMuted = FileManager.default.fileExists(atPath: muteAllPath)
@@ -1029,7 +1030,7 @@ final class Store: ObservableObject {
         UserDefaults.standard.set(Array(collapsed), forKey: "collapsed")
     }
 
-    // 종료 세션 목록을 펼쳐 둔 그룹의 cwd — 기본은 접힘
+    // 종료 세션 목록을 펼쳐 둔 그룹의 경로(Group.id) — 기본은 접힘
     @Published var endedOpen = Set(UserDefaults.standard.stringArray(forKey: "endedOpen") ?? [])
 
     func toggleEnded(_ cwd: String) {
@@ -1111,7 +1112,7 @@ final class Store: ObservableObject {
 
     private func expandNewlyWaiting(_ sessions: [Session]) {
         let waiting = sessions.filter { $0.state == "waiting" }
-        let opened = Set(waiting.filter { !waitingIds.contains($0.id) }.map(\.cwd)).intersection(collapsed)
+        let opened = Set(waiting.filter { !waitingIds.contains($0.id) }.map(\.projectDir)).intersection(collapsed)
         waitingIds = Set(waiting.map(\.id))
         guard !opened.isEmpty else { return }
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { collapsed.subtract(opened) }
@@ -1201,6 +1202,7 @@ final class Store: ObservableObject {
             }
             sessions.append(Session(id: j["session_id"] as? String ?? name,
                                     cwd: j["cwd"] as? String ?? "?",
+                                    projectDir: j["project_dir"] as? String ?? j["cwd"] as? String ?? "?",
                                     state: state,
                                     since: since,
                                     updated: updated,
@@ -1226,8 +1228,8 @@ final class Store: ObservableObject {
         expandNewlyWaiting(sessions)
         let muted = fm.fileExists(atPath: muteAllPath)
         if muted != allMuted { allMuted = muted }
-        let grouped = Dictionary(grouping: sessions, by: \.cwd).map { cwd, list in
-            Group(id: cwd, sessions: list.sorted { $0.rank != $1.rank ? $0.rank < $1.rank : $0.since > $1.since })
+        let grouped = Dictionary(grouping: sessions, by: \.projectDir).map { dir, list in
+            Group(id: dir, sessions: list.sorted { $0.rank != $1.rank ? $0.rank < $1.rank : $0.since > $1.since })
         }
         // 지운 뒤 새 활동이 없는 작업경로는 빼고, 새 활동이 생긴 작업경로는 지운 목록에서 꺼낸다
         var visible: [Group] = []
@@ -5162,7 +5164,7 @@ final class SplitNode {
 // 보드 터미널 탭 하나 — 화면 나누기 트리 하나와 그 가운데 고른 화면. 탭 이름·⌘ 번호·경로 줄·카드 강조는 탭 단위다
 @MainActor final class BoardTab: ObservableObject, Identifiable {
     let id = UUID()
-    // 탭의 작업 경로(경로 줄의 묶음, workspaceKey 꼴) — 탭을 연 경로(이어 열면 세션 기록의 cwd). 셸에서 cd 해도 바뀌지 않는다(cwd 는 따라간다)
+    // 탭의 작업 경로(경로 줄의 묶음, workspaceKey 꼴) — 탭을 연 경로(이어 열면 세션 기록의 project_dir, 없으면 cwd). 셸에서 cd 해도 바뀌지 않는다(cwd 는 따라간다)
     let workspace: String
     let root: SplitNode
     @Published var focused: BoardSurface   // 고른 화면 — 키 입력·탭의 "지금 하는 일"·⌘D 로 나눌 화면
@@ -5504,7 +5506,7 @@ final class SplitNode {
             boardLog("탭을 되살리지 않음: 세션 \(id) 이 보드 밖(pid \(pid))에서 돌고 있습니다")
             return nil
         }
-        let dir = rec?["cwd"] as? String ?? cwd
+        let dir = rec?["project_dir"] as? String ?? rec?["cwd"] as? String ?? cwd   // 보드 카드와 같은 경로(워크트리에 들어간 세션도 프로젝트 폴더에서)
         guard FileManager.default.fileExists(atPath: dir) else {
             boardLog("탭을 되살리지 않음: 작업 경로가 없습니다 \(dir)")
             return nil
@@ -7881,8 +7883,8 @@ func transcriptPath(_ given: String?, _ cwd: String, _ id: String) -> String {
     return NSHomeDirectory() + "/.claude/projects/\(slug)/\(id).jsonl"
 }
 
-// 끝난 세션을 보드 탭에서 같은 작업 경로로 이어 연다 — 그 세션이 마지막으로 돌던 화면이 같은 경로의 셸 프롬프트로 남아 있으면 그 화면에,
-// 아니면 새 탭에. 대화 이력은 claude --resume 이 불러오고,
+// 끝난 세션을 보드 탭에서 그 세션의 프로젝트 경로(claude 를 띄운 폴더 — 보드 카드·탭의 경로와 같다. cd·워크트리로 옮긴 cwd 가 아니다)로
+// 이어 연다 — 그 세션이 마지막으로 돌던 화면이 같은 경로의 셸 프롬프트로 남아 있으면 그 화면에, 아니면 새 탭에. 대화 이력은 claude --resume 이 불러오고,
 // 실행 인자·마지막 권한 모드·모델은 state.py 가 기록한 resume_cmd 에 담겨 있다(-p 는 넘기지 않아 대화형으로 열린다)
 @MainActor func resumeSession(_ s: Session, carryOn: Bool = false) {
     // 답변 꾸미기는 기본으로 켠다(보드 밖에서 시작한 세션도) — 새 세션 창에서 끄고 띄운 세션만 끈 채로. 재개 문구보다 앞에
@@ -7894,11 +7896,11 @@ func transcriptPath(_ given: String?, _ cwd: String, _ id: String) -> String {
         try? FileManager.default.removeItem(atPath: pausedMark(s))
     }
     let hub = TerminalHub.shared
-    if let surface = hub.surfaces.first(where: { $0.sessionId == s.id && $0.atPrompt && $0.cwd == s.cwd }) {
+    if let surface = hub.surfaces.first(where: { $0.sessionId == s.id && $0.atPrompt && $0.cwd == s.projectDir }) {
         hub.run(cmd, in: surface, sessionId: s.id, mdRenderOff: off)
         hub.reveal(surface.id)
     } else {
-        hub.launch(cmd, in: s.cwd, sessionId: s.id, mdRenderOff: off)
+        hub.launch(cmd, in: s.projectDir, sessionId: s.id, mdRenderOff: off)
     }
 }
 

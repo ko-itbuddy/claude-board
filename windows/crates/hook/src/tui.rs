@@ -286,13 +286,13 @@ impl Painter<'_> {
     /// 한 화면 전체(커서를 맨 위로 옮겨 덮어 그리는 문자열).
     fn render(&self, sessions: &[Record], tick: usize, size: (usize, usize), now: f64, home: &str) -> String {
         let (cols, rows) = (size.0.max(60), size.1);
-        // 경로별로 묶고(처음 나온 순서), 묶음 안은 급한 상태 → 최근에 바뀐 것 순
+        // 프로젝트 경로(claude 를 띄운 폴더, 없으면 cwd)별로 묶고(처음 나온 순서), 묶음 안은 급한 상태 → 최근에 바뀐 것 순
         let mut groups: Vec<(String, Vec<&Record>)> = Vec::new();
         for s in sessions {
-            let cwd = get_str(s, "cwd").unwrap_or("?").to_string();
-            match groups.iter_mut().find(|(c, _)| *c == cwd) {
+            let dir = get_str(s, "project_dir").filter(|d| !d.is_empty()).or_else(|| get_str(s, "cwd")).unwrap_or("?").to_string();
+            match groups.iter_mut().find(|(c, _)| *c == dir) {
                 Some((_, g)) => g.push(s),
-                None => groups.push((cwd, vec![s])),
+                None => groups.push((dir, vec![s])),
             }
         }
         let key = |s: &Record| (order(get_str(s, "state")), -get_f64(s, "since").unwrap_or(0.0));
@@ -501,5 +501,19 @@ mod tests {
         let empty = strip_ansi(&Painter { theme: &THEMES[1] }.render(&[], 3, (60, 10), now, ""));
         assert!(empty.contains("아직 기록된 세션이 없습니다"));
         assert!(empty.contains("테마: Tokyo Night"));
+    }
+
+    #[test]
+    fn render_groups_by_project_dir() {
+        let rec = |v: Value| v.as_object().unwrap().clone();
+        // 워크트리에 들어가 cwd 가 바뀐 세션도 claude 를 띄운 폴더의 카드에, project_dir 이 없는 예전 기록은 cwd 의 카드에
+        let sessions = vec![
+            rec(json!({"cwd": "/home/u/a", "project_dir": "/home/u/a", "state": "idle", "since": 1.0, "updated": 1.0})),
+            rec(json!({"cwd": "/home/u/a/.claude/worktrees/t1", "project_dir": "/home/u/a", "state": "working", "since": 2.0, "updated": 2.0})),
+            rec(json!({"cwd": "/home/u/a", "state": "idle", "since": 3.0, "updated": 3.0})),
+        ];
+        let plain = strip_ansi(&Painter { theme: &THEMES[0] }.render(&sessions, 0, (80, 30), 10.0, "/home/u"));
+        assert_eq!(plain.matches("📁 a").count(), 1, "{plain}");
+        assert!(!plain.contains("📁 t1"), "{plain}");
     }
 }

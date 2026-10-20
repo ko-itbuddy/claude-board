@@ -19,3 +19,5 @@ macOS `state.py`(커밋 `68ffed2`)에 hook 이벤트 14개를 차례로 넣고, 
 `replay_with_captured_clock_and_process_is_exact` 시험은 캡처와 같은 가짜 프로세스(pid 46137, tty `ttys000`, 인자 `--allow-dangerously-skip-permissions`)와
 단계마다 캡처의 `updated` 를 시계로 넣어, 가린 필드까지 모두 같고 키 순서·터미널 제목·`.paused` 삭제 여부도 맞는지 본다.
 `resume_args` 는 내용(`resume_cmd` 와 같은 인자 배열)을 따로 확인한 뒤 빼고 비교한다.
+`project_dir` 는 이 캡처 뒤 `state.py` 에 더한 필드라 캡처에 없다. 그래서 `masked_sequence_matches_state_py` 는 가리고,
+`replay_with_captured_clock_and_process_is_exact` 는 값(환경 변수 `CLAUDE_PROJECT_DIR` 가 없으므로 첫 hook 의 `cwd`)을 따로 확인한 뒤 빼고 비교한다.

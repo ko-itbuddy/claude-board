@@ -118,6 +118,9 @@ pub struct Session {
     pub pid_ctime: Option<f64>,
     #[serde(skip)]
     pub file: PathBuf,
+    /// claude 를 띄운 폴더(hook 의 `project_dir`, 없으면 cwd) — cd·워크트리에도 그대로라 카드는 이것으로 묶는다
+    #[serde(skip)]
+    pub project_dir: String,
     /// `claude` 뒤에 붙일 이어 열기 인자(hook 이 기록한 `resume_args`, 없으면 `--resume <id>`)
     #[serde(skip)]
     pub resume_args: Vec<String>,

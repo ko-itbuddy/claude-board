@@ -47,6 +47,8 @@ pub trait Env {
     fn subagent_meta(&self, transcript: &str, agent_id: &str) -> Record;
     /// hook 입력과 기록에 cwd 가 없을 때 쓸 현재 폴더.
     fn cwd(&self) -> String;
+    /// Claude Code 가 hook 에 넘기는 환경 변수 `CLAUDE_PROJECT_DIR`(claude 를 띄운 폴더). 없으면 None.
+    fn project_dir(&self) -> Option<String>;
 }
 
 /// [`apply`] 의 결과.
@@ -260,6 +262,14 @@ pub fn apply(mut rec: Record, state_arg: &str, data: &Record, now: f64, env: &dy
     set(&mut rec, "cwd", cwd.as_str());
     set(&mut rec, "project", paths::basename(&cwd));
     set(&mut rec, "updated", now);
+    // 프로젝트 경로 — claude 를 띄운 폴더. cwd 는 Claude 가 하위 폴더로 cd 하거나 워크트리에 들어가면 따라 바뀌지만
+    // Claude Code 가 hook 에 넘기는 CLAUDE_PROJECT_DIR 은 그대로다(2.1.304 실측). 보드는 이 경로로 카드를 묶는다
+    let project_dir = env
+        .project_dir()
+        .filter(|d| !d.is_empty())
+        .or_else(|| non_empty_str(rec.get("project_dir")).map(str::to_string))
+        .unwrap_or_else(|| cwd.clone());
+    set(&mut rec, "project_dir", project_dir);
 
     // 같은 프로젝트에서 여러 세션을 띄워도 구분되도록 마지막 요청 문구를 주제로 남긴다
     let prompt = collapse_ws(data.get("prompt").and_then(Value::as_str).unwrap_or(""));
@@ -383,6 +393,9 @@ impl Env for SystemEnv {
     fn cwd(&self) -> String {
         std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
     }
+    fn project_dir(&self) -> Option<String> {
+        std::env::var_os("CLAUDE_PROJECT_DIR").map(|v| v.to_string_lossy().into_owned())
+    }
 }
 
 /// 종료된 지 2일이 넘은 세션 파일을 지운다 — 보드를 띄우지 않는 동안 쌓이는 것을 막는다 (`state.py:prune`).
@@ -490,6 +503,8 @@ mod tests {
         found: Option<ClaudeProcess>,
         alive: bool,
         meta: Record,
+        /// CLAUDE_PROJECT_DIR
+        project_dir: Option<String>,
     }
 
     impl Env for Fake {
@@ -508,6 +523,9 @@ mod tests {
         fn cwd(&self) -> String {
             "/fallback/dir".into()
         }
+        fn project_dir(&self) -> Option<String> {
+            self.project_dir.clone()
+        }
     }
 
     fn fake() -> Fake {
@@ -515,6 +533,7 @@ mod tests {
             found: Some(ClaudeProcess { pid: 42, ctime: Some(1.5), tty: None, headless: false, argv: vec!["claude".into(), "--chrome".into()] }),
             alive: true,
             meta: Map::new(),
+            project_dir: None,
         }
     }
 
@@ -573,7 +592,7 @@ mod tests {
             ["--add-dir", "a b", "c&d", "--settings", "{\"x\": 1}", "--chrome", "--permission-mode", "plan", "--model", "x\" & calc & \"", "--resume", "sid-1"]
         );
         // apply 가 기록에 resume_cmd 와 같은 내용의 배열을 남긴다 — 위험한 모델 이름도 원소 하나
-        let env = Fake { found: Some(ClaudeProcess { argv: vec!["claude".into(), "--chrome".into()], ..fake().found.unwrap() }), alive: true, meta: Map::new() };
+        let env = Fake { found: Some(ClaudeProcess { argv: vec!["claude".into(), "--chrome".into()], ..fake().found.unwrap() }), alive: true, meta: Map::new(), project_dir: None };
         let data = obj(json!({"session_id": "s9", "hook_event_name": "SessionStart", "cwd": "/w/p", "model": "x\" & calc & \""}));
         let out = apply(Map::new(), "idle", &data, 1.0, &env);
         assert_eq!(out.record["resume_args"], json!(["--chrome", "--model", "x\" & calc & \"", "--resume", "s9"]));
@@ -586,7 +605,7 @@ mod tests {
     #[test]
     fn null_pid_is_not_probed_again() {
         // state.py 의 alive(None) 은 참 — pid 가 null 로 남은 기록은 SessionStart 가 아니면 다시 찾지 않는다
-        let env = Fake { found: None, alive: false, meta: Map::new() };
+        let env = Fake { found: None, alive: false, meta: Map::new(), project_dir: None };
         let data = obj(json!({"session_id": "s", "hook_event_name": "UserPromptSubmit", "cwd": "/w/p"}));
         let rec = obj(json!({"pid": null, "started": 1.0}));
         let out = apply(rec, "working", &data, 10.0, &env);
@@ -716,7 +735,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("s1.paused"), "{}").unwrap();
         let input = br#"{"session_id":"s1","hook_event_name":"UserPromptSubmit","cwd":"/w/proj","prompt":"hello"}"#;
-        run(&dir, "working", input, &Fake { found: None, alive: true, meta: Map::new() });
+        run(&dir, "working", input, &Fake { found: None, alive: true, meta: Map::new(), project_dir: None });
         let rec = fileio::read_record(&dir.join("s1.json")).unwrap();
         assert_eq!(rec["state"], "working");
         assert_eq!(rec["topic"], "hello");
@@ -729,5 +748,34 @@ mod tests {
         let n = fs::read_dir(&dir).unwrap().count();
         assert_eq!(n, 2);
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn project_dir_stays_through_cd_and_worktree() {
+        let hook = |cwd: &str| obj(json!({"session_id": "s", "hook_event_name": "PreToolUse", "cwd": cwd}));
+        let walk = |env: &Fake, rec: Record| {
+            let mut rec = rec;
+            for cwd in ["/w/repo", "/w/repo/sub", "/w/repo/.claude/worktrees/t1"] {
+                rec = apply(rec, "working", &hook(cwd), 1.0, env).record;
+                assert_eq!(rec["cwd"], cwd);
+                assert_eq!(rec["project"], paths::basename(cwd));
+                assert_eq!(rec["project_dir"], "/w/repo", "cwd {cwd}");
+            }
+        };
+        // 환경 변수가 있으면 그 값 — 기록에 다른 값이 있어도 환경 변수가 이긴다
+        let launched = Fake { project_dir: Some("/w/repo".into()), ..fake() };
+        walk(&launched, Map::new());
+        walk(&launched, obj(json!({"pid": 42, "args": [], "state": "working", "project_dir": "/elsewhere"})));
+        // 환경 변수가 없거나 비어 있으면 처음 기록한 값을 지킨다(처음엔 그 hook 의 cwd)
+        walk(&fake(), Map::new());
+        walk(&Fake { project_dir: Some(String::new()), ..fake() }, Map::new());
+        // project_dir 이 없는 예전 기록은 그 hook 의 cwd 부터
+        let rec = obj(json!({"pid": 42, "args": [], "state": "working", "cwd": "/w/old"}));
+        let out = apply(rec, "working", &hook("/w/repo/sub"), 1.0, &fake());
+        assert_eq!(out.record["project_dir"], "/w/repo/sub");
+        // state.py 와 같은 키 순서 — updated 바로 뒤
+        let keys: Vec<&String> = out.record.keys().collect();
+        let at = keys.iter().position(|k| *k == "updated").unwrap();
+        assert_eq!(keys[at + 1], "project_dir");
     }
 }

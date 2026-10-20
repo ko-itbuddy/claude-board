@@ -193,7 +193,7 @@ fn stop(board: &Arc<Board>, s: &Session, confirm: bool) {
     board.publish();
 }
 
-/// 이어 열기: `claude <resume_args…> [carryOn 문구]` 를 작업 폴더에서 새 콘솔로 띄운다.
+/// 이어 열기: `claude <resume_args…> [carryOn 문구]` 를 프로젝트 폴더(claude 를 띄운 폴더 — 보드 카드의 경로. cd·워크트리로 옮긴 cwd 가 아니다)에서 새 콘솔로 띄운다.
 fn resume(board: &Arc<Board>, s: &Session, carry_on: bool) {
     let mut args = s.resume_args.clone();
     if carry_on {
@@ -205,7 +205,7 @@ fn resume(board: &Arc<Board>, s: &Session, carry_on: bool) {
         board.flash("claude 명령을 찾지 못했습니다", true);
         return;
     };
-    if let Err(e) = spawn_console(&claude, &args, Path::new(&s.cwd), &[]) {
+    if let Err(e) = spawn_console(&claude, &args, Path::new(&s.project_dir), &[]) {
         board.flash(format!("세션을 다시 열지 못했습니다 — {e}"), true);
     }
     board.publish();

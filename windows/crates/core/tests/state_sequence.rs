@@ -58,12 +58,16 @@ impl Env for Fake {
     fn cwd(&self) -> String {
         "/somewhere/else".into()
     }
+    fn project_dir(&self) -> Option<String> {
+        None
+    }
 }
 
 /// 캡처한 기기의 프로세스·시계에서 온 필드를 지운다(값을 바꾸지 않고 키째 지운다 — pid_ctime 은 macOS 기록에 없다).
+/// project_dir 은 캡처 뒤 state.py 에 더한 필드라 캡처에 없다 — replay 시험에서 따로 본다.
 fn mask(rec: &Record) -> Record {
     let mut r = rec.clone();
-    for k in ["pid", "pid_ctime", "tty", "headless", "args", "resume_cmd", "resume_args", "started", "updated", "since", "transcript_path"] {
+    for k in ["pid", "pid_ctime", "tty", "headless", "args", "resume_cmd", "resume_args", "started", "updated", "since", "transcript_path", "project_dir"] {
         r.shift_remove(k);
     }
     if let Some(Value::Object(subs)) = r.get_mut("subagents") {
@@ -124,6 +128,7 @@ fn replay_with_captured_clock_and_process_is_exact() {
         Some(format!("🔵 demo-proj{topic_title}")),
         Some(format!("⚫ demo-proj{topic_title}")),
     ];
+    let first_cwd = steps()[0].input["cwd"].clone();
     let mut rec = Map::new();
     for (i, step) in steps().iter().enumerate() {
         let now = step.expected["updated"].as_f64().unwrap();
@@ -137,6 +142,9 @@ fn replay_with_captured_clock_and_process_is_exact() {
                                "--resume", "11111111-2222-3333-4444-555555555555"]),
             "resume_args — 단계 {}", step.name
         );
+        // project_dir 은 캡처 뒤 state.py 에 더한 필드(캡처에 없다) — 환경 변수가 없으면 첫 hook 의 cwd 를 지킨다
+        let dir = got.shift_remove("project_dir").expect("project_dir");
+        assert_eq!(dir, first_cwd, "project_dir — 단계 {}", step.name);
         assert_eq!(Value::Object(got.clone()), Value::Object(step.expected.clone()), "단계 {}", step.name);
         assert_eq!(out.title, titles[i], "제목 — 단계 {}", step.name);
         assert_eq!(out.remove_paused, step.input["hook_event_name"] == "UserPromptSubmit", "단계 {}", step.name);

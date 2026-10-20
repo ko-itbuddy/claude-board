@@ -227,6 +227,9 @@ def update(path, sid, state, data, sub_event):
             rec[key] = data[key]
     cwd = data.get("cwd") or rec.get("cwd") or os.getcwd()
     rec.update(session_id=sid, cwd=cwd, project=os.path.basename(cwd), updated=now)
+    # 프로젝트 경로 — claude 를 띄운 폴더. cwd 는 Claude 가 하위 폴더로 cd 하거나 워크트리에 들어가면 따라 바뀌지만
+    # Claude Code 가 hook 에 넘기는 CLAUDE_PROJECT_DIR 은 그대로다(2.1.304 실측). 보드는 이 경로로 카드를 묶는다
+    rec["project_dir"] = os.environ.get("CLAUDE_PROJECT_DIR") or rec.get("project_dir") or cwd
 
     # 같은 프로젝트에서 여러 세션을 띄워도 구분되도록 마지막 요청 문구를 주제로 남긴다
     prompt = " ".join((data.get("prompt") or "").split())

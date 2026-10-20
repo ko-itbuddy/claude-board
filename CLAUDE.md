@@ -61,7 +61,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
 
 | 파일 | 쓰는 쪽 | 읽는 쪽 |
 |---|---|---|
-| `sessions/<sid>.json` (`state`·`pid`·`tty`·`headless`·`cwd`·`topic`·`last_message`·`subagents`·`limit_hit`·`resume_cmd`·`transcript_path`·`model` …) | state.py | ClaudeBoard.swift, board-tui.py, notify.py(상태별 개수) |
+| `sessions/<sid>.json` (`state`·`pid`·`tty`·`headless`·`cwd`·`project_dir`(claude 를 띄운 폴더 = hook 의 `CLAUDE_PROJECT_DIR`, cd·워크트리에도 그대로 — 보드·TUI 카드 묶음)·`topic`·`last_message`·`subagents`·`limit_hit`·`resume_cmd`·`transcript_path`·`model` …) | state.py | ClaudeBoard.swift, board-tui.py, notify.py(상태별 개수) |
 | `sessions/<sid>.mute`, `mute-all`, `notify-position` | 보드 | notify.py |
 | `sessions/<sid>.paused` | 보드 (일시중지 때, 업데이트·종료로 끊기는 보드 탭 세션에도) | state.py (새 요청이 오면 지움), 보드 (일시중지 카드·재개) |
 | `plugins/md-render/` | 보드 (시작할 때 앱 안 사본에서 바뀐 파일만 옮김. Claude Code 가 안에 `tsconfig.json`·`.claude-plugin/types/` 를 더 씀, `Uninstall.command` 가 지움) | 보드 탭 claude (`--plugin-dir`) |

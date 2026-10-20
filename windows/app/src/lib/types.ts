@@ -52,7 +52,7 @@ export interface Session {
 }
 
 export interface Group {
-  id: string;           // cwd
+  id: string;           // project_dir(claude 를 띄운 폴더), 없으면 cwd
   name: string;
   path: string;         // 홈 폴더를 ~ 로
   sessions: Session[];  // 급한 순
@@ -84,7 +84,7 @@ export interface BoardSettings {
   collapsed: string[];
   endedOpen: string[];
   pinnedGroups: string[];
-  kindCollapsed: string[];   // "<cwd>|term" · "<cwd>|bg"
+  kindCollapsed: string[];   // "<그룹 id>|term" · "<그룹 id>|bg"
   subCollapsed: string[];    // 서브에이전트 목록을 접은 세션 id
   usageCompact: boolean;
   pinned: boolean;           // 항상 위

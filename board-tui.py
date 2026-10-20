@@ -270,7 +270,7 @@ def render(sessions, tick):
 
     groups = {}
     for s in sessions:
-        groups.setdefault(s.get("cwd", "?"), []).append(s)
+        groups.setdefault(s.get("project_dir") or s.get("cwd", "?"), []).append(s)
     for g in groups.values():
         g.sort(key=lambda s: (ORDER.get(s.get("state"), 9), -s.get("since", 0)))
     ordered = sorted(groups.items(), key=lambda kv: (min(ORDER.get(s.get("state"), 9) for s in kv[1]),
