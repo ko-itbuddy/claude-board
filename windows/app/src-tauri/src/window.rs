@@ -270,11 +270,27 @@ pub fn toggle(app: &AppHandle) {
     }
 }
 
-/// Windows 11 Mica, 안 되면 아크릴. 실패는 무시한다(Windows 10 등).
+/// 창 모양은 프론트 CSS(반지름 16, 1px 가장자리 선)가 혼자 그린다. Windows 11 DWM 이 같은 일을 또 하면
+/// 바깥 호(DWM 약 8px)와 안쪽 호(CSS 16)가 겹쳐 보이므로 DWM 쪽을 모두 끈다:
+/// 모서리 둥글림(DONOTROUND)·DWM 테두리(COLOR_NONE)·Mica 배경(직사각형 전체에 칠해져 둥근 모서리 밖 쐐기로 비친다).
+/// 창 그림자(tauri.conf.json `shadow`)도 끈다 — DWM 그림자는 둥근 CSS 모양이 아니라 직사각형으로 번지고, 보이지 않는 7px 크기 조절 틀 때문에 창이 작업 영역 밖으로 나간다.
+/// Windows 10 등 속성이 없는 곳은 DwmSetWindowAttribute 가 오류 코드만 돌려주므로 무시한다.
 pub fn apply_vibrancy(win: &WebviewWindow) {
     #[cfg(windows)]
-    if window_vibrancy::apply_mica(win, Some(true)).is_err() {
-        let _ = window_vibrancy::apply_acrylic(win, Some((18, 18, 28, 160)));
+    {
+        use windows_sys::Win32::Graphics::Dwm::{
+            DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DwmSetWindowAttribute,
+        };
+        let _ = window_vibrancy::clear_mica(win);
+        let _ = window_vibrancy::clear_acrylic(win);
+        let Ok(hwnd) = win.hwnd() else { return };
+        let corner: i32 = DWMWCP_DONOTROUND;
+        let border: u32 = DWMWA_COLOR_NONE;
+        // SAFETY: hwnd 는 살아 있는 이 창의 핸들이고, 값은 속성이 요구하는 4바이트 정수다.
+        unsafe {
+            DwmSetWindowAttribute(hwnd.0 as _, DWMWA_WINDOW_CORNER_PREFERENCE as u32, &corner as *const i32 as *const _, 4);
+            DwmSetWindowAttribute(hwnd.0 as _, DWMWA_BORDER_COLOR as u32, &border as *const u32 as *const _, 4);
+        }
     }
     let _ = win;
 }

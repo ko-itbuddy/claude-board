@@ -317,7 +317,7 @@
     inset: 0;
     display: flex;
     overflow: hidden;
-    border-radius: 10px;
+    border-radius: 16px;
   }
   .root.flip {
     flex-direction: row-reverse;
@@ -326,8 +326,8 @@
   .root.expanded {
     border-radius: 16px;
   }
-  /* mac 창 가장자리의 1px 밝은 선(실측: 흰색 알파 약 0.22 가 위·오른쪽·아래에서 같은 값) — 자식 위에 덮는다 */
-  .root.expanded::after {
+  /* 접은 창도 같다. mac 창 가장자리의 1px 밝은 선(실측: 흰색 알파 약 0.22 가 위·오른쪽·아래에서 같은 값) — 자식 위에 덮는다 */
+  .root::after {
     content: "";
     position: absolute;
     inset: 0;
@@ -352,7 +352,7 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    border-radius: 10px;
+    border-radius: 16px;
     /* 위 두 겹은 macOS 창 바탕 뒤로 비치는 블러(바탕화면)가 더하는 밝기를 같은 색으로 흉내 낸 것 — 실측한 합성색에 맞춘다 */
     background:
       linear-gradient(to right, rgb(235 235 255 / 0.006), rgb(235 235 255 / 0.03) 50px, rgb(235 235 255 / 0.056) 110px),
@@ -361,7 +361,6 @@
       radial-gradient(circle 420px at 100% 100%, rgb(115 128 255 / 0.04), transparent),
       radial-gradient(circle 420px at 100% 100%, rgb(115 128 255 / 0.14), transparent),
       linear-gradient(to bottom, rgb(31 31 48 / var(--bd-a)), rgb(18 18 28 / var(--bd-a)));
-    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.08);
   }
   .root.expanded .board {
     --bd-a: 1;
