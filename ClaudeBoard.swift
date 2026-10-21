@@ -6860,25 +6860,43 @@ struct TerminalWorkspaceBar: View {
     @ObservedObject var hub: TerminalHub
 
     var body: some View {
-        let list = hub.workspaces
-        HStack(spacing: 0) {
-            HStack(spacing: 4) {
-                ForEach(list, id: \.self) { ws in
-                    WorkspaceButton(label: workspaceLabel(ws, among: list), path: ws, count: hub.tabs(in: ws).count,
-                                    state: hub.workspaceStates[ws] ?? "idle", current: ws == hub.workspace, background: hub.background)
+        GeometryReader { g in
+            // 경로가 넘치면 가로로 밀어 본다 — 넘친 HStack 은 가운데 맞춤이라 맨 앞 경로가 왼쪽 밖으로 잘렸다(탭 줄과 같은 문제).
+            // 항목은 이름을 줄이지 않고 왼쪽부터 늘어서고, 다 들어가면 그 오른쪽이 빈 곳
+            let list = hub.workspaces
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(list, id: \.self) { ws in
+                            WorkspaceButton(label: workspaceLabel(ws, among: list), path: ws, count: hub.tabs(in: ws).count,
+                                            state: hub.workspaceStates[ws] ?? "idle", current: ws == hub.workspace, background: hub.background)
+                                .id(ws)
+                        }
+                    }
+                    // 경로 줄의 빈 곳이 어디부터인지 — 탭 줄과 따로 그리는 호스팅 뷰라 같은 키로 잰다
+                    .background(GeometryReader { g in Color.clear.preference(key: TabBarEnd.self, value: g.frame(in: .named("workspaceBar")).maxX) })
+                    .frame(minWidth: max(0, g.size.width - 16), maxHeight: .infinity, alignment: .leading)
                 }
+                // 지금 경로(⌃⌥↑↓·세션 줄 누르기·새 경로 포함)가 칸 밖이면 보이게 민다. 탭 줄처럼 줄 폭이 바뀔 때도
+                .onAppear { scrollToCurrent(proxy) }
+                .onChange(of: hub.workspace) { scrollToCurrent(proxy, animated: true) }
+                .onChange(of: g.size.width) { scrollToCurrent(proxy) }
             }
-            // 경로 줄의 빈 곳이 어디부터인지 — 탭 줄과 따로 그리는 호스팅 뷰라 같은 키로 잰다
-            .background(GeometryReader { g in Color.clear.preference(key: TabBarEnd.self, value: g.frame(in: .named("workspaceBar")).maxX) })
-            Spacer(minLength: 0)
+            .padding(.horizontal, 8)
         }
-        .padding(.horizontal, 8)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .coordinateSpace(name: "workspaceBar")
         .onPreferenceChange(TabBarEnd.self) { hub.workspaceBarEnd = $0 }
         .background(Color(nsColor: terminalBarColor))
         .preferredColorScheme(.dark)
         .boardFont(13)   // 글자 크기를 따로 정하지 않은 글자도 보드 글자 비율을 따른다
+    }
+
+    // 경로가 막 붙었거나 줄 폭이 막 바뀐 때는 그 배치가 끝난 뒤에 민다
+    private func scrollToCurrent(_ proxy: ScrollViewProxy, animated: Bool = false) {
+        guard let ws = hub.workspace else { return }
+        DispatchQueue.main.async {
+            if animated { withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(ws) } } else { proxy.scrollTo(ws) }
+        }
     }
 }
 
