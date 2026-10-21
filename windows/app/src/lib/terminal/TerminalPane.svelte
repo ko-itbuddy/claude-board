@@ -67,7 +67,8 @@
     left: 50%;
     bottom: 16px;
     transform: translateX(-50%);
-    z-index: 2;
+    /* xterm 안쪽 레이어(링크·선택·스크롤바, 최대 10)보다 위여야 마우스로 누를 수 있다 */
+    z-index: 20;
     display: flex;
     align-items: center;
     gap: 12px;
