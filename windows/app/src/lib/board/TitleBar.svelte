@@ -1,14 +1,15 @@
 <script lang="ts">
   // 직접 그린 제목 막대(SPEC §5.10) — 끌기 영역, 왼쪽에 "처음 크기로 오른쪽에 붙이기", 오른쪽에 최대축소(↘↖)/원래 크기(⤢)·최소화·닫기.
-  // 미니에서는 상태별 세션 수를 함께 보인다(자리가 모자라면 글자를 빼고 수만)
+  // 미니에서는 상태별 세션 수를 함께 보인다(자리가 모자라면 글자를 빼고 수만).
+  // 최대축소 단추 왼쪽에 내장 터미널 펼침·접힘 단추가 있다
   import type { State } from "$lib/types";
-  import { enterMini, hideBoard, leaveMini, minimizeBoard, snapRight } from "$lib/backend";
+  import { enterMini, hideBoard, leaveMini, minimizeBoard, setTerminalExpanded, snapRight } from "$lib/backend";
   import Fit from "./Fit.svelte";
   import Icon from "./Icon.svelte";
   import { stateName, stateRgb } from "./format";
   import { hint } from "./hint.svelte";
 
-  let { mini, counts, rows }: { mini: boolean; counts: Record<State, number>; rows: number } = $props();
+  let { mini, counts, rows, expanded }: { mini: boolean; counts: Record<State, number>; rows: number; expanded: boolean } = $props();
 
   const short: Record<string, string> = { waiting: "승인", working: "작업", idle: "대기" };
   const chips = $derived((["waiting", "working", "idle"] as const).filter((st) => counts[st] > 0));
@@ -33,6 +34,16 @@
   {:else}
     <div class="drag" data-tauri-drag-region></div>
   {/if}
+  <button
+    class="term"
+    class:on={expanded}
+    onclick={() => setTerminalExpanded(!expanded)}
+    use:hint={expanded ? "터미널 접기 (Ctrl+Alt+T)" : "터미널 펼치기 (Ctrl+Alt+T)"}
+    aria-label={expanded ? "터미널 접기" : "터미널 펼치기"}
+    aria-pressed={expanded}
+  >
+    <Icon name="terminal" size={11} />
+  </button>
   <!-- 미니 = 원래 크기로, 전체·중간 = 최대축소(창을 가장 작게 줄여 경로마다 한 줄로 본다) -->
   <button
     class="tier"
@@ -126,6 +137,25 @@
   .tier:hover {
     color: var(--fg);
     background: rgb(255 255 255 / 0.16);
+  }
+  .term {
+    flex: none;
+    width: 24px;
+    height: 20px;
+    display: grid;
+    place-items: center;
+    border-radius: 10px;
+    color: var(--fg2);
+    background: rgb(255 255 255 / 0.08);
+    transition: background 0.15s;
+  }
+  .term:hover {
+    color: var(--fg);
+    background: rgb(255 255 255 / 0.16);
+  }
+  .term.on {
+    color: #fff;
+    background: rgb(var(--accent) / 0.55);
   }
   .win {
     flex: none;

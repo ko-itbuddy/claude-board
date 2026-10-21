@@ -3,6 +3,7 @@ export type State = "working" | "waiting" | "idle" | "paused" | "ended";
 export type Mood = "urgent" | "busy" | "idle" | "sleepy";
 export type MascotKind =
   | "tralalero" | "bombardiro" | "tungtung" | "lirili" | "patapim" | "boneca" | "cappuccino" | "foreman";
+export type BoardSide = "left" | "right";
 export type NotifyPosition = "center" | "top-left" | "top-right" | "bottom-left" | "bottom-right";
 
 export interface Brain {
@@ -94,6 +95,9 @@ export interface BoardSettings {
   autoSwitch: boolean;
   boardMini: boolean;
   notifyPosition: NotifyPosition;
+  terminalExpanded: boolean; // 내장 터미널을 펼쳤는지(보드 옆에 터미널 칸이 붙는다)
+  boardSide: BoardSide;      // 접었을 때 보드가 붙는 화면 쪽, 펼쳤을 때 터미널 반대쪽
+  boardPaneWidth: number;    // 보드 칸 폭(논리 px)
 }
 
 export interface TerminalApp {
@@ -144,3 +148,48 @@ export interface NotifyOptions {
   duration: number;     // 초
   position: NotifyPosition;
 }
+
+// ── 내장 터미널 — 계약은 windows/docs/SPEC.md 터미널 절(백엔드 terms.rs)과 같게 유지한다 ──────────────
+
+// 백엔드가 프로세스 수명 동안 유일하게 내는 터미널 번호("t1", "t2", …). 칸(leaf)은 따로 leafId 를 갖는다
+export type TermId = string;
+
+export interface TermSpec {
+  cwd?: string;
+  cols: number;
+  rows: number;
+}
+
+export interface TermInfo {
+  id: TermId;
+  pid: number;
+  shell: "pwsh" | "powershell" | "cmd";
+  cwd: string;
+  cols: number;
+  rows: number;
+  status: "running" | "exited";
+  exitCode: number | null;
+  windowsBuild: number | null;
+  oldestSeq: number;   // 링에 남은 가장 오래된 바이트의 오프셋
+  nextSeq: number;     // 다음에 올 바이트의 오프셋
+}
+
+// 채널로 오는 프레임 한 개를 푼 것: 출력 조각(seq = 첫 바이트의 오프셋) · 링이 덮여 처음부터 다시 받음 · 셸 종료(마지막 출력 뒤)
+export type TermFrame =
+  | { kind: "data"; seq: number; bytes: Uint8Array }
+  | { kind: "gap"; seq: number }
+  | { kind: "exit"; code: number | null };
+
+// 터미널 칸 배치. 1단계는 잎 하나만 그리지만 나누기를 넣을 수 있는 트리 모양이다
+export type PaneNode =
+  | { type: "leaf"; leafId: string; termId: TermId | null }
+  | { type: "split"; dir: "row" | "col"; ratio: number; first: PaneNode; second: PaneNode };
+
+export interface TerminalTab {
+  id: string;
+  root: PaneNode;
+  activeLeaf: string;
+}
+
+// 칸의 셸 상태 — idle(아직 안 띄움) · starting · running · exited · failed
+export type LeafPhase = "idle" | "starting" | "running" | "exited" | "failed";

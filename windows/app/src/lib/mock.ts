@@ -1,6 +1,6 @@
 // 브라우저(npm run dev)용 가짜 백엔드 — docs/images/hero.png 와 같은 장면을 만들고, SPEC §6.2 명령마다 이 상태를 고쳐
 // 보드를 Tauri 없이도 끝까지 눌러 볼 수 있게 한다. 주소에 ?update 를 붙이면 새 버전 알림 줄, ?empty 면 세션 없는 화면
-import type { Account, Brain, Group, Session, Snapshot, State, Sub } from "./types";
+import type { Account, Brain, Group, Session, Snapshot, State, Sub, TermId, TermInfo, TermSpec } from "./types";
 
 const SEC = 1000;
 const MIN = 60 * SEC;
@@ -176,6 +176,10 @@ const S: Snapshot = {
     autoSwitch: false,
     boardMini: false,
     notifyPosition: "center",
+    // 주소에 ?collapsed 를 붙이면 터미널을 접은 채, ?left 면 보드를 왼쪽에 두고 연다
+    terminalExpanded: !q.has("collapsed"),
+    boardSide: q.has("left") ? "left" : "right",
+    boardPaneWidth: 454,
   },
   claudeVersion: "2.1.301",
   terminals: [
@@ -387,6 +391,33 @@ export async function handle(cmd: string, a: Record<string, unknown>): Promise<u
     case "set_board_mini":
       st.boardMini = bool("on");
       break;
+    case "set_terminal_expanded":
+      st.terminalExpanded = bool("on");
+      break;
+    case "set_board_side":
+      st.boardSide = a.side === "left" ? "left" : "right";
+      break;
+    case "set_board_width":
+      st.boardPaneWidth = Number(a.width) || 454;
+      break;
+    case "term_spawn":
+      return spawnTerm(a.spec as TermSpec);
+    case "term_list":
+      return [...fakeTerms.values()].map((t) => t.info());
+    case "term_ack":
+      return;
+    case "term_write":
+      fakeTerms.get(str("id"))?.input(str("data"));
+      return;
+    case "term_write_bin":
+      fakeTerms.get(str("id"))?.input(String.fromCharCode(...(a.data as number[])));
+      return;
+    case "term_resize":
+      fakeTerms.get(str("id"))?.resize(Number(a.cols), Number(a.rows));
+      return;
+    case "term_kill":
+      fakeTerms.get(str("id"))?.exit(1);
+      return;
     case "open_terminal": {
       const t = S.terminals.find((x) => x.id === str("id"));
       if (t?.installed) t.running = true;
@@ -398,4 +429,137 @@ export async function handle(cmd: string, a: Record<string, unknown>): Promise<u
       return;
   }
   push();
+}
+
+// ── 가짜 터미널(브라우저 개발용) ─────────────────────────────────
+// 셸 대신 한 줄을 쳐서 Enter 하면 그 줄을 되돌려 주는 에코 터미널. 실제 백엔드와 같은 프레임(8바이트 seq + 출력, JSON gap·exit)을
+// 내보내 프런트의 해독·다시 받기·종료 처리까지 같은 길로 지나게 한다. 명령: exit [코드] 종료 · flood 많은 줄 쏟아내기 · clear 화면 지우기
+
+const PROMPT = "PS C:\\Users\\demo> ";
+const encoder = new TextEncoder();
+const fakeTerms = new Map<TermId, FakeTerm>();
+let nextTermNumber = 1;
+
+class FakeTerm {
+  private log: Uint8Array[] = [];
+  private nextSeq = 0;
+  private line = "";
+  private emit: ((message: unknown) => void) | null = null;
+  private status: TermInfo["status"] = "running";
+  private exitCode: number | null = null;
+
+  constructor(
+    readonly id: TermId,
+    private cols: number,
+    private rows: number,
+  ) {
+    this.print(`Mock PowerShell (echo) ${cols}x${rows}\r\n한 줄을 치고 Enter 를 누르면 되돌려 줍니다. exit, flood, clear\r\n\r\n${PROMPT}`);
+  }
+
+  info(): TermInfo {
+    return {
+      id: this.id,
+      pid: 4000 + Number(this.id.slice(1)),
+      shell: "pwsh",
+      cwd: HOME,
+      cols: this.cols,
+      rows: this.rows,
+      status: this.status,
+      exitCode: this.exitCode,
+      windowsBuild: 26200,
+      oldestSeq: 0,
+      nextSeq: this.nextSeq,
+    };
+  }
+
+  // 채널을 이 연결로 바꾸고 fromSeq 부터 다시 보낸다
+  attach(fromSeq: number, emit: (message: unknown) => void): TermInfo {
+    this.emit = emit;
+    let offset = 0;
+    for (const chunk of this.log) {
+      if (offset + chunk.length > fromSeq) {
+        const skip = Math.max(0, fromSeq - offset);
+        this.send(offset + skip, chunk.subarray(skip));
+      }
+      offset += chunk.length;
+    }
+    if (this.status === "exited") emit({ t: "exit", code: this.exitCode });
+    return this.info();
+  }
+
+  resize(cols: number, rows: number) {
+    if (cols < 2 || rows < 1 || (cols === this.cols && rows === this.rows)) return;
+    this.cols = cols;
+    this.rows = rows;
+  }
+
+  input(data: string) {
+    if (this.status === "exited") return;
+    for (const ch of data) {
+      if (ch === "\r" || ch === "\n") this.submit();
+      else if (ch === "\x7f") {
+        if (this.line) {
+          this.line = [...this.line].slice(0, -1).join("");
+          this.print("\b \b");
+        }
+      } else if (ch === "\x03") {
+        this.line = "";
+        this.print(`^C\r\n${PROMPT}`);
+      } else if (ch === "\x1b") this.print("^[");
+      else if (ch >= " ") {
+        this.line += ch;
+        this.print(ch);
+      }
+    }
+  }
+
+  exit(code: number) {
+    if (this.status === "exited") return;
+    this.status = "exited";
+    this.exitCode = code;
+    this.emit?.({ t: "exit", code });
+  }
+
+  private submit() {
+    const line = this.line.trim();
+    this.line = "";
+    const [command, arg] = line.split(/\s+/);
+    if (command === "exit") {
+      this.print("\r\n");
+      this.exit(Number(arg) || 0);
+    } else if (command === "clear") this.print("\x1b[2J\x1b[H" + PROMPT);
+    else if (command === "flood") {
+      let text = "\r\n";
+      for (let i = 1; i <= 3000; i++) text += `line ${i}\r\n`;
+      this.print(text + PROMPT);
+    } else this.print(`\r\n${line ? `${line}\r\n` : ""}${PROMPT}`);
+  }
+
+  private print(text: string) {
+    const bytes = encoder.encode(text);
+    this.log.push(bytes);
+    this.send(this.nextSeq, bytes);
+    this.nextSeq += bytes.length;
+  }
+
+  private send(seq: number, bytes: Uint8Array) {
+    if (!this.emit) return;
+    const frame = new ArrayBuffer(8 + bytes.length);
+    new DataView(frame).setBigUint64(0, BigInt(seq), true);
+    new Uint8Array(frame, 8).set(bytes);
+    this.emit(frame);
+  }
+}
+
+function spawnTerm(spec: TermSpec): TermInfo {
+  const id = `t${nextTermNumber++}`;
+  const term = new FakeTerm(id, spec.cols, spec.rows);
+  fakeTerms.set(id, term);
+  return term.info();
+}
+
+export function attachTerm(id: TermId, fromSeq: number, emit: (message: unknown) => void): TermInfo {
+  const term = fakeTerms.get(id);
+  if (!term) throw new Error(`터미널 ${id} 없음`);
+  return term.attach(fromSeq, emit);
 }

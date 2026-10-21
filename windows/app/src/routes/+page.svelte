@@ -1,9 +1,10 @@
 <script lang="ts">
-  // 보드 화면(SPEC §7, ClaudeBoard.swift:3772-4095·4246-4460) — 창 크기에 따라 전체·중간·미니 세 단계로 그린다
-  import { tick, untrack } from "svelte";
+  // 보드 화면(SPEC §7, ClaudeBoard.swift:3772-4095·4246-4460) — 창 크기에 따라 전체·중간·미니 세 단계로 그린다.
+  // 창은 [터미널 칸 │ 경계 │ 보드 칸]으로 나뉜다(보드가 왼쪽이면 뒤집는다). 터미널을 접으면 보드 칸이 창 전체다
+  import { tick } from "svelte";
   import { flip } from "svelte/animate";
   import { fade, fly, slide } from "svelte/transition";
-  import { setBoardMini, toggleCollapsed } from "$lib/backend";
+  import { onTerminalFocus, setBoardMini, setBoardWidth, toggleCollapsed } from "$lib/backend";
   import type { Group } from "$lib/types";
   import EdgeDock from "$lib/board/EdgeDock.svelte";
   import GroupCard from "$lib/board/GroupCard.svelte";
@@ -16,29 +17,71 @@
   import TitleBar from "$lib/board/TitleBar.svelte";
   import UpdateBanner from "$lib/board/UpdateBanner.svelte";
   import UsagePanel from "$lib/board/UsagePanel.svelte";
+  import Divider from "$lib/terminal/Divider.svelte";
+  import PaneView from "$lib/terminal/PaneView.svelte";
+  import { activeTab, focusActive, setDragging, startHub, hub } from "$lib/terminal/hub.svelte";
   import { stateName, stateRgb } from "$lib/board/format";
   import { hint } from "$lib/board/hint.svelte";
   import { pointer, trackWindow, win } from "$lib/board/pointer.svelte";
   import { board, connect, ui, type Tier } from "$lib/board/store.svelte";
 
   const snap = $derived(board.snap);
+  const expanded = $derived(snap?.settings.terminalExpanded ?? false);
+  const side = $derived(snap?.settings.boardSide ?? "right");
+
+  // 칸 크기 규칙(논리 px) — 보드 칸은 360 이상, 터미널 칸은 480 이상 남긴다. 경계는 8
+  const MIN_BOARD = 360;
+  const MIN_TERMINAL = 480;
+  const DIVIDER = 8;
+  const DEFAULT_BOARD_WIDTH = 454;
+
+  let rootEl = $state<HTMLElement>();
+  let boardEl = $state<HTMLElement>();
+  let winWidth = $state(0);
+  // 경계를 끄는 동안의 보드 칸 폭. 놓으면 저장하고 비운다
+  let dragWidth = $state<number | null>(null);
+  const maxBoard = $derived(Math.max(MIN_BOARD, winWidth - DIVIDER - MIN_TERMINAL));
+  const boardWidth = $derived(Math.min(Math.max(dragWidth ?? snap?.settings.boardPaneWidth ?? DEFAULT_BOARD_WIDTH, MIN_BOARD), maxBoard));
 
   $effect(() => connect());
-  $effect(() => trackWindow(() => board.snap?.terminals.length ?? 5));
+  $effect(() => trackWindow(() => board.snap?.terminals.length ?? 5, () => ({ el: boardEl, side })));
+  $effect(() => onTerminalFocus(focusActive));
+  $effect(() => {
+    const sync = () => (winWidth = window.innerWidth);
+    sync();
+    window.addEventListener("resize", sync);
+    return () => window.removeEventListener("resize", sync);
+  });
+
+  // 터미널을 처음 펼칠 때 셸을 준비한다(접힌 채 시작하면 띄우지 않는다)
+  $effect(() => {
+    if (expanded) void startHub();
+  });
+
+  function resizeBoard(width: number) {
+    if (dragWidth === null) setDragging(true);
+    dragWidth = width;
+  }
+
+  function commitBoard(width: number) {
+    dragWidth = null;
+    setBoardWidth(width);
+    setDragging(false);
+  }
 
   // 투명 모드 — 보드가 활성이 아니고 마우스가 창 밖이면 고른 투명도, 마우스가 들어오거나 활성이면 불투명.
-  // 슬라이더를 끄는 동안과 놓은 뒤 1.2초는 고른 투명도를 미리 보여 준다
+  // 슬라이더를 끄는 동안과 놓은 뒤 1.2초는 고른 투명도를 미리 보여 준다. 터미널을 펼친 동안은 늘 불투명이다
   $effect(() => {
     if (!snap) return;
     const level = win.dragging ? win.dragLevel : snap.settings.opacity;
-    const solid = !win.previewing && (pointer.inside || win.focused);
+    const solid = expanded || (!win.previewing && (pointer.inside || win.focused));
     const root = document.documentElement;
     root.style.transition = win.previewing ? "none" : "opacity 0.22s ease";
     root.style.opacity = String(solid ? 1 : level);
   });
 
   // ── 창 크기 단계(BoardFit) ──────────────────────────────────
-  // 폭 360 미만 = 미니. 아니면 목록 칸이 120 이상 남으면 전체, 56 이상이면 중간, 그 밖 미니.
+  // 보드 칸 폭 360 미만 = 미니. 아니면 목록 칸이 120 이상 남으면 전체, 56 이상이면 중간, 그 밖 미니.
   // 단계마다 목록 칸을 뺀 높이는 그 단계로 그렸을 때만 잴 수 있어 잰 값을 기억한다(재기 전엔 어림값)
   const fixed: Record<"full" | "medium", number> = { full: 330, medium: 200 };
   let contentEl = $state<HTMLElement>();
@@ -46,14 +89,19 @@
   let scrollerEl = $state<HTMLElement>();
   const cardEls: Record<string, HTMLElement> = {};
 
+  // 보드 칸 크기(창이 아니라 이 칸) — ResizeObserver 가 갱신한다
+  let paneWidth = 0;
+  let paneHeight = 0;
+
   function pickTier() {
-    const w = window.innerWidth;
-    const h = window.innerHeight;
+    const w = paneWidth;
+    const h = paneHeight;
+    if (!w || !h) return;
     const t: Tier = w < 360 ? "mini" : h >= fixed.full + 120 ? "full" : h >= fixed.medium + 56 ? "medium" : "mini";
     if (t === ui.tier) return;
     ui.tier = t;
-    // 미니로 둔 채 끄면 다음에도 그 크기로 연다
-    setBoardMini(t === "mini");
+    // 미니로 둔 채 끄면 다음에도 그 크기로 연다. 터미널을 펼친 동안의 칸 크기는 창 크기가 아니라 기억하지 않는다
+    if (!expanded) setBoardMini(t === "mini");
   }
 
   function measure() {
@@ -66,9 +114,14 @@
   }
 
   $effect(() => {
-    window.addEventListener("resize", pickTier);
-    untrack(pickTier);
-    return () => window.removeEventListener("resize", pickTier);
+    if (!boardEl) return;
+    const ro = new ResizeObserver(([entry]) => {
+      paneWidth = entry.contentRect.width;
+      paneHeight = entry.contentRect.height;
+      pickTier();
+    });
+    ro.observe(boardEl);
+    return () => ro.disconnect();
   });
 
   $effect(() => {
@@ -161,9 +214,23 @@
   }
 </script>
 
-<div class="board">
+<div class="root" class:expanded class:flip={side === "left"} bind:this={rootEl}>
   {#if snap}
-    <TitleBar mini={ui.tier === "mini"} counts={snap.counts} rows={snap.groups.length} />
+    <!-- 접어도 언마운트하지 않고 숨긴다 — 셸과 출력이 그대로 남는다 -->
+    <div class="termPane" class:hidden={!expanded}>
+      {#each hub.tabs as tab (tab.id)}
+        {#if tab.id === activeTab()?.id}
+          <PaneView node={tab.root} visible={expanded} />
+        {/if}
+      {/each}
+    </div>
+    {#if expanded}
+      <Divider root={rootEl} {side} min={MIN_BOARD} max={maxBoard} onresize={resizeBoard} oncommit={commitBoard} />
+    {/if}
+  {/if}
+  <div class="board" style:width={expanded ? `${boardWidth}px` : undefined} bind:this={boardEl}>
+  {#if snap}
+    <TitleBar mini={ui.tier === "mini"} counts={snap.counts} rows={snap.groups.length} {expanded} />
     {#if ui.tier === "mini"}
       <MiniBoard {snap} />
     {:else}
@@ -238,9 +305,10 @@
         </div>
       </div>
       <!-- 터미널 열기 독 — 보드 위에 겹쳐 뜨므로 아래 배치는 그대로다 -->
-      <EdgeDock terminals={snap.terminals} />
+      <EdgeDock terminals={snap.terminals} {side} />
     {/if}
   {/if}
+  </div>
 </div>
 
 <HintLayer />
@@ -249,9 +317,34 @@
 <style>
   /* 창 바탕(Backdrop, ClaudeBoard.swift:2608-2622): 짙은 남색 그라데이션 위에 왼쪽 위에서 강조색 빛, 오른쪽 아래에서 푸른 빛.
      Tauri 창이 투명·테두리 없음이라 둥근 모서리와 바탕을 여기서 직접 그린다(뒤의 Mica 가 살짝 비치게 조금 투명) */
-  .board {
+  .root {
     position: fixed;
     inset: 0;
+    display: flex;
+    overflow: hidden;
+    border-radius: 10px;
+  }
+  .root.flip {
+    flex-direction: row-reverse;
+  }
+  /* 터미널을 펼친 창은 작업 영역 전체라 모서리를 둥글리지 않고 바탕도 비치지 않게 한다 */
+  .root.expanded {
+    border-radius: 0;
+    background: #12121c;
+  }
+  .termPane {
+    flex: 1 1 0;
+    min-width: 0;
+    height: 100%;
+  }
+  .termPane.hidden {
+    display: none;
+  }
+  .board {
+    position: relative;
+    --bd-a: 0.94;
+    flex: 1 1 0;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -259,8 +352,13 @@
     background:
       radial-gradient(circle 360px at 0 0, rgb(217 120 87 / 0.22), transparent),
       radial-gradient(circle 420px at 100% 100%, rgb(115 128 255 / 0.14), transparent),
-      linear-gradient(to bottom, rgb(31 31 48 / 0.94), rgb(18 18 28 / 0.94));
+      linear-gradient(to bottom, rgb(31 31 48 / var(--bd-a)), rgb(18 18 28 / var(--bd-a)));
     box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.08);
+  }
+  .root.expanded .board {
+    --bd-a: 1;
+    flex: none;
+    border-radius: 0;
   }
   .content {
     flex: 1;
