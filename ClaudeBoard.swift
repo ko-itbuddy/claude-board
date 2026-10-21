@@ -5038,6 +5038,7 @@ final class BoardSurface: NSObject, ObservableObject, Identifiable, TerminalSurf
     var command: String?            // 보드가 셸에 넣은 claude 명령 — nil 이면 셸 화면(claude 가 끝나 셸만 남은 화면도)
     var sessionId: String?          // 이 화면의 세션 id(새 세션의 --session-id, 이어 연 세션, tty 로 짝지은 지금 세션) — 끝난 뒤에도 남는다
     var mdRenderOff = false         // 답변 꾸미기를 끄고 띄운 claude 화면 — 이 화면의 세션 id 는 모두 끈 세션으로 기억한다
+    var held: [String: String]?     // 다시 뜰 때 셸만 띄우고 들어갈 때 이어 열 claude 화면의 남겨 둔 값(TerminalHub.resumeHeld) — 그때까지 쥔 목록에 그대로 남긴다
     @Published var title = ""
     @Published var cwd: String
     @Published var session: Session?   // 이 화면에서 도는 세션(세션 파일의 tty 로 짝짓는다) — 탭의 상태 점·제목
@@ -5456,6 +5457,7 @@ final class SplitNode {
     // 화면의 셸에 claude 명령을 넣고 그 화면을 claude 화면으로 삼는다(새 탭, 셸 프롬프트로 남은 화면에서 이어 열기, 다시 뜰 때 되살리기).
     // 세션 이름(--name)은 셸에 칠 때 붙인다 — 되살릴 때는 그때야 탭과 탭 이름이 생긴다. 쥔 탭 목록의 명령에는 남기지 않는다(되살릴 때 다시 고른다)
     func run(_ command: String, in s: BoardSurface, sessionId: String?, mdRenderOff: Bool) {
+        s.held = nil
         s.command = command
         s.sessionId = sessionId
         s.mdRenderOff = mdRenderOff
@@ -5586,8 +5588,9 @@ final class SplitNode {
         UserDefaults.standard.set(list, forKey: "terminalTabs")
     }
 
-    // 화면 값 — 셸 화면은 경로만, claude 화면은 명령·세션까지
+    // 화면 값 — 셸 화면은 경로만, claude 화면은 명령·세션까지. 들어가지 않아 아직 이어 열지 않은 화면은 남겨 둔 값 그대로
     private func entry(_ s: BoardSurface) -> [String: String] {
+        if let held = s.held { return held }
         var e = ["cwd": s.cwd]
         if let command = s.command {
             e["command"] = command
@@ -5611,7 +5614,8 @@ final class SplitNode {
                 "a": savedNode(n.children[0], focused: focused), "b": savedNode(n.children[1], focused: focused)]
     }
 
-    // 다시 뜰 때 — 지난번에 쥐고 있던 탭을 나눈 모양 그대로 되살린다. 셸 화면은 그 경로에서 셸, claude 화면은 셸에 세션 파일의 resume_cmd 를 넣어 이어 연다.
+    // 다시 뜰 때 — 지난번에 쥐고 있던 탭을 나눈 모양 그대로 되살린다. 셸 화면은 그 경로에서 셸, claude 화면도 우선 셸만 띄우고(held)
+    // 그 탭에 들어갈 때 세션 파일의 resume_cmd 를 넣어 이어 연다(사용자 결정 2026-10-21) — 마지막에 고른 탭은 되살린 뒤 바로 고르므로 바로 열린다.
     // 작업 경로는 남겨 둔 것, 없으면(3.0.x 목록) 되살릴 때 여는 경로. 지금 경로·경로마다 마지막 탭도 되살린다. 보드가 뜰 때 한 번 부른다.
     // 업데이트처럼 보드를 끄고 바로 다시 띄우면 옛 탭의 claude 가 아직 끝나는 중일 수 있다 — 같은 세션을 두 프로세스가 쥐지 않게 최대 5초 기다린다
     func restoreTabs(waited: Double = 0) {
@@ -5663,16 +5667,26 @@ final class SplitNode {
         let s: BoardSurface, dir: String
         if e["command"] != nil {
             let off = e["mdoff"] != nil || isMdRenderOff(e["session"])
-            guard let (cmd, id, d) = restoreCommand(e, off: off) else { return nil }
+            guard let (_, id, d) = restoreCommand(e, off: off) else { return nil }
             dir = d
             s = makeSurface(in: dir)
-            run(cmd, in: s, sessionId: id, mdRenderOff: off)
+            s.held = e.filter { ["cwd", "command", "mdoff", "session", "resume"].contains($0.key) }
+            s.sessionId = e["session"] ?? id   // 끝난 세션 줄을 누르면 이 화면에서 이어 연다(resumeSession)
         } else {
             dir = FileManager.default.fileExists(atPath: cwd) ? cwd : NSHomeDirectory()
             s = makeSurface(in: dir)
         }
         if e["focused"] != nil { focused = s }
         return (SplitNode(s), dir)
+    }
+
+    // 되살린 뒤 아직 들어가지 않은 화면의 claude 를 이어 연다 — 그 탭을 고를 때(select). 명령은 그때 다시 고른다:
+    // 그사이 다른 터미널에서 그 세션을 이어 열었으면 restoreCommand 가 nil 이라 셸로 둔다
+    private func resumeHeld(_ s: BoardSurface) {
+        guard let e = s.held else { return }
+        s.held = nil
+        let off = e["mdoff"] != nil || isMdRenderOff(e["session"])
+        if let (cmd, id, _) = restoreCommand(e, off: off) { run(cmd, in: s, sessionId: id, mdRenderOff: off) } else { saveTabs() }
     }
 
     // 되살릴 명령 화면의 (명령, 세션 id, 작업 경로). 대화가 남은 세션은 세션 파일의 resume_cmd(파일이 지워졌으면 남겨 둔 것),
@@ -5790,6 +5804,8 @@ final class SplitNode {
         }
         for t in all {
             let running = main[t.id] != nil || t.runsClaude
+            // 셸 프롬프트에서 사람이 친 대화형 claude 도 claude 화면으로 — 쥔 목록에 세션이 남아 다시 뜰 때 이어 연다(-p·--bg 는 빼고)
+            if t.command == nil, let s = main[t.id], mode(s) == nil { t.command = "claude" }
             // 보드가 넣은 claude 가 끝나 셸만 남았다 — 셸 화면으로(쥔 목록·상태 점). 끈 꾸미기는 끈 세션 기억에 이미 남아 있다
             if !running, t.command != nil { t.command = nil; t.mdRenderOff = false }
             let s = main[t.id] ?? (running ? t.sessionId.flatMap { id in sessions.first { $0.id == id } } : nil)
@@ -5833,6 +5849,7 @@ final class SplitNode {
         if let t = tabs.first(where: { $0.id == id }) {
             lastTab[t.workspace] = id
             if workspace != t.workspace { workspace = t.workspace }
+            if restored { t.surfaces.forEach(resumeHeld) }   // 되살리는 동안 탭마다 고르는 것은 들어간 것이 아니다
         }
         applyVisibility()
         focusSelected()
