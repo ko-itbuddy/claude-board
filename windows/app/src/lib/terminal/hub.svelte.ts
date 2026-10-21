@@ -50,7 +50,8 @@ export function controllerOf(leafId: string): TermController {
       onExit: (code) => markExited(leafId, code),
       onTitle: (title) => {
         const tab = tabOfLeaf(leafId);
-        if (tab) tab.title = title;
+        // 셸이 처음에 보내는 제목은 실행 파일 경로(C:\Program Files\...\pwsh.exe)라 보이지 않게 한다
+        if (tab) tab.title = /\.exe"?$/i.test(title.trim()) ? "" : title;
       },
     });
     controllers.set(leafId, ctl);
