@@ -4162,7 +4162,9 @@ final class PointerTracker: NSResponder, ObservableObject {
     static let shared = PointerTracker()
     @Published private(set) var inside = false
     @Published private(set) var atEdge = false
+    private(set) var inWindow = false   // 창 어디든(펼친 창의 터미널 쪽·제목 막대 띠 포함) — 투명도가 쓴다
     private weak var view: NSView?
+    private var windowArea: NSTrackingArea?
 
     private override init() { super.init() }
     required init?(coder: NSCoder) { fatalError() }
@@ -4173,9 +4175,20 @@ final class PointerTracker: NSResponder, ObservableObject {
                                          owner: self))
     }
 
-    override func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
+    // 창 전체 추적 — 보드 쪽 추적과 따로 둔다(독은 보드 쪽에 들어와야 튀어나온다)
+    func attachWindow(_ v: NSView) {
+        let a = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
+        windowArea = a
+        v.addTrackingArea(a)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        if event.trackingArea === windowArea { return setInWindow(true) }
+        mouseMoved(with: event)
+    }
 
     override func mouseExited(with event: NSEvent) {
+        if event.trackingArea === windowArea { return setInWindow(false) }
         if atEdge { atEdge = false }
         setInside(false)
         HintPanel.shared.leaveAll()
@@ -4195,12 +4208,18 @@ final class PointerTracker: NSResponder, ObservableObject {
     private func setInside(_ v: Bool) {
         guard v != inside else { return }
         inside = v
+    }
+
+    private func setInWindow(_ v: Bool) {
+        guard v != inWindow else { return }
+        inWindow = v
         WindowOpacity.shared.apply()
     }
 }
 
 // 투명 모드 — 카카오톡 PC 처럼 오른쪽 아래 슬라이더로 창 전체(글자 포함)의 투명도를 정한다.
-// 마우스를 올리거나 보드가 활성 창이 되면 불투명하게 보이고, 슬라이더를 움직이는 동안은 고른 투명도를 미리 보여 준다
+// 마우스가 창 안에 있으면 불투명하게 보이고, 슬라이더를 움직이는 동안은 고른 투명도를 미리 보여 준다.
+// 보드가 활성 창이어도 마우스가 창 밖이면 고른 투명도다(사용자 결정)
 @MainActor final class WindowOpacity: ObservableObject {
     static let shared = WindowOpacity()
     static let range: ClosedRange<Double> = 0.3...1
@@ -4212,8 +4231,8 @@ final class PointerTracker: NSResponder, ObservableObject {
 
     func apply() {
         guard let w = window else { return }
-        // 터미널을 펼친 동안에는 늘 불투명 — 화면 전체의 터미널이 비쳐 보이게 할 까닭이 없다
-        let solid = !previewing && (PointerTracker.shared.inside || w.isKeyWindow || TerminalHub.shared.expanded || SessionMenuPanel.shared.isOpen)
+        // 터미널을 펼쳐 화면 전체를 덮은 동안에는 늘 불투명 — 화면 전체의 터미널이 비쳐 보이게 할 까닭이 없다
+        let solid = !previewing && (PointerTracker.shared.inWindow || expandedToFullScreen() || SessionMenuPanel.shared.isOpen)
         let target = solid ? 1 : CGFloat(level)
         guard abs(w.alphaValue - target) > 0.001 else { return }
         NSAnimationContext.runAnimationGroup { ctx in
@@ -4251,7 +4270,7 @@ struct OpacitySlider: View {
         .foregroundStyle(.secondary)
         .opacity(hover ? 1 : 0.6)
         .onHover { h in withAnimation(.easeOut(duration: 0.15)) { hover = h } }
-        .hint("투명도: 보드에서 마우스가 벗어나 있고 다른 앱을 쓰는 동안 이 투명도로 보입니다. 마우스를 올리거나 보드를 누르면 불투명해집니다")
+        .hint("투명도: 마우스가 보드 창 밖에 있으면 보드를 쓰는 중이어도 이 투명도로 보입니다. 마우스를 올리면 불투명해집니다. 화면 전체로 펼친 창은 늘 불투명합니다")
     }
 }
 
@@ -6363,7 +6382,7 @@ func pruneMdRenderOff() {
 let terminalExpandedMinSize = NSSize(width: boardMinWidth + paneDividerWidth + terminalMinWidth, height: 300)
 
 // 펼치기: 창을 화면의 쓸 수 있는 영역 전체로. 접기: 보드만 화면 한쪽(보드 위치 — 오른쪽·왼쪽)에 끈 폭으로.
-// 펼친 동안에는 "위에 고정" 을 쓰지 않는다 — 화면 전체를 덮은 창이 늘 위에 있으면 다른 앱을 쓸 수 없다.
+// 펼쳐 화면 전체를 덮은 동안에는 "위에 고정"·투명도를 쓰지 않는다 — 화면 전체를 덮은 창이 늘 위에 있으면 다른 앱을 쓸 수 없다(expandedToFullScreen).
 // animated — 메뉴의 "펼치기·접기 애니메이션"(보드 설정 terminalAnimation, 기본 끔). 처음 크기로 붙이기·최대축소는 접은 뒤
 // 제 애니메이션을 바로 이어 돌리므로 false 로 부른다. 도는 애니메이션이 있으면 끝 상태로 마친 뒤 새 요청을 받는다
 @MainActor func setTerminalExpanded(_ on: Bool, animated: Bool = UserDefaults.standard.bool(forKey: "terminalAnimation")) {
@@ -6519,6 +6538,19 @@ let terminalExpandedMinSize = NSSize(width: boardMinWidth + paneDividerWidth + t
     if hub.expanded { showBoard() }
 }
 
+// 창이 화면의 쓸 수 있는 영역(메뉴 막대·Dock 을 뺀 곳, 펼치기와 같은 기준) 전체인가 — 2pt 오차까지 같은 것으로 본다
+@MainActor func windowFillsScreen() -> Bool {
+    guard let vf = (window.screen ?? NSScreen.main)?.visibleFrame else { return false }
+    let f = window.frame
+    return abs(f.minX - vf.minX) <= 2 && abs(f.minY - vf.minY) <= 2 && abs(f.width - vf.width) <= 2 && abs(f.height - vf.height) <= 2
+}
+
+// 터미널을 펼쳐 창이 화면 전체를 덮었나 — 그동안은 위에 고정·투명도를 쓰지 않는다. 펼치는 애니메이션 중에는 끝 크기(화면 전체)로 본다
+@MainActor func expandedToFullScreen() -> Bool {
+    let hub = TerminalHub.shared
+    return hub.expanded && (hub.slide != nil || windowFillsScreen())
+}
+
 // 창 크기 전환(터미널을 펼쳤을 때 제목 막대 더블클릭·초록 단추) — 창이 화면의 쓸 수 있는 영역(펼치기와 같은 기준)과 같으면 가로·세로
 // 60% 크기로 그 영역 가운데에, 그 밖의 크기면 그 영역 전체로. 크기는 기억하지 않는다(펼치기·다시 띄우기는 늘 화면 전체).
 // 시스템 설정 "제목 막대 더블클릭"과 상관없이 늘 이 동작이다
@@ -6526,10 +6558,8 @@ let terminalExpandedMinSize = NSSize(width: boardMinWidth + paneDividerWidth + t
     let hub = TerminalHub.shared
     hub.slide?.finish()
     guard hub.expanded, let vf = (window.screen ?? NSScreen.main)?.visibleFrame else { return }
-    let f = window.frame
-    let full = abs(f.minX - vf.minX) <= 2 && abs(f.minY - vf.minY) <= 2 && abs(f.width - vf.width) <= 2 && abs(f.height - vf.height) <= 2
     var target = vf
-    if full {
+    if windowFillsScreen() {
         // setFrame 은 최소 크기(SizeGuard)를 거치지 않으므로 직접 맞춘다
         let min = window.frameRect(forContentRect: NSRect(origin: .zero, size: window.contentMinSize)).size
         let w = max((vf.width * 0.6).rounded(), min.width), h = max((vf.height * 0.6).rounded(), min.height)
@@ -8191,9 +8221,11 @@ func transcriptPath(_ given: String?, _ cwd: String, _ id: String) -> String {
     }
 }
 
-// 터미널을 펼친 동안에는 고정하지 않는다 — 화면 전체를 덮은 창이 늘 위에 있으면 다른 앱을 쓸 수 없다. 접으면 다시 고정
+// 터미널을 펼쳐 창이 화면 전체를 덮은 동안에는 고정하지 않는다 — 화면 전체를 덮은 창이 늘 위에 있으면 다른 앱을 쓸 수 없다.
+// 펼친 채 창 크기 전환(60%)·손으로 줄인 창과 접은 창은 고정
 @MainActor func applyPin(_ pinned: Bool) {
-    window.level = pinned && !TerminalHub.shared.expanded ? .floating : .normal
+    let level: NSWindow.Level = pinned && !expandedToFullScreen() ? .floating : .normal
+    if window.level != level { window.level = level }   // 창 크기가 바뀔 때마다 불린다
 }
 
 @MainActor func setPinned(_ pinned: Bool) {
@@ -8251,6 +8283,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         TerminalHub.shared.area = root.terminal
         TerminalHub.shared.store = store
         PointerTracker.shared.attach(blur)
+        PointerTracker.shared.attachWindow(root)
         _ = mdRenderDir   // 답변 꾸미기 플러그인을 ~/.claude/notifier 로 옮겨 둔다 — 되살릴 탭이 쓴다
         pruneMdRenderOff()
         DispatchQueue.main.async { TerminalHub.shared.restoreTabs() }   // 지난번에 쥐고 있던 탭을 되살린다
@@ -8265,10 +8298,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         nc.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { _ in
             AmbientTicker.shared.running = window.occlusionState.contains(.visible)
             MainActor.assumeIsolated { TerminalHub.shared.applyVisibility() }
-        }
-        // 투명 모드: 보드가 활성 창이 되면 불투명, 다른 앱으로 넘어가면 고른 투명도
-        for n in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
-            nc.addObserver(forName: n, object: window, queue: .main) { _ in MainActor.assumeIsolated { WindowOpacity.shared.apply() } }
         }
         // 미니 화면 크기보다 창을 더 줄이지 못하게 한다 — 그보다 크면 창 크기에 따라 전체·중간·미니로 그린다
         // 터미널을 펼쳤으면 터미널 최소 폭과 보드 최소 폭이 들어가는 크기까지
@@ -8324,9 +8353,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         BoardFit.shared.update()   // 창을 띄우기 전에 단계를 정한다 — 미니로 열 때 전체 화면이 한 번 비치지 않게
         // 미니에서 돌아갈 위치는 접힌 보드의 위치만 기억한다
         if BoardFit.shared.tier != .mini, !TerminalHub.shared.expanded { saveRestoreFrame() }
-        // 실행 크기를 정한 뒤부터 창 크기를 따라 단계를 고른다
+        // 실행 크기를 정한 뒤부터 창 크기를 따라 단계를 고른다.
+        // 펼친 창이 화면 전체가 되거나 벗어나면(창 크기 전환·초록 단추·손으로 바꿈·시스템 타일 배치) 위에 고정·투명도도 다시 맞춘다 —
+        // 펼치기·접기 애니메이션 중에는 끝난 뒤 settleTerminalPane 이 맞춘다
         nc.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: .main) { _ in
-            MainActor.assumeIsolated { BoardFit.shared.update() }
+            MainActor.assumeIsolated {
+                BoardFit.shared.update()
+                if TerminalHub.shared.slide == nil {
+                    applyPin(UserDefaults.standard.bool(forKey: "pinned"))
+                    WindowOpacity.shared.apply()
+                }
+            }
         }
         nc.addObserver(forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main) { _ in
             MainActor.assumeIsolated { if BoardFit.shared.tier != .mini, !TerminalHub.shared.expanded { saveRestoreFrame() } }
