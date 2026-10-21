@@ -6765,48 +6765,92 @@ struct TabBarEnd: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
+struct TabBarNewWidth: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
 struct TerminalTabBar: View {
     @ObservedObject var hub: TerminalHub
     @State private var newHover = false
+    @State private var newWidth: CGFloat = 0   // "새 세션" 단추 폭(앞 여백 포함) — 탭 칸에 줄 폭을 셀 때
 
     var body: some View {
-        HStack(spacing: 2) {
-            // 지금 경로의 탭만
-            ForEach(Array(hub.tabs(in: hub.workspace).enumerated()), id: \.element.id) { i, t in
-                // ⌘ 를 누르고 있으면 탭 줄 순서의 ⌘번호(⌘1~⌘9, 열 번째 탭부터는 없음)
-                TerminalTabButton(tab: t, selected: t.id == hub.selected, background: hub.background,
-                                  shortcut: hub.commandHeld && i < 9 ? i + 1 : nil, commandHeld: hub.commandHeld)
-            }
-            // 새 세션 — 글자 대신 + 와 단축키(⌘T), 이름은 마우스를 올리면
-            Button { hub.newSessionSheet() } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "plus").font(.system(size: 10, weight: .bold))
-                    Text("⌘T").boardFont(11, weight: .medium).opacity(0.75)
+        GeometryReader { g in
+            // 지금 경로의 탭만. 탭 칸은 탭이 모두 들어가면 탭마다 가장 좁게~넓게(120~250) 나눠 갖고, 가장 좁게 해도 넘치면 가로로 밀어 본다
+            // (넘친 HStack 은 가운데 맞춤이라 맨 앞의 가장 오래된 탭이 왼쪽 밖으로 잘렸다). 새 세션 단추는 칸 밖이라 늘 보인다
+            let tabs = hub.tabs(in: hub.workspace)
+            let n = CGFloat(tabs.count)
+            let shown = max(0, min(g.size.width - 16 - newWidth, n * (TerminalTabButton.maxWidth + 2) - 2))
+            let least = max(0, n * (TerminalTabButton.minWidth + 2) - 2)
+            HStack(spacing: 0) {
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 2) {
+                            ForEach(Array(tabs.enumerated()), id: \.element.id) { i, t in
+                                // ⌘ 를 누르고 있으면 탭 줄 순서의 ⌘번호(⌘1~⌘9, 열 번째 탭부터는 없음)
+                                TerminalTabButton(tab: t, selected: t.id == hub.selected, background: hub.background,
+                                                  shortcut: hub.commandHeld && i < 9 ? i + 1 : nil, commandHeld: hub.commandHeld)
+                                    .id(t.id)
+                            }
+                        }
+                        .frame(width: max(shown, least))
+                        .frame(maxHeight: .infinity)
+                    }
+                    .frame(width: shown)
+                    // 고른 탭(⌘ 번호·탭 이동 키·새 탭 포함)이 칸 밖이면 보이게 민다. 칸 폭이 바뀔 때도 — 다시 뜰 때는 탭이 그려지기 전에
+                    // 고른 탭이 정해져 그때 민 것이 헛돈다(시험 빌드 실측). 창·보드 칸 크기를 바꿀 때도 고른 탭을 놓치지 않게
+                    .onAppear { scrollToSelected(proxy) }
+                    .onChange(of: hub.selected) { scrollToSelected(proxy, animated: true) }
+                    .onChange(of: shown) { scrollToSelected(proxy) }
                 }
-                .boardFont(12, weight: .semibold)
-                .foregroundStyle(.primary.opacity(newHover ? 1 : 0.8))
-                .padding(.horizontal, 11)
-                .frame(height: 26)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(newHover ? 0.08 : 0)))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.white.opacity(0.22), style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
-                .contentShape(Rectangle())
+                newSessionButton
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.plain)
-            .clickable($newHover)
-            .hint("새 세션")
-            .padding(.leading, 6)
-            // 탭 줄의 빈 곳이 어디부터인지 — 그 오른쪽 더블클릭은 창 크기 전환(isWindowSizeDoubleClick)
-            .background(GeometryReader { g in Color.clear.preference(key: TabBarEnd.self, value: g.frame(in: .named("tabBar")).maxX) })
-            Spacer(minLength: 0)
+            .padding(.horizontal, 8)
+            .frame(width: g.size.width, height: g.size.height)
         }
-        .padding(.horizontal, 8)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .coordinateSpace(name: "tabBar")
         .onPreferenceChange(TabBarEnd.self) { hub.tabBarEnd = $0 }
+        .onPreferenceChange(TabBarNewWidth.self) { newWidth = $0 }
         .background(Color(nsColor: terminalBarColor))
         .overlay(alignment: .bottom) { Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1) }
         .preferredColorScheme(.dark)
         .boardFont(13)   // 글자 크기를 따로 정하지 않은 글자(단추 제목 등)도 보드 글자 비율을 따른다
+    }
+
+    // 탭이 막 붙었거나 칸 폭이 막 바뀐 때는 그 배치가 끝난 뒤에 민다
+    private func scrollToSelected(_ proxy: ScrollViewProxy, animated: Bool = false) {
+        guard let id = hub.selected else { return }
+        DispatchQueue.main.async {
+            if animated { withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id) } } else { proxy.scrollTo(id) }
+        }
+    }
+
+    private var newSessionButton: some View {
+        // 새 세션 — 글자 대신 + 와 단축키(⌘T), 이름은 마우스를 올리면
+        Button { hub.newSessionSheet() } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "plus").font(.system(size: 10, weight: .bold))
+                Text("⌘T").boardFont(11, weight: .medium).opacity(0.75)
+            }
+            .boardFont(12, weight: .semibold)
+            .foregroundStyle(.primary.opacity(newHover ? 1 : 0.8))
+            .padding(.horizontal, 11)
+            .frame(height: 26)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(newHover ? 0.08 : 0)))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.white.opacity(0.22), style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .clickable($newHover)
+        .hint("새 세션")
+        .padding(.leading, 6)
+        // 탭 줄의 빈 곳이 어디부터인지 — 그 오른쪽 더블클릭은 창 크기 전환(isWindowSizeDoubleClick)
+        .background(GeometryReader { g in
+            Color.clear.preference(key: TabBarEnd.self, value: g.frame(in: .named("tabBar")).maxX)
+                .preference(key: TabBarNewWidth.self, value: g.size.width)
+        })
     }
 }
 
@@ -6867,6 +6911,7 @@ struct WorkspaceButton: View {
 }
 
 struct TerminalTabButton: View {
+    static let minWidth: CGFloat = 120, maxWidth: CGFloat = 250   // 탭 폭 — 탭 줄이 넘칠지 셀 때도 쓴다
     @ObservedObject var tab: BoardTab
     let selected: Bool
     let background: NSColor
@@ -6915,7 +6960,7 @@ struct TerminalTabButton: View {
             }
         }
         .padding(.leading, 14).padding(.trailing, 8)
-        .frame(minWidth: 120, maxWidth: 250, maxHeight: .infinity)
+        .frame(minWidth: Self.minWidth, maxWidth: Self.maxWidth, maxHeight: .infinity)
         .background(selected ? Color(nsColor: background) : Color.white.opacity(hover ? 0.04 : 0))
         .overlay(alignment: .top) { Rectangle().fill(selected ? Palette.color("working") : .clear).frame(height: 2) }
         .foregroundStyle(selected ? .primary : .secondary)
