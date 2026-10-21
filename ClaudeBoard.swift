@@ -198,12 +198,23 @@ final class ClaudeNames {
     private func path(_ pid: Int32) -> String { (dir as NSString).appendingPathComponent("\(pid).json") }
 
     // 1초마다 읽는 카드 라벨·탭 줄 — 파일이 바뀔 때만 다시 푼다
-    func name(_ pid: Int32) -> String? {
+    private func record(_ pid: Int32) -> [String: Any]? {
         guard pid > 0, let m = mtime(path(pid)) else { cache[pid] = nil; return nil }
         if cache[pid]?.mtime != m {
             cache[pid] = (m, FileManager.default.contents(atPath: path(pid)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
         }
-        return (cache[pid]?.j?["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        return cache[pid]?.j
+    }
+
+    func name(_ pid: Int32) -> String? {
+        (record(pid)?["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    // status 와 그것이 바뀐 시각(statusUpdatedAt, ms) — 그 파일의 sessionId 가 이 세션일 때만(/clear 하면 같은 pid 가 새 id 를 쓴다)
+    func statusChange(_ pid: Int32, session: String) -> (status: String, at: Date)? {
+        guard let j = record(pid), j["sessionId"] as? String == session, let status = j["status"] as? String,
+              let ms = (j["statusUpdatedAt"] as? NSNumber)?.doubleValue else { return nil }
+        return (status, Date(timeIntervalSince1970: ms / 1000))
     }
 
     // 지금 status — 이름 바꾸기를 치기 직전에 보므로 캐시 없이 읽는다. 파일·값이 없으면 nil
@@ -1202,14 +1213,21 @@ final class Store: ObservableObject {
                 try? fm.removeItem(atPath: path)
                 continue
             }
-            // Esc 로 끊긴 세션은 입력을 기다리는 중이다 — 그 뒤에도 도는 서브에이전트·셸이 있으면 아래에서 다시 작업 중이 된다
+            // Esc 로 끊긴 세션은 입력을 기다리는 중이다 — 그 뒤에도 도는 서브에이전트·셸이 있으면 아래에서 다시 작업 중이 된다.
+            // 첫 응답이 오기 전에 끊으면 대화 기록에 중단 표시가 남지 않으므로 Claude Code 의 status 가 이번 상태 뒤에 idle 이 된 것도 본다
+            let pid = (j["pid"] as? NSNumber)?.int32Value ?? 0
             var since = Date(timeIntervalSince1970: j["since"] as? Double ?? 0)
-            if state == "working" || state == "waiting", let at = interrupts.read(transcript) {
+            let live = ClaudeNames.shared.statusChange(pid, session: sid).flatMap { $0.at > since ? $0 : nil }
+            if state == "working" || state == "waiting",
+               let at = interrupts.read(transcript) ?? (live?.status == "idle" ? live?.at : nil) {
                 state = "idle"
                 since = at
+            } else if state == "waiting", let live, live.status == "busy" {
+                // 승인한 도구가 도는 동안은 hook 이 없다(PostToolUse 까지) — 승인 창이 닫혀 Claude Code 가 다시 busy 면 작업 중이다
+                state = "working"
+                since = live.at
             }
             // 응답은 끝났어도 서브에이전트나 백그라운드 셸이 돌고 있으면 작업 중으로 보인다
-            let pid = (j["pid"] as? NSNumber)?.int32Value ?? 0
             let subDir = ((transcript.hasSuffix(".jsonl") ? String(transcript.dropLast(6)) : transcript) as NSString)
                 .appendingPathComponent("subagents")
             let subs = Sub.parse(j["subagents"] as? [String: Any], alive: state != "ended", now: now).map { sub -> Sub in

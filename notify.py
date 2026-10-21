@@ -78,6 +78,24 @@ def interrupted_at(transcript):
     return None
 
 
+def claude_status(pid, sid, since):
+    """Claude Code 의 status(idle·busy·waiting)가 since 뒤에 바뀌었으면 (status, 바뀐 시각 epoch 초), 아니면 (None, None).
+    hook 이 오지 않는 때를 메운다 — 첫 응답 전에 Esc 로 끊으면 대화 기록에 중단 표시가 남지 않고(idle), 승인한 도구가 도는 동안은
+    PostToolUse 까지 hook 이 없다(busy). Claude Code 가 ~/.claude/sessions/<pid>.json 에 쓰는 값을 그 파일의 sessionId 가
+    이 세션일 때만 본다. 보드(ClaudeNames.statusChange)와 같은 규칙."""
+    try:
+        with open(os.path.expanduser(f"~/.claude/sessions/{int(pid)}.json")) as f:
+            j = json.load(f)
+    except (OSError, TypeError, ValueError):
+        return None, None
+    if not isinstance(j, dict) or j.get("sessionId") != sid:
+        return None, None
+    at = j.get("statusUpdatedAt")
+    if not isinstance(at, (int, float)) or at / 1000 <= (since or 0):
+        return None, None
+    return j.get("status"), at / 1000
+
+
 def plain(text):
     """마크다운 기호를 덜어내고 한 문단으로 줄인다."""
     text = re.sub(r"```.*?```", " ", text, flags=re.S)
@@ -114,10 +132,14 @@ def session_summary(current_id, current_state):
                 continue
             except PermissionError:
                 pass
-        # Esc 로 끊긴 다른 세션은 입력을 기다리는 중이다
-        if rec.get("session_id") != current_id and state in ("working", "waiting") \
-                and interrupted_at(rec.get("transcript_path")) is not None:
-            state = "idle"
+        # Esc 로 끊긴 다른 세션은 입력을 기다리는 중이다(첫 응답 전에 끊었으면 Claude Code 의 status 로 안다).
+        # 승인한 도구가 도는 세션은 승인 대기로 남으므로 Claude Code 가 다시 busy 면 작업 중이다
+        if rec.get("session_id") != current_id and state in ("working", "waiting"):
+            status, _ = claude_status(rec.get("pid"), rec.get("session_id"), rec.get("since"))
+            if interrupted_at(rec.get("transcript_path")) is not None or status == "idle":
+                state = "idle"
+            elif state == "waiting" and status == "busy":
+                state = "working"
         if state in counts:
             counts[state] += 1
     if not seen and current_id:

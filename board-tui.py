@@ -155,6 +155,24 @@ def interrupted_at(transcript):
     return None
 
 
+def claude_status(pid, sid, since):
+    """Claude Code 의 status(idle·busy·waiting)가 since 뒤에 바뀌었으면 (status, 바뀐 시각 epoch 초), 아니면 (None, None).
+    hook 이 오지 않는 때를 메운다 — 첫 응답 전에 Esc 로 끊으면 대화 기록에 중단 표시가 남지 않고(idle), 승인한 도구가 도는 동안은
+    PostToolUse 까지 hook 이 없다(busy). Claude Code 가 ~/.claude/sessions/<pid>.json 에 쓰는 값을 그 파일의 sessionId 가
+    이 세션일 때만 본다. 보드(ClaudeNames.statusChange)와 같은 규칙."""
+    try:
+        with open(os.path.expanduser(f"~/.claude/sessions/{int(pid)}.json")) as f:
+            j = json.load(f)
+    except (OSError, TypeError, ValueError):
+        return None, None
+    if not isinstance(j, dict) or j.get("sessionId") != sid:
+        return None, None
+    at = j.get("statusUpdatedAt")
+    if not isinstance(at, (int, float)) or at / 1000 <= (since or 0):
+        return None, None
+    return j.get("status"), at / 1000
+
+
 def load():
     now = time.time()
     sessions = []
@@ -172,11 +190,17 @@ def load():
             continue
         if s.get("state") != "ended" and not alive(s.get("pid")):
             s["state"] = "ended"
-        # Esc 로 끊긴 세션은 입력을 기다리는 중이다 — 대기 시간은 끊은 때부터 센다
+        # Esc 로 끊긴 세션은 입력을 기다리는 중이다 — 대기 시간은 끊은 때부터 센다(첫 응답 전에 끊었으면 Claude Code 의 status 로 안다).
+        # 승인한 도구가 도는 동안은 승인 대기로 남으므로 Claude Code 가 다시 busy 면 작업 중이다
         if s.get("state") in ("working", "waiting"):
             at = interrupted_at(s.get("transcript_path"))
+            status, changed = claude_status(s.get("pid"), s.get("session_id"), s.get("since"))
+            if at is None and status == "idle":
+                at = changed
             if at is not None:
                 s.update(state="idle", since=at)
+            elif s.get("state") == "waiting" and status == "busy":
+                s.update(state="working", since=changed)
         if s.get("state") == "ended" and now - s.get("updated", 0) > 1800:
             try:
                 os.remove(os.path.join(SESSIONS, name))
