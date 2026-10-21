@@ -39,6 +39,8 @@ export class TermController {
   /** xterm 이 그려질 상자. 칸을 옮길 때는 이 요소를 통째로 옮긴다 */
   readonly host: HTMLDivElement;
   termId: TermId | null = null;
+  /** 마지막으로 출력 조각이 도착한 시각(ms). 한 번도 없으면 0 — 새 세션 명령을 칠 때를 가늠한다 */
+  lastOutputAt = 0;
 
   private term: Terminal | null = null;
   private fitAddon: FitAddon | null = null;
@@ -256,6 +258,7 @@ export class TermController {
       this.safeWrite("", () => this.hooks.onExit(frame.code));
       return;
     }
+    this.lastOutputAt = Date.now();
     // 이미 받은 앞부분이 겹쳐 오면 자른다
     const skip = Math.max(0, this.expectedSeq - frame.seq);
     if (skip >= frame.bytes.length) return;

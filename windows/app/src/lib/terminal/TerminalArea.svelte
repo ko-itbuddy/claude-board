@@ -4,6 +4,7 @@
   import { onTerminalFocus } from "$lib/backend";
   import { ui } from "$lib/board/store.svelte";
   import type { BoardSide } from "$lib/types";
+  import NewSessionDialog from "./NewSessionDialog.svelte";
   import PaneView from "./PaneView.svelte";
   import PathRow from "./PathRow.svelte";
   import TabBar from "./TabBar.svelte";
@@ -35,7 +36,7 @@
   $effect(() => {
     if (!expanded) return;
     const handle = (e: KeyboardEvent) => {
-      if (hub.confirm) return;
+      if (hub.confirm || hub.sheet) return;
       const run = (fn: () => void) => {
         e.preventDefault();
         e.stopPropagation();
@@ -95,6 +96,10 @@
       <TerminalEmpty />
     {/if}
   </div>
+
+  {#if hub.sheet}
+    <NewSessionDialog />
+  {/if}
 
   {#if hub.confirm}
     {@const sheet = hub.confirm}

@@ -586,3 +586,8 @@ export function attachTerm(id: TermId, fromSeq: number, emit: (message: unknown)
   if (!term) throw new Error(`터미널 ${id} 없음`);
   return term.attach(fromSeq, emit);
 }
+
+// 브라우저 개발 화면의 "다른 폴더 고르기…" — 대화상자가 없어 고정된 폴더를 돌려준다
+export function mockPickFolder(): string {
+  return `${HOME}\\picked-folder`;
+}

@@ -4,6 +4,7 @@
   import { cubicOut } from "svelte/easing";
   import { fade, fly, slide } from "svelte/transition";
   import type { BoardSettings, Group } from "$lib/types";
+  import { DEFAULT_SESSION_COMMAND, startSession } from "$lib/terminal/launch";
   import { hideGroup, removeEnded, toggleEndedOpen, toggleKindCollapsed, togglePinGroup } from "$lib/backend";
   import HeaderButton from "./HeaderButton.svelte";
   import Icon from "./Icon.svelte";
@@ -95,6 +96,11 @@
         <div class="path"><bdi>{g.path}</bdi></div>
       {/if}
     </div>
+    <HeaderButton
+      icon="plus"
+      help={`이 경로에서 새 세션 (${DEFAULT_SESSION_COMMAND})`}
+      onclick={() => startSession(DEFAULT_SESSION_COMMAND, g.id)}
+    />
     <HeaderButton
       icon={pinned ? "star-fill" : "star"}
       tint={pinned ? "255 199 71" : null}

@@ -3,7 +3,7 @@
 // 탭 줄은 지금 경로의 탭만 보인다. 셸이 끝나면 그 탭이 닫히고 선택은 같은 경로의 이웃 탭 → 이웃 경로 → 빈 상태로 간다.
 // 터미널 출력은 보드의 1초 상태 묶음에 싣지 않고, 여기서 term_list 와 채널로 채운다(이벤트 기반).
 import { tick } from "svelte";
-import { inTauri, termKill, termList, termSpawn, termWrite } from "$lib/backend";
+import { inTauri, setTerminalExpanded, termKill, termList, termSpawn, termWrite } from "$lib/backend";
 import { board } from "$lib/board/store.svelte";
 import { mockTabs } from "$lib/mock";
 import type { LeafPhase, PaneNode, Session, State, TermId, TermInfo, TerminalTab } from "$lib/types";
@@ -34,6 +34,8 @@ export const hub = $state({
   /** 수정키(Ctrl+Alt)를 누르고 있는 동안 true — 탭의 번호 배지와 이름 바꾸기 안내를 보인다 */
   commandHeld: false,
   confirm: null as Confirm | null,
+  /** 새 세션 창이 떠 있는가 */
+  sheet: false,
   leaves: {} as Record<string, LeafState>,
 });
 
@@ -316,9 +318,24 @@ export function openShell(dir: string | null = null, opts: { command?: string; s
   return hub.tabs.find((t) => t.id === tab.id);
 }
 
-/** 새 세션 — 새 세션 창이 오기 전에는 홈 폴더 셸 탭을 연다 */
+/** 새 세션 창 — 터미널이 접혀 있으면 펼치고 연다. 이미 떠 있으면 겹쳐 띄우지 않는다(Ctrl+T 를 또 누름) */
 export function newSessionSheet() {
-  openShell(null);
+  if (hub.sheet) return;
+  if (!expanded()) setTerminalExpanded(true);
+  hub.sheet = true;
+}
+
+/** 셸이 첫 출력을 낸 뒤 300ms 조용해지면(5초 상한) 명령을 쳐 넣고 100ms 뒤 Enter — 셸의 줄 편집이 시작된 뒤에 넣는다(ClaudeBoard.swift:5088-5096) */
+const QUIET_MS = 300;
+const QUIET_CAP_MS = 5000;
+async function typeCommand(ctl: TermController, termId: TermId, command: string) {
+  const startedAt = Date.now();
+  const quiet = () => ctl.lastOutputAt > 0 && Date.now() - ctl.lastOutputAt >= QUIET_MS;
+  while (!quiet() && Date.now() - startedAt < QUIET_CAP_MS) await new Promise((r) => setTimeout(r, 50));
+  if (!hub.terms[termId]) return; // 기다리는 사이 탭이 닫혔다
+  termWrite(termId, command);
+  await new Promise((r) => setTimeout(r, 100));
+  if (hub.terms[termId]) termWrite(termId, "");
 }
 
 /** 칸의 셸을 띄우거나(없으면 새로, 있으면 이어서) 붙는다. 칸이 처음 보일 때 부른다 */
