@@ -560,11 +560,16 @@ mod tests {
         bump(&t, 2);
         let r = st.reload(&mut s, &Probe::default(), &|_| true, false, LIVE_NOW + 1.0);
         assert_eq!(session_of(&r.groups, "w").state, "idle");
-        // 수정 시각이 같으면 파일을 다시 읽지 않는다 — 내용을 지워도 같은 값을 돌려준다
-        let mtime = fs::metadata(&t).unwrap().modified().unwrap();
-        fs::write(&t, "").unwrap();
+        // 수정 시각과 크기가 같으면 파일을 다시 읽지 않는다 — 같은 길이의 다른 내용으로 바꿔도 같은 값을 돌려준다
+        let md = fs::metadata(&t).unwrap();
+        let mtime = md.modified().unwrap();
+        fs::write(&t, " ".repeat(md.len() as usize)).unwrap();
         fs::File::options().append(true).open(&t).unwrap().set_modified(mtime).unwrap();
         assert_eq!(st.interrupts.read(&t), Some(STAMP_S));
+        // 수정 시각이 그대로여도 크기가 달라지면 다시 읽는다(Windows 는 같은 틱 안의 쓰기가 같은 시각으로 보인다)
+        fs::write(&t, "").unwrap();
+        fs::File::options().append(true).open(&t).unwrap().set_modified(mtime).unwrap();
+        assert_eq!(st.interrupts.read(&t), None);
         // 목록에서 사라진 세션의 캐시는 버린다
         assert_eq!((st.interrupts.len(), st.names.len()), (1, 1));
         fs::remove_file(f.sessions.join("w.json")).unwrap();

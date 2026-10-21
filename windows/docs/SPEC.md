@@ -265,7 +265,7 @@ Claude Code 는 사용자가 Esc 로 응답을 끊으면 `Stop` hook 을 부르�
 - `transcript = transcript_path` 또는 `~/.claude/projects/<cwd 의 영숫자 밖 문자를 - 로>/<sid>.jsonl`. ended 이고 (`updated` 가 2일 넘었거나 transcript 파일이 없으면) 세션 파일을 지우고 뺀다.
 - Claude Code 실시간 상태 덮기(§3.9): 위 종료 판정과 prune 뒤, 아래 셸·서브에이전트로 working 을 올리는 단계와 paused 판정 앞에서 적용한다(`Store.reload` 의 순서).
   기록 상태가 working·waiting 일 때만 `live_state` 를 부르고, 덮이면 `state` 와 `since` 가 바뀐다. 세션 id 는 파일 이름으로 대신해도 된다.
-  중단 시각은 위 `transcript` 경로의 파일 끝에서 읽고, 파일 수정 시각이 같으면 이전 결과를 쓴다(`InterruptReader` 대응). Claude Code 의 `sessions\<pid>.json`(§2.3)도 pid 별로 수정 시각이 같으면 다시 읽지 않는다(`ClaudeNames` 대응). 두 캐시는 목록에서 사라진 항목을 버린다.
+  중단 시각은 위 `transcript` 경로의 파일 끝에서 읽고, 파일 수정 시각과 크기가 같으면 이전 결과를 쓴다(`InterruptReader` 대응). Claude Code 의 `sessions\<pid>.json`(§2.3)도 pid 별로 수정 시각과 크기가 같으면 다시 읽지 않는다(`ClaudeNames` 대응). 두 캐시는 목록에서 사라진 항목을 버린다.
   덮은 결과가 idle 이어도 아래 셸·서브에이전트 규칙은 그대로 적용되므로, 끊은 뒤에도 서브에이전트가 돌고 있으면 working 으로 보인다. paused 는 덮은 결과보다 우선한다.
 - 서브에이전트: ended 가 아니면 `subagents` 를 풀되 끝난 지 10초 넘은 것은 뺀다. 정렬: done 이 아닌 것 먼저, started 순. 각 `subagents/agent-<id>.jsonl` 에서 모델·effort(§5.2).
 - 백그라운드 셸 수: idle 일 때만, 그 Claude 프로세스의 자식 가운데 명령줄에 `shell-snapshots` 가 든 프로세스 수(3초마다 백그라운드에서 셈). idle 인데 셸이 있거나 끝나지 않은 서브에이전트가 있으면 `working` 으로 보인다.
@@ -495,9 +495,9 @@ Windows CI 러너에서 실기로 확인: `#[cfg(windows)]` 시험(콘솔 제목
 | B9 | 창·트레이·단축키·단일 실행·자동 실행 | 4226-5204 | src-tauri `main` | macOS 실행(트레이), smoke 화면 확인(창·단일 실행) |
 | U1 | 보드 화면 전체(단계 3개) | 1247-4460 | app/src | macOS 실행 스크린샷 |
 | U2 | 캐릭터 8종·말풍선 | 2643-3388 | app/src/lib/mascot | 스크린샷 |
-| U3 | 세션 이름 라벨 | ClaudeBoard.swift:ClaudeNames | src-tauri `readers`·`store`, app/src `SessionRow.svelte` | 단위 테스트(이름 읽기·ended 숨김), macOS 실행 스크린샷 |
+| U3 | 세션 이름 라벨 | ClaudeBoard.swift:ClaudeNames | src-tauri `readers`·`store`, app/src `SessionRow.svelte` | 단위 테스트(이름 읽기·ended 숨김), macOS 실행 스크린샷, Windows 보드 화면(합성 세션 파일: 이름 라벨, 24자 넘는 이름 줄임) |
 | T1 | TUI | board-tui.py | crates/hook `tui` | macOS 실행 |
-| L1 | Esc 중단·Claude Code status 로 상태 덮기(알림 요약·TUI·보드) | notify.py·board-tui.py:interrupted_at·claude_status, ClaudeBoard.swift:InterruptReader·ClaudeNames, Store.reload | crates/core `claude_live`, `notify`, hook `tui`, src-tauri `store`·`readers` | 단위 테스트(가짜 대화 기록·가짜 claude 폴더), 실기 미확인 |
+| L1 | Esc 중단·Claude Code status 로 상태 덮기(알림 요약·TUI·보드) | notify.py·board-tui.py:interrupted_at·claude_status, ClaudeBoard.swift:InterruptReader·ClaudeNames, Store.reload | crates/core `claude_live`, `notify`, hook `tui`, src-tauri `store`·`readers` | 단위 테스트(가짜 대화 기록·가짜 claude 폴더), 합성 세션 파일로 보드 화면 확인(실제 세션 미확인) |
 | R1 | CI·자동 릴리스(Latest 금지) | release.sh | .github/workflows/windows.yml | 브랜치 push 후 CI |
 | D1 | 문서 | README.md, packaging/README.txt | windows/*.md, 최상위 README·CLAUDE.md | 검토 |
 
@@ -527,8 +527,8 @@ REA 를 쓴 곳: `import-reference-source`(원본 소스 목록), `capture-proce
 | R1 | 확인 | Windows CI build·release(dry run) 통과(실행 38903798305) — 자산 §8.1 과 같고, 만들 명령에 `--latest=false --target <커밋>`. main 병합 뒤 실행 38923609837 이 build·smoke·release 를 통과해 `windows-v2.12` 를 게시했다 — 자산 6개, zip SHA256 일치, Latest 는 macOS `v2.12` 그대로 |
 | D1 | 확인 | 문서 작성·검토 |
 
-2.13 추가분(H6·L1·U3)은 규칙을 단위 시험으로 검증하는 대상이고 Windows 실기 확인을 거치지 않았다.
+2.13 추가분(H6·L1·U3)은 단위 시험과, Windows 11 에서 NSIS 로 빌드한 `ClaudeBoard.exe` 를 합성 세션 파일(`CLAUDE_BOARD_HOME` 격리 홈)로 띄운 화면 확인을 거쳤다. 실제 Claude Code 세션으로는 확인하지 않았다.
 
 | ID | 상태 | 근거 |
 |---|---|---|
-| H6·L1·U3 | 실기 미확인 | 단위 시험 대상: 인자 중복 제거·새 요청의 since·중단 시각 파싱(CRLF·BOM·256,000 경계·tool_result·sidechain)·status 변화·상태 덮기 진리표·알림 요약(다른 세션만 덮음)·TUI 읽기·보드 읽기(중단→대기, 승인 뒤 working, 서브에이전트가 돌면 working, paused 우선, ended 면 이름 숨김). **untested:** 실제 Claude Code 세션에서 hook 이 기록하는 `pid`(`proc::find_claude`)가 `~\.claude\sessions\<pid>.json` 의 pid 와 같은지, Esc 로 끊은 실제 세션에서의 동작 |
+| H6·L1·U3 | 부분 확인 | 합성 세션 파일로 보드 화면 확인(Esc 로 끊긴 기록 → 대기와 끊은 때부터의 경과 시간, 승인 대기 + status busy → 작업 중, 24자 넘는 이름 줄임, 같은 `project_dir` 한 카드). 단위 시험 대상: 인자 중복 제거·새 요청의 since·중단 시각 파싱(CRLF·BOM·256,000 경계·tool_result·sidechain)·status 변화·상태 덮기 진리표·알림 요약(다른 세션만 덮음)·TUI 읽기·보드 읽기(중단→대기, 승인 뒤 working, 서브에이전트가 돌면 working, paused 우선, ended 면 이름 숨김). **untested:** 실제 Claude Code 세션에서 hook 이 기록하는 `pid`(`proc::find_claude`)가 `~\.claude\sessions\<pid>.json` 의 pid 와 같은지, Esc 로 끊은 실제 세션에서의 동작 |
