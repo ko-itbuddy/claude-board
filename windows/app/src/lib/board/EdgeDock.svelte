@@ -72,8 +72,8 @@
   {:else}
     <!-- 숨어 있을 때의 탭 — 보드에 마우스가 들어오면 밝아지며 끝까지 튀어나온다. 열고 닫기는 창 전체 추적이 맡는다 -->
     <div class="tab" class:lit={pointer.inside} transition:fly={{ x: 16 * out, duration: 220 }}>
-      <Icon name={side === "right" ? "chevron-left" : "chevron-right"} size={8} />
-      <Icon name="terminal" size={11} />
+      <Icon name={side === "right" ? "chevron-left" : "chevron-right"} size={11.5} />
+      <Icon name="terminal" size={14.5} />
     </div>
   {/if}
 </div>
@@ -160,13 +160,13 @@
     position: absolute;
     right: 0;
     bottom: 0;
-    width: 16px;
+    width: 17px;
     height: 58px;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: 3.75px;
     color: rgb(255 255 255 / 0.6);
     background: rgb(var(--accent) / 0.25);
     border-radius: 8px 0 0 8px;

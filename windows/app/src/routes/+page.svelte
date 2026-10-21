@@ -285,7 +285,7 @@
                     onclick={() => below.first && scrollToCard(below.first, true)}
                     use:hint={"눌러서 아래 카드로 이동"}
                   >
-                    <Icon name="chevron-down" size={10} />
+                    <Icon name="chevron-down" size={13} />
                     {below.waiting ? `아래에 경로 ${below.n}개 더 · 승인 대기 있음` : `아래에 경로 ${below.n}개 더`}
                   </button>
                 </div>
@@ -353,8 +353,12 @@
     flex-direction: column;
     overflow: hidden;
     border-radius: 10px;
+    /* 위 두 겹은 macOS 창 바탕 뒤로 비치는 블러(바탕화면)가 더하는 밝기를 같은 색으로 흉내 낸 것 — 실측한 합성색에 맞춘다 */
     background:
+      linear-gradient(to right, rgb(235 235 255 / 0.006), rgb(235 235 255 / 0.03) 50px, rgb(235 235 255 / 0.056) 110px),
+      radial-gradient(circle 460px at 0 0, rgb(217 120 87 / 0.05), transparent),
       radial-gradient(circle 360px at 0 0, rgb(217 120 87 / 0.22), transparent),
+      radial-gradient(circle 420px at 100% 100%, rgb(115 128 255 / 0.04), transparent),
       radial-gradient(circle 420px at 100% 100%, rgb(115 128 255 / 0.14), transparent),
       linear-gradient(to bottom, rgb(31 31 48 / var(--bd-a)), rgb(18 18 28 / var(--bd-a)));
     box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.08);
@@ -435,6 +439,7 @@
     position: relative;
     flex: 1;
     min-height: 0;
+    margin-top: -1px;
   }
   /* 스크롤 막대는 오른쪽 여백 안에 두어 막대가 생겨도 카드 폭이 변하지 않게 한다 */
   .scroller {
@@ -448,8 +453,8 @@
   .cards {
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    padding: 1px 0 12px;
+    gap: 11px;
+    padding: 0 0 12px;
   }
   .below {
     position: absolute;
@@ -468,7 +473,7 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    padding: 5px 10px;
+    padding: 5px 11px;
     border-radius: 999px;
     font-size: 11px;
     font-weight: 600;
@@ -493,6 +498,6 @@
     display: flex;
     justify-content: flex-end;
     margin-top: -8px;
-    padding-bottom: 6px;
+    padding: 0 1.5px 6px 0;
   }
 </style>

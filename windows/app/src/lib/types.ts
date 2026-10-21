@@ -51,6 +51,16 @@ export interface Session {
   muted: boolean;
   limitAt: number | null;
   canDrive: boolean;    // 콘솔에 키를 넣을 수 있는 세션(일시중지 가능)
+  // 세션이 어디서 도는지(위치 칩) — 프런트엔드 전용 선택 필드. 백엔드는 아직 보내지 않고 이후 단계(세션·탭 짝짓기)가 채운다.
+  // 없으면 칩을 그리지 않는다. macOS PlaceChip(ClaudeBoard.swift) 대응:
+  //   tab = 보드 탭(CB), terminal = 다른 터미널(appName), background = 터미널 없이(mode: -p·--bg), ended = 끝난 세션
+  place?: SessionPlace;
+}
+
+export interface SessionPlace {
+  kind: "tab" | "terminal" | "background" | "ended";
+  appName?: string;     // kind=terminal 일 때 앱 이름
+  mode?: string;        // -p · --bg — 대화형이면 없음
 }
 
 export interface Group {
