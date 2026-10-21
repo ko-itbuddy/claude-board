@@ -78,9 +78,10 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
   창 크기에 따라 `BoardTier`(full·medium·mini)로 그린다. `$TMPDIR/claude-board.lock` 을 `flock` 해 한 번만 뜨고, 두 번째 실행은 `claude-board.show` 분산 알림만 보내고 끝난다.
   `--action pause|resume|stop|reopen|focus <세션 id>` 는 떠 있는 보드에 `claude-board.action` 분산 알림으로 넘긴다(메뉴와 같은 함수).
   `// MARK: - 내장 터미널` — 창 내용은 `BoardRootView`([터미널 영역 │ `PaneDivider` │ 보드]). `TerminalHub` 가 탭(`BoardTab`)을 쥐고,
-  claude 는 셸 없이 `/usr/bin/env <명령>` 으로 띄운다(새 세션은 `--session-id`, 모든 길에 탭 이름을 `--name` 으로 붙이고 ⇧⌘R 은 `/rename` — `named`·`applyRenames`). `pair` 가 세션 파일의 `tty` = 탭 tty(headless 는 pid 조상이 탭)로 짝짓고
+  탭(화면)마다 그 폴더의 로그인 셸을 띄우고, claude 명령은 셸의 줄 편집이 시작되면 그 셸에 붙여넣기 + Return 으로 넣는다(`BoardSurface.type`, claude 가 끝나면 셸 프롬프트로 남고 셸을 exit 하면 탭을 닫음.
+  새 세션은 `--session-id`, 모든 길에 탭 이름을 `--name` 으로 붙이고 ⇧⌘R 은 `/rename` — `named`·`applyRenames`). `pair` 가 세션 파일의 `tty` = 탭 tty(headless 는 pid 조상이 탭)로 짝짓고
   `place` 가 보드 탭·다른 터미널·백그라운드·끝남을 가른다 — 세션 파일 약속은 그대로. 쥔 탭 목록은 UserDefaults `terminalTabs` 에 바뀔 때마다 남기고 다시 뜰 때 `restoreTabs` 가 resume_cmd 로 이어 연다.
-  `BoardTerminalView`(한글 조합 중 Return·Esc 고침 — 엔진을 올리면 다시 시험), `LoginEnvironment`(시작할 때 사용자 셸을 `-i -l` 로 띄워 읽은 환경을 탭 claude 에 넘김),
+  `BoardTerminalView`(한글 조합 중 Return·Esc 고침 — 엔진을 올리면 다시 시험),
   `confirmShutdown`(업데이트·종료 전 확인, 끊기는 탭의 주 세션에 `.paused`), `driveSession`(보드 탭은 탭에 직접, Ghostty 는 AppleScript),
   `mdRenderDir`·`mdRenderCommand`(md-render 를 `~/.claude/notifier/plugins/` 로 옮기고 `--plugin-dir` 을 한 번만 붙임, 끈 세션은 `mdRenderOff`). 보드 쪽 문제는 `~/.claude/notifier/board.log`.
   설계·결정·실측은 `docs/내장 터미널/설계.md`(11장 단계별 메모) — 이 기능을 바꿀 때 먼저 본다.

@@ -352,7 +352,7 @@ footer.site a:hover { color: var(--fg) }
     <h2>터미널 창을 뒤지는 시간을 없앱니다</h2>
     <p class="lead">Claude Code 를 여러 개 돌리면 어느 창이 끝났는지, 어느 세션이 권한 승인을 기다리며 멈춰 있는지 알기 어렵습니다. Claude Board 는 모든 세션의 상태를 실시간으로 모아 보여 주고, 끝나거나 멈추는 순간 알려 줍니다.</p>
     <div class="grid g3">
-      <div class="card"><div class="ic">◎</div><h3>모든 세션을 한 보드에</h3><p>작업 경로별로 세션을 묶어 작업 중, 승인 대기, 대기, 종료 상태를 색과 움직임으로 보여 줍니다. 서브에이전트와 백그라운드 작업까지 함께 보입니다.</p><a class="more" href="#guide-board">보드 읽는 법 →</a></div>
+      <div class="card"><div class="ic">◎</div><h3>모든 세션을 한 보드에</h3><p>프로젝트 폴더별로 세션을 묶어 작업 중, 승인 대기, 대기, 종료 상태를 색과 움직임으로 보여 줍니다. 서브에이전트와 백그라운드 작업까지 함께 보입니다.</p><a class="more" href="#guide-board">보드 읽는 법 →</a></div>
       <div class="card"><div class="ic">◉</div><h3>놓치지 않는 알림</h3><p>응답이 끝나거나 승인이 필요하면 화면에 알림 패널이 뜹니다. 키보드 입력을 빼앗지 않아 쓰던 프롬프트를 그대로 이어 쓸 수 있습니다.</p><a class="more" href="#guide-notify">알림 패널 →</a></div>
       <div class="card"><div class="ic">▤</div><h3>보드 안 터미널</h3><p>보드 창 옆의 터미널 탭에서 세션을 새로 띄우고, 끝난 대화를 한 번에 이어 엽니다. 보드를 껐다 켜도 탭이 되살아납니다.</p><a class="more" href="#terminal">자세히 →</a></div>
       <div class="card"><div class="ic">⇅</div><h3>사용 한도와 계정 전환</h3><p>5시간·주간 한도를 보드에서 바로 확인하고, 저장한 계정으로 한 번에 바꿉니다. 한도가 차면 다른 계정으로 자동 전환할 수도 있습니다.</p><a class="more" href="#guide-account">계정 전환 →</a></div>
@@ -407,7 +407,7 @@ footer.site a:hover { color: var(--fg) }
   <div class="page-head"><div class="wrap"><p class="eyebrow">기능</p><h1>세션 관리에 필요한 모든 것</h1><p>Claude Board 의 주요 기능을 모았습니다. 각 기능의 자세한 사용법은 사용 설명서에 있습니다.</p></div></div>
   <div class="block"><div class="wrap">
     <div class="grid g2">
-      <div class="card"><h3>경로별 세션 보드</h3><p>작업 경로마다 카드 하나로 세션을 묶습니다. 위쪽 상태 칩을 누르면 그 상태의 세션만 보이고, 30분 넘게 조용한 카드는 저절로 접힙니다. 접힌 카드에서도 도는 링과 지금 하는 일로 진행 상황이 보입니다.</p></div>
+      <div class="card"><h3>프로젝트별 세션 보드</h3><p>프로젝트 폴더(claude 를 띄운 폴더)마다 카드 하나로 세션을 묶습니다. Claude 가 하위 폴더로 cd 하거나 워크트리에 들어가도 세션은 같은 카드에 남습니다. 위쪽 상태 칩을 누르면 그 상태의 세션만 보이고, 30분 넘게 조용한 카드는 저절로 접힙니다. 접힌 카드에서도 도는 링과 지금 하는 일로 진행 상황이 보입니다.</p></div>
       <div class="card"><h3>서브에이전트와 백그라운드 작업</h3><p>세션이 띄운 서브에이전트는 부모 세션 아래에 이름과 지금 쓰는 도구까지 보입니다. 터미널 없이 도는 <code>claude -p</code> 세션은 "백그라운드" 구역에 따로 모입니다.</p></div>
       <div class="card"><h3>모델·effort·컨텍스트 표시</h3><p>세션 줄마다 모델 계열 색(Opus 주황, Sonnet 파랑, Haiku 민트, Fable 보라)과 effort 다섯 칸 막대, 컨텍스트 사용량이 붙습니다.</p></div>
       <div class="card"><h3>세션 칩</h3><p>세션이 어디서 도는지 칩으로 구분합니다. <span class="chip cb">CB</span> 는 보드 탭, <span class="chip app">Ghostty</span> 같은 앱 이름은 다른 터미널, <span class="chip bgc">$ claude -p</span> 는 백그라운드입니다.</p></div>
@@ -447,7 +447,7 @@ footer.site a:hover { color: var(--fg) }
           </ul>
         </div>
       </div>
-      <div class="note"><b>탭과 화면 나누기</b><br>탭마다 상태 점, 탭 이름(처음에는 경로의 폴더 이름), 지금 하는 일이 보입니다. 탭은 작업 경로마다 따로 봅니다. 탭 줄 위 경로 줄에 탭이 있는 경로가 상태 점·폴더 이름·탭 수로 늘어서고, 탭 줄에는 지금 경로의 탭만 보입니다. 경로를 누르거나 <kbd>⌃</kbd><kbd>⌥</kbd><kbd>↑</kbd><kbd>↓</kbd> 로 옮기면 그 경로에서 마지막에 고른 탭으로 가고, 보드에서 세션을 누르거나 카드 머리를 눌러도 그 경로로 바뀝니다. <kbd>⌘</kbd><kbd>1</kbd>~<kbd>⌘</kbd><kbd>9</kbd> 로 탭 줄 순서대로 바로 고르고 <kbd>⌃</kbd><kbd>⌥</kbd><kbd>←</kbd><kbd>→</kbd> 로 왼쪽·오른쪽 탭으로 가며(Ghostty 의 <kbd>⇧</kbd><kbd>⌘</kbd><kbd>[</kbd><kbd>]</kbd> 도 같습니다), <kbd>⌘</kbd> 를 잠깐 누르고 있으면 탭마다 그 번호가 보입니다. <kbd>⇧</kbd><kbd>⌘</kbd><kbd>R</kbd> 로 고른 탭의 이름을 탭 안에서 바로 바꾸고(비우면 폴더 이름), 바꾼 이름은 다시 켜도 남습니다. 탭 안의 화면은 Ghostty 와 같은 키로 나눕니다. <kbd>⌘</kbd><kbd>D</kbd> 는 오른쪽, <kbd>⇧</kbd><kbd>⌘</kbd><kbd>D</kbd> 는 아래로 나눠 같은 폴더의 셸을 열고, <kbd>⌘</kbd><kbd>[</kbd><kbd>]</kbd> 와 <kbd>⌥</kbd><kbd>⌘</kbd> 방향키로 화면을 고르며, 경계를 끌거나 <kbd>⌃</kbd><kbd>⌘</kbd> 방향키로 크기를 바꿉니다. <kbd>⇧</kbd><kbd>⌘</kbd><kbd>↩</kbd> 는 고른 화면 하나만 크게 봅니다. 나눈 모양은 다시 켜도 남습니다. 탭에 마우스를 올리면 나오는 × 로 탭을, <kbd>⌘</kbd><kbd>W</kbd> 로 고른 화면을 닫고, 프로그램이 돌고 있으면 먼저 묻습니다. 글꼴과 색은 Ghostty 설정을 따르고, 한글 조합 중 Return·Esc 도 한 번에 듣습니다. 한글 입력 상태에서도 <kbd>⌘</kbd><kbd>W</kbd>·<kbd>⌘</kbd><kbd>C</kbd>·<kbd>⌘</kbd><kbd>V</kbd> 같은 단축키가 영문 상태와 같이 듣습니다.</div>
+      <div class="note"><b>탭과 화면 나누기</b><br>탭마다 상태 점, 탭 이름(처음에는 경로의 폴더 이름), 지금 하는 일이 보입니다. 탭은 작업 경로마다 따로 봅니다. 탭 줄 위 경로 줄에 탭이 있는 경로가 상태 점·폴더 이름·탭 수로 늘어서고, 탭 줄에는 지금 경로의 탭만 보입니다. 경로를 누르거나 <kbd>⌃</kbd><kbd>⌥</kbd><kbd>↑</kbd><kbd>↓</kbd> 로 옮기면 그 경로에서 마지막에 고른 탭으로 가고, 보드에서 세션을 누르거나 카드 머리를 눌러도 그 경로로 바뀝니다. <kbd>⌘</kbd><kbd>1</kbd>~<kbd>⌘</kbd><kbd>9</kbd> 로 탭 줄 순서대로 바로 고르고 <kbd>⌃</kbd><kbd>⌥</kbd><kbd>←</kbd><kbd>→</kbd> 로 왼쪽·오른쪽 탭으로 가며(Ghostty 의 <kbd>⇧</kbd><kbd>⌘</kbd><kbd>[</kbd><kbd>]</kbd> 도 같습니다), <kbd>⌘</kbd> 를 잠깐 누르고 있으면 탭마다 그 번호가 보입니다. <kbd>⇧</kbd><kbd>⌘</kbd><kbd>R</kbd> 로 고른 탭의 이름을 탭 안에서 바로 바꾸고(비우면 폴더 이름), 바꾼 이름은 다시 켜도 남습니다. 탭에서 띄운 claude 는 탭 이름을 세션 이름으로 쓰고(같은 이름이 있으면 -2, -3), 탭 이름을 바꾸면 세션 이름도 함께 바뀝니다. 탭 안의 화면은 Ghostty 와 같은 키로 나눕니다. <kbd>⌘</kbd><kbd>D</kbd> 는 오른쪽, <kbd>⇧</kbd><kbd>⌘</kbd><kbd>D</kbd> 는 아래로 나눠 같은 폴더의 셸을 열고, <kbd>⌘</kbd><kbd>[</kbd><kbd>]</kbd> 와 <kbd>⌥</kbd><kbd>⌘</kbd> 방향키로 화면을 고르며, 경계를 끌거나 <kbd>⌃</kbd><kbd>⌘</kbd> 방향키로 크기를 바꿉니다. <kbd>⇧</kbd><kbd>⌘</kbd><kbd>↩</kbd> 는 고른 화면 하나만 크게 봅니다. 나눈 모양은 다시 켜도 남습니다. 탭에 마우스를 올리면 나오는 × 로 탭을, <kbd>⌘</kbd><kbd>W</kbd> 로 고른 화면을 닫고, 프로그램이 돌고 있으면 먼저 묻습니다. 글꼴과 색은 Ghostty 설정을 따르고, 한글 조합 중 Return·Esc 도 한 번에 듣습니다. 한글 입력 상태에서도 <kbd>⌘</kbd><kbd>W</kbd>·<kbd>⌘</kbd><kbd>C</kbd>·<kbd>⌘</kbd><kbd>V</kbd> 같은 단축키가 영문 상태와 같이 듣습니다.</div>
     </div>
 
     <div class="demo">
@@ -627,10 +627,11 @@ footer.site a:hover { color: var(--fg) }
   <div class="block topic" id="guide-board"><div class="wrap narrow">
     <h2>보드 읽기</h2>
     <div class="prose">
-      <p>보드는 작업 경로별 카드로 세션을 묶어 보여 줍니다. 카드 안에서는 보드 탭과 다른 터미널의 세션이 "터미널" 구역에, 터미널 없이 도는 세션이 "백그라운드" 구역에 모입니다.</p>
+      <p>보드는 프로젝트 폴더(claude 를 띄운 폴더)별 카드로 세션을 묶어 보여 줍니다. Claude 가 하위 폴더로 cd 하거나 워크트리에 들어가도 같은 카드에 남습니다. 카드 안에서는 보드 탭과 다른 터미널의 세션이 "터미널" 구역에, 터미널 없이 도는 세션이 "백그라운드" 구역에 모입니다.</p>
       <ul>
         <li><b>위쪽 상태 칩</b>: 승인 대기, 작업 중, 대기 세션 수입니다. 누르면 그 상태의 세션만 보이고, 다시 누르면 모두 보입니다.</li>
-        <li><b>세션 줄</b>: 상태 아이콘, 첫 요청(제목), 경과 시간, 세션 칩, 모델과 effort, 컨텍스트 사용량이 보입니다. 승인 대기면 무엇을 승인해야 하는지도 나옵니다.</li>
+        <li><b>세션 줄</b>: 상태 아이콘, 첫 요청(제목), 경과 시간, 세션 칩, 모델과 effort, 컨텍스트 사용량, 세션 이름이 보입니다. 승인 대기면 무엇을 승인해야 하는지도 나옵니다.</li>
+        <li><b>세션 이름</b>: Claude Code 의 세션 이름(세션끼리 메시지를 보낼 때 부르는 이름)입니다. 보드 탭 세션은 탭 이름과 같고, 다른 터미널 세션은 Claude Code 가 붙인 이름(예: claude-board-81) 그대로입니다. 보드 칸이 좁으면 먼저 빠집니다.</li>
         <li><b>모델 라벨</b>: 색은 모델 계열(Opus 주황, Sonnet 파랑, Haiku 민트, Fable 보라), 뒤의 다섯 칸 막대는 effort 단계입니다. 마우스를 올리면 정확한 모델 ID 가 보입니다.</li>
         <li><b>서브에이전트</b>: 세션이 띄운 하위 작업은 부모 세션 아래에 이름, 모델, 지금 쓰는 도구와 함께 보입니다.</li>
         <li><b>카드 접기</b>: 승인 대기나 작업 중 세션이 없고 30분 넘게 조용한 카드는 저절로 접힙니다. 접힌 카드에서도 작업 중이면 도는 링, 승인 대기면 퍼지는 파문과 지금 하는 일이 보입니다.</li>
