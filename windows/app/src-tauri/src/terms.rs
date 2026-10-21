@@ -2,9 +2,7 @@
 //!
 //! 터미널마다 스레드 셋이 돈다. 리더는 출력 파이프를 늘 비워 [`Stream`] 고리에 쓰고(웹뷰를 기다리지 않는다),
 //! 웨이터는 프로세스가 끝나면 종료 코드를 남기고 가짜 콘솔을 닫는다. 웹뷰로 보내는 배처는 `term_attach` 마다 [`Stream`] 이 띄운다.
-//! 명령 등록(`generate_handler!`)과 `TermHub` 상태 등록(`manage`)은 창·연결을 맡은 쪽이 한다.
-// 명령이 아직 등록되지 않아 쓰는 곳이 없다 — 등록되면 이 줄을 지운다
-#![allow(dead_code)]
+//! 명령 등록(`generate_handler!`)과 `TermHub` 상태 등록(`manage`)은 `board.rs` 가 한다.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};

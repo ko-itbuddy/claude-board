@@ -346,7 +346,7 @@ macOS 키체인 대신:
 ### 5.10 창·트레이·단축키
 
 - 보드 창: 장식 없음(직접 그린 제목 막대: 끌기 영역, 오른쪽에 최소화·닫기, 왼쪽에 "처음 크기로 보드 쪽에 붙이기" 단추, 오른쪽에 최대축소/⤢ 단추, 터미널 펼치기/접기 단추), 투명 배경 + Windows 11 Mica/아크릴(`window-vibrancy`, 실패 무시), 크기 조절 가능, 최소 300×144.
-  실행할 때: 미니로 끄지 않았으면 폭 `boardPaneWidth`(기본 454), 그 모니터 작업 영역 높이 전체, 마지막 가로 위치. `terminalExpanded` 가 true 면 펼친 채 연다(아래). 닫기 = 숨기기(앱은 트레이에 남음).
+  실행할 때: 미니로 끄지 않았으면 `terminalExpanded` 가 true 일 때 펼친 채(작업 영역 전체), false 일 때 접은 채 보드 쪽(`boardSide`)에 폭 `boardPaneWidth`(기본 454)·그 모니터 작업 영역 높이 전체로 붙여 연다(마지막 가로 위치는 쓰지 않는다. 모니터는 저장한 창 위치로 고르고 없으면 주 모니터). 미니로 껐으면 그 크기·위치 그대로. 닫기 = 숨기기(앱은 트레이에 남음).
 - 항상 위(pinned, 기본 켜짐) = `set_always_on_top`.
 - 투명도: 슬라이더 값(30~100%)을 보드가 활성이 아니고 마우스가 창 밖일 때 문서 전체 불투명도로 적용, 마우스가 들어오거나 활성이면 100%, 슬라이더를 움직이는 동안과 놓은 뒤 1.2초는 미리보기. 터미널이 펼쳐진 동안은 적용하지 않는다(불투명도 1).
 - 전역 단축키 Ctrl+Alt+B = 터미널을 접고 처음 크기로 보드 쪽(`boardSide`, 기본 오른쪽)에 붙이고 앞으로(포커스는 가져가지 않음). 등록 실패는 `board.log` 에만.
@@ -355,7 +355,7 @@ macOS 키체인 대신:
 - 터미널 펼침/접힘(`terminalExpanded`): 창 안은 `[터미널 │ 경계 │ 보드]`(`boardSide` 가 `"left"` 면 보드가 왼쪽) 세 칸이다. 크기는 모두 물리 px = 논리 px × 그 모니터 배율이다.
   - 펼침: 프레임 = 그 모니터 작업 영역 전체(`m.work`), `set_always_on_top(false)`, 최소 크기 논리 848×300(= 보드 360 + 경계 8 + 터미널 480). 보드 칸 폭 = `clamp(boardPaneWidth, 360, innerWidth − 8 − 480)`.
     펼친 동안 창은 자유 크기(끌기·크기 조절 가능)이고 `save_frame_if_settled` 는 프레임을 저장하지 않는다.
-  - 접힘: 보드 쪽 가장자리에서 `boardPaneWidth` × 배율 폭, 작업 영역 전체 높이, `always_on_top` = `pinned`, 최소 300×144. 접을 때는 늘 `boardPaneWidth` 로 보드 쪽에 붙인다 — `launch_frame`·`snap_frame` 이 고정 폭(`LAUNCH_WIDTH`)과 오른쪽 가장자리 대신 `boardPaneWidth`·`boardSide` 를 쓴다.
+  - 접힘: 보드 쪽 가장자리에서 `boardPaneWidth` × 배율 폭, 작업 영역 전체 높이, `always_on_top` = `pinned`, 최소 300×144. 접을 때와 접힌 채 시작할 때는 늘 `boardPaneWidth` 로 보드 쪽에 붙인다(마지막 가로 위치는 없다). `launch_frame` 과 접힌 창 프레임이 고정 폭(`LAUNCH_WIDTH`)과 오른쪽 가장자리 대신 `boardPaneWidth`·`boardSide` 를 쓴다. `snap_right` 명령은 이름을 그대로 두고 `boardSide` 쪽에 붙인다(펼쳐 있으면 접는다).
   - 경계를 끌다 놓으면 `set_board_width(width)` 가 `boardPaneWidth`(논리 px)를 저장한다.
   - 접을 때 터미널은 언마운트하지 않고 숨긴다. 출력은 숨겨진 동안에도 백엔드 링 버퍼에 쌓이고 다시 펼치면 이어서 받는다(§5.12).
   - 미니: `enter_mini` 는 먼저 접고 `miniFromExpanded` 를 기록한다. 미니 프레임은 보드 쪽 모서리 기준이다. `leave_mini` 는 그 표지가 있으면 다시 펼친다.

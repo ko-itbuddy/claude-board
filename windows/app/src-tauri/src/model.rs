@@ -283,6 +283,9 @@ pub struct SettingsView {
     pub opacity: f64,
     pub auto_switch: bool,
     pub board_mini: bool,
+    pub terminal_expanded: bool,
+    pub board_side: String,
+    pub board_pane_width: f64,
     pub notify_position: String,
 }
 
