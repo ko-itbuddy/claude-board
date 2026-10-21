@@ -399,7 +399,7 @@ interface TermInfo {
 | `term_write` | `id, data: string` | xterm `onData`. ConPTY 입력 파이프에 UTF-8 로 통째로 쓴다 |
 | `term_write_bin` | `id, data: number[]` | xterm `onBinary`. 같은 방식 |
 | `term_resize` | `id, cols, rows` | cols < 2, rows < 1, 같은 크기면 무시한다 |
-| `term_kill` | `id` | 별도 스레드에서 `ClosePseudoConsole`. 6초 안에 안 끝나면 프로세스를 강제 종료한다 |
+| `term_kill` | `id` | 별도 스레드에서 `ClosePseudoConsole`. 6초 안에 안 끝나면 프로세스를 강제 종료한다. 프로세스가 끝나면 터미널은 `term_list` 에서 빠지고 그 출력 보내기 스레드도 끝난다. 끝났지만 죽이지 않은 터미널은 보던 웹뷰가 닫힐 때까지 남는다 |
 
 #### 5.12.2 채널 프레임
 

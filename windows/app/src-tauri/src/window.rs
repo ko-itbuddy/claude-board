@@ -195,9 +195,23 @@ pub fn frame(win: &WebviewWindow) -> Option<Frame> {
     Some(Frame { x: p.x as f64, y: p.y as f64, w: s.width as f64, h: s.height as f64 })
 }
 
+/// 두 배율이 다르면 창을 옮길 때 tao 가 방금 준 크기를 새 배율로 다시 곱한다.
+pub fn rescales(from: f64, to: f64) -> bool {
+    (from - to).abs() > 1e-6
+}
+
+/// 위치를 먼저, 크기를 그다음에 준다. 배율이 다른 모니터로 옮기면 tao 가 옮기면서 크기를 다시 곱하므로
+/// 옮긴 뒤에 크기를 한 번 더 준다.
 pub fn set_frame(win: &WebviewWindow, f: Frame) {
-    let _ = win.set_size(PhysicalSize::new(f.w.round().max(1.0) as u32, f.h.round().max(1.0) as u32));
+    let mons = monitors(win.app_handle());
+    let before = monitor_of(win).map(|m| m.scale);
+    let after = monitor_at(&mons, f).map(|m| m.scale);
+    let size = PhysicalSize::new(f.w.round().max(1.0) as u32, f.h.round().max(1.0) as u32);
     let _ = win.set_position(PhysicalPosition::new(f.x.round() as i32, f.y.round() as i32));
+    let _ = win.set_size(size);
+    if matches!((before, after), (Some(b), Some(a)) if rescales(b, a)) {
+        let _ = win.set_size(size);
+    }
 }
 
 /// 최소 크기를 먼저 맞추고(새 프레임이 옛 최소 크기에 막히지 않게) 항상 위와 프레임을 바꾼다.
@@ -381,6 +395,16 @@ mod tests {
         assert_eq!(side_frame(mini, &main, Side::Left, 454.0), fr(0.0, 20.0, 300.0, 144.0));
         let mini_left = fr(0.0, 20.0, 300.0, 144.0);
         assert_eq!(side_frame(mini_left, &main, Side::Right, 454.0), fr(1620.0, 20.0, 300.0, 144.0));
+    }
+
+    #[test]
+    fn size_is_set_again_only_when_the_scale_changes() {
+        assert!(rescales(1.0, 1.5));
+        assert!(!rescales(1.5, 1.5));
+        let (a, b) = two();
+        assert!(rescales(a.scale, b.scale));
+        // 도크 프레임이 있는 모니터의 배율은 monitor_at 이 고른다
+        assert_eq!(monitor_at(&[a, b], dock_frame(&b, Side::Right, 454.0)).map(|m| m.scale), Some(1.5));
     }
 
     #[test]

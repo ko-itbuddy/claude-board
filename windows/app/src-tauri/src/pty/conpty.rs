@@ -10,8 +10,10 @@ use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr::{null, null_mut};
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
+#[cfg(test)]
+use std::sync::Arc;
 
 use claude_board_core::quote;
 use windows_sys::core::HRESULT;
@@ -97,7 +99,8 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 pub struct ConPty {
     api: &'static ConptyApi,
     hpc: HPCON,
-    console_open: AtomicBool,
+    /// 가짜 콘솔이 열려 있나. 크기 바꾸기와 닫기가 같은 뮤텍스를 쥐고 부르므로 닫힌(해제된) 핸들에 resize 가 닿지 않는다
+    console_open: Mutex<bool>,
     /// 입력 파이프 쓰기 끝(0 = 닫힘). 쓰기를 한 줄로 세우려고 뮤텍스에 둔다
     input: Mutex<isize>,
     /// 출력 파이프 읽기 끝(0 = 닫힘). 읽기 스레드만 읽고 닫는다
@@ -137,7 +140,7 @@ impl ConPty {
         let mut pty = ConPty {
             api,
             hpc,
-            console_open: AtomicBool::new(true),
+            console_open: Mutex::new(true),
             input: Mutex::new(in_write.into_raw()),
             output: AtomicIsize::new(out_read.into_raw()),
             process: Mutex::new(0),
@@ -199,16 +202,23 @@ impl ConPty {
         Ok(())
     }
 
+    /// 가짜 콘솔이 이미 닫혔으면 아무 일도 하지 않고 Ok 를 돌려준다(닫힌 핸들은 해제된 메모리다).
     pub fn resize(&self, cols: u16, rows: u16) -> io::Result<()> {
-        // SAFETY: 열려 있는 가짜 콘솔. 닫힌 뒤에는 콘솔 호스트가 오류를 돌려준다
+        let open = lock(&self.console_open);
+        if !*open {
+            return Ok(());
+        }
+        // SAFETY: 뮤텍스를 쥔 동안은 close_console 이 핸들을 해제하지 못한다
         hresult(unsafe { (self.api.resize)(self.hpc, coord(cols, rows)) })
     }
 
     /// 가짜 콘솔을 닫는다(한 번만). 붙어 있던 프로세스에는 콘솔이 닫혔다고 알려진다. 오래 걸릴 수 있어
     /// 출력을 읽는 스레드가 따로 살아 있는 동안 별도 스레드에서 부른다.
     pub fn close_console(&self) {
-        if self.console_open.swap(false, Ordering::AcqRel) {
-            // SAFETY: swap 으로 한 번만 닫는다
+        let mut open = lock(&self.console_open);
+        if *open {
+            *open = false;
+            // SAFETY: 뮤텍스 아래서 한 번만 닫고, 이후 resize 는 닫힘을 보고 돌아간다
             unsafe { (self.api.close)(self.hpc) };
         }
     }
@@ -363,4 +373,78 @@ pub fn windows_build() -> Option<u32> {
         let chars = (bytes as usize / 2).min(buf.len());
         String::from_utf16_lossy(&buf[..chars]).trim_end_matches('\0').trim().parse().ok()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    static CLOSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    static CLOSES: AtomicUsize = AtomicUsize::new(0);
+    static USED_AFTER_CLOSE: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "system" fn fake_create(_: COORD, _: HANDLE, _: HANDLE, _: u32, _: *mut HPCON) -> HRESULT {
+        0
+    }
+
+    unsafe extern "system" fn fake_resize(_: HPCON, _: COORD) -> HRESULT {
+        // 닫힌 뒤에 불리면 해제된 메모리를 만진 것
+        if CLOSED.load(Ordering::SeqCst) {
+            USED_AFTER_CLOSE.fetch_add(1, Ordering::SeqCst);
+        }
+        std::thread::yield_now();
+        if CLOSED.load(Ordering::SeqCst) {
+            USED_AFTER_CLOSE.fetch_add(1, Ordering::SeqCst);
+        }
+        0
+    }
+
+    unsafe extern "system" fn fake_close(_: HPCON) {
+        CLOSES.fetch_add(1, Ordering::SeqCst);
+        CLOSED.store(true, Ordering::SeqCst);
+    }
+
+    static FAKE: ConptyApi = ConptyApi { create: fake_create, resize: fake_resize, close: fake_close };
+
+    fn bare() -> ConPty {
+        ConPty {
+            api: &FAKE,
+            hpc: 1,
+            console_open: Mutex::new(true),
+            input: Mutex::new(0),
+            output: AtomicIsize::new(0),
+            process: Mutex::new(0),
+            pid: 0,
+        }
+    }
+
+    /// resize 여럿이 close_console 과 겹쳐도 닫힌 뒤에 resize 가 핸들을 쓰지 않고, 닫기는 한 번이다.
+    #[test]
+    fn resize_never_touches_the_console_after_close() {
+        for _ in 0..300 {
+            CLOSED.store(false, Ordering::SeqCst);
+            CLOSES.store(0, Ordering::SeqCst);
+            USED_AFTER_CLOSE.store(0, Ordering::SeqCst);
+            let pty = Arc::new(bare());
+            let mut hs = Vec::new();
+            for i in 0..3 {
+                let p = Arc::clone(&pty);
+                hs.push(std::thread::spawn(move || {
+                    for k in 0..50 {
+                        assert!(p.resize(80 + k + i, 24).is_ok());
+                    }
+                }));
+            }
+            let (a, b) = (Arc::clone(&pty), Arc::clone(&pty));
+            hs.push(std::thread::spawn(move || a.close_console()));
+            hs.push(std::thread::spawn(move || b.close_console()));
+            for h in hs {
+                h.join().unwrap();
+            }
+            assert_eq!(USED_AFTER_CLOSE.load(Ordering::SeqCst), 0);
+            assert_eq!(CLOSES.load(Ordering::SeqCst), 1);
+            assert!(pty.resize(100, 30).is_ok());
+        }
+    }
 }

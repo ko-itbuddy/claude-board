@@ -5,7 +5,7 @@
 //! 명령 등록(`generate_handler!`)과 `TermHub` 상태 등록(`manage`)은 `board.rs` 가 한다.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -54,9 +54,16 @@ struct Term {
     size: Mutex<(u16, u16)>,
     pty: Arc<Pty>,
     stream: Arc<Stream>,
+    /// `term_kill` 이 불렸다 - 끝난 뒤 목록에서 치워도 된다.
+    kill_requested: AtomicBool,
 }
 
 impl Term {
+    /// 끝났고 더 둘 이유가 없다: 죽이라고 했거나, 보던 웹뷰가 없어졌다.
+    fn removable(&self) -> bool {
+        self.stream.exit_code().is_some() && (self.kill_requested.load(Ordering::SeqCst) || self.stream.viewer_lost())
+    }
+
     fn info(&self) -> TermInfo {
         let (cols, rows) = *lock(&self.size);
         let exit_code = self.stream.exit_code();
@@ -84,11 +91,22 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 /// 터미널 목록. 만든 순서를 지키고 `TermId`("t1", "t2", …)는 프로세스 수명 동안 겹치지 않는다.
 #[derive(Default)]
 pub struct TermHub {
-    terms: Mutex<Vec<Arc<Term>>>,
+    terms: Arc<Mutex<Vec<Arc<Term>>>>,
     next_id: AtomicU64,
 }
 
 impl TermHub {
+    /// 치울 수 있는 터미널을 목록에서 빼고 보내기 스레드를 끝낸다. 몇 번 불러도 같다.
+    fn reap(terms: &Mutex<Vec<Arc<Term>>>) {
+        lock(terms).retain(|t| {
+            let dead = t.removable();
+            if dead {
+                t.stream.close();
+            }
+            !dead
+        });
+    }
+
     fn get(&self, id: &str) -> Result<Arc<Term>, String> {
         lock(&self.terms).iter().find(|t| t.id == id).cloned().ok_or_else(|| format!("없는 터미널: {id}"))
     }
@@ -107,7 +125,6 @@ impl TermHub {
         let stream = Arc::new(Stream::new(RING_CAP));
         let id = format!("t{}", self.next_id.fetch_add(1, Ordering::Relaxed) + 1);
         spawn_reader(&id, &pty, &stream);
-        spawn_waiter(&id, &pty, &stream);
         let term = Arc::new(Term {
             id,
             shell: shell.to_string(),
@@ -115,13 +132,18 @@ impl TermHub {
             size: Mutex::new((cols, rows)),
             pty,
             stream,
+            kill_requested: AtomicBool::new(false),
         });
         let info = term.info();
-        lock(&self.terms).push(term);
+        Self::reap(&self.terms);
+        lock(&self.terms).push(Arc::clone(&term));
+        spawn_waiter(&term, &self.terms);
         Ok(info)
     }
 
+    /// 목록. 끝났고 죽이라고 했거나 보는 쪽이 없어진 터미널은 여기서도 치운다.
     pub fn list(&self) -> Vec<TermInfo> {
+        Self::reap(&self.terms);
         lock(&self.terms).iter().map(|t| t.info()).collect()
     }
 
@@ -141,7 +163,8 @@ impl TermHub {
         self.get(id)?.pty.write_all(data).map_err(|e| format!("터미널 입력 실패: {e}"))
     }
 
-    /// 열이 2 미만이거나 행이 1 미만이거나 지금과 같은 크기면 무시한다.
+    /// 열이 2 미만이거나 행이 1 미만이거나 지금과 같은 크기면 무시한다. 가짜 콘솔이 닫힌 뒤에는 Ok 로 아무 일도 하지 않는다
+    /// (닫힘과의 경합은 `Pty::resize` 가 막는다).
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
         let t = self.get(id)?;
         if cols < 2 || rows < 1 || t.stream.exit_code().is_some() {
@@ -157,24 +180,31 @@ impl TermHub {
     }
 
     /// 가짜 콘솔을 별도 스레드에서 닫는다. 6초 안에 프로세스가 안 끝나면 강제로 끝낸다. 기다리지 않고 돌아온다.
+    /// 프로세스가 끝나면 터미널은 목록에서 빠지고 보내기 스레드도 끝난다.
     pub fn kill(&self, id: &str) -> Result<(), String> {
         let t = self.get(id)?;
+        t.kill_requested.store(true, Ordering::SeqCst);
         if t.stream.exit_code().is_some() {
+            Self::reap(&self.terms);
             return Ok(());
         }
+        let terms = Arc::clone(&self.terms);
         std::thread::spawn(move || {
             let closer = Arc::clone(&t.pty);
             std::thread::spawn(move || closer.close_console());
             if !t.stream.wait_exit(KILL_GRACE) {
                 t.pty.kill();
+                t.stream.wait_exit(KILL_GRACE);
             }
+            Self::reap(&terms);
         });
         Ok(())
     }
 
     /// 앱을 끝낼 때: 모든 터미널의 프로세스를 바로 끝내고 가짜 콘솔을 닫는다. 기다리지 않는다.
     pub fn kill_all(&self) {
-        for t in lock(&self.terms).iter().cloned() {
+        let all: Vec<Arc<Term>> = lock(&self.terms).clone();
+        for t in all {
             t.pty.kill();
             std::thread::spawn(move || t.pty.close_console());
         }
@@ -199,16 +229,18 @@ fn spawn_reader(id: &str, pty: &Arc<Pty>, stream: &Arc<Stream>) {
 
 /// 프로세스가 끝나길 기다려 종료 코드를 남기고, 가짜 콘솔을 별도 스레드에서 닫는다
 /// (자손이 붙어 있으면 콘솔을 닫아야 출력 파이프가 끊긴다. 닫기가 오래 걸려도 리더는 계속 비운다).
-fn spawn_waiter(id: &str, pty: &Arc<Pty>, stream: &Arc<Stream>) {
-    let (pty, stream) = (Arc::clone(pty), Arc::clone(stream));
+fn spawn_waiter(term: &Arc<Term>, terms: &Arc<Mutex<Vec<Arc<Term>>>>) {
+    let (term, terms) = (Arc::clone(term), Arc::clone(terms));
     std::thread::Builder::new()
-        .name(format!("term-wait-{id}"))
+        .name(format!("term-wait-{}", term.id))
         .spawn(move || {
-            let code = pty.wait_exit();
-            stream.set_exit(code);
-            let closer = Arc::clone(&pty);
+            let code = term.pty.wait_exit();
+            term.stream.set_exit(code);
+            let closer = Arc::clone(&term.pty);
             std::thread::spawn(move || closer.close_console());
-            pty.release();
+            term.pty.release();
+            // 죽이라고 했거나 보는 쪽이 없어졌다면 지금 치운다
+            TermHub::reap(&terms);
         })
         .expect("웨이터 스레드를 만들지 못했다");
 }
@@ -552,5 +584,84 @@ mod real {
         hub.write(&info.id, b"exit\r").unwrap();
         assert_eq!(v.wait_exit(40), Some(0), "출력: {:?}", v.text());
         assert_eq!(hub.list()[0].status, "exited");
+    }
+
+    fn wait_until(what: &str, secs: u64, f: impl Fn() -> bool) {
+        let end = Instant::now() + Duration::from_secs(secs);
+        while !f() {
+            assert!(Instant::now() < end, "{secs}초 안에 \"{what}\" 가 되지 않았다");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn spawn_cmd_idle(hub: &TermHub) -> TermInfo {
+        let cmd = std::env::var_os("ComSpec").map(PathBuf::from).expect("ComSpec");
+        hub.spawn_program("cmd", &cmd, &[], &paths::home(), 80, 24).unwrap()
+    }
+
+    /// (A) resize 를 kill 과 겹치고, 자연 종료와 겹쳐 많이 돌려도 죽지 않는다.
+    #[test]
+    fn resize_races_kill_and_natural_exit_without_crashing() {
+        let hub = Arc::new(Guard(TermHub::default()));
+        let cmd = std::env::var_os("ComSpec").map(PathBuf::from).expect("ComSpec");
+        for i in 0..20u16 {
+            // 자연 종료: 바로 끝나는 cmd
+            let info = hub.spawn_program("cmd", &cmd, &["/c".into(), "exit 0".into()], &paths::home(), 80, 24).unwrap();
+            // kill: 계속 사는 cmd
+            let alive = spawn_cmd_idle(&hub);
+            let mut hs = Vec::new();
+            for id in [info.id.clone(), alive.id.clone()] {
+                let h = Arc::clone(&hub);
+                hs.push(std::thread::spawn(move || {
+                    for k in 0..200u16 {
+                        let _ = h.resize(&id, 60 + (k + i) % 40, 20 + k % 10);
+                    }
+                }));
+            }
+            hub.kill(&alive.id).unwrap();
+            for h in hs {
+                h.join().unwrap();
+            }
+            hub.kill(&info.id).ok();
+        }
+        wait_until("모두 치워짐", 30, || hub.list().is_empty());
+    }
+
+    /// (B) 끝난 터미널에 kill 하면 바로 목록에서 빠진다.
+    #[test]
+    fn kill_removes_an_exited_terminal() {
+        let hub = Guard(TermHub::default());
+        let cmd = std::env::var_os("ComSpec").map(PathBuf::from).expect("ComSpec");
+        let info = hub.spawn_program("cmd", &cmd, &["/c".into(), "exit 3".into()], &paths::home(), 80, 24).unwrap();
+        wait_until("종료", 20, || hub.list().first().is_some_and(|t| t.status == "exited"));
+        // 끝났지만 죽이라고 하지 않았고 보는 쪽도 안 닫혔으니 남는다
+        assert_eq!(hub.list().len(), 1);
+        hub.kill(&info.id).unwrap();
+        assert!(hub.list().is_empty());
+        assert!(hub.kill(&info.id).is_err());
+    }
+
+    /// (B) 도는 터미널에 kill 하면 끝난 뒤 목록에서 빠지고 보내기 스레드도 끝난다.
+    #[test]
+    fn kill_removes_a_running_terminal_and_ends_its_batcher() {
+        let hub = Guard(TermHub::default());
+        let info = spawn_cmd_idle(&hub);
+        let v = view(&hub, &info.id);
+        let stream = Arc::clone(&hub.get(&info.id).unwrap().stream);
+        wait_until("배처 시작", 5, || stream.active_batchers() == 1);
+        hub.kill(&info.id).unwrap();
+        wait_until("목록에서 빠짐", 15, || hub.list().is_empty());
+        wait_until("배처 종료", 5, || stream.active_batchers() == 0);
+        drop(v);
+    }
+
+    /// (B) 끝난 뒤 보던 웹뷰가 닫히면(받는 쪽이 false) 죽이라고 하지 않아도 치운다.
+    #[test]
+    fn exited_terminal_whose_viewer_closed_is_removed() {
+        let hub = Guard(TermHub::default());
+        let cmd = std::env::var_os("ComSpec").map(PathBuf::from).expect("ComSpec");
+        let info = hub.spawn_program("cmd", &cmd, &["/c".into(), "exit 0".into()], &paths::home(), 80, 24).unwrap();
+        hub.attach(&info.id, 0, Arc::new(|_| false)).unwrap();
+        wait_until("목록에서 빠짐", 20, || hub.list().is_empty());
     }
 }

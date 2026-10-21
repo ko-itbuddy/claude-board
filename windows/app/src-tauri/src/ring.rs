@@ -5,6 +5,7 @@
 //! 1MiB 넘게 앞서가지 않는다. 고리가 아직 안 보낸 바이트를 덮으면 `Gap` 을 보내고 가장 오래된 바이트부터 다시 보낸다.
 //! 오프셋(`seq`)은 터미널이 태어난 뒤 쓴 총 바이트 수이고 줄지 않는다.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -104,19 +105,35 @@ struct State {
     sent: u64,
     /// 웹뷰가 처리했다고 알려 준 끝 오프셋.
     acked: u64,
+    /// 터미널이 목록에서 빠졌다 - 배처는 크레딧도 새 출력도 기다리지 않고 끝난다.
+    closed: bool,
+    /// 보내다가 받는 쪽이 닫혀 있었다(웹뷰가 없어졌다). 다시 attach 하면 지워진다.
+    viewer_lost: bool,
 }
 
 /// 터미널 하나의 출력 흐름 — 읽기 스레드가 쓰고, attach 한 배처가 보낸다.
 pub struct Stream {
     st: Mutex<State>,
     cv: Condvar,
+    /// 지금 도는 배처 스레드 수.
+    batchers: AtomicUsize,
+}
+
+/// 배처 스레드가 어떻게 끝나든 수를 줄인다.
+struct BatcherCount<'a>(&'a AtomicUsize);
+
+impl Drop for BatcherCount<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl Stream {
     pub fn new(cap: usize) -> Self {
         Stream {
-            st: Mutex::new(State { ring: Ring::new(cap), output_done: false, exit_code: None, gen: 0, sent: 0, acked: 0 }),
+            st: Mutex::new(State { ring: Ring::new(cap), output_done: false, exit_code: None, gen: 0, sent: 0, acked: 0, closed: false, viewer_lost: false }),
             cv: Condvar::new(),
+            batchers: AtomicUsize::new(0),
         }
     }
 
@@ -160,6 +177,23 @@ impl Stream {
         true
     }
 
+    /// 터미널을 치운다: 도는 배처를 모두 깨워 끝내고 이후 attach 는 배처를 띄우지 않는다.
+    pub fn close(&self) {
+        self.lock().closed = true;
+        self.cv.notify_all();
+    }
+
+    /// 지금 도는 배처 스레드 수(시험용).
+    #[cfg(test)]
+    pub fn active_batchers(&self) -> usize {
+        self.batchers.load(Ordering::SeqCst)
+    }
+
+    /// 마지막으로 보내려던 받는 쪽이 닫혀 있었다.
+    pub fn viewer_lost(&self) -> bool {
+        self.lock().viewer_lost
+    }
+
     pub fn bounds(&self) -> Bounds {
         let g = self.lock();
         Bounds { oldest: g.ring.oldest(), next: g.ring.next() }
@@ -183,9 +217,18 @@ impl Stream {
         let b = Bounds { oldest: g.ring.oldest(), next: g.ring.next() };
         g.sent = if from_seq == 0 { b.oldest } else { from_seq.min(b.next) };
         g.acked = g.sent;
+        g.viewer_lost = false;
+        let closed = g.closed;
+        // 배처 수는 락 아래서 올려 close 뒤에 새 배처가 생기지 않게 한다
+        if !closed {
+            self.batchers.fetch_add(1, Ordering::SeqCst);
+        }
         drop(g);
         // 지난 배처를 깨워 멈추게 한다
         self.cv.notify_all();
+        if closed {
+            return b;
+        }
         let me = Arc::clone(self);
         std::thread::Builder::new()
             .name("term-batch".into())
@@ -196,10 +239,11 @@ impl Stream {
 
     /// 보낼 것이 있을 때 8ms 또는 64KiB 마다 보내고, ack 안 된 바이트가 [`WINDOW`] 이상이면 기다린다.
     fn batcher(&self, gen: u64, sink: Sink) {
+        let _count = BatcherCount(&self.batchers);
         let mut g = self.lock();
         let mut since: Option<Instant> = None;
         loop {
-            if g.gen != gen {
+            if g.gen != gen || g.closed {
                 return;
             }
             let (oldest, next) = (g.ring.oldest(), g.ring.next());
@@ -238,7 +282,14 @@ impl Stream {
             };
             // 보내는 동안 락을 쥐지 않는다 — 읽기 스레드와 ack 가 막히면 안 된다
             drop(g);
-            if !sink(out) || last {
+            if !sink(out) {
+                let mut g = self.lock();
+                if g.gen == gen {
+                    g.viewer_lost = true;
+                }
+                return;
+            }
+            if last {
                 return;
             }
             g = self.lock();
@@ -461,5 +512,53 @@ mod tests {
         s.attach(0, cap.sink());
         cap.wait("Exit", |o| matches!(o.last(), Some(Out::Exit(0))));
         assert_eq!(cap.data_bytes(), 3);
+    }
+
+    fn wait_until(what: &str, f: impl Fn() -> bool) {
+        let end = Instant::now() + Duration::from_secs(10);
+        while !f() {
+            assert!(Instant::now() < end, "10초 안에 \"{what}\" 가 되지 않았다");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn close_ends_an_idle_batcher() {
+        let s = Arc::new(Stream::new(64));
+        let cap = Arc::new(Cap::default());
+        s.attach(0, cap.sink());
+        wait_until("배처 시작", || s.active_batchers() == 1);
+        s.close();
+        wait_until("배처 종료", || s.active_batchers() == 0);
+        // 닫힌 뒤 attach 는 배처를 띄우지 않는다
+        s.attach(0, cap.sink());
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(s.active_batchers(), 0);
+    }
+
+    #[test]
+    fn close_ends_a_batcher_waiting_for_credit() {
+        let s = Arc::new(Stream::new(4 << 20));
+        let cap = Arc::new(Cap::default());
+        s.attach(0, cap.sink());
+        s.push(&vec![7u8; (WINDOW as usize) + FRAME_MAX]);
+        cap.wait("창이 찰 때까지", |o| bytes_of(o) >= WINDOW);
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(s.active_batchers(), 1, "ack 를 기다리며 서 있어야 한다");
+        s.close();
+        wait_until("배처 종료", || s.active_batchers() == 0);
+    }
+
+    #[test]
+    fn closed_sink_marks_viewer_lost_and_ends_the_batcher() {
+        let s = Arc::new(Stream::new(64));
+        s.attach(0, Arc::new(|_| false));
+        s.push(b"x");
+        wait_until("배처 종료", || s.active_batchers() == 0);
+        assert!(s.viewer_lost());
+        let cap = Arc::new(Cap::default());
+        s.attach(0, cap.sink());
+        assert!(!s.viewer_lost());
+        s.close();
     }
 }
