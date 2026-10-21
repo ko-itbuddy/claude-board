@@ -5023,6 +5023,7 @@ final class BoardSurface: NSObject, ObservableObject, Identifiable, TerminalSurf
     @Published var title = ""
     @Published var cwd: String
     @Published var session: Session?   // 이 화면에서 도는 세션(세션 파일의 tty 로 짝짓는다) — 탭의 상태 점·제목
+    @Published var renameTo: String?   // ⇧⌘R 로 바꿀 세션 이름 — /rename 으로 Claude Code 이름이 그렇게 될 때까지(TerminalHub.applyRenames)
     private var shellReady = false     // 셸이 첫 프롬프트를 띄웠다(셸 통합이 경로·제목을 알림)
     private var pending: (() -> String)?   // 셸이 뜨면 넣을 명령 — 넣을 때 만든다(세션 이름은 그때 쓰는 이름을 보고 고른다)
     private var typedAt = Date.distantPast
@@ -5256,8 +5257,8 @@ final class SplitNode {
     // 나눈 탭이면 탭을 연 경로로 고정(고른 화면이 다른 폴더여도 그대로 — 사용자 결정)
     var name: String { customName ?? folderName }
     // 탭 줄에 보이는 이름 — 화면이 하나이고 그 화면에 claude 세션이 돌면 그 세션의 Claude Code 이름(번호가 붙었거나 /rename 한 이름도
-    // 그대로 — 탭과 세션 이름이 같은 글자로 보이게), 아니면 name. 나눈 탭은 name 그대로
-    var shownName: String { surfaces.count == 1 ? focused.session?.name ?? name : name }
+    // 그대로 — 탭과 세션 이름이 같은 글자로 보이게. 이름 바꾸기를 미뤄 둔 동안은 바꿀 이름), 아니면 name. 나눈 탭은 name 그대로
+    var shownName: String { surfaces.count == 1 ? focused.renameTo ?? focused.session?.name ?? name : name }
     var folderName: String {
         guard surfaces.count > 1 else { return focused.folderName }
         return workspace == NSHomeDirectory() ? "~" : (workspace as NSString).lastPathComponent
@@ -5449,10 +5450,11 @@ final class SplitNode {
 
     // 세션 이름(사용자 결정 2026-10-20) — 보드 탭 claude 는 탭 이름(⇧⌘R 이름, 없으면 폴더 이름)을 세션 이름으로 쓰고, 그 이름을 쓰는 다른
     // 세션이 있으면 -2, -3 … 을 붙인다(나눈 탭의 화면들도 이렇게 나뉜다). Claude Code 는 같은 이름도 그대로 받으므로(2.1.304 실측) 보드가 고른다.
-    // 탭 줄·카드 라벨은 고른 번호가 아니라 늘 ~/.claude/sessions 의 이름을 보인다
+    // 탭 줄·카드 라벨은 고른 번호가 아니라 ~/.claude/sessions 의 이름을 보인다(탭 줄은 미뤄 둔 이름 바꾸기가 있으면 그 이름)
     private var reservedNames: [UUID: (name: String, at: Date)] = [:]   // 화면 → 방금 --name 으로 붙여 아직 파일이 없을 수 있는 이름(15초)
-    private var pendingRenames: [UUID: (name: String, typed: Bool)] = [:]   // 화면 → 미뤄 둔 이름 바꾸기(typed — 글은 쳤고 Return 만 남음)
-    private var renameBusy: Set<UUID> = []   // 이름 바꾸기를 치는 중인 화면
+    // 화면 → 이름 바꾸기를 어디까지 쳤나(없으면 아직 안 침 — 바꿀 이름은 BoardSurface.renameTo): 치는 중, 글은 붙였고 Return 만 남음, Return 친 시각
+    private enum RenameStep { case typing, typed, sent(Date) }
+    private var renameSteps: [UUID: RenameStep] = [:]
 
     // 쓰는 이름 = 살아 있는 claude 의 이름 + 방금 붙인 이름 + 미뤄 둔 이름 바꾸기 + taken. 그 화면 자신의 것(지금 도는 claude 의 이름·제 몫)은
     // 빼고 본다. 대소문자는 가리지 않는다(Claude Code 는 가리지 않고 둘 다 받지만 세션끼리 부르는 주소라 헷갈리지 않게)
@@ -5460,7 +5462,7 @@ final class SplitNode {
         let own = s.session?.pid
         var used = Set(ClaudeNames.shared.live().filter { $0.key != own }.values.map { $0.lowercased() })
         for (id, r) in reservedNames where id != s.id && Date().timeIntervalSince(r.at) < 15 { used.insert(r.name.lowercased()) }
-        for (id, r) in pendingRenames where id != s.id { used.insert(r.name.lowercased()) }
+        for o in surfaces where o !== s { if let n = o.renameTo { used.insert(n.lowercased()) } }
         used.formUnion(taken.map { $0.lowercased() })
         var name = base, i = 2
         while used.contains(name.lowercased()) { name = "\(base)-\(i)"; i += 1 }
@@ -5480,35 +5482,58 @@ final class SplitNode {
     // ⇧⌘R 로 바꾼 탭 이름을 그 탭의 claude 세션들에 — 화면마다 /rename <이름>(나눈 탭은 번호로 나뉜다, 사용자 결정). 셸만 남은 화면·
     // claude -p 는 빼고, 이미 그 이름이면 치지 않는다. 치는 것은 applyRenames
     private func renameSessions(_ tab: BoardTab) {
-        tab.surfaces.forEach { pendingRenames[$0.id] = nil }
+        tab.surfaces.forEach(clearRename)
         var taken: Set<String> = []
         for s in tab.surfaces {
             guard let ss = s.session, ss.state != "ended", s.isForeground(ss.pid), mode(ss) == nil else { continue }
             let target = pickName(tab.name, for: s, taken: taken)
             taken.insert(target)
-            if ClaudeNames.shared.name(ss.pid) != target { pendingRenames[s.id] = (target, false) }
+            if ClaudeNames.shared.name(ss.pid) != target { s.renameTo = target }
         }
         applyRenames()
+    }
+
+    private func clearRename(_ s: BoardSurface) {
+        if s.renameTo != nil { s.renameTo = nil }
+        renameSteps[s.id] = nil
     }
 
     // 미뤄 둔 이름 바꾸기를 친다(⇧⌘R 직후, 그 뒤 세션 목록을 읽을 때마다). 승인 창·질문 창이 떠 있을 때 치면 Return 이 그 창에 들어가
     // 도구 실행을 허락해 버릴 수 있다 — 세션이 작업 중·대기일 때만 치고(승인 대기·일시중지는 미룬다), 글을 붙인 뒤 Return 직전에 지금
     // 파일로 한 번 더 본다. 그 사이 창이 떴으면 Return 만 남겨 두었다가 창이 닫히면 친다(빈 입력 칸의 Return 은 아무 일도 하지 않는다).
+    // 요청 전 세션(대화 기록이 아직 없음)도 첫 요청이 들어갈 때까지 미룬다(사용자 결정) — /rename 이 대화 기록을 만들어, 요청 없이 끝나도
+    // 목록에 "요청 전" 카드가 남는다. 미루는 동안 탭 줄은 바꿀 이름, 카드 라벨은 실제 이름(옛 이름)이다.
+    // Return 을 친 뒤에는 Claude Code 이름이 바뀌면 끝, 5초가 지나도 그대로면 그만둔다(탭 줄이 실제 이름으로 돌아간다).
     // 사용자가 입력 칸에 쓰던 글이 있으면 섞일 수 있다(사용자가 알고 고름)
     func applyRenames() {
-        for (id, r) in pendingRenames where !renameBusy.contains(id) {
-            guard let s = surface(id), let ss = s.session, ss.state != "ended", s.isForeground(ss.pid) else { pendingRenames[id] = nil; continue }
-            guard renameSafe(ss) else { continue }
-            renameBusy.insert(id)
-            s.drive(r.typed ? [] : [("text", "/rename " + r.name), ("wait", "0.2")]) { [weak self] _ in
-                guard let self else { return }
-                self.renameBusy.remove(id)
-                guard self.pendingRenames[id]?.name == r.name else { return }   // 그 사이 다시 바꿨거나 화면이 닫혔다
-                guard let now = s.session, self.renameSafe(now) else { self.pendingRenames[id] = (r.name, true); return }
+        for s in surfaces {
+            guard let target = s.renameTo else { continue }
+            guard let ss = s.session, ss.state != "ended", s.isForeground(ss.pid), ClaudeNames.shared.name(ss.pid) != target else {
+                clearRename(s)   // 바뀌었거나 claude 가 끝났다
+                continue
+            }
+            var typed = false
+            switch renameSteps[s.id] {
+            case .typing: continue
+            case .sent(let at): if Date().timeIntervalSince(at) > 5 { clearRename(s) }; continue
+            case .typed: typed = true
+            case nil: break
+            }
+            guard renameSafe(ss), hasTranscript(ss) else { continue }
+            renameSteps[s.id] = .typing
+            s.drive(typed ? [] : [("text", "/rename " + target), ("wait", "0.2")]) { [weak self] _ in
+                guard let self, s.renameTo == target else { return }   // 그 사이 다시 바꿨거나 화면이 닫혔다
+                guard let now = s.session, self.renameSafe(now) else { self.renameSteps[s.id] = .typed; return }
                 s.drive([("key", "enter")]) { _ in }
-                self.pendingRenames[id] = nil
+                self.renameSteps[s.id] = .sent(Date())
             }
         }
+    }
+
+    // 요청이 들어간 세션인가 — 대화 기록 파일이 있다. Claude Code 는 첫 요청을 보낼 때 이 파일을 만든다(--name·/model 만으로는 생기지 않고
+    // 첫 요청 0.1초 뒤 생김 — 2.1.304 실측). 보드 목록도 이 파일이 없는 끝난 세션은 지운다(Store.reload, 같은 경로 계산)
+    private func hasTranscript(_ s: Session) -> Bool {
+        FileManager.default.fileExists(atPath: transcriptPath(sessionRecord(s.id)?["transcript_path"] as? String, s.cwd, s.id))
     }
 
     // 이름 바꾸기를 쳐도 되는가 — 보드 상태가 작업 중·대기이고 승인 창·질문 창이 없다. 보드 상태는 1초마다 읽은 것이라 Claude Code 의
@@ -5770,7 +5795,7 @@ final class SplitNode {
         }
         if names != appNames { appNames = names }
         reservedNames = reservedNames.filter { Date().timeIntervalSince($0.value.at) < 15 }
-        if !pendingRenames.isEmpty { applyRenames() }   // 승인 대기를 벗어난 세션의 미뤄 둔 이름 바꾸기
+        applyRenames()   // 승인 대기를 벗어났거나 첫 요청이 들어간 세션의 미뤄 둔 이름 바꾸기
     }
 
     // 세션의 실행 방식 — 프로세스 인자에서(-p·--print → -p, --bg·--background → --bg, 대화형이면 nil). 끝난 세션은 읽을 수 없다
