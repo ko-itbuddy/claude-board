@@ -3,6 +3,7 @@
 import { setTerminalExpanded } from "$lib/backend";
 import { board } from "$lib/board/store.svelte";
 import { folderName, hub, openShell, shownName } from "./hub.svelte";
+import { quoteSessionName, sanitizeSessionName } from "./sessionName";
 
 /** 새 세션 기본 명령 — 승인 대기가 거의 없게 권한 확인을 건너뛴다(ClaudeBoard.swift defaultSessionCommand) */
 export const DEFAULT_SESSION_COMMAND = "claude --dangerously-skip-permissions";
@@ -23,12 +24,8 @@ export function freshSessionCommand(command: string): { command: string; session
   return { command: command.replace(SESSION_ID_FLAG, "") + " --session-id " + sessionId, sessionId };
 }
 
-// 셸에 치는 이름 — pwsh·powershell·cmd 가 모두 같은 뜻으로 읽는 큰따옴표로 묶는다. 글자·숫자·_.- 뿐이면 그대로 둔다.
-// 큰따옴표 안에서도 풀리는 " ` $ % 는 뺀다
-function shellQuote(name: string): string {
-  if (/^[\p{L}\p{N}_.-]+$/u.test(name)) return name;
-  return `"${name.replace(/["`$%]/g, "")}"`;
-}
+// 셸에 치는 이름은 sessionName.ts 의 허용 목록(글자·숫자·공백·_.-)을 거친 것만 쓴다. 폴더·탭 글자를 그대로 명령줄에 넣지 않는다
+const shellQuote = (name: string) => quoteSessionName(sanitizeSessionName(name));
 
 /** 다른 탭이 쓰는 이름과 겹치지 않는 이름 — 겹치면 -2, -3 …(대소문자는 가리지 않는다) */
 export function uniqueTabName(base: string): string {
@@ -52,6 +49,6 @@ export function startSession(command: string, dir: string) {
   if (!trimmed) return;
   if (!board.snap?.settings.terminalExpanded) setTerminalExpanded(true);
   const fresh = freshSessionCommand(trimmed);
-  const finalCommand = namedCommand(fresh.command, uniqueTabName(folderName(dir)));
+  const finalCommand = namedCommand(fresh.command, uniqueTabName(sanitizeSessionName(folderName(dir))));
   openShell(dir, { command: finalCommand, sessionId: fresh.sessionId ?? undefined });
 }

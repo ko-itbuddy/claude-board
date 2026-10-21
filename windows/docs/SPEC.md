@@ -437,7 +437,7 @@ interface TermInfo {
 - xterm 옵션: `allowProposedApi: true`, `unicode.activeVersion = "11"`, `scrollback: 5000`, `allowTransparency: false`(테마 배경은 불투명), 글꼴 `Cascadia Mono, Consolas, D2Coding, monospace`,
   `windowsPty: { backend: "conpty", buildNumber }`(빌드 21376 이상일 때만 `buildNumber`). WebGL 애드온은 `onContextLoss` 때 버리고 DOM 렌더러로 내려간다.
 - fit: 접을 때 터미널을 언마운트하지 않고 숨기며 fit 도 하지 않는다. fit 은 칸이 1셀 이상일 때만, 보인 뒤 `requestAnimationFrame` 에서 한 번 한다. 경계를 끄는 동안은 fit 을 멈추고 놓을 때 한 번 한다. `term_resize` 앞에 100ms 디바운스를 둔다.
-- 다시 받기(replay): 받는 동안 `onData` 를 삼킨다(쓰기마다 카운터를 올리고 쓰기 콜백에서 내린다. xterm 의 자동 응답이 셸로 가지 않게). 쓰기 콜백은 던지지 않는다.
+- 다시 받기(replay): 받는 동안 xterm 의 자동 응답 `onData` 를 삼킨다(쓰기마다 카운터를 올리고 쓰기 콜백에서 내린다). 단 사용자 입력 이벤트(keydown·paste·compositionend·input) 뒤 300ms 안의 데이터는 통과한다 — 키 입력은 되감기 중에도 셸에 닿는다(`replayGate.ts`). 쓰기 콜백은 던지지 않는다.
 - 키: 선택이 있을 때만 Ctrl+C 는 복사, 아니면 셸로 보낸다. Ctrl+V 는 브라우저 붙여넣기에 맡긴다. Shift+Enter 는 `\n` 을 보낸다.
 - IME(`ime.ts`, xterm 이슈 #6065): xterm 소스를 패치하지 않고 키 처리기로만 고친다. 조합 중이 아닌데 keyCode 229 로 오는 키는 `ev.code` 로 바꿔 보낸다(Escape → `\x1b`, Ctrl+A..Z → 0x01..0x1A, Ctrl+Space → 0x00).
   조합 중의 Enter·Escape·방향키·Home/End·Ctrl 조합은 `compositionend` 까지 붙들었다가 다음 틱에 보낸다. 이미 하나 대기 중이면 다시 쏘아진 Enter 는 버린다. Shift 는 조합을 시작한 keydown 에서 가져온다.
@@ -446,12 +446,12 @@ interface TermInfo {
 
 #### 5.12.6 탭·새 세션 (`hub.svelte.ts`, `launch.ts`)
 
-- 탭은 늘 셸이다(pwsh → powershell → cmd 순). claude 명령은 새로 띄운 셸에 붙은 직후 `term_write` 로 `명령 + 
-` 을 한 번에 쳐 넣는다(셸이 입력을 읽을 때까지 ConPTY 가 쥐고 있는다). 셸 없이 바로 띄우지 않는다. `hub.svelte.ts` 에 "출력이 300ms 조용해지면 친다"는 `typeCommand` 가 있으나 아무도 부르지 않는다.
+- 탭은 늘 셸이다(pwsh → powershell → cmd 순). claude 명령은 새로 띄운 셸에 붙은 뒤 `typeCommand` 가 친다: 셸의 첫 출력을 기다리고, 출력이 300ms 조용해지면(상한 5초, 컨트롤러의 `lastOutputAt`) `term_write` 로 명령을 쓰고 100ms 뒤 `` 을 따로 쓴다. 기다리는 사이 탭이 닫히거나 칸의 셸이 바뀌면 치지 않는다. 셸 없이 바로 띄우지 않는다.
+  시작 중(`ctl.open()`·`term_spawn`·`bind` 뒤)에 탭이 닫혔으면 새로 띄운 셸을 `term_kill` 로 끝내고 컨트롤러를 버린 채 명령을 치지 않는다.
   `/exit` 하면 같은 탭이 셸 프롬프트로 돌아오고, 셸이 끝나면(exit 이벤트) 그 탭이 닫힌다. 닫으면 선택은 같은 경로의 이웃 탭 → 이웃 경로 → 빈 상태 순으로 간다.
 - 새 세션: 터미널이 접혀 있으면 펼치고, 명령을 `freshSessionCommand`(claude 로 시작하고 `--resume`·`-r`·`--continue`·`-c` 가 없으면 `--session-id <새 UUID>` 를 붙이고 기존 `--session-id` 는 새 값으로 바꿈) →
   `namedCommand`(`--name <탭 이름>` 을 claude 바로 뒤에 붙임, 사용자가 `-n`·`--name` 을 적었으면 그대로)를 거쳐 그 폴더의 새 탭에서 친다. 탭 이름은 폴더 이름이고 다른 탭과 겹치면 `-2`, `-3` 을 붙인다.
-  이름에 글자·숫자·`_.-` 밖의 글자가 있으면 큰따옴표로 묶고 큰따옴표·백틱·`$`·`%` 는 뺀다. 기본 명령은 `claude --dangerously-skip-permissions` 다.
+  `--name` 값은 허용 목록(`sessionName.ts`)만 통과한다: 글자·숫자(유니코드)·공백·`_`·`.`·`-` 외의 글자(굽은 따옴표 “ ” „ 포함)는 모두 `-` 로 바꾸고 이어진 `-` 는 하나로, 앞뒤의 공백·`-`·`.` 은 떼며, 비면 `session`. 공백이 있으면 큰따옴표로 묶는다. 폴더·탭 글자를 검증 없이 명령줄에 넣지 않고, 작업 폴더(cwd)는 `term_spawn` 인자로만 넘기며 쳐 넣지 않는다. 시험: `cd windows/app && node --test src/lib/terminal/*.test.ts`. 기본 명령은 `claude --dangerously-skip-permissions` 다.
 - 탭 이름: Ctrl+Shift+R 로 이름 자리가 입력 칸이 된다(Enter 저장, Esc 취소, 포커스를 잃으면 저장, 비우거나 폴더 이름과 같으면 사용자 이름을 지움). 끝나면 포커스는 터미널로 간다. 셸이 보내는 제목이 `.exe` 로 끝나면(실행 파일 경로) 탭에 보이지 않게 버린다.
 - 닫기: 탭의 ×는 그 탭의 짝 세션(`sessionId` 로 찾은 세션)이 있고 끝나지 않았을 때만 확인 창을 띄우고, 셸만 있는 탭은 바로 닫는다. 닫으면 `term_kill` 한다.
 - 뒤 단계에 남은 것(§5.12 범위): 탭 저장·복원, 세션 짝짓기 칩, 구동, 분할, 글꼴 크기, 테마, md-render.
@@ -572,6 +572,8 @@ props `{ groups: Group[]; limits: Limit[]; now: number; compact?: boolean; masco
 | Ctrl+Alt+←/→ | 지금 경로 안의 이전/다음 탭(끝에서 반대쪽 끝으로) |
 | Ctrl+Alt+↑/↓ | 이전/다음 경로(끝에서 반대쪽 끝으로) |
 | Ctrl+Alt+T | 펼치기/접기(전역, §5.10) |
+
+AltGr(`getModifierState("AltGraph")` 가 참인 입력)은 Windows 가 Ctrl+Alt 로 보고하지만 글자를 치는 키라 위 Ctrl+Alt 키를 가로채지 않고 번호 배지도 띄우지 않는다.
 
 Ctrl+Alt 를 누르는 동안(창이 포커스를 잃으면 해제) 탭의 × 자리에 번호 배지(1~9)가, 고른 탭의 하는 일 자리에 "Ctrl+Shift+R 이름 바꾸기" 안내가 보인다.
 

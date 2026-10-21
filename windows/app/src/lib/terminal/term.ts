@@ -4,6 +4,7 @@
 import { termAck, termAttach, termList, termResize, termWrite, termWriteBin } from "$lib/backend";
 import type { TermFrame, TermId, TermInfo } from "$lib/types";
 import { createImeKeys, type ImeKeys } from "./ime";
+import { ReplayGate } from "./replayGate";
 // 형식만 가져오므로 번들에 들어가지 않는다
 import type { Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
@@ -55,9 +56,10 @@ export class TermController {
   private focusWhenOpen = false;
 
   // 다시 받기: 이 오프셋 앞의 출력은 되감아 받은 것이라, 그 사이 xterm 이 만든 자동 응답(onData)은 셸로 보내지 않는다.
-  // 쓰기마다 카운터를 올리고 쓰기 콜백에서 내린다. 카운터가 0 보다 크면 삼킨다
+  // 단 사용자 입력은 늘 통과한다 — 규칙은 replayGate.ts 머리말이 소유한다
   private replayEnd = 0;
-  private replayWrites = 0;
+  private readonly gate = new ReplayGate();
+  private inputListeners: AbortController | null = null;
   private expectedSeq = 0;
   private ackedSeq = 0;
   private sentAckSeq = 0;
@@ -145,11 +147,17 @@ export class TermController {
     this.fitAddon = fit;
     this.loadWebgl(term);
 
+    // 사용자 입력 이벤트 시각 — 캡처 단계라 xterm 이 onData 를 내기 전에 기록된다(조합은 compositionend 직후 비동기로 나온다)
+    this.inputListeners = new AbortController();
+    const noteInput = () => this.gate.noteUserInput(Date.now());
+    for (const type of ["keydown", "paste", "compositionend", "input", "beforeinput"]) {
+      term.textarea!.addEventListener(type, noteInput, { capture: true, signal: this.inputListeners.signal });
+    }
     term.onData((data) => {
-      if (this.termId && this.replayWrites === 0) termWrite(this.termId, data);
+      if (this.termId && this.gate.allows(Date.now())) termWrite(this.termId, data);
     });
     term.onBinary((data) => {
-      if (this.termId && this.replayWrites === 0) termWriteBin(this.termId, Array.from(data, (ch) => ch.charCodeAt(0)));
+      if (this.termId && this.gate.allows(Date.now())) termWriteBin(this.termId, Array.from(data, (ch) => ch.charCodeAt(0)));
     });
     term.onResize(({ cols, rows }) => this.scheduleResize(cols, rows));
     term.onTitleChange((title) => this.hooks.onTitle(title));
@@ -267,9 +275,9 @@ export class TermController {
     const end = start + bytes.length;
     this.expectedSeq = end;
     const replay = start < this.replayEnd;
-    if (replay) this.replayWrites++;
+    if (replay) this.gate.replayWriteStarted();
     this.safeWrite(bytes, () => {
-      if (replay) this.replayWrites--;
+      if (replay) this.gate.replayWriteFinished();
       this.acknowledge(end);
     });
   }
@@ -341,6 +349,7 @@ export class TermController {
     clearTimeout(this.resizeTimer);
     clearTimeout(this.ackTimer);
     this.waitingForSize?.();
+    this.inputListeners?.abort();
     this.ime?.dispose();
     this.webgl?.dispose();
     this.term?.dispose();

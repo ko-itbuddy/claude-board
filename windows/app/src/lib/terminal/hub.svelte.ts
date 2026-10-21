@@ -326,17 +326,23 @@ export function newSessionSheet() {
   hub.sheet = true;
 }
 
-/** 셸이 첫 출력을 낸 뒤 300ms 조용해지면(5초 상한) 명령을 쳐 넣고 100ms 뒤 Enter — 셸의 줄 편집이 시작된 뒤에 넣는다(ClaudeBoard.swift:5088-5096) */
+/** 셸이 첫 출력을 낸 뒤 300ms 조용해지면(5초 상한) 명령을 쳐 넣고 100ms 뒤 Enter(\r) — 셸의 줄 편집이 시작된 뒤에 넣는다(ClaudeBoard.swift:5088-5096) */
 const QUIET_MS = 300;
 const QUIET_CAP_MS = 5000;
-async function typeCommand(ctl: TermController, termId: TermId, command: string) {
+const ENTER_DELAY_MS = 100;
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+async function typeCommand(ctl: TermController, leafId: string, termId: TermId, command: string) {
   const startedAt = Date.now();
+  // 첫 출력(lastOutputAt > 0)이 있고 그 뒤 300ms 조용하면 준비된 것. 5초가 지나면 그냥 친다
   const quiet = () => ctl.lastOutputAt > 0 && Date.now() - ctl.lastOutputAt >= QUIET_MS;
-  while (!quiet() && Date.now() - startedAt < QUIET_CAP_MS) await new Promise((r) => setTimeout(r, 50));
-  if (!hub.terms[termId]) return; // 기다리는 사이 탭이 닫혔다
+  while (!quiet() && Date.now() - startedAt < QUIET_CAP_MS) await sleep(50);
+  // 기다리는 사이 탭이 닫혔거나 같은 칸에 다른 셸이 붙었으면 치지 않는다
+  const alive = () => hub.leaves[leafId] && leafOf(leafId)?.termId === termId && hub.terms[termId];
+  if (!alive()) return;
   termWrite(termId, command);
-  await new Promise((r) => setTimeout(r, 100));
-  if (hub.terms[termId]) termWrite(termId, "");
+  await sleep(ENTER_DELAY_MS);
+  if (alive()) termWrite(termId, "\r");
 }
 
 /** 칸의 셸을 띄우거나(없으면 새로, 있으면 이어서) 붙는다. 칸이 처음 보일 때 부른다 */
@@ -348,27 +354,43 @@ export async function startLeaf(leafId: string) {
   state.phase = "starting";
   state.error = "";
   const ctl = controllerOf(leafId);
+  // 기다리는 사이 탭이 닫혔는가 — remove() 가 칸 상태를 지운다
+  const closed = () => !hub.leaves[leafId];
+  let spawnedId: TermId | null = null;
   try {
     await ctl.open();
+    if (closed()) return ctl.dispose();
     let info = leaf.termId ? hub.terms[leaf.termId] : undefined;
-    let fresh = false;
     if (!info) {
       const dims = ctl.dims();
       if (!dims) throw new Error("터미널 크기를 잴 수 없음");
       const cwd = workspaceKey(tab.workspace) === "~" ? undefined : tab.workspace;
       info = await termSpawn({ cwd, cols: dims.cols, rows: dims.rows });
+      spawnedId = info.id;
+      if (closed()) {
+        termKill(info.id); // 닫힌 탭의 셸이 남지 않게
+        return ctl.dispose();
+      }
       hub.terms[info.id] = info;
       leaf.termId = info.id;
-      fresh = true;
     }
     await ctl.bind(info);
-    // 새로 띄운 셸에만 명령을 한 번 친다. 붙는 사이에 셸이 이미 끝났을 수 있다
-    if (fresh && tab.command) {
-      termWrite(info.id, tab.command + "\r");
-      tab.command = null;
+    if (closed()) {
+      if (spawnedId) termKill(spawnedId);
+      return ctl.dispose();
     }
     if (state.phase === "starting") state.phase = "running";
+    // 새로 띄운 셸에만 명령을 한 번 친다(셸 준비를 기다린 뒤). 기다리는 동안 칸은 이미 running
+    if (spawnedId && tab.command) {
+      const command = tab.command;
+      tab.command = null;
+      void typeCommand(ctl, leafId, spawnedId, command);
+    }
   } catch (e) {
+    if (closed()) {
+      if (spawnedId) termKill(spawnedId);
+      return;
+    }
     state.phase = "failed";
     state.error = String(e);
     console.error("터미널을 시작하지 못함", e);

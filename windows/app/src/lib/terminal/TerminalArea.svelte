@@ -20,7 +20,7 @@
 
   // 수정키 — 누르는 즉시(다른 키와 함께여도) 번호 배지가 나타나고, 떼거나 창이 포커스를 잃으면 사라진다
   $effect(() => {
-    const sync = (e: KeyboardEvent) => (hub.commandHeld = e.ctrlKey && e.altKey);
+    const sync = (e: KeyboardEvent) => (hub.commandHeld = e.ctrlKey && e.altKey && !e.getModifierState("AltGraph"));
     const off = () => (hub.commandHeld = false);
     window.addEventListener("keydown", sync, true);
     window.addEventListener("keyup", sync, true);
@@ -37,6 +37,8 @@
     if (!expanded) return;
     const handle = (e: KeyboardEvent) => {
       if (hub.confirm || hub.sheet) return;
+      // AltGr 은 Windows 가 Ctrl+Alt 로 보고한다 — 글자(@ { [ 등)를 치는 키라 가로채지 않는다
+      if (e.getModifierState("AltGraph")) return;
       const run = (fn: () => void) => {
         e.preventDefault();
         e.stopPropagation();
