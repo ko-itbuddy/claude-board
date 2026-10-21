@@ -543,10 +543,20 @@ mod real {
         v.wait_text("UP", 20);
         let t0 = Instant::now();
         hub.kill(&info.id).unwrap();
-        let code = v.wait_exit(8);
+        // kill 이 끝난 터미널은 허브에서 바로 지워지므로 보는 쪽에 종료 이벤트가 닿기 전에 정리될 수 있다.
+        // 프로세스가 끝났는지는 허브 상태(지워졌거나 종료 코드가 있음)로 본다
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let code = loop {
+            match hub.get(&info.id) {
+                Err(_) => break Some(()),
+                Ok(t) if t.stream.exit_code().is_some() => break Some(()),
+                Ok(_) if Instant::now() >= deadline => break None,
+                Ok(_) => std::thread::sleep(Duration::from_millis(20)),
+            }
+        };
         let took = t0.elapsed();
-        assert!(code.is_some() && took < KILL_GRACE, "kill 뒤 {took:?} 에도 끝나지 않았다(종료 코드 {code:?})");
-        eprintln!("kill 뒤 종료까지 {took:?}, 종료 코드 {code:?}");
+        assert!(code.is_some() && took < KILL_GRACE, "kill 뒤 {took:?} 에도 끝나지 않았다");
+        eprintln!("kill 뒤 종료까지 {took:?}");
         let _ = fs::remove_dir_all(dir);
     }
 
