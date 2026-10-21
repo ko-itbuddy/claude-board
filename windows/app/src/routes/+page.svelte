@@ -322,9 +322,19 @@
   .root.flip {
     flex-direction: row-reverse;
   }
-  /* 터미널을 펼친 창은 작업 영역 전체라 모서리를 둥글리지 않는다(바탕은 터미널 영역과 보드가 각자 덮는다) */
+  /* 터미널을 펼친 창도 mac 처럼 둥글다 — 반지름 16 은 mac 스크린샷의 창 모서리 실측(바깥선 따라 맞춤). 바탕은 터미널 영역과 보드가 각자 덮고 root 가 잘라 낸다 */
   .root.expanded {
-    border-radius: 0;
+    border-radius: 16px;
+  }
+  /* mac 창 가장자리의 1px 밝은 선(실측: 흰색 알파 약 0.22 가 위·오른쪽·아래에서 같은 값) — 자식 위에 덮는다 */
+  .root.expanded::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.22);
+    pointer-events: none;
   }
   .termPane {
     flex: 1 1 0;
@@ -353,6 +363,7 @@
     --bd-a: 1;
     flex: none;
     border-radius: 0;
+    box-shadow: none;
   }
   .content {
     flex: 1;

@@ -129,12 +129,10 @@
     color: var(--fg);
     background: rgb(255 255 255 / 0.14);
   }
-  /* 번호 배지는 고정 16x16 칸이라 탭 폭이 흔들리지 않는다 */
+  /* 번호 배지는 고정 16x16 칸이라 탭 폭이 흔들리지 않는다. mac 의 ⌘번호는 글자만이라 바탕·모서리가 없다 */
   .badge {
     opacity: 1;
-    border-radius: 4px;
     font-size: 10px;
     font-weight: 600;
-    background: rgb(255 255 255 / 0.08);
   }
 </style>

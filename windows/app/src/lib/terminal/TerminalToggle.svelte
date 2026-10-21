@@ -2,7 +2,6 @@
   // 제목 막대의 "터미널" 단추(ClaudeBoard.swift:7369-7398 TerminalToggleButton) — 캡슐. 펼침은 작업 중 색, 접힘은 흰 반투명.
   // 미니 단계에서는 부르는 쪽이 그리지 않는다
   import { setTerminalExpanded } from "$lib/backend";
-  import Icon from "$lib/board/Icon.svelte";
   import { hint } from "$lib/board/hint.svelte";
   import type { BoardSide } from "$lib/types";
 
@@ -18,7 +17,11 @@
 
 <button class="toggle" class:on={expanded} onclick={() => setTerminalExpanded(!expanded)} use:hint={tip} aria-pressed={expanded}>
   <span class="cap">
-    <Icon name={left ? "panel-right" : "panel-left"} size={12} />
+    <!-- SF Symbol rectangle.(leading|trailing)half.inset.filled — 14x11, 속 채움이 반쪽 -->
+    <svg class="sym" width="14" height="11" viewBox="0 0 14 11" aria-hidden="true">
+      <rect x="0.5" y="0.5" width="13" height="10" rx="2.2" fill="none" stroke="currentColor" stroke-width="1" />
+      <rect x={left ? 7.7 : 2.2} y="2.2" width="3.6" height="6.6" rx="0.6" fill="currentColor" />
+    </svg>
     <span class="text">{expanded ? "터미널 펼침" : "터미널 접힘"}</span>
     <span class="key">Ctrl+Alt+T</span>
   </span>
@@ -44,7 +47,7 @@
     white-space: nowrap;
     color: rgb(255 255 255 / 0.8);
     background: rgb(255 255 255 / 0.18);
-    box-shadow: inset 0 0 0 0.5px rgb(255 255 255 / 0.18);
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.18);
     transition:
       color 0.15s ease-out,
       background 0.15s ease-out;
@@ -53,16 +56,24 @@
     color: #fff;
     background: rgb(255 255 255 / 0.3);
   }
+  /* 펼침 색은 mac 의 반투명 합성이 같은 알파에서 더 진하게 나오는 실측 값에 맞춘 불투명 값이다(바탕은 --term-bar 위) */
   .toggle.on .cap {
     color: rgb(var(--working));
-    background: rgb(var(--working) / 0.18);
-    box-shadow: inset 0 0 0 0.5px rgb(var(--working) / 0.45);
+    background: rgb(44 56 83);
+    box-shadow: inset 0 0 0 1px rgb(60 70 95);
+  }
+  .sym {
+    flex: none;
   }
   .key {
     padding: 0 4px;
     border-radius: 4px;
     font-size: 10px;
     font-weight: 500;
+    line-height: 14px;
     background: rgb(255 255 255 / 0.08);
+  }
+  .toggle.on .key {
+    background: rgb(55 67 91);
   }
 </style>

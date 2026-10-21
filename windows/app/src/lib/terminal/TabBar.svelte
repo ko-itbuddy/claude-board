@@ -65,7 +65,7 @@
   </div>
   <button class="new" bind:offsetWidth={newWidth} onclick={newSessionSheet} use:hint={"새 세션"}>
     <span class="box">
-      <svg class="dash" aria-hidden="true"><rect x="0.5" y="0.5" rx="8" ry="8" /></svg>
+      <svg class="dash" aria-hidden="true"><rect x="0.5" y="0.5" rx="7.5" ry="7.5" /></svg>
       <Icon name="plus" size={10} />
       <span class="key">Ctrl+T</span>
     </span>
@@ -90,7 +90,7 @@
     right: 0;
     bottom: 0;
     height: 1px;
-    background: rgb(255 255 255 / 0.07);
+    background: rgb(255 255 255 / 0.083);
     pointer-events: none;
   }
   .scroller {
@@ -151,8 +151,9 @@
     width: calc(100% - 1px);
     height: calc(100% - 1px);
     fill: none;
-    stroke: rgb(255 255 255 / 0.22);
+    stroke: rgb(255 255 255 / 0.25);
     stroke-width: 1;
     stroke-dasharray: 3 2;
+    stroke-dashoffset: 3.5;
   }
 </style>

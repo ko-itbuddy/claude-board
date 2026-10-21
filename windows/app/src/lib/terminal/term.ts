@@ -19,7 +19,7 @@ const RESIZE_DEBOUNCE_MS = 100;
 const CONPTY_REFLOW_BUILD = 21376;
 
 /** 터미널 테마 배경 — 고른 탭·현재 경로 항목·칸 바탕이 같은 색을 쓰도록 이 한 곳에서 정하고 TerminalArea 가 --term-bg 로 내보낸다 */
-export const TERM_BG = "#12121c";
+export const TERM_BG = "#212121";
 
 const THEME = {
   background: TERM_BG,

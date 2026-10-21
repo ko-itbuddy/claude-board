@@ -26,10 +26,16 @@
   }
   .t1 {
     font-size: 14px;
+    line-height: 17px;
+    position: relative;
+    top: -2px;
     font-weight: 600;
   }
   .t2 {
     font-size: 12px;
+    line-height: 14px;
+    position: relative;
+    top: -1px;
     color: var(--fg2);
   }
   .new {
@@ -41,10 +47,10 @@
     border-radius: 999px;
     font-size: 12px;
     font-weight: 600;
-    background: rgb(255 255 255 / 0.1);
+    background: rgb(255 255 255 / 0.126);
     transition: background 0.15s;
   }
   .new:hover {
-    background: rgb(255 255 255 / 0.16);
+    background: rgb(255 255 255 / 0.2);
   }
 </style>
