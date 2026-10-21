@@ -1,5 +1,8 @@
 // 브라우저(npm run dev)용 가짜 백엔드 — docs/images/hero.png 와 같은 장면을 만들고, SPEC §6.2 명령마다 이 상태를 고쳐
 // 보드를 Tauri 없이도 끝까지 눌러 볼 수 있게 한다. 주소에 ?update 를 붙이면 새 버전 알림 줄, ?empty 면 세션 없는 화면
+// 화면 대조용 시나리오(?scenario=mac1) — 파일은 저장소에 올리지 않는다(없으면 건너뜀)
+type Scenarios = { applyMac1?: (s: typeof S) => void; FROZEN_NOW?: number };
+const scenarios: Scenarios = Object.values(import.meta.glob("./mock-scenarios.ts", { eager: true }))[0] as Scenarios ?? {};
 import type { Account, Brain, Group, Session, Snapshot, State, Sub, TermId, TermInfo, TermSpec } from "./types";
 
 const SEC = 1000;
@@ -10,6 +13,7 @@ const HOME = "C:\\Users\\demo";
 const q = new URLSearchParams(typeof location === "undefined" ? "" : location.search);
 const hasUpdate = q.has("update");
 const empty = q.has("empty");
+const scenario = q.get("scenario");
 
 const t0 = Date.now();
 
@@ -191,6 +195,8 @@ const S: Snapshot = {
   ],
 };
 
+if (scenario === "mac1") scenarios.applyMac1?.(S);
+
 const rank: Record<State, number> = { waiting: 0, working: 1, paused: 2, idle: 2, ended: 3 };
 
 // §5.1 정렬 — 그룹 안은 급한 순·최근 순, 그룹은 고정 순서 → 가장 급한 상태 → 가장 최근 활동
@@ -216,7 +222,7 @@ let publish: (s: Snapshot) => void = () => {};
 
 function push() {
   normalize();
-  S.now = Date.now();
+  S.now = scenario === "mac1" && scenarios.FROZEN_NOW ? scenarios.FROZEN_NOW : Date.now();
   publish(structuredClone(S));
 }
 
