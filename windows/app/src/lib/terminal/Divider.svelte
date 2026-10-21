@@ -72,18 +72,16 @@
     display: grid;
     place-items: center;
     cursor: col-resize;
-    background: #0c0c14;
+    background: var(--term-edge);
     touch-action: none;
   }
   .grip {
-    width: 2px;
-    height: 36px;
-    border-radius: 1px;
-    background: rgb(255 255 255 / 0.16);
-    transition: background 0.15s;
+    width: 3px;
+    height: 44px;
+    border-radius: 1.5px;
+    background: #5c5c5c;
   }
-  .divider:hover .grip,
   .divider.dragging .grip {
-    background: rgb(var(--accent) / 0.9);
+    background: #7aa3f7;
   }
 </style>

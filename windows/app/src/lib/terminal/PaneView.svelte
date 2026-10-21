@@ -4,18 +4,18 @@
   import PaneView from "./PaneView.svelte";
   import TerminalPane from "./TerminalPane.svelte";
 
-  let { node, visible }: { node: PaneNode; visible: boolean } = $props();
+  let { node, tabId, visible }: { node: PaneNode; tabId: string; visible: boolean } = $props();
 </script>
 
 {#if node.type === "leaf"}
-  <TerminalPane leafId={node.leafId} {visible} />
+  <TerminalPane leafId={node.leafId} {tabId} {visible} />
 {:else}
   <div class="split" class:col={node.dir === "col"}>
     <div class="side" style:flex="{node.ratio} 1 0">
-      <PaneView node={node.first} {visible} />
+      <PaneView node={node.first} {tabId} {visible} />
     </div>
     <div class="side" style:flex="{1 - node.ratio} 1 0">
-      <PaneView node={node.second} {visible} />
+      <PaneView node={node.second} {tabId} {visible} />
     </div>
   </div>
 {/if}

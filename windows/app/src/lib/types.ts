@@ -189,6 +189,12 @@ export interface TerminalTab {
   id: string;
   root: PaneNode;
   activeLeaf: string;
+  workspace: string;          // 경로 줄 항목 — 이 탭을 연 작업 경로("~" = 홈)
+  customName: string | null;  // 사용자가 바꾼 탭 이름, 없으면 폴더 이름
+  renaming: boolean;          // 이름 바꾸기 입력 칸이 열려 있는지
+  sessionId: string | null;   // 이 탭의 claude 세션(보드 상태 묶음의 Session.id), 셸 탭은 null
+  command: string | null;     // 셸이 뜬 뒤 한 번 칠 명령(claude …), 없으면 null
+  title: string;              // 터미널이 알려 준 제목(xterm onTitleChange)
 }
 
 // 칸의 셸 상태 — idle(아직 안 띄움) · starting · running · exited · failed

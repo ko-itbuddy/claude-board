@@ -17,17 +17,22 @@ const RESIZE_DEBOUNCE_MS = 100;
 /** ConPTY 가 줄 바꿈을 직접 다시 계산하는 첫 빌드(xterm windowsPty 규칙) */
 const CONPTY_REFLOW_BUILD = 21376;
 
+/** 터미널 테마 배경 — 고른 탭·현재 경로 항목·칸 바탕이 같은 색을 쓰도록 이 한 곳에서 정하고 TerminalArea 가 --term-bg 로 내보낸다 */
+export const TERM_BG = "#12121c";
+
 const THEME = {
-  background: "#12121c",
+  background: TERM_BG,
   foreground: "#ebebf5",
   cursor: "#d97857",
-  cursorAccent: "#12121c",
+  cursorAccent: TERM_BG,
   selectionBackground: "rgba(217, 120, 87, 0.35)",
 };
 
 export interface TermHooks {
   /** 셸이 끝났다(마지막 출력까지 화면에 쓴 뒤) */
   onExit(code: number | null): void;
+  /** 프로그램이 터미널 제목을 바꿨다(OSC 0·2) */
+  onTitle(title: string): void;
 }
 
 export class TermController {
@@ -45,6 +50,7 @@ export class TermController {
   private fitFrame = 0;
   private resizeTimer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
+  private focusWhenOpen = false;
 
   // 다시 받기: 이 오프셋 앞의 출력은 되감아 받은 것이라, 그 사이 xterm 이 만든 자동 응답(onData)은 셸로 보내지 않는다.
   // 쓰기마다 카운터를 올리고 쓰기 콜백에서 내린다. 카운터가 0 보다 크면 삼킨다
@@ -84,8 +90,10 @@ export class TermController {
     this.requestFit();
   }
 
+  /** 포커스를 준다. xterm 이 아직 안 열렸으면(처음 보이는 탭) 열리는 즉시 준다 */
   focus() {
-    this.term?.focus();
+    if (this.term) this.term.focus();
+    else this.focusWhenOpen = true;
   }
 
   // ── 열기·붙이기 ───────────────────────────────────────────
@@ -142,6 +150,7 @@ export class TermController {
       if (this.termId && this.replayWrites === 0) termWriteBin(this.termId, Array.from(data, (ch) => ch.charCodeAt(0)));
     });
     term.onResize(({ cols, rows }) => this.scheduleResize(cols, rows));
+    term.onTitleChange((title) => this.hooks.onTitle(title));
     this.ime = createImeKeys(
       term.textarea!,
       (data) => this.termId && termWrite(this.termId, data),
@@ -149,6 +158,7 @@ export class TermController {
     );
     term.attachCustomKeyEventHandler((ev) => this.handleKey(ev));
     this.fitNow();
+    if (this.focusWhenOpen) term.focus();
   }
 
   // WebGL 이 안 되거나(원격 데스크톱 등) 도중에 컨텍스트를 잃으면 DOM 렌더러로 간다

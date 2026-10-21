@@ -8,7 +8,7 @@
     | "hand" | "check-circle" | "pause-circle" | "minus-circle" | "trash" | "gauge"
     | "warn" | "arrow-down-circle" | "hammer" | "moon-zzz" | "half-circle"
     | "snap-right" | "shrink" | "grow" | "win-min" | "win-close" | "shells" | "seal-check"
-    | "app-forward" | "app-plus" | "nosign";
+    | "app-forward" | "app-plus" | "nosign" | "plus" | "panel-left" | "panel-right";
 </script>
 
 <script lang="ts">
@@ -142,6 +142,14 @@
   {:else if name === "half-circle"}
     <circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.5" />
     <path d="M8 1.8a6.2 6.2 0 0 0 0 12.4z" fill="currentColor" />
+  {:else if name === "plus"}
+    <path d="M8 2.6v10.8M2.6 8h10.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+  {:else if name === "panel-left"}
+    <rect x="1.2" y="2.4" width="13.6" height="11.2" rx="2.4" fill="none" stroke="currentColor" stroke-width="1.4" />
+    <rect x="3.4" y="4.6" width="4.2" height="6.8" rx="1" fill="currentColor" />
+  {:else if name === "panel-right"}
+    <rect x="1.2" y="2.4" width="13.6" height="11.2" rx="2.4" fill="none" stroke="currentColor" stroke-width="1.4" />
+    <rect x="8.4" y="4.6" width="4.2" height="6.8" rx="1" fill="currentColor" />
   {:else if name === "snap-right"}
     <rect x="1.2" y="2.4" width="13.6" height="11.2" rx="2.4" fill="none" stroke="currentColor" stroke-width="1.4" />
     <rect x="8.4" y="4.6" width="4.2" height="6.8" rx="1" fill="currentColor" />

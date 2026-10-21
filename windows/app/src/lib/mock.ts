@@ -435,6 +435,27 @@ export async function handle(cmd: string, a: Record<string, unknown>): Promise<u
 // 셸 대신 한 줄을 쳐서 Enter 하면 그 줄을 되돌려 주는 에코 터미널. 실제 백엔드와 같은 프레임(8바이트 seq + 출력, JSON gap·exit)을
 // 내보내 프런트의 해독·다시 받기·종료 처리까지 같은 길로 지나게 한다. 명령: exit [코드] 종료 · flood 많은 줄 쏟아내기 · clear 화면 지우기
 
+// 터미널 칸을 미리 여는 길 — 주소에 ?tabs=N(1~12)을 붙이면 터미널을 펼칠 때 탭 N 개가 열린다(경로 줄·가로 밀림·상태 점·같은 이름 라벨을 볼 때)
+const TAB_PRESETS: { dir: string; sessionId?: string; name?: string }[] = [
+  { dir: cwdOf("shop-api"), sessionId: "s-shop-1" },
+  { dir: cwdOf("shop-api"), sessionId: "s-shop-2" },
+  { dir: cwdOf("web-dashboard"), sessionId: "s-web-1" },
+  { dir: cwdOf("shop-api") },
+  { dir: cwdOf("mobile-app"), sessionId: "s-mob-1" },
+  { dir: cwdOf("infra"), sessionId: "s-infra-1" },
+  { dir: "D:\\other\\shop-api" },
+  { dir: HOME },
+  { dir: cwdOf("infra"), sessionId: "s-infra-2" },
+  { dir: cwdOf("web-dashboard"), name: "배포 확인용 터미널" },
+  { dir: cwdOf("web-dashboard") },
+  { dir: cwdOf("web-dashboard") },
+];
+
+export function mockTabs() {
+  const n = Math.min(12, Math.max(0, Number(q.get("tabs")) || 0));
+  return TAB_PRESETS.slice(0, n);
+}
+
 const PROMPT = "PS C:\\Users\\demo> ";
 const encoder = new TextEncoder();
 const fakeTerms = new Map<TermId, FakeTerm>();
@@ -452,8 +473,10 @@ class FakeTerm {
     readonly id: TermId,
     private cols: number,
     private rows: number,
+    private readonly cwd: string,
   ) {
-    this.print(`Mock PowerShell (echo) ${cols}x${rows}\r\n한 줄을 치고 Enter 를 누르면 되돌려 줍니다. exit, flood, clear\r\n\r\n${PROMPT}`);
+    // 제목(OSC 0) — 셸 탭의 "하는 일" 자리에 보이는 터미널 제목
+    this.print(`\x1b]0;${cwd}\x07Mock PowerShell (echo) ${cols}x${rows}\r\n한 줄을 치고 Enter 를 누르면 되돌려 줍니다. exit, flood, clear\r\n\r\n${PROMPT}`);
   }
 
   info(): TermInfo {
@@ -461,7 +484,7 @@ class FakeTerm {
       id: this.id,
       pid: 4000 + Number(this.id.slice(1)),
       shell: "pwsh",
-      cwd: HOME,
+      cwd: this.cwd,
       cols: this.cols,
       rows: this.rows,
       status: this.status,
@@ -553,7 +576,7 @@ class FakeTerm {
 
 function spawnTerm(spec: TermSpec): TermInfo {
   const id = `t${nextTermNumber++}`;
-  const term = new FakeTerm(id, spec.cols, spec.rows);
+  const term = new FakeTerm(id, spec.cols, spec.rows, spec.cwd ?? HOME);
   fakeTerms.set(id, term);
   return term.info();
 }

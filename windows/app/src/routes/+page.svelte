@@ -4,7 +4,7 @@
   import { tick } from "svelte";
   import { flip } from "svelte/animate";
   import { fade, fly, slide } from "svelte/transition";
-  import { onTerminalFocus, setBoardMini, setBoardWidth, toggleCollapsed } from "$lib/backend";
+  import { setBoardMini, setBoardWidth, toggleCollapsed } from "$lib/backend";
   import type { Group } from "$lib/types";
   import EdgeDock from "$lib/board/EdgeDock.svelte";
   import GroupCard from "$lib/board/GroupCard.svelte";
@@ -18,8 +18,8 @@
   import UpdateBanner from "$lib/board/UpdateBanner.svelte";
   import UsagePanel from "$lib/board/UsagePanel.svelte";
   import Divider from "$lib/terminal/Divider.svelte";
-  import PaneView from "$lib/terminal/PaneView.svelte";
-  import { activeTab, focusActive, setDragging, startHub, hub } from "$lib/terminal/hub.svelte";
+  import TerminalArea from "$lib/terminal/TerminalArea.svelte";
+  import { setDragging, startHub } from "$lib/terminal/hub.svelte";
   import { stateName, stateRgb } from "$lib/board/format";
   import { hint } from "$lib/board/hint.svelte";
   import { pointer, trackWindow, win } from "$lib/board/pointer.svelte";
@@ -45,7 +45,6 @@
 
   $effect(() => connect());
   $effect(() => trackWindow(() => board.snap?.terminals.length ?? 5, () => ({ el: boardEl, side })));
-  $effect(() => onTerminalFocus(focusActive));
   $effect(() => {
     const sync = () => (winWidth = window.innerWidth);
     sync();
@@ -53,7 +52,7 @@
     return () => window.removeEventListener("resize", sync);
   });
 
-  // 터미널을 처음 펼칠 때 셸을 준비한다(접힌 채 시작하면 띄우지 않는다)
+  // 터미널을 처음 펼칠 때 아직 도는 터미널을 이어받는다(탭은 만들지 않는다 — 탭이 생길 때까지 빈 상태)
   $effect(() => {
     if (expanded) void startHub();
   });
@@ -218,11 +217,7 @@
   {#if snap}
     <!-- 접어도 언마운트하지 않고 숨긴다 — 셸과 출력이 그대로 남는다 -->
     <div class="termPane" class:hidden={!expanded}>
-      {#each hub.tabs as tab (tab.id)}
-        {#if tab.id === activeTab()?.id}
-          <PaneView node={tab.root} visible={expanded} />
-        {/if}
-      {/each}
+      <TerminalArea {expanded} {side} />
     </div>
     {#if expanded}
       <Divider root={rootEl} {side} min={MIN_BOARD} max={maxBoard} onresize={resizeBoard} oncommit={commitBoard} />
@@ -230,7 +225,7 @@
   {/if}
   <div class="board" style:width={expanded ? `${boardWidth}px` : undefined} bind:this={boardEl}>
   {#if snap}
-    <TitleBar mini={ui.tier === "mini"} counts={snap.counts} rows={snap.groups.length} {expanded} />
+    <TitleBar mini={ui.tier === "mini"} counts={snap.counts} rows={snap.groups.length} {expanded} {side} />
     {#if ui.tier === "mini"}
       <MiniBoard {snap} />
     {:else}
@@ -327,10 +322,9 @@
   .root.flip {
     flex-direction: row-reverse;
   }
-  /* 터미널을 펼친 창은 작업 영역 전체라 모서리를 둥글리지 않고 바탕도 비치지 않게 한다 */
+  /* 터미널을 펼친 창은 작업 영역 전체라 모서리를 둥글리지 않는다(바탕은 터미널 영역과 보드가 각자 덮는다) */
   .root.expanded {
     border-radius: 0;
-    background: #12121c;
   }
   .termPane {
     flex: 1 1 0;
