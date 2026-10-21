@@ -79,10 +79,14 @@ export function createImeKeys(
         if (!(isEnter(ev) && held.some((key) => key.enter))) held.push({ enter: isEnter(ev), data });
         return false;
       }
-      if (held.length > 0 && isEnter(ev) && held.some((key) => key.enter)) {
-        // compositionend 직후 같은 틱에 다시 쏘아진 Enter
-        ev.preventDefault();
-        return false;
+      if (held.length > 0) {
+        // compositionend 직후 같은 틱에 입력기가 다시 쏘는 같은 키(Enter, Escape, 방향키 ...)는 이미 붙들어 둔 것과 같으므로 버린다.
+        // 조합 중 Escape 는 한 번인데 ESC 가 두 번 셸에 가면 PSReadLine 이 줄을 지우지 않고 ^[ 를 글자로 넣는다
+        const again = heldKey(ev, applicationCursor());
+        if ((isEnter(ev) && held.some((key) => key.enter)) || (again !== null && held.some((key) => key.data === again))) {
+          ev.preventDefault();
+          return false;
+        }
       }
       if (ev.keyCode === 229) {
         const data = controlKey(ev);
