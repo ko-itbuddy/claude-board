@@ -349,8 +349,9 @@ export function termAck(id: TermId, seq: number) {
   fire("term_ack", { id, seq });
 }
 
-export function termResize(id: TermId, cols: number, rows: number) {
-  fire("term_resize", { id, cols, rows });
+/** 적용했으면 ConPTY 크기 변경 직전의 스트림 위치, 적용 안 했으면(같은 크기·끝난 셸) null */
+export function termResize(id: TermId, cols: number, rows: number): Promise<number | null> {
+  return call<number | null>("term_resize", { id, cols, rows });
 }
 
 export function termKill(id: TermId) {

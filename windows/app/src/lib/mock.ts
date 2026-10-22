@@ -427,7 +427,7 @@ export async function handle(cmd: string, a: Record<string, unknown>): Promise<u
       return;
     case "term_resize":
       fakeTerms.get(str("id"))?.resize(Number(a.cols), Number(a.rows));
-      return;
+      return null; // 기준 seq 없음 — 장벽이 바로 적용한다
     case "term_kill":
       fakeTerms.get(str("id"))?.exit(1);
       return;
