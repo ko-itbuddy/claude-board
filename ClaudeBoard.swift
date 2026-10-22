@@ -6,6 +6,7 @@ import Combine
 import CryptoKit
 import GhosttyTerminal
 import GhosttyTheme
+import ServiceManagement
 import SwiftUI
 
 // MARK: - 데이터
@@ -1856,7 +1857,7 @@ struct AccountChip: View {
                 + (!isCurrent && a.expired ? "  (다시 로그인 필요)" : "")
             let item = ActionItem(title, enabled: !accounts.switching) {
                 guard !isCurrent else { return }
-                a.expired ? accounts.beginAdd(email: a.email) : confirmSwitch(a)
+                a.expired ? accounts.beginAdd(email: a.email) : accounts.confirmSwitch(a, busy: busy())
             }
             item.state = isCurrent ? .on : .off
             if !a.org.isEmpty { item.toolTip = a.org }
@@ -1883,11 +1884,12 @@ struct AccountChip: View {
         menu.addItem(auto)
         menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
     }
+}
 
-    // 작업 중·승인 대기 세션이 있으면 이전 계정으로 일하는 중이라고 알리고 한 번 더 묻는다
-    private func confirmSwitch(_ a: Account) {
-        guard TerminalHub.shared.slide == nil else { return whenPaneSettled { confirmSwitch(a) } }
-        let working = busy()
+extension AccountStore {
+    // 계정 전환(계정 칩 메뉴·설정 > 계정) — 작업 중·승인 대기 세션이 있으면 이전 계정으로 일하는 중이라고 알리고 한 번 더 묻는다
+    @MainActor func confirmSwitch(_ a: Account, busy working: [Session]) {
+        guard TerminalHub.shared.slide == nil else { return whenPaneSettled { self.confirmSwitch(a, busy: working) } }
         if !working.isEmpty {
             let names = working.prefix(5).map { s in
                 "• \((s.cwd as NSString).lastPathComponent) · \(s.topic.isEmpty ? Palette.name(s.state) : s.topic)"
@@ -1895,7 +1897,7 @@ struct AccountChip: View {
             let alert = NSAlert()
             alert.messageText = "이전 계정으로 작업 중인 세션이 있습니다"
             alert.informativeText = """
-            \(accounts.current?.email ?? "지금") 계정으로 작업 중이거나 승인을 기다리는 세션이 \(working.count)개 있습니다.
+            \(current?.email ?? "지금") 계정으로 작업 중이거나 승인을 기다리는 세션이 \(working.count)개 있습니다.
             \(names.joined(separator: "\n"))\(working.count > 5 ? "\n… 외 \(working.count - 5)개" : "")
 
             전환하면 모든 세션이 다음 요청부터 \(a.email) 계정으로 이어서 동작합니다(30초 안에 반영). 지금 받고 있는 응답은 이전 계정으로 마무리됩니다.
@@ -1907,7 +1909,7 @@ struct AccountChip: View {
             NSApp.activate(ignoringOtherApps: true)
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
-        accounts.switchTo(a)
+        switchTo(a)
     }
 }
 
@@ -3285,7 +3287,7 @@ struct SpeechBubble: Shape {
 }
 
 // 제목 오른쪽의 작은 캐릭터 — 세션 상태에 따라 움직이고, 재촉하고, 졸고, 말풍선으로 상황을 알려 준다. 누르면 다음 말.
-// 그림은 고른 캐릭터(브레인롯 7종 또는 현장 감독)로 그린다 — 오른쪽 클릭이나 앱 메뉴 "캐릭터" 에서 고른다
+// 그림은 고른 캐릭터(브레인롯 7종 또는 현장 감독)로 그린다 — 오른쪽 클릭이나 설정 > 일반 에서 고른다
 struct Foreman: View {
     let groups: [Group]
     let limits: [Limit]
@@ -3329,7 +3331,7 @@ struct Foreman: View {
             Ambient { t in
                 ZStack {
                     if mascot == .foreman {
-                        figure(mood: q.mood, t: t, sinceChange: t - clock.changedAt)
+                        Self.figure(mood: q.mood, t: t, sinceChange: t - clock.changedAt, blink: clock.blink)
                     } else {
                         BrainrotFigure(kind: mascot, mood: q.mood, t: t, sinceChange: t - clock.changedAt, blink: clock.blink)
                     }
@@ -3350,7 +3352,7 @@ struct Foreman: View {
     }
 
     // 동작 — 모두 시계 t 의 함수라 반복 애니메이션 없이 공유 시계 하나로 움직인다
-    private func figure(mood: Mood, t: TimeInterval, sinceChange: Double) -> some View {
+    static func figure(mood: Mood, t: TimeInterval, sinceChange: Double, blink: Bool) -> some View {
         let skin = mood == .urgent ? Color(red: 0.93, green: 0.42, blue: 0.32) : Color(red: 0.85, green: 0.47, blue: 0.34)
         // 말풍선이 바뀌면 폴짝 — 0.45초 동안 뛰었다 내려와 착지에 찌그러진다
         let hopP = min(max(sinceChange / 0.45, 0), 1)
@@ -3401,7 +3403,7 @@ struct Foreman: View {
             // 얼굴
             Circle().fill(skin)
                 .frame(width: 28, height: 28)
-                .overlay { eyes(mood: mood, t: t) }
+                .overlay { eyes(mood: mood, t: t, blink: blink) }
                 .overlay(alignment: .bottom) { mouth(mood: mood, t: t).offset(y: -5) }
                 .overlay {
                     HStack(spacing: 13) {
@@ -3437,7 +3439,7 @@ struct Foreman: View {
         .offset(x: dx, y: hop + 2)
     }
 
-    @ViewBuilder private func eyes(mood: Mood, t: TimeInterval) -> some View {
+    @ViewBuilder private static func eyes(mood: Mood, t: TimeInterval, blink: Bool) -> some View {
         HStack(spacing: 7) {
             ForEach(0..<2, id: \.self) { _ in
                 switch mood {
@@ -3446,7 +3448,7 @@ struct Foreman: View {
                 case .urgent:
                     Circle().fill(Color(white: 0.12)).frame(width: 5, height: 5)
                 default:
-                    Capsule().fill(Color(white: 0.12)).frame(width: 3.5, height: clock.blink ? 0.8 : 5)
+                    Capsule().fill(Color(white: 0.12)).frame(width: 3.5, height: blink ? 0.8 : 5)
                 }
             }
         }
@@ -3454,7 +3456,7 @@ struct Foreman: View {
         .offset(x: mood == .sleepy ? 0 : -1.5, y: 1)
     }
 
-    @ViewBuilder private func mouth(mood: Mood, t: TimeInterval) -> some View {
+    @ViewBuilder private static func mouth(mood: Mood, t: TimeInterval) -> some View {
         switch mood {
         case .urgent:
             // 소리치는 입 — 열렸다 닫힌다
@@ -4678,8 +4680,10 @@ final class Updater: ObservableObject {
 
     private init() {
         guard eligible else { return }
-        check()
-        timer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in self?.check() }
+        if UserDefaults.standard.bool(forKey: "autoUpdateCheck") { check() }
+        timer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
+            if UserDefaults.standard.bool(forKey: "autoUpdateCheck") { self?.check() }   // 설정 > 업데이트
+        }
     }
 
     // manual — 업데이트 확인 단추·메뉴에서 불렀을 때. 새 버전이 없거나 확인하지 못해도 결과를 알림 줄에 보인다
@@ -4933,7 +4937,7 @@ func asciiKeyCharacters(_ keyCode: UInt16, shift: Bool) -> String? {
 
 // 터미널 설정은 보드가 직접 만든다 — 사용자 Ghostty 설정을 바탕으로 하되 theme 줄은 뺀다(엔진 번들에 테마 폴더가 없어 theme 한 줄 때문에
 // 파일 전체가 조용히 거부된다). 같은 이름 테마는 엔진의 테마 목록에서 찾아 넘긴다(넘기지 않으면 래퍼 기본 테마가 사용자 색을 덮는다).
-// 보드에서 고른 테마(보드 설정 terminalTheme, 윈도우 > 터미널 테마…)가 있으면 Ghostty 설정의 theme 대신 그것
+// 보드에서 고른 테마(보드 설정 terminalTheme, 설정 > 터미널 > 테마)가 있으면 Ghostty 설정의 theme 대신 그것
 @MainActor func makeTerminalController() -> TerminalController {
     var lines: [String] = []
     var theme: String?
@@ -5385,7 +5389,7 @@ final class SplitNode {
         toast("터미널 글자 \(String(format: "%g", d.object(forKey: "terminalFontSize") as? Double ?? ghosttyConfigFontSize()))pt")
     }
 
-    // 터미널 테마(윈도우 > 터미널 테마…) — 보드 설정 terminalTheme(테마 이름). nil 은 지워 Ghostty 설정의 theme 을 따른다.
+    // 터미널 테마(설정 > 터미널 > 테마) — 보드 설정 terminalTheme(테마 이름). nil 은 지워 Ghostty 설정의 theme 을 따른다.
     // 열린 탭 모두 바로 바뀌고 고른 탭·경로 칸 바탕·경계 색도 다시 읽는다. 엔진을 아직 띄우지 않았으면 설정만 남아 처음 띄울 때 쓴다
     func setTerminalTheme(_ name: String?) {
         let d = UserDefaults.standard
@@ -5739,13 +5743,14 @@ final class SplitNode {
     }
 
     // 새 세션 — claude 면 보드가 세션 id 를 붙여 미리 안다. 답변 꾸미기는 새 세션 창의 체크(경로 카드 "+" 는 늘 켬) — 끄면 그 세션 id 를 기억한다
-    func startSession(_ command: String, in dir: String, mdRender: Bool = true) {
+    func startSession(_ command: String, in dir: String, mdRender: Bool = UserDefaults.standard.bool(forKey: "newSessionMdRender")) {
         let (cmd, id) = freshSessionCommand(mdRenderCommand(command, off: !mdRender))
         launch(cmd, in: dir, sessionId: id, mdRenderOff: !mdRender)
     }
 
     // "+ 새 세션" 창 — 작업 폴더는 보드에 있는 경로(지금 경로를 먼저 고른다) + 다른 폴더
     func newSessionSheet() {
+        SettingsScreen.shared.close(keep: true)
         if !expanded { setTerminalExpanded(true) }
         showBoard()
         whenPaneSettled { self.beginNewSessionSheet() }
@@ -5767,6 +5772,7 @@ final class SplitNode {
     // 탭을 보이게 한다 — 접혀 있거나 미니면 펼치고, 그 탭을 고르고, 보드를 앞으로 꺼내 터미널에 포커스.
     // id 가 화면이면(세션 줄 클릭 — place 의 화면) 그 탭의 그 화면을 고른다(크게 보는 중이면 푼다)
     func reveal(_ id: UUID) {
+        SettingsScreen.shared.close(keep: true)
         if !expanded { setTerminalExpanded(true) }
         if let s = surface(id), let t = s.tab {
             if t.focused !== s { t.zoomed = false; t.focused = s }
@@ -5916,7 +5922,7 @@ final class SplitNode {
 
     // 이름을 고치는 탭이면 입력 칸에서 포커스를 뺏지 않는다(그 탭을 눌렀을 때, 펼치기 애니메이션이 끝났을 때)
     func focusSelected() {
-        guard expanded, let t = selectedTab, !t.renaming else { return }
+        guard expanded, !SettingsScreen.shared.shown, let t = selectedTab, !t.renaming else { return }
         window.makeFirstResponder(t.focused.view)
     }
 
@@ -6385,11 +6391,12 @@ let terminalExpandedMinSize = NSSize(width: boardMinWidth + paneDividerWidth + t
 
 // 펼치기: 창을 화면의 쓸 수 있는 영역 전체로. 접기: 보드만 화면 한쪽(보드 위치 — 오른쪽·왼쪽)에 끈 폭으로.
 // 펼쳐 화면 전체를 덮은 동안에는 "위에 고정"·투명도를 쓰지 않는다 — 화면 전체를 덮은 창이 늘 위에 있으면 다른 앱을 쓸 수 없다(expandedToFullScreen).
-// animated — 메뉴의 "펼치기·접기 애니메이션"(보드 설정 terminalAnimation, 기본 끔). 처음 크기로 붙이기·최대축소는 접은 뒤
+// animated — 설정 > 창 의 "펼치기·접기 애니메이션"(보드 설정 terminalAnimation, 기본 끔). 처음 크기로 붙이기·최대축소는 접은 뒤
 // 제 애니메이션을 바로 이어 돌리므로 false 로 부른다. 도는 애니메이션이 있으면 끝 상태로 마친 뒤 새 요청을 받는다
 @MainActor func setTerminalExpanded(_ on: Bool, animated: Bool = UserDefaults.standard.bool(forKey: "terminalAnimation")) {
     let hub = TerminalHub.shared
     hub.slide?.finish()
+    if !on { SettingsScreen.shared.dismissForCollapse() }
     guard hub.expanded != on, let vf = (window.screen ?? NSScreen.main)?.visibleFrame else { return }
     let target = on ? vf : NSRect(x: hub.boardOnLeft ? vf.minX : vf.maxX - hub.boardWidth, y: vf.minY, width: hub.boardWidth, height: vf.height)
     // 시트가 붙어 있으면 애니메이션 없이 — 시트가 붙은 창은 프레임이 멈췄다 건너뛴다
@@ -6658,6 +6665,8 @@ final class TerminalAreaView: NSView {
     let empty = PassiveHostingView(rootView: TerminalEmptyView())
     private let workspaceBar = PassiveHostingView(rootView: TerminalWorkspaceBar(hub: TerminalHub.shared))
     private let tabBar = PassiveHostingView(rootView: TerminalTabBar(hub: TerminalHub.shared))
+    let settings = SettingsHostingView(rootView: SettingsView())   // 설정 화면 — 제목 막대 띠 아래 전체를 덮는다
+    private var settingsMoving = 0   // 전환 효과 차례 — 도는 동안 layout 이 자리를 덮어쓰지 않게
     var titlebar: CGFloat = 0 { didSet { if titlebar != oldValue { needsLayout = true } } }
     var workspaceBarShown = false { didSet { if workspaceBarShown != oldValue { needsLayout = true } } }
 
@@ -6674,6 +6683,38 @@ final class TerminalAreaView: NSView {
         addSubview(empty)
         addSubview(workspaceBar)
         addSubview(tabBar)
+        settings.sizingOptions = []
+        settings.isHidden = true
+        addSubview(settings)
+    }
+
+    private var settingsFrame: NSRect { NSRect(x: 0, y: 0, width: bounds.width, height: max(0, bounds.height - titlebar)) }
+
+    // 설정 화면 올리기·내리기 — 밀기는 보드 반대쪽 가장자리에서 들어와 그쪽으로 나간다(투명도도 함께). 뒤의 탭은 그대로 돈다
+    func present(_ on: Bool, style: SettingsTransition) {
+        let base = settingsFrame
+        let away = base.offsetBy(dx: TerminalHub.shared.boardOnLeft ? base.width : -base.width, dy: 0)
+        settingsMoving += 1
+        let turn = settingsMoving
+        if on, settings.isHidden {
+            settings.frame = style == .slide ? away : base
+            settings.alphaValue = style == .none ? 1 : 0
+            settings.isHidden = false
+        }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = style == .none ? 0 : style == .slide ? 0.34 : 0.2
+            ctx.timingFunction = on ? CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)   // 빠르게 들어와 부드럽게 멈춘다
+                                    : CAMediaTimingFunction(controlPoints: 0.4, 0, 0.8, 0.4)
+            settings.animator().frame = on || style != .slide ? base : away
+            settings.animator().alphaValue = on || style == .none ? 1 : 0
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, turn == self.settingsMoving else { return }
+                self.settingsMoving = 0
+                if !on { self.settings.isHidden = true }
+                self.needsLayout = true
+            }
+        })
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -6694,6 +6735,7 @@ final class TerminalAreaView: NSView {
         tabBar.frame = NSRect(x: 0, y: top - ws - terminalTabBarHeight, width: bounds.width, height: terminalTabBarHeight)
         container.frame = NSRect(x: 0, y: 0, width: bounds.width, height: max(0, top - ws - terminalTabBarHeight))
         empty.frame = container.frame
+        if settingsMoving == 0 { settings.frame = settingsFrame }
     }
 }
 
@@ -7067,8 +7109,13 @@ struct TabNameField: NSViewRepresentable {
     }
 }
 
-// 새 세션 기본 명령 — 승인 대기가 거의 없게 권한 확인을 건너뛰는 것도 의도한 것(2026-10-17 사용자)
-let defaultSessionCommand = "claude --dangerously-skip-permissions"
+// 새 세션 기본 명령 — 승인 대기가 거의 없게 권한 확인을 건너뛰는 것도 의도한 것(2026-10-17 사용자).
+// 설정 > 터미널 > 새 세션 의 기본 명령(newSessionCommand)이 있으면 그것을 쓴다
+let builtinSessionCommand = "claude --dangerously-skip-permissions"
+var defaultSessionCommand: String {
+    let s = UserDefaults.standard.string(forKey: "newSessionCommand")?.trimmingCharacters(in: .whitespaces) ?? ""
+    return s.isEmpty ? builtinSessionCommand : s
+}
 
 struct NewSessionSheet: View {
     let paths: [String]
@@ -7079,7 +7126,7 @@ struct NewSessionSheet: View {
     @State private var dir: String
     @State private var others: [String] = []
     @State private var command = defaultSessionCommand
-    @State private var mdRender = true   // 명령처럼 열 때마다 기본값(켬)
+    @State private var mdRender = UserDefaults.standard.bool(forKey: "newSessionMdRender")   // 명령처럼 열 때마다 기본값(설정 > 터미널)
 
     init(paths: [String], initial: String, cancel: @escaping () -> Void, start: @escaping (String, String, Bool) -> Void) {
         self.paths = paths
@@ -7157,21 +7204,16 @@ struct NewSessionSheet: View {
     }
 }
 
-// 터미널 테마 창(윈도우 > 터미널 테마…) — 엔진에 든 테마(485개)를 검색·미리보기하고 고른다. 한 번에 하나만(열려 있으면 앞으로).
-// 줄을 누르거나 ↑↓ 로 옮기면 바로 그 테마로 바꾼다(열린 탭 모두). Return·닫기 단추·창 닫기는 그대로 두고 닫고, Esc 는 창을 열 때의
-// 설정으로 되돌리고 닫는다. 키는 SessionMenuPanel 처럼 앱 안 이벤트 감시로 검색 칸보다 먼저 받는다(한글 조합 중이면 입력기 몫)
-@MainActor final class ThemePicker: ObservableObject {
-    static let shared = ThemePicker()
+// 터미널 테마 목록(설정 > 터미널 > 테마) — 엔진에 든 테마(485개)를 이름으로 찾고 색 띠·견본으로 미리 본다.
+// 줄을 누르면 바로 그 테마로 바꾼다(열린 탭 모두). "Ghostty 설정 따르기" 는 보드 설정을 지워 Ghostty 설정의 theme 을 쓴다
+@MainActor final class ThemeList: ObservableObject {
+    static let shared = ThemeList()
     // 이름순(대소문자 무시). GhosttyThemeCatalog.search("") 는 빈 글자를 Foundation 의 contains 로 견주어 하나도 돌려주지 않는다(실측)
     let themes = GhosttyThemeCatalog.allThemes.sorted { $0.name.caseInsensitiveCompare($1.name) == .orderedAscending }
     @Published var query = ""
     @Published private(set) var current: String?    // 지금 쓰는 테마(보드 설정 terminalTheme) — nil 은 "Ghostty 설정 따르기"
-    private(set) var followed: GhosttyThemeDefinition?   // Ghostty 설정을 따를 때의 테마(색 띠·미리보기) — 열 때 읽는다
+    private(set) var followed: GhosttyThemeDefinition?   // Ghostty 설정을 따를 때의 테마(색 띠·미리보기) — 설정 화면을 열 때 읽는다
     private(set) var followedName = ""
-    private var original: String?                    // 창을 열 때의 설정 — Esc 로 돌아간다
-    private var win: NSWindow?
-    private var monitor: Any?
-    private var observer: NSObjectProtocol?
 
     // 보이는 줄 — nil 은 "Ghostty 설정 따르기"(검색어가 있으면 숨긴다). 이름 대소문자 무시 부분 일치
     var rows: [GhosttyThemeDefinition?] {
@@ -7181,71 +7223,17 @@ struct NewSessionSheet: View {
 
     func definition(_ name: String?) -> GhosttyThemeDefinition? { name.map { n in themes.first { $0.name == n } } ?? followed }
 
-    func open() {
-        if let win { win.makeKeyAndOrderFront(nil); return }
-        original = UserDefaults.standard.string(forKey: "terminalTheme")
-        current = original
+    func load() {
+        current = UserDefaults.standard.string(forKey: "terminalTheme")
         query = ""
         followed = themeDefinitions(ghosttyConfigValue("theme"))?.dark ?? GhosttyThemeCatalog.theme(named: "Afterglow")
         followedName = ghosttyThemeName()
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 540), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        w.title = "터미널 테마"
-        w.appearance = NSAppearance(named: .darkAqua)
-        w.level = window.level   // 위에 고정한 보드(.floating)에 가리지 않게 — 고정하지 않았으면 다른 앱 위에 남지 않게 보통 층
-        w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        w.isReleasedWhenClosed = false
-        w.contentViewController = NSHostingController(rootView: ThemePickerView(model: self))
-        w.setContentSize(NSSize(width: 420, height: 540))   // 붙이는 순간 창이 아직 그리지 않은 뷰 크기(0)로 줄어든다 — 그대로 띄우면 키 창이 못 된다
-        // 보드 쪽 끝에 붙여 연다 — 펼친 터미널이 가려지지 않게
-        let f = window.frame
-        w.setFrameOrigin(NSPoint(x: TerminalHub.shared.boardOnLeft ? f.minX + 20 : f.maxX - w.frame.width - 20, y: f.midY - w.frame.height / 2))
-        win = w
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in self?.handle(e) ?? e }
-        observer = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.closed() }
-        }
-        w.makeKeyAndOrderFront(nil)
-    }
-
-    private func handle(_ e: NSEvent) -> NSEvent? {
-        guard let win, e.window === win, !e.modifierFlags.contains(.command) else { return e }
-        if (win.firstResponder as? NSTextView)?.hasMarkedText() == true { return e }
-        switch e.keyCode {
-        case 125: move(1)
-        case 126: move(-1)
-        case 36, 76: close(revert: false)   // Return·Enter
-        case 53: close(revert: true)        // Esc
-        default: return e
-        }
-        return nil
-    }
-
-    // ↑↓ — 보이는 줄에서 한 줄씩(끝에서 멈춘다). 지금 것이 안 보이면 첫 줄·끝 줄로
-    func move(_ d: Int) {
-        let names = rows.map { $0?.name }
-        guard !names.isEmpty else { return }
-        if let i = names.firstIndex(of: current) { pick(names[max(0, min(names.count - 1, i + d))]) } else { pick(d > 0 ? names[0] : names[names.count - 1]) }
     }
 
     func pick(_ name: String?) {
         guard name != current else { return }
         current = name
         TerminalHub.shared.setTerminalTheme(name)
-    }
-
-    func close(revert: Bool) {
-        if revert, current != original { TerminalHub.shared.setTerminalTheme(original) }
-        win?.close()   // 정리는 closed
-    }
-
-    // 창이 닫혔다(Return·Esc·닫기 단추·창 닫기 단추·⌘W)
-    private func closed() {
-        if let monitor { NSEvent.removeMonitor(monitor) }
-        if let observer { NotificationCenter.default.removeObserver(observer) }
-        monitor = nil
-        observer = nil
-        win = nil
-        if NSApp.isActive, window.isVisible { window.makeKey() }   // 키 창·터미널 포커스를 보드로 돌린다
     }
 }
 
@@ -7255,63 +7243,80 @@ func themeColor(_ hex: String?) -> Color {
     return Color(red: Double(n >> 16 & 0xFF) / 255, green: Double(n >> 8 & 0xFF) / 255, blue: Double(n & 0xFF) / 255)
 }
 
-struct ThemePickerView: View {
-    @ObservedObject var model: ThemePicker
-    @FocusState private var searching: Bool
+// 테마 목록(왼쪽, 검색·스크롤) + 고른 테마의 견본(오른쪽). 폭이 좁으면 견본을 아래로
+struct ThemeListView: View {
+    @ObservedObject var model: ThemeList
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            TextField("테마 이름 검색", text: $model.query)
-                .textFieldStyle(.roundedBorder)
-                .focused($searching)
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 1) { ForEach(model.rows, id: \.?.name) { row($0) } }.padding(4)
-                }
-                .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.04)))
-                .onAppear { proxy.scrollTo(model.current, anchor: .center) }
-                .onChange(of: model.current) { _, name in proxy.scrollTo(name) }   // ↑↓ 로 옮긴 줄이 보이게(보이면 그대로)
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 12) {
+                list.frame(minWidth: 240)
+                preview(model.definition(model.current)).frame(width: 250)
             }
-            preview(model.definition(model.current))
-            HStack {
-                Text("↑↓ 고르기 · Return 닫기 · Esc 되돌리고 닫기").boardFont(11).foregroundStyle(.secondary)
-                Spacer()
-                Button("닫기") { model.close(revert: false) }
+            VStack(spacing: 12) {
+                list
+                preview(model.definition(model.current))
             }
         }
-        .padding(14)
-        .frame(width: 420, height: 540)
-        .background(Color(red: 0.11, green: 0.11, blue: 0.17))
-        .preferredColorScheme(.dark)
-        .boardFont(13)   // 글자 크기를 따로 정하지 않은 글자(단추 제목 등)도 보드 글자 비율을 따른다
-        .onAppear { DispatchQueue.main.async { searching = true } }
+    }
+
+    private var list: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+                TextField("테마 이름 검색", text: $model.query).textFieldStyle(.plain).boardFont(12)
+            }
+            .padding(.horizontal, 8).frame(height: 26)
+            .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(0.06)))
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 1) { ForEach(model.rows, id: \.?.name) { row($0) } }.padding(3)
+                }
+                .frame(height: 236)
+                .onAppear { proxy.scrollTo(model.current, anchor: .center) }
+            }
+            .background(RoundedRectangle(cornerRadius: 9).fill(Color.black.opacity(0.2)))
+            .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.white.opacity(0.07), lineWidth: 1))
+        }
     }
 
     // 이름(+ "Ghostty 설정 따르기" 는 지금 그것이 무엇인지), 지금 쓰는 것에 체크, 오른쪽에 바탕색 칩 + palette 0~7 칩
     private func row(_ t: GhosttyThemeDefinition?) -> some View {
-        let on = t?.name == model.current
-        let colors = t ?? model.followed
-        return HStack(spacing: 8) {
-            Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(Palette.color("working"))
-                .opacity(on ? 1 : 0).frame(width: 12)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(t?.name ?? "Ghostty 설정 따르기").boardFont(13, weight: on ? .semibold : .regular).lineLimit(1)
-                if t == nil { Text(model.followedName).boardFont(11).foregroundStyle(.secondary).lineLimit(1) }
-            }
-            Spacer(minLength: 8)
-            HStack(spacing: 3) {
-                RoundedRectangle(cornerRadius: 3).fill(themeColor(colors?.background)).frame(width: 18, height: 14)
-                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.white.opacity(0.2), lineWidth: 0.5))
-                HStack(spacing: 0) {
-                    ForEach(0..<8, id: \.self) { i in Rectangle().fill(themeColor(colors?.palette[i])).frame(width: 9, height: 14) }
+        ThemeRow(theme: t, colors: t ?? model.followed, followedName: model.followedName, on: t?.name == model.current) { model.pick(t?.name) }
+    }
+
+    private struct ThemeRow: View {
+        let theme: GhosttyThemeDefinition?
+        let colors: GhosttyThemeDefinition?
+        let followedName: String
+        let on: Bool
+        let pick: () -> Void
+        @State private var hover = false
+        var body: some View {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(SettingsStyle.accent)
+                    .opacity(on ? 1 : 0).frame(width: 10)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(theme?.name ?? "Ghostty 설정 따르기").boardFont(12, weight: on ? .semibold : .regular).lineLimit(1)
+                    if theme == nil { Text(followedName).boardFont(10.5).foregroundStyle(.secondary).lineLimit(1) }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 3))
+                Spacer(minLength: 8)
+                HStack(spacing: 3) {
+                    RoundedRectangle(cornerRadius: 3).fill(themeColor(colors?.background)).frame(width: 16, height: 12)
+                        .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.white.opacity(0.2), lineWidth: 0.5))
+                    HStack(spacing: 0) {
+                        ForEach(0..<8, id: \.self) { i in Rectangle().fill(themeColor(colors?.palette[i])).frame(width: 7, height: 12) }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                }
             }
+            .padding(.horizontal, 7).padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: 6).fill(on ? SettingsStyle.accent.opacity(0.18) : Color.white.opacity(hover ? 0.05 : 0)))
+            .contentShape(Rectangle())
+            .onTapGesture(perform: pick)
+            .clickable($hover)
+            .id(theme?.name)
         }
-        .padding(.horizontal, 8).padding(.vertical, 5)
-        .background(RoundedRectangle(cornerRadius: 7).fill(on ? Palette.color("working").opacity(0.18) : .clear))
-        .contentShape(Rectangle())
-        .onTapGesture { model.pick(t?.name) }
     }
 
     // 고른 테마의 색으로 그린 터미널 견본 — 프롬프트, 색 있는 ls 출력, diff 의 - · + 줄, 커서
@@ -7327,11 +7332,19 @@ struct ThemePickerView: View {
                 Text(command).foregroundStyle(fg)
             }
         }
-        return VStack(alignment: .leading, spacing: 2) {
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 5) {
+                ForEach([Color(red: 1, green: 0.37, blue: 0.34), Color(red: 1, green: 0.74, blue: 0.18), Color(red: 0.16, green: 0.79, blue: 0.25)], id: \.self) {
+                    Circle().fill($0).frame(width: 7, height: 7)
+                }
+                Spacer()
+                Text(t?.name ?? "").boardFont(10, weight: .semibold).foregroundStyle(fg.opacity(0.6)).lineLimit(1)
+            }
+            .padding(.bottom, 6)
             prompt("ls")
             HStack(spacing: 0) {
                 Text("docs  plugins").foregroundStyle(p(4)).bold()
-                Text("  build-board.sh").foregroundStyle(p(2))
+                Text("  build.sh").foregroundStyle(p(2))
                 Text("  README.md").foregroundStyle(fg)
             }
             prompt("git diff --cached")
@@ -7342,11 +7355,12 @@ struct ThemePickerView: View {
                 Text(" ").background(themeColor(t?.cursorColor ?? t?.foreground))
             }
         }
-        .boardFont(12, design: .monospaced)
+        .boardFont(11, design: .monospaced)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10).fill(themeColor(t?.background)))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.14), lineWidth: 0.5))
+        .animation(.easeOut(duration: 0.2), value: t?.name)
     }
 }
 
@@ -7812,7 +7826,7 @@ struct ShortcutAction {
     let initial: KeyCombo?
 }
 
-// 보드 단축키 표 — 앱 메뉴 > 단축키…(⌘,)에서 바꾼다. 메뉴의 keyEquivalent·전역 단축키(Carbon)·화면의 안내 글자를 모두 여기서 만든다.
+// 보드 단축키 표 — 설정 > 단축키(⌘,)에서 바꾼다. 메뉴의 keyEquivalent·전역 단축키(Carbon)·화면의 안내 글자를 모두 여기서 만든다.
 // 바꾼 것만 보드 설정 shortcuts 에 [id: [키 번호, 수정키]] 로 남기고, 비운 것은 [] 다.
 // ⌘C·⌘Q 같은 macOS 표준 키와 ⌘W(엔진이 화면을 닫는다)는 표에 없고 고를 수도 없다(reserved)
 @MainActor final class Shortcuts: ObservableObject {
@@ -7913,7 +7927,7 @@ struct ShortcutAction {
 
     // 앱 안 키 감시 — 표의 키를 키 번호로 맞춰 그 메뉴 동작을 바로 부른다. 그래서 한글 입력기에서 ⌃⌥ + 글자 키가 메뉴에 맞지 않는 일도,
     // 터미널에 포커스가 있을 때 엔진이 사용자가 고른 키를 먼저 가져가는 일도 없다(엔진의 unbind 목록을 사용자 키마다 늘리지 않는다).
-    // 단축키 창이 키를 받는 중이면 그쪽으로. 모달 창(NSAlert 등)·⋯ 메뉴 패널(SessionMenuPanel, 키를 스스로 받는다)이 떠 있거나
+    // 설정 화면이 키를 받는 중이면 그쪽으로. 모달 창(NSAlert 등)·⋯ 메뉴 패널(SessionMenuPanel, 키를 스스로 받는다)이 떠 있거나
     // 글자 칸에서 한글을 조합하는 중이면 그대로 둔다
     func handle(_ e: NSEvent) -> NSEvent? {
         if ShortcutSettings.shared.recording != nil { return ShortcutSettings.shared.record(e) }
@@ -7921,7 +7935,9 @@ struct ShortcutAction {
               (e.window?.firstResponder as? NSTextView)?.hasMarkedText() != true else { return e }
         let c = KeyCombo(e)
         // ⌘, 는 엔진 기본값(open_config)이 먼저 가져가므로 여기서 받는다
-        if c == Self.settingsKey { ShortcutSettings.shared.open(); return nil }
+        if c == Self.settingsKey { SettingsScreen.shared.toggle(); return nil }
+        // 설정 화면의 Esc — 검색어를 지우고, 없으면 닫는다(키 받기 취소는 위에서)
+        if c == KeyCombo(53, []), SettingsScreen.shared.shown, e.window === window { SettingsScreen.shared.escape(); return nil }
         guard let id = Self.actions.first(where: { combo($0.id) == c })?.id, let item = items[id], let sel = item.action else { return e }
         NSApp.sendAction(sel, to: item.target, from: item)
         return nil
@@ -7929,7 +7945,7 @@ struct ShortcutAction {
 
     // 전역 단축키 — 처음 크기로 붙이기(기본 ⌃⌥B): 어느 앱에서든 보드를 처음 크기로 보드 쪽 끝(오른쪽·왼쪽)에 붙이고 앞으로 꺼낸다(포커스는
     // 지금 앱에 남긴다). 터미널 펼치기·접기(기본 ⌃⌥T). Carbon 단축키는 손쉬운 사용 권한이 필요 없다.
-    // 표가 바뀔 때마다 다시 등록하고, 단축키 창이 키를 받는 동안은 풀어 둔다(paused — 누른 키가 동작하지 않고 창에 들어가게)
+    // 표가 바뀔 때마다 다시 등록하고, 설정 화면이 키를 받는 동안은 풀어 둔다(paused — 누른 키가 동작하지 않고 그쪽에 들어가게)
     func registerHotKeys(paused: Bool = false) {
         if !handlerInstalled {
             handlerInstalled = true
@@ -7958,7 +7974,7 @@ struct ShortcutAction {
             var ref: EventHotKeyRef?
             let hid = EventHotKeyID(signature: OSType(0x43424F44), id: n)   // 'CBOD'
             let status = RegisterEventHotKey(UInt32(c.code), c.carbonMods, hid, GetApplicationEventTarget(), 0, &ref)
-            // 다른 앱이 먼저 잡은 단축키면 등록에 실패한다 — 보드는 그대로 동작하고 로그를 남기고 단축키 창에 알린다
+            // 다른 앱이 먼저 잡은 단축키면 등록에 실패한다 — 보드는 그대로 동작하고 로그를 남기고 설정 화면에 알린다
             if status == noErr, let ref { hotKeyRefs.append(ref) } else {
                 failed.insert(id)
                 boardLog("전역 단축키 \(c.label) 등록 실패 (\(status))")
@@ -7980,51 +7996,22 @@ func systemHotKeys() -> [[Int]] {
     }
 }
 
-// 단축키 창(앱 메뉴 > 단축키…, ⌘,) — 표의 동작을 묶음별로 보이고, 줄의 키를 누르면 새 키를 받는다(Esc 취소, ⌫ 비우기).
-// 바꾸면 바로 메뉴·전역 단축키·화면 안내 글자에 반영된다. 보드 안에서 겹치면 받아 두고 상대를 비울지 그 줄에서 묻고,
-// 시스템 단축키와 겹치면 알린다. 한 번에 하나만(열려 있으면 앞으로)
+// 단축키 받기(설정 > 단축키) — 줄의 키를 누르면 새 키를 받는다(Esc 취소, ⌫ 비우기). 바꾸면 바로 메뉴·전역 단축키·화면 안내 글자에
+// 반영된다. 보드 안에서 겹치면 받아 두고 상대를 비울지 그 줄에서 묻고, 시스템 단축키와 겹치면 알린다
 @MainActor final class ShortcutSettings: ObservableObject {
     static let shared = ShortcutSettings()
-    @Published var query = ""
     @Published private(set) var recording: String?   // 새 키를 받는 중인 동작
     @Published private(set) var refused: String?     // 받지 않은 키 안내
-    private(set) var systemKeys: [[Int]] = []         // 열 때 읽는다
-    private var win: NSWindow?
-    private var observers: [NSObjectProtocol] = []
+    private(set) var systemKeys: [[Int]] = []         // 설정 화면을 열 때 읽는다
 
-    func open() {
-        if let win { win.makeKeyAndOrderFront(nil); return }
-        query = ""
+    func load() {
         refused = nil
         systemKeys = systemHotKeys()
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 620), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        w.title = "단축키"
-        w.appearance = NSAppearance(named: .darkAqua)
-        w.level = window.level   // 위에 고정한 보드(.floating)에 가리지 않게
-        w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        w.isReleasedWhenClosed = false
-        w.contentViewController = NSHostingController(rootView: ShortcutSettingsView(model: self))
-        w.setContentSize(NSSize(width: 480, height: 620))   // ThemePicker 와 같은 까닭 — 붙이는 순간 0 으로 줄어든다
-        let f = window.frame
-        w.setFrameOrigin(NSPoint(x: TerminalHub.shared.boardOnLeft ? f.minX + 20 : f.maxX - w.frame.width - 20, y: f.midY - w.frame.height / 2))
-        win = w
-        let nc = NotificationCenter.default
-        observers = [
-            nc.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.closed() }
-            },
-            // 다른 앱·다른 창으로 옮기면 받기를 그만둔다 — 풀어 둔 전역 단축키가 그대로 꺼져 있지 않게
-            nc.addObserver(forName: NSWindow.didResignKeyNotification, object: w, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { if self?.recording != nil { self?.stopRecording() } }
-            },
-        ]
-        w.makeKeyAndOrderFront(nil)
     }
-
-    func close() { win?.close() }
 
     func systemTaken(_ c: KeyCombo) -> Bool { systemKeys.contains([Int(c.code), Int(c.carbonMods)]) }
 
+    // 받는 동안은 전역 단축키를 풀어 둔다 — 누른 키가 동작하지 않고 여기로 오게
     func startRecording(_ id: String) {
         recording = id
         refused = nil
@@ -8055,64 +8042,1060 @@ func systemHotKeys() -> [[Int]] {
         Shortcuts.shared.set(id, c)   // 전역 단축키도 여기서 다시 등록된다
         return nil
     }
+}
 
-    private func closed() {
-        if recording != nil { stopRecording() }
-        observers.forEach { NotificationCenter.default.removeObserver($0) }
-        observers = []
-        win = nil
-        if NSApp.isActive, window.isVisible { window.makeKey() }
+// MARK: - 설정 화면
+
+// 설정 화면(앱 메뉴 > 설정…, ⌘,) — 보드는 그대로 두고 터미널 영역(제목 막대 띠 아래)을 설정 화면으로 덮는다. 왼쪽 묶음 목록·검색, 오른쪽 항목.
+// 전환 효과는 settingsTransition(옆으로 밀기 기본). 접혀 있으면 펼치는 것을 전환으로 삼고 닫을 때 다시 접는다 — 잠깐 펼친 것은
+// terminalExpanded 에 남기지 않는다(열린 채 끄고 다시 켜도 접힌 채로 뜬다). 열린 동안 탭은 뒤에서 그대로 돌고, 탭을 다루는
+// 동작(⌘T·⌘1·⌘D·세션 줄 누르기 등)은 설정 화면을 닫고 한다. Esc 는 키 받기 취소 → 검색어 지우기 → 닫기 차례(Shortcuts.handle)
+enum SettingsSection: String, CaseIterable, Identifiable {
+    case general, window, notify, terminal, board, account, shortcuts, update
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .general: "일반"
+        case .window: "창"
+        case .notify: "알림"
+        case .terminal: "터미널"
+        case .board: "보드"
+        case .account: "계정"
+        case .shortcuts: "단축키"
+        case .update: "업데이트"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .general: "gearshape"
+        case .window: "macwindow"
+        case .notify: "bell"
+        case .terminal: "terminal"
+        case .board: "rectangle.grid.1x2"
+        case .account: "person.crop.circle"
+        case .shortcuts: "keyboard"
+        case .update: "arrow.down.circle"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .general: "보드를 띄우는 방식과 제목 옆 캐릭터"
+        case .window: "보드 자리, 투명도, 펼치기·접기와 설정 화면의 움직임"
+        case .notify: "작업 완료·승인 대기 알림 패널"
+        case .terminal: "내장 터미널의 글자·테마와 새 세션 기본값"
+        case .board: "세션 보드의 글자 크기와 사용 한도 칸"
+        case .account: "Claude 계정 전환과 한도 자동 전환"
+        case .shortcuts: "키 칸을 누르고 새 키를 누르면 바로 바뀝니다"
+        case .update: "새 버전 확인과 설치"
+        }
     }
 }
 
-struct ShortcutSettingsView: View {
-    @ObservedObject var model: ShortcutSettings
-    @ObservedObject private var keys = Shortcuts.shared
-
-    private var visible: [ShortcutAction] {
-        let q = model.query.trimmingCharacters(in: .whitespaces)
-        return q.isEmpty ? Shortcuts.actions : Shortcuts.actions.filter { $0.title.localizedCaseInsensitiveContains(q) }
+enum SettingsTransition: String, CaseIterable, Identifiable {
+    case slide, fade, none
+    var id: String { rawValue }
+    var name: String {
+        switch self {
+        case .slide: "옆으로 밀기"
+        case .fade: "서서히 바뀌기"
+        case .none: "효과 없음"
+        }
     }
+    static var current: SettingsTransition {
+        SettingsTransition(rawValue: UserDefaults.standard.string(forKey: "settingsTransition") ?? "") ?? .slide
+    }
+}
+
+@MainActor final class SettingsScreen: ObservableObject {
+    static let shared = SettingsScreen()
+    @Published private(set) var shown = false
+    @Published var section: SettingsSection = .general
+    @Published var query = ""
+    @Published private(set) var focusSearch = 0   // 바뀌면 검색 칸에 포커스
+    private var collapseOnClose = false            // 접힌 보드에서 열었다 — 닫을 때 다시 접는다
+    private var observer: NSObjectProtocol?
+
+    func toggle() { shown ? close() : open() }
+
+    func open(_ s: SettingsSection? = nil) {
+        if let s { section = s }
+        showBoard()
+        let hub = TerminalHub.shared
+        guard !shown, let area = hub.area else { focusSearch += 1; return }
+        hub.slide?.finish()
+        query = ""
+        ThemeList.shared.load()
+        ShortcutSettings.shared.load()
+        LoginItem.shared.refresh()
+        shown = true
+        collapseOnClose = !hub.expanded
+        // 접혀 있으면 설정 화면을 먼저 깔고 펼친다 — 펼치기(애니메이션 설정을 따른다)가 전환 효과다
+        area.present(true, style: collapseOnClose ? .none : .current)
+        if collapseOnClose {
+            setTerminalExpanded(true)
+            UserDefaults.standard.set(false, forKey: "terminalExpanded")
+        }
+        window.makeFirstResponder(area.settings)
+        focusSearch += 1
+        // 다른 앱·다른 창으로 옮기면 키 받기를 그만둔다 — 풀어 둔 전역 단축키가 그대로 꺼져 있지 않게
+        observer = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) { _ in
+            MainActor.assumeIsolated { if ShortcutSettings.shared.recording != nil { ShortcutSettings.shared.stopRecording() } }
+        }
+    }
+
+    // keep — 탭을 다루는 동작으로 닫을 때: 잠깐 펼쳤어도 펼친 채로 남긴다
+    func close(keep: Bool = false) {
+        guard shown else { return }
+        finish()
+        let hub = TerminalHub.shared
+        if collapseOnClose, !keep {
+            collapseOnClose = false
+            setTerminalExpanded(false)   // 접는 것이 전환 효과다 — 다 접힌 뒤 내린다
+            whenPaneSettled { if !self.shown { hub.area?.present(false, style: .none) } }
+            return
+        }
+        if collapseOnClose { hub.setExpanded(true) }
+        collapseOnClose = false
+        hub.area?.present(false, style: .current)
+        hub.focusSelected()
+    }
+
+    // 터미널 영역이 접혔다(⌃⌥T·처음 크기로 붙이기 등) — 효과 없이 내린다
+    func dismissForCollapse() {
+        guard shown else { return }
+        finish()
+        collapseOnClose = false
+        TerminalHub.shared.area?.present(false, style: .none)
+    }
+
+    private func finish() {
+        shown = false
+        if ShortcutSettings.shared.recording != nil { ShortcutSettings.shared.stopRecording() }
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+        observer = nil
+    }
+
+    func escape() { if query.isEmpty { close() } else { query = "" } }
+
+    func go(_ s: SettingsSection) {
+        withAnimation(.easeOut(duration: 0.15)) {
+            section = s
+            query = ""
+        }
+    }
+}
+
+// 로그인 시 실행(설정 > 일반) — macOS 로그인 항목(SMAppService.mainApp). 켜짐 여부는 시스템에서 읽는다(시스템 설정에서 끌 수도 있다)
+@MainActor final class LoginItem: ObservableObject {
+    static let shared = LoginItem()
+    @Published private(set) var status = SMAppService.mainApp.status
+
+    func refresh() { status = SMAppService.mainApp.status }
+
+    func set(_ on: Bool) {
+        do {
+            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+        } catch {
+            boardLog("로그인 항목 \(on ? "등록" : "해제") 실패: \(error)")
+        }
+        refresh()
+    }
+}
+
+// 알림 위치 — 표지 파일 notify-position(notify.py 가 읽는다). 중앙(기본)은 파일을 지운다
+let notifyPositions = [("top-left", "왼쪽 위"), ("top-right", "오른쪽 위"), ("center", "가운데"), ("bottom-left", "왼쪽 아래"), ("bottom-right", "오른쪽 아래")]
+
+func notifyPosition() -> String {
+    (try? String(contentsOfFile: notifyPositionPath, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "center"
+}
+
+func setNotifyPosition(_ value: String) {
+    if value == "center" {
+        try? FileManager.default.removeItem(atPath: notifyPositionPath)
+    } else {
+        try? value.write(toFile: notifyPositionPath, atomically: true, encoding: .utf8)
+    }
+}
+
+// 설정 화면 색 — 터미널 영역과 같은 짙은 바탕 위에 옅은 카드
+enum SettingsStyle {
+    static let sidebar = Color(nsColor: terminalBarColor)
+    static let content = Color(nsColor: terminalAreaColor)
+    static let card = Color.white.opacity(0.035)
+    static let cardLine = Color.white.opacity(0.07)
+    static let line = Color.white.opacity(0.06)
+    static let accent = Palette.color("working")
+}
+
+// 설정 화면 호스팅 뷰 — 글자 칸이 포커스를 받아야 해서 PassiveHostingView 가 아니다. 창 바탕 끌기(isMovableByWindowBackground)로 창이 움직이지 않게
+final class SettingsHostingView<Content: View>: NSHostingView<Content> {
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+// 설정 한 줄 — 검색은 제목·설명·덧붙인 낱말로 맞춘다. kind 가 row 면 [제목·설명 … 조절기], block 이면 내용이 줄 전체를 쓴다
+struct SettingsItem: Identifiable {
+    enum Kind { case row, block }
+    let id: String
+    let section: SettingsSection
+    let card: String
+    let title: String
+    var detail: String? = nil
+    var keywords = ""
+    var kind = Kind.row
+    let content: () -> AnyView
+
+    func matches(_ q: String) -> Bool {
+        [title, detail ?? "", keywords, card].contains { $0.localizedCaseInsensitiveContains(q) }
+    }
+}
+
+struct SettingsView: View {
+    @ObservedObject private var model = SettingsScreen.shared
+    @ObservedObject private var keys = Shortcuts.shared
+    @ObservedObject private var recorder = ShortcutSettings.shared
+    @ObservedObject private var themes = ThemeList.shared
+    @ObservedObject private var opacity = WindowOpacity.shared
+    @ObservedObject private var fontScale = BoardFontScale.shared
+    @ObservedObject private var updater = Updater.shared
+    @ObservedObject private var login = LoginItem.shared
+    @ObservedObject private var hub = TerminalHub.shared
+    @AppStorage("pinned") private var pinned = true
+    @AppStorage("mascot") private var mascot: Mascot = .tralalero
+    @AppStorage("terminalAnimation") private var animation = false
+    @AppStorage("settingsTransition") private var transition: SettingsTransition = .slide
+    @AppStorage("terminalFontSize") private var terminalFont: Double = 0   // 0 = 설정 없음(Ghostty 설정 크기)
+    @AppStorage("newSessionCommand") private var sessionCommand = ""
+    @AppStorage("newSessionMdRender") private var sessionMdRender = true
+    @AppStorage("usageCompact") private var usageCompact = false
+    @AppStorage("autoUpdateCheck") private var autoUpdate = true
+    @State private var position = notifyPosition()
+    @State private var settle: DispatchWorkItem?
+    @FocusState private var searching: Bool
+
+    private var app: AppDelegate? { NSApp.delegate as? AppDelegate }
 
     var body: some View {
-        let list = visible
-        let groups = list.map(\.group).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
-        VStack(alignment: .leading, spacing: 10) {
-            TextField("동작 이름 검색", text: $model.query).textFieldStyle(.roundedBorder)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 1) {
-                    ForEach(groups, id: \.self) { g in
-                        Text(g).boardFont(11, weight: .semibold).foregroundStyle(.secondary).padding(.top, 8).padding(.leading, 8)
-                        ForEach(list.filter { $0.group == g }, id: \.id) { row($0) }
-                    }
-                }
-                .padding(4)
-            }
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.04)))
-            if let r = model.refused { Text(r).boardFont(11).foregroundStyle(.orange) }
-            HStack {
-                Button("모두 기본값으로") { keys.resetAll() }.disabled(keys.overrides.isEmpty)
-                Spacer()
-                Text("키를 누르고 새 키 입력 · Esc 취소 · ⌫ 비우기").boardFont(11).foregroundStyle(.secondary)
-                Button("닫기") { model.close() }
-            }
+        HStack(spacing: 0) {
+            sidebar
+            Rectangle().fill(SettingsStyle.line).frame(width: 1)
+            content
         }
-        .padding(14)
-        .frame(width: 480, height: 620)
-        .background(Color(red: 0.11, green: 0.11, blue: 0.17))
+        .background(SettingsStyle.content)
         .preferredColorScheme(.dark)
         .boardFont(13)
+        .onChange(of: model.focusSearch) { _, _ in
+            position = notifyPosition()
+            DispatchQueue.main.async { searching = true }
+        }
     }
 
-    // 이름 · (바꿨으면 되돌리기) · 키 단추. 아래에 겹침·시스템 단축키·전역 등록 실패 안내
-    private func row(_ a: ShortcutAction) -> some View {
-        let listening = model.recording == a.id
-        let changed = keys.overrides[a.id] != nil
-        let accent = Palette.color("working")
-        return VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 8) {
-                Text(a.title).lineLimit(1)
+    // MARK: 왼쪽 — 돌아가기, 검색, 묶음
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsBackButton { model.close() }
+                .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 8)
+            searchField.padding(.horizontal, 10).padding(.bottom, 12)
+            ScrollView {
+                VStack(spacing: 2) {
+                    ForEach(SettingsSection.allCases) { s in
+                        SettingsSectionButton(section: s, on: model.query.isEmpty && model.section == s,
+                                              dim: !model.query.isEmpty && !items.contains { $0.section == s && $0.matches(trimmedQuery) }) {
+                            model.go(s)
+                        }
+                    }
+                }
+                .padding(.horizontal, 10)
+            }
+            Spacer(minLength: 0)
+            Text("Claude Board \(updater.current)")
+                .boardFont(10.5).foregroundStyle(.tertiary)
+                .padding(.horizontal, 20).padding(.vertical, 12)
+        }
+        .frame(width: 200)
+        .background(SettingsStyle.sidebar)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+            TextField("설정 검색", text: $model.query)
+                .textFieldStyle(.plain)
+                .focused($searching)
+            if !model.query.isEmpty {
+                Button { model.query = "" } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .boardFont(12.5)
+        .padding(.horizontal, 9).frame(height: 30)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(searching ? SettingsStyle.accent.opacity(0.7) : Color.white.opacity(0.08), lineWidth: 1))
+        .animation(.easeOut(duration: 0.15), value: searching)
+    }
+
+    private var trimmedQuery: String { model.query.trimmingCharacters(in: .whitespaces) }
+
+    // MARK: 오른쪽 — 고른 묶음, 또는 모든 묶음의 검색 결과
+
+    private var content: some View {
+        let q = trimmedQuery
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                if q.isEmpty {
+                    header(model.section)
+                    sectionBody(items.filter { $0.section == model.section })
+                        .id(model.section)
+                        .transition(.opacity)
+                } else {
+                    searchResults(q)
+                }
+            }
+            .frame(maxWidth: 660, alignment: .leading)
+            .padding(.horizontal, 32).padding(.top, 26).padding(.bottom, 40)
+            .frame(maxWidth: .infinity)
+        }
+        .scrollIndicators(.automatic)
+    }
+
+    private func header(_ s: SettingsSection) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(s.title).boardFont(22, weight: .bold)
+            Text(s.subtitle).boardFont(12).foregroundStyle(.secondary)
+            Rectangle().fill(SettingsStyle.line).frame(height: 1).padding(.top, 14)
+        }
+        .padding(.bottom, 20)
+    }
+
+    // 카드 이름별로 묶어 차례대로
+    private func sectionBody(_ list: [SettingsItem]) -> some View {
+        let cards = list.map(\.card).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+        return VStack(alignment: .leading, spacing: 22) {
+            ForEach(cards, id: \.self) { c in
+                SettingsCard(title: c, items: list.filter { $0.card == c })
+            }
+            if model.section == .shortcuts, model.query.isEmpty { shortcutFooter }
+        }
+    }
+
+    private func searchResults(_ q: String) -> some View {
+        let found = items.filter { $0.matches(q) }
+        return VStack(alignment: .leading, spacing: 26) {
+            Text("\"\(q)\" 검색 결과 \(found.count)개").boardFont(12).foregroundStyle(.secondary)
+            if found.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").font(.system(size: 26, weight: .light)).foregroundStyle(.tertiary)
+                    Text("맞는 설정이 없습니다").boardFont(13, weight: .semibold)
+                    Text("다른 낱말로 찾아 보세요").boardFont(11.5).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity).padding(.top, 60)
+            }
+            ForEach(SettingsSection.allCases.filter { s in found.contains { $0.section == s } }) { s in
+                VStack(alignment: .leading, spacing: 12) {
+                    Button { model.go(s) } label: {
+                        HStack(spacing: 7) {
+                            Image(systemName: s.icon).font(.system(size: 12, weight: .semibold)).foregroundStyle(SettingsStyle.accent)
+                            Text(s.title).boardFont(15, weight: .bold)
+                            Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold)).foregroundStyle(.tertiary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    sectionBody(found.filter { $0.section == s })
+                }
+            }
+        }
+    }
+
+    // MARK: 항목
+
+    private var items: [SettingsItem] {
+        general + windowItems + notifyItems + terminalItems + boardItems + accountItems + shortcutItems + updateItems
+    }
+
+    private var general: [SettingsItem] {
+        [
+            SettingsItem(id: "pin", section: .general, card: "보드", title: "항상 위에 고정",
+                         detail: "다른 앱을 눌러도 보드가 위에 남습니다. 화면 전체로 펼친 동안에는 쉬어요", keywords: "⌘P 플로팅") {
+                AnyView(SettingsSwitch(isOn: Binding(get: { pinned }, set: { setPinned($0) })))
+            },
+            SettingsItem(id: "login", section: .general, card: "보드", title: "로그인할 때 열기",
+                         detail: login.status == .requiresApproval ? "시스템 설정 > 일반 > 로그인 항목에서 허용해 주세요"
+                         : "Mac 에 로그인하면 보드를 띄웁니다", keywords: "로그인 시 실행 시작") {
+                AnyView(HStack(spacing: 8) {
+                    if login.status == .requiresApproval {
+                        SettingsLinkButton("시스템 설정 열기") { SMAppService.openSystemSettingsLoginItems() }
+                    }
+                    SettingsSwitch(isOn: Binding(get: { login.status == .enabled || login.status == .requiresApproval },
+                                                 set: { login.set($0) }))
+                })
+            },
+            SettingsItem(id: "mascot", section: .general, card: "캐릭터", title: "제목 옆 캐릭터",
+                         detail: "세션 상태를 말풍선으로 알려 주는 캐릭터. 캐릭터를 오른쪽 클릭해도 고를 수 있어요",
+                         keywords: Mascot.allCases.map(\.name).joined(separator: " "), kind: .block) {
+                AnyView(MascotGrid(selection: $mascot))
+            },
+        ]
+    }
+
+    private var windowItems: [SettingsItem] {
+        [
+            SettingsItem(id: "side", section: .window, card: "배치", title: "보드 위치",
+                         detail: "펼치면 터미널 반대쪽, 접으면 화면 그쪽 끝에 붙습니다", keywords: "오른쪽 왼쪽") {
+                AnyView(BoardSidePicker(left: Binding(get: { hub.boardOnLeft }, set: { setBoardSide(left: $0) })))
+            },
+            SettingsItem(id: "opacity", section: .window, card: "배치", title: "투명도",
+                         detail: "마우스가 보드 창 밖에 있을 때의 투명도. 화면 전체로 펼친 창은 늘 불투명합니다", keywords: "투명 불투명") {
+                AnyView(HStack(spacing: 10) {
+                    Slider(value: $opacity.level, in: WindowOpacity.range) { editing in
+                        settle?.cancel()
+                        if editing { opacity.previewing = true; return }
+                        let w = DispatchWorkItem { opacity.previewing = false }
+                        settle = w
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: w)
+                    }
+                    .controlSize(.small)
+                    .tint(SettingsStyle.accent)
+                    .frame(width: 150)
+                    Text("\(Int((opacity.level * 100).rounded()))%").boardFont(12, weight: .semibold).monospacedDigit()
+                        .frame(width: 40, alignment: .trailing)
+                })
+            },
+            SettingsItem(id: "animation", section: .window, card: "움직임", title: "펼치기·접기 애니메이션",
+                         detail: "터미널을 펼치고 접을 때 창이 미끄러지듯 움직입니다") {
+                AnyView(SettingsSwitch(isOn: $animation))
+            },
+            SettingsItem(id: "transition", section: .window, card: "움직임", title: "설정 화면 전환",
+                         detail: "터미널 영역이 설정 화면으로 바뀔 때의 효과", keywords: "밀기 서서히 효과 애니메이션") {
+                AnyView(SettingsSegments(options: SettingsTransition.allCases.map { ($0, $0.name) }, selection: $transition))
+            },
+        ]
+    }
+
+    private var notifyItems: [SettingsItem] {
+        guard let app else { return [] }
+        return [
+            SettingsItem(id: "allMute", section: .notify, card: "알림", title: "모든 알림 끄기",
+                         detail: "켜면 모든 세션의 작업 완료·승인 대기 알림을 띄우지 않습니다. 끄면 세션마다 정해 둔 대로 돌아가요",
+                         keywords: "음소거 종") {
+                AnyView(AllMuteSwitch(store: app.store))
+            },
+            SettingsItem(id: "position", section: .notify, card: "알림", title: "알림 위치",
+                         detail: "패널이 뜨는 화면 자리. \(notifyPositions.first { $0.0 == position }?.1 ?? "가운데")",
+                         keywords: notifyPositions.map(\.1).joined(separator: " ")) {
+                AnyView(NotifyPositionPicker(selection: Binding(get: { position }, set: { position = $0; setNotifyPosition($0) })))
+            },
+        ]
+    }
+
+    private var terminalItems: [SettingsItem] {
+        let size = terminalFont > 0 ? terminalFont : ghosttyConfigFontSize()
+        return [
+            SettingsItem(id: "terminalFont", section: .terminal, card: "글자", title: "터미널 글자 크기",
+                         detail: terminalFont > 0 ? "모든 탭에 바로 적용됩니다" : "Ghostty 설정 크기를 따르는 중",
+                         keywords: "폰트 pt") {
+                AnyView(SettingsStepper(value: "\(String(format: "%g", size))pt", changed: terminalFont > 0,
+                                        minus: { hub.changeTerminalFont(-1) }, plus: { hub.changeTerminalFont(1) },
+                                        reset: { hub.changeTerminalFont(nil) }))
+            },
+            SettingsItem(id: "theme", section: .terminal, card: "테마", title: "터미널 테마",
+                         detail: "누르면 열린 탭 모두 바로 바뀝니다", keywords: "색 Ghostty 컬러", kind: .block) {
+                AnyView(ThemeListView(model: themes))
+            },
+            SettingsItem(id: "sessionCommand", section: .terminal, card: "새 세션", title: "기본 명령",
+                         detail: "새 세션 창과 카드의 + 가 쓰는 명령. 비우면 \(builtinSessionCommand)", keywords: "claude 실행 명령어",
+                         kind: .block) {
+                AnyView(SettingsTextField(text: $sessionCommand, placeholder: builtinSessionCommand))
+            },
+            SettingsItem(id: "sessionMd", section: .terminal, card: "새 세션", title: "답변 마크다운 꾸미기",
+                         detail: "새 세션을 열 때 기본으로 켭니다(md-render). 새 세션 창에서 세션마다 바꿀 수 있어요", keywords: "md-render") {
+                AnyView(SettingsSwitch(isOn: $sessionMdRender).disabled(mdRenderDir == nil))
+            },
+        ]
+    }
+
+    private var boardItems: [SettingsItem] {
+        [
+            SettingsItem(id: "boardFont", section: .board, card: "보드", title: "보드 글자 크기",
+                         detail: "80%부터 150%까지 10%씩", keywords: "폰트 확대 축소") {
+                AnyView(SettingsStepper(value: "\(Int((fontScale.scale * 100).rounded()))%", changed: fontScale.scale != 1,
+                                        minus: { fontScale.change(-1) }, plus: { fontScale.change(1) }, reset: { fontScale.change(nil) }))
+            },
+            SettingsItem(id: "usageCompact", section: .board, card: "보드", title: "사용 한도 간략히 보기",
+                         detail: "5시간·주간 한도 칸을 한 줄로 줄입니다", keywords: "사용량 한도") {
+                AnyView(SettingsSwitch(isOn: $usageCompact))
+            },
+        ]
+    }
+
+    private var accountItems: [SettingsItem] {
+        guard let app else { return [] }
+        return [
+            SettingsItem(id: "accounts", section: .account, card: "Claude 계정", title: "저장한 계정",
+                         detail: "고르면 모든 세션이 다음 요청부터 그 계정으로 이어 갑니다", keywords: "로그인 전환 추가 지우기 이메일",
+                         kind: .block) {
+                AnyView(AccountList(accounts: app.accounts, busy: {
+                    app.store.groups.flatMap(\.sessions).filter { $0.state == "working" || $0.state == "waiting" }
+                }))
+            },
+            SettingsItem(id: "autoSwitch", section: .account, card: "자동 전환", title: "한도가 차면 다른 계정으로 자동 전환",
+                         detail: "5시간·주간 한도가 차거나 세션이 한도에 걸려 멈추면 저장한 다른 계정으로 바꾸고, 멈춘 세션을 이어서 진행합니다") {
+                AnyView(AccountAutoSwitch(accounts: app.accounts))
+            },
+        ]
+    }
+
+    private var shortcutItems: [SettingsItem] {
+        Shortcuts.actions.map { a in
+            SettingsItem(id: "key." + a.id, section: .shortcuts, card: a.group, title: a.title,
+                         keywords: (keys.label(a.id) ?? "") + " 단축키 키") {
+                AnyView(ShortcutRow(action: a, keys: keys, recorder: recorder))
+            }
+        }
+    }
+
+    // 모두 기본값으로 · 받지 않은 키 안내
+    private var shortcutFooter: some View {
+        HStack(spacing: 10) {
+            SettingsLinkButton("모두 기본값으로", enabled: !keys.overrides.isEmpty) { keys.resetAll() }
+            if let r = recorder.refused {
+                Label(r, systemImage: "exclamationmark.circle.fill").boardFont(11.5).foregroundStyle(.orange)
+            }
+            Spacer()
+            Text("Esc 취소 · ⌫ 비우기").boardFont(11).foregroundStyle(.tertiary)
+        }
+    }
+
+    private var updateItems: [SettingsItem] {
+        [
+            SettingsItem(id: "version", section: .update, card: "버전", title: "Claude Board \(updater.current)",
+                         detail: updater.latest.map { "새 버전 \($0) 이 나왔습니다" } ?? updater.notice?.text ?? "업데이트 확인을 누르면 지금 바로 확인합니다",
+                         keywords: "업데이트 확인 새 버전 설치") {
+                AnyView(HStack(spacing: 8) {
+                    SettingsLinkButton("바뀐 점") { NSWorkspace.shared.open(changelogURL) }
+                    if updater.latest != nil {
+                        SettingsButton(updater.running ? "설치하는 중…" : "업데이트", prominent: true, enabled: !updater.running) { updater.run() }
+                    } else {
+                        SettingsButton(updater.checking ? "확인하는 중…" : "업데이트 확인", enabled: !updater.checking) { updater.check(manual: true) }
+                    }
+                })
+            },
+            SettingsItem(id: "autoUpdate", section: .update, card: "버전", title: "자동으로 업데이트 확인",
+                         detail: "1시간마다 새 버전이 있는지 보고 보드 위에 알립니다. 설치는 직접 누를 때만 합니다", keywords: "자동 업데이트") {
+                AnyView(SettingsSwitch(isOn: Binding(get: { autoUpdate }, set: { autoUpdate = $0; if $0 { updater.check() } })))
+            },
+        ]
+    }
+}
+
+// 카드 — 위에 작은 제목, 안에 줄들(줄 사이 가는 선)
+struct SettingsCard: View {
+    let title: String
+    let items: [SettingsItem]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).boardFont(11.5, weight: .semibold).foregroundStyle(.secondary).padding(.leading, 4)
+            VStack(spacing: 0) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
+                    if i > 0 { Rectangle().fill(SettingsStyle.line).frame(height: 1).padding(.leading, 16) }
+                    row(item)
+                }
+            }
+            .background(RoundedRectangle(cornerRadius: 12).fill(SettingsStyle.card))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(SettingsStyle.cardLine, lineWidth: 1))
+        }
+    }
+
+    @ViewBuilder private func row(_ item: SettingsItem) -> some View {
+        switch item.kind {
+        case .row:
+            HStack(alignment: .center, spacing: 16) {
+                label(item)
                 Spacer(minLength: 8)
+                item.content()
+            }
+            .padding(.horizontal, 16).padding(.vertical, item.detail == nil ? 10 : 13)
+        case .block:
+            VStack(alignment: .leading, spacing: 12) {
+                label(item)
+                item.content()
+            }
+            .padding(16)
+        }
+    }
+
+    private func label(_ item: SettingsItem) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(item.title).boardFont(13, weight: .medium)
+            if let d = item.detail {
+                Text(d).boardFont(11.5).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+// MARK: 조절기
+
+struct SettingsBackButton: View {
+    let action: () -> Void
+    @State private var hover = false
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.left").font(.system(size: 10, weight: .bold))
+                Text("터미널로 돌아가기").boardFont(12, weight: .medium)
+                Spacer(minLength: 0)
+                Text("esc").boardFont(10, weight: .semibold).foregroundStyle(.tertiary)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(RoundedRectangle(cornerRadius: 4).stroke(Color.white.opacity(0.14), lineWidth: 1))
+            }
+            .foregroundStyle(hover ? .primary : .secondary)
+            .padding(.horizontal, 8).frame(height: 28)
+            .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(hover ? 0.07 : 0)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .clickable($hover)
+    }
+}
+
+struct SettingsSectionButton: View {
+    let section: SettingsSection
+    let on: Bool
+    let dim: Bool
+    let action: () -> Void
+    @State private var hover = false
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 9) {
+                Image(systemName: section.icon)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(on ? SettingsStyle.accent : .secondary)
+                    .frame(width: 18)
+                Text(section.title).boardFont(12.5, weight: on ? .semibold : .regular)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(on ? .primary : .secondary)
+            .padding(.horizontal, 9).frame(height: 30)
+            .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(on ? 0.09 : hover ? 0.05 : 0)))
+            .contentShape(Rectangle())
+            .opacity(dim ? 0.4 : 1)
+        }
+        .buttonStyle(.plain)
+        .clickable($hover)
+        .animation(.easeOut(duration: 0.12), value: on)
+    }
+}
+
+// 스위치 — BoardSwitch 처럼 직접 그린다(macOS 기본 스위치는 창이 비활성이면 회색이 된다)
+struct SettingsSwitch: View {
+    @Binding var isOn: Bool
+    var tint = SettingsStyle.accent
+    @Environment(\.isEnabled) private var enabled
+    @State private var hover = false
+    var body: some View {
+        Button { withAnimation(.spring(response: 0.25, dampingFraction: 0.75)) { isOn.toggle() } } label: {
+            ZStack(alignment: isOn ? .trailing : .leading) {
+                Capsule().fill(isOn ? tint : Color.white.opacity(hover ? 0.2 : 0.13))
+                    .overlay(Capsule().stroke(Color.white.opacity(isOn ? 0 : 0.14), lineWidth: 0.5))
+                Circle().fill(Color.white).shadow(color: .black.opacity(0.3), radius: 1.5, y: 0.5).padding(2.5)
+            }
+            .frame(width: 38, height: 22)
+            .opacity(enabled ? 1 : 0.4)
+        }
+        .buttonStyle(.plain)
+        .clickable($hover)
+    }
+}
+
+struct SettingsButton: View {
+    let title: String
+    var prominent = false
+    var enabled = true
+    let action: () -> Void
+    @State private var hover = false
+    init(_ title: String, prominent: Bool = false, enabled: Bool = true, action: @escaping () -> Void) {
+        self.title = title
+        self.prominent = prominent
+        self.enabled = enabled
+        self.action = action
+    }
+    var body: some View {
+        Button(action: action) {
+            Text(title).boardFont(12, weight: .semibold)
+                .foregroundStyle(prominent ? Color.white : .primary)
+                .padding(.horizontal, 12).frame(height: 26)
+                .background(RoundedRectangle(cornerRadius: 7).fill(prominent ? SettingsStyle.accent.opacity(hover ? 1 : 0.85)
+                                                                    : Color.white.opacity(hover ? 0.14 : 0.08)))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.white.opacity(prominent ? 0 : 0.1), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.5)
+        .clickable($hover)
+    }
+}
+
+struct SettingsLinkButton: View {
+    let title: String
+    var enabled = true
+    let action: () -> Void
+    @State private var hover = false
+    init(_ title: String, enabled: Bool = true, action: @escaping () -> Void) {
+        self.title = title
+        self.enabled = enabled
+        self.action = action
+    }
+    var body: some View {
+        Button(action: action) {
+            Text(title).underline(hover).boardFont(12, weight: .medium)
+                .foregroundStyle(SettingsStyle.accent.opacity(hover ? 1 : 0.85))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.4)
+        .clickable($hover)
+    }
+}
+
+// 고르기 칸 — 둥근 바탕 위에 고른 것만 밝은 알약이 미끄러져 간다
+struct SettingsSegments<T: Hashable>: View {
+    let options: [(T, String)]
+    @Binding var selection: T
+    @Namespace private var ns
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(options, id: \.0) { value, name in
+                let on = value == selection
+                Button { withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { selection = value } } label: {
+                    Text(name).boardFont(11.5, weight: on ? .semibold : .regular)
+                        .foregroundStyle(on ? .primary : .secondary)
+                        .padding(.horizontal, 10).frame(height: 24)
+                        .background {
+                            if on { RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.14)).matchedGeometryEffect(id: "on", in: ns) }
+                        }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(2)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.08), lineWidth: 1))
+    }
+}
+
+// − 값 + (바꿨으면 되돌리기)
+struct SettingsStepper: View {
+    let value: String
+    let changed: Bool
+    let minus: () -> Void
+    let plus: () -> Void
+    let reset: () -> Void
+    var body: some View {
+        HStack(spacing: 10) {
+            if changed {
+                Button(action: reset) {
+                    Image(systemName: "arrow.uturn.backward").font(.system(size: 10, weight: .bold)).foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .transition(.opacity)
+            }
+            HStack(spacing: 0) {
+                step("minus", minus)
+                Text(value).boardFont(12, weight: .semibold).monospacedDigit().frame(minWidth: 52)
+                    .contentTransition(.numericText())
+                step("plus", plus)
+            }
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.06)))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.08), lineWidth: 1))
+        }
+        .animation(.easeOut(duration: 0.15), value: value)
+    }
+
+    private func step(_ icon: String, _ run: @escaping () -> Void) -> some View {
+        StepButton(icon: icon, run: run)
+    }
+
+    private struct StepButton: View {
+        let icon: String
+        let run: () -> Void
+        @State private var hover = false
+        var body: some View {
+            Button(action: run) {
+                Image(systemName: icon).font(.system(size: 10, weight: .bold))
+                    .frame(width: 28, height: 26)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(hover ? 0.08 : 0)))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .clickable($hover)
+        }
+    }
+}
+
+struct SettingsTextField: View {
+    @Binding var text: String
+    let placeholder: String
+    @FocusState private var focused: Bool
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold)).foregroundStyle(SettingsStyle.accent)
+            TextField(placeholder, text: $text)
+                .textFieldStyle(.plain)
+                .boardFont(12.5, design: .monospaced)
+                .focused($focused)
+            if !text.isEmpty {
+                SettingsLinkButton("기본값으로") { text = "" }
+            }
+        }
+        .padding(.horizontal, 10).frame(height: 32)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.25)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(focused ? SettingsStyle.accent.opacity(0.7) : Color.white.opacity(0.1), lineWidth: 1))
+    }
+}
+
+// 보드 위치 — 창 모양 두 개(터미널 │ 보드)
+struct BoardSidePicker: View {
+    @Binding var left: Bool
+    var body: some View {
+        HStack(spacing: 8) {
+            tile(false, "오른쪽")
+            tile(true, "왼쪽")
+        }
+    }
+
+    private func tile(_ isLeft: Bool, _ name: String) -> some View {
+        let on = left == isLeft
+        return Button { withAnimation(.easeOut(duration: 0.15)) { left = isLeft } } label: {
+            VStack(spacing: 5) {
+                HStack(spacing: 2) {
+                    if isLeft { pane(board: true, on: on) }
+                    pane(board: false, on: on)
+                    if !isLeft { pane(board: true, on: on) }
+                }
+                .padding(3)
+                .frame(width: 66, height: 40)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.3)))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(on ? SettingsStyle.accent : Color.white.opacity(0.12), lineWidth: on ? 1.5 : 1))
+                Text(name).boardFont(10.5, weight: on ? .semibold : .regular).foregroundStyle(on ? .primary : .secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func pane(board: Bool, on: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 2.5)
+            .fill(board ? (on ? SettingsStyle.accent.opacity(0.75) : Color.white.opacity(0.28)) : Color.white.opacity(0.08))
+            .frame(width: board ? 18 : nil)
+    }
+}
+
+// 알림 위치 — 화면 모양 위의 다섯 자리
+struct NotifyPositionPicker: View {
+    @Binding var selection: String
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 7).fill(Color.black.opacity(0.3))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.white.opacity(0.12), lineWidth: 1))
+            VStack(spacing: 0) {
+                Rectangle().fill(Color.white.opacity(0.08)).frame(height: 5)   // 메뉴 막대
+                Spacer()
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            ForEach(notifyPositions, id: \.0) { value, name in spot(value, name) }
+        }
+        .frame(width: 132, height: 82)
+    }
+
+    private func spot(_ value: String, _ name: String) -> some View {
+        let on = selection == value
+        let x: CGFloat = value.hasSuffix("left") ? -44 : value.hasSuffix("right") ? 44 : 0
+        let y: CGFloat = value.hasPrefix("top") ? -21 : value.hasPrefix("bottom") ? 27 : 3
+        return SpotButton(on: on) { withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) { selection = value } }
+            .offset(x: x, y: y)
+    }
+
+    private struct SpotButton: View {
+        let on: Bool
+        let action: () -> Void
+        @State private var hover = false
+        var body: some View {
+            Button(action: action) {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(on ? SettingsStyle.accent : Color.white.opacity(hover ? 0.32 : 0.16))
+                    .frame(width: 30, height: 14)
+                    .shadow(color: on ? SettingsStyle.accent.opacity(0.6) : .clear, radius: 4)
+                    .padding(4)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .clickable($hover)
+        }
+    }
+}
+
+// 캐릭터 고르기 — 8명이 제자리에서 움직인다. 고른 캐릭터는 강조 테두리
+struct MascotGrid: View {
+    @Binding var selection: Mascot
+    var body: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
+            ForEach(Mascot.allCases) { m in MascotTile(mascot: m, on: m == selection) { selection = m } }
+        }
+    }
+
+    private struct MascotTile: View {
+        let mascot: Mascot
+        let on: Bool
+        let action: () -> Void
+        @State private var hover = false
+        var body: some View {
+            Button(action: action) {
+                VStack(spacing: 6) {
+                    Ambient { t in
+                        ZStack {
+                            if mascot == .foreman {
+                                Foreman.figure(mood: on ? .busy : .idle, t: t, sinceChange: 9, blink: false)
+                            } else {
+                                BrainrotFigure(kind: mascot, mood: on ? .busy : .idle, t: t, sinceChange: 9, blink: false)
+                            }
+                        }
+                        .frame(width: 46, height: 44)
+                    }
+                    Text(mascot.name).boardFont(10.5, weight: on ? .semibold : .regular)
+                        .foregroundStyle(on ? .primary : .secondary)
+                        .multilineTextAlignment(.center).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                        .frame(height: 28, alignment: .top)
+                }
+                .frame(maxWidth: .infinity).padding(.top, 10).padding(.bottom, 6).padding(.horizontal, 4)
+                .background(RoundedRectangle(cornerRadius: 10).fill(on ? SettingsStyle.accent.opacity(0.14) : Color.white.opacity(hover ? 0.06 : 0.025)))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(on ? SettingsStyle.accent.opacity(0.8) : Color.white.opacity(0.07), lineWidth: on ? 1.5 : 1))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .clickable($hover)
+            .animation(.easeOut(duration: 0.15), value: on)
+        }
+    }
+}
+
+// 계정 목록 — 지금 계정 표시, 다른 계정은 전환·지우기, 아래에 계정 추가
+struct AccountList: View {
+    @ObservedObject var accounts: AccountStore
+    let busy: () -> [Session]
+
+    var body: some View {
+        var list = accounts.saved
+        if let c = accounts.current, !list.contains(where: { $0.id == c.id }) { list.insert(c, at: 0) }
+        return VStack(spacing: 6) {
+            ForEach(list, id: \.id) { a in AccountRow(account: a, accounts: accounts, busy: busy) }
+            if list.isEmpty {
+                Text("로그인 정보가 없습니다").boardFont(12).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack {
+                if accounts.adding {
+                    ProgressView().controlSize(.small)
+                    Text("터미널·브라우저에서 로그인을 기다리는 중").boardFont(11.5).foregroundStyle(.secondary)
+                    Spacer()
+                    SettingsButton("취소") { accounts.cancelAdd() }
+                } else {
+                    SettingsButton("계정 추가…") { accounts.beginAdd() }
+                    Text("터미널과 브라우저에서 로그인합니다").boardFont(11).foregroundStyle(.tertiary)
+                    Spacer()
+                }
+            }
+            .padding(.top, 4)
+            if let n = accounts.notice {
+                Label(n.text, systemImage: n.error ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    .boardFont(11.5).foregroundStyle(n.error ? Color.orange : .secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private struct AccountRow: View {
+        let account: Account
+        @ObservedObject var accounts: AccountStore
+        let busy: () -> [Session]
+        @State private var hover = false
+
+        var body: some View {
+            let current = account.id == accounts.current?.id
+            HStack(spacing: 10) {
+                Image(systemName: "person.crop.circle.fill").font(.system(size: 20))
+                    .foregroundStyle(current ? Palette.accent : Color.white.opacity(0.3))
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(account.email).boardFont(12.5, weight: .semibold).lineLimit(1).truncationMode(.middle)
+                        if !account.plan.isEmpty {
+                            Text(account.plan).boardFont(9.5, weight: .bold).foregroundStyle(.secondary)
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(Capsule().fill(Color.white.opacity(0.08))).fixedSize()
+                        }
+                    }
+                    if !account.org.isEmpty { Text(account.org).boardFont(11).foregroundStyle(.secondary).lineLimit(1) }
+                }
+                Spacer(minLength: 8)
+                if current {
+                    Text("사용 중").boardFont(11, weight: .semibold).foregroundStyle(Palette.color("idle"))
+                        .padding(.horizontal, 8).frame(height: 22)
+                        .background(Capsule().fill(Palette.color("idle").opacity(0.12)))
+                } else {
+                    if hover {
+                        Button { accounts.remove(account) } label: {
+                            Image(systemName: "trash").font(.system(size: 11)).foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .transition(.opacity)
+                    }
+                    if account.expired {
+                        SettingsButton("다시 로그인", enabled: !accounts.switching) { accounts.beginAdd(email: account.email) }
+                    } else {
+                        SettingsButton("전환", enabled: !accounts.switching) { accounts.confirmSwitch(account, busy: busy()) }
+                    }
+                }
+            }
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(current ? 0.05 : hover ? 0.04 : 0)))
+            .onHover { h in withAnimation(.easeOut(duration: 0.12)) { hover = h } }
+        }
+    }
+}
+
+// 매초 바뀌는 Store 는 이 스위치만 지켜본다 — 설정 화면 전체가 매초 다시 그려지지 않게
+struct AllMuteSwitch: View {
+    @ObservedObject var store: Store
+    var body: some View {
+        SettingsSwitch(isOn: Binding(get: { store.allMuted }, set: { store.setAllMuted($0) }), tint: Color(red: 1, green: 0.45, blue: 0.45))
+    }
+}
+
+struct AccountAutoSwitch: View {
+    @ObservedObject var accounts: AccountStore
+    var body: some View { SettingsSwitch(isOn: $accounts.autoSwitch) }
+}
+
+// 단축키 한 줄 — (바꿨으면 되돌리기) · 키 칸. 아래에 겹침·시스템 단축키·전역 등록 실패 안내
+struct ShortcutRow: View {
+    let action: ShortcutAction
+    @ObservedObject var keys: Shortcuts
+    @ObservedObject var recorder: ShortcutSettings
+    @State private var hover = false
+
+    var body: some View {
+        let a = action
+        let listening = recorder.recording == a.id
+        let changed = keys.overrides[a.id] != nil
+        let accent = SettingsStyle.accent
+        VStack(alignment: .trailing, spacing: 4) {
+            HStack(spacing: 8) {
                 if changed {
                     Button { keys.set(a.id, a.initial) } label: {
                         Image(systemName: "arrow.uturn.backward").font(.system(size: 10, weight: .bold)).foregroundStyle(.secondary)
@@ -8120,33 +9103,32 @@ struct ShortcutSettingsView: View {
                     .buttonStyle(.plain)
                     .hint("기본값(\(a.initial?.label ?? "없음"))으로 되돌리기")
                 }
-                Button { listening ? model.stopRecording() : model.startRecording(a.id) } label: {
+                Button { listening ? recorder.stopRecording() : recorder.startRecording(a.id) } label: {
                     Text(listening ? "새 키를 누르세요…" : keys.label(a.id) ?? "없음")
                         .font(.system(size: 12, weight: .medium, design: .monospaced))
                         .foregroundStyle(listening ? accent : changed ? Color.yellow : keys.combo(a.id) == nil ? .secondary : .primary)
-                        .padding(.horizontal, 8)
-                        .frame(minWidth: 76, minHeight: 22)
-                        .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.08)))
-                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(listening ? accent : Color.white.opacity(0.15), lineWidth: 1))
+                        .padding(.horizontal, 10)
+                        .frame(minWidth: 84, minHeight: 26)
+                        .background(RoundedRectangle(cornerRadius: 7).fill(listening ? accent.opacity(0.14) : Color.white.opacity(hover ? 0.1 : 0.06)))
+                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(listening ? accent : Color.white.opacity(0.12), lineWidth: 1))
                 }
                 .buttonStyle(.plain)
+                .clickable($hover)
             }
             ForEach(keys.conflicts(a.id), id: \.self) { other in
                 HStack(spacing: 6) {
-                    Text("⚠ \"\(keys.action(other)?.title ?? other)\" 항목과 같은 키입니다").foregroundStyle(.orange)
-                    Button("그쪽 비우기") { keys.set(other, nil) }.buttonStyle(.link)
+                    Text("\"\(keys.action(other)?.title ?? other)\" 항목과 같은 키입니다").foregroundStyle(.orange)
+                    SettingsLinkButton("그쪽 비우기") { keys.set(other, nil) }
                 }
                 .boardFont(11)
             }
-            if let c = keys.combo(a.id), model.systemTaken(c) {
-                Text("⚠ macOS 시스템 단축키와 겹칩니다 (시스템 설정 > 키보드 > 키보드 단축키)").boardFont(11).foregroundStyle(.orange)
+            if let c = keys.combo(a.id), recorder.systemTaken(c) {
+                Text("macOS 시스템 단축키와 겹칩니다").boardFont(11).foregroundStyle(.orange)
             }
             if keys.hotKeyFailed.contains(a.id) {
-                Text("⚠ 전역 단축키로 등록하지 못했습니다. 다른 앱이 먼저 잡았을 수 있습니다").boardFont(11).foregroundStyle(.orange)
+                Text("전역 단축키로 등록하지 못했습니다").boardFont(11).foregroundStyle(.orange)
             }
         }
-        .padding(.horizontal, 8).padding(.vertical, 5)
-        .background(RoundedRectangle(cornerRadius: 7).fill(listening ? accent.opacity(0.14) : .clear))
     }
 }
 
@@ -8630,7 +9612,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var statusShown = ""
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        UserDefaults.standard.register(defaults: ["pinned": true, "mascot": Mascot.tralalero.rawValue])
+        UserDefaults.standard.register(defaults: ["pinned": true, "mascot": Mascot.tralalero.rawValue,
+                                                  "autoUpdateCheck": true, "newSessionMdRender": true])
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: boardLaunchWidth, height: 620),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                           backing: .buffered, defer: false)
@@ -8784,21 +9767,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let keys = Shortcuts.shared
         keys.bind(appMenu.addItem(withTitle: "세션 보드 보기", action: #selector(showBoardAction), keyEquivalent: ""), "showBoard")
         keys.bind(appMenu.addItem(withTitle: "항상 위에 고정", action: #selector(togglePin), keyEquivalent: ""), "pin")
-        // 제목 오른쪽 캐릭터 고르기 — 캐릭터를 오른쪽 클릭해도 같은 목록이 나온다. 체크 표시는 validateMenuItem 이 단다
-        let mascotMenu = NSMenu(title: "캐릭터")   // 하위 메뉴를 달면 항목 이름이 하위 메뉴 제목을 따른다
-        for m in Mascot.allCases {
-            mascotMenu.addItem(withTitle: m.name, action: #selector(pickMascot(_:)), keyEquivalent: "").representedObject = m.rawValue
-        }
-        appMenu.addItem(withTitle: "캐릭터", action: nil, keyEquivalent: "").submenu = mascotMenu
-        // 작업 완료·승인 대기 알림 패널이 뜨는 자리 — 체크 표시는 validateMenuItem 이 단다
-        let positionMenu = NSMenu(title: "알림 위치")
-        for (value, name) in [("center", "중앙 (기본)"), ("top-left", "왼쪽 상단"), ("top-right", "오른쪽 상단"),
-                              ("bottom-left", "왼쪽 하단"), ("bottom-right", "오른쪽 하단")] {
-            positionMenu.addItem(withTitle: name, action: #selector(pickNotifyPosition(_:)), keyEquivalent: "").representedObject = value
-        }
-        appMenu.addItem(withTitle: "알림 위치", action: nil, keyEquivalent: "").submenu = positionMenu
-        // 보드 단축키를 바꾸는 창 — ⌘, 는 표에 없고 바꿀 수 없다(엔진이 먼저 가져가는 키라 Shortcuts.handle 이 받는다)
-        let settings = ActionItem("단축키…") { ShortcutSettings.shared.open() }
+        // 설정 화면 — 터미널 영역을 설정 화면으로 바꾼다. ⌘, 는 표에 없고 바꿀 수 없다(엔진이 먼저 가져가는 키라 Shortcuts.handle 이 받는다)
+        let settings = ActionItem("설정…") { SettingsScreen.shared.open() }
         settings.keyEquivalent = ","
         appMenu.addItem(settings)
         appMenu.addItem(withTitle: "업데이트 확인…", action: #selector(checkForUpdates), keyEquivalent: "")
@@ -8856,8 +9826,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         tabMenu.addItem(.separator())
         // 키는 단축키 표(id)에서 — 숨긴 항목은 메뉴에 보이지 않는 보조 키
+        // 설정 화면이 떠 있으면 닫고 한다(잠깐 펼쳤어도 펼친 채로)
         func keyItem(_ menu: NSMenu, _ title: String, _ id: String, hidden: Bool = false, run: @escaping @MainActor () -> Void) {
-            let item = ActionItem(title, run: run)
+            let item = ActionItem(title) { SettingsScreen.shared.close(keep: true); run() }
             keys.bind(item, id)
             item.isHidden = hidden
             item.allowsKeyEquivalentWhenHidden = hidden
@@ -8897,7 +9868,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         keyItem(splitMenu, "화면 하나 크게 보기", "zoom") { TerminalHub.shared.toggleZoom() }
         windowMenu.addItem(withTitle: "화면 나누기", action: nil, keyEquivalent: "").submenu = splitMenu
         // ⇧⌘R — 고른 탭의 이름을 탭 안에서 고친다(접혀 있으면 펼친다). 탭이 없으면 그대로. 엔진 기본값은 이 키를 묶지 않는다
-        let rename = ActionItem("탭 이름 바꾸기") { TerminalHub.shared.beginRename() }
+        let rename = ActionItem("탭 이름 바꾸기") { SettingsScreen.shared.close(keep: true); TerminalHub.shared.beginRename() }
         keys.bind(rename, "rename")
         windowMenu.addItem(rename)
         // 글자 크기 — 터미널(모든 탭, 1pt씩)과 보드(10%씩)를 따로 정한다. 둘 다 다시 켜도 남는다. 엔진의 ⌘+·⌘=·⌘-·⌘0 은 풀어 두어
@@ -8923,16 +9894,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         sizeItem("보드 글자 작게", "boardSmaller") { BoardFontScale.shared.change(-1) }
         sizeItem("보드 글자 원래 크기", "boardReset") { BoardFontScale.shared.change(nil) }
         windowMenu.addItem(withTitle: "글자 크기", action: nil, keyEquivalent: "").submenu = fontMenu
-        // 터미널 테마 — 엔진에 든 테마를 고르는 창(보드 설정 terminalTheme, 고르지 않았으면 Ghostty 설정의 theme). 단축키 없음
-        windowMenu.addItem(ActionItem("터미널 테마…") { ThemePicker.shared.open() })
-        windowMenu.addItem(.separator())
-        // 보드 위치(오른쪽·왼쪽)와 펼치기·접기 애니메이션 — 체크 표시는 validateMenuItem 이 단다
-        let sideMenu = NSMenu(title: "보드 위치")
-        for (value, name) in [("right", "오른쪽 (기본)"), ("left", "왼쪽")] {
-            sideMenu.addItem(withTitle: name, action: #selector(pickBoardSide(_:)), keyEquivalent: "").representedObject = value
-        }
-        windowMenu.addItem(withTitle: "보드 위치", action: nil, keyEquivalent: "").submenu = sideMenu
-        windowMenu.addItem(withTitle: "펼치기·접기 애니메이션", action: #selector(toggleTerminalAnimation), keyEquivalent: "")
         windowItem.submenu = windowMenu
         NSApp.mainMenu = main
     }
@@ -8986,26 +9947,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc func togglePin() { MainActor.assumeIsolated { setPinned(!UserDefaults.standard.bool(forKey: "pinned")) } }
 
-    @objc func pickMascot(_ item: NSMenuItem) { UserDefaults.standard.set(item.representedObject as? String, forKey: "mascot") }
-
     @objc func snapAction() { MainActor.assumeIsolated { snapToSide() } }
-
-    @objc func pickBoardSide(_ item: NSMenuItem) { MainActor.assumeIsolated { setBoardSide(left: item.representedObject as? String == "left") } }
-
-    // 펼치기·접기 애니메이션 켜고 끄기 — 기본 끔(바로 펼치고 접는다)
-    @objc func toggleTerminalAnimation() {
-        UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: "terminalAnimation"), forKey: "terminalAnimation")
-    }
-
-    // 중앙(기본)을 고르면 표지 파일을 지운다 — 파일이 없으면 notify.py 가 가운데로 띄운다
-    @objc func pickNotifyPosition(_ item: NSMenuItem) {
-        guard let value = item.representedObject as? String else { return }
-        if value == "center" {
-            try? FileManager.default.removeItem(atPath: notifyPositionPath)
-        } else {
-            try? value.write(toFile: notifyPositionPath, atomically: true, encoding: .utf8)
-        }
-    }
 
     // 결과는 보드의 알림 줄에 뜨므로 보드를 먼저 연다
     @objc func checkForUpdates() {
@@ -9017,17 +9959,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if item.action == #selector(togglePin) { item.state = UserDefaults.standard.bool(forKey: "pinned") ? .on : .off }
         let left = UserDefaults.standard.string(forKey: "boardSide") == "left"
         if item.action == #selector(snapAction) { item.title = left ? "처음 크기로 왼쪽에 붙이기" : "처음 크기로 오른쪽에 붙이기" }
-        if item.action == #selector(pickBoardSide(_:)) { item.state = (item.representedObject as? String == "left") == left ? .on : .off }
-        if item.action == #selector(toggleTerminalAnimation) { item.state = UserDefaults.standard.bool(forKey: "terminalAnimation") ? .on : .off }
-        if item.action == #selector(pickMascot(_:)) {
-            let current = UserDefaults.standard.string(forKey: "mascot") ?? Mascot.tralalero.rawValue
-            item.state = item.representedObject as? String == current ? .on : .off
-        }
-        if item.action == #selector(pickNotifyPosition(_:)) {
-            let current = (try? String(contentsOfFile: notifyPositionPath, encoding: .utf8))?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? "center"
-            item.state = item.representedObject as? String == current ? .on : .off
-        }
         return true
     }
 
