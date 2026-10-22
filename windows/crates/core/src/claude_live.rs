@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::text::non_empty_str;
+use crate::text::{non_empty_str, strip_utf8_bom};
 use crate::{clock, notify, Record};
 
 /// 대화 기록 끝에서 읽는 바이트 수.
@@ -75,7 +75,7 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 /// JSONL 한 줄 — 줄 끝 `\r` 과 줄 앞 BOM 을 떼고 객체로 푼다. 못 풀면(UTF-8 이 깨진 줄 포함) None.
 fn parse_line(line: &[u8]) -> Option<Record> {
     let line = line.strip_suffix(b"\r").unwrap_or(line);
-    let line = line.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(line);
+    let line = strip_utf8_bom(line);
     match serde_json::from_slice::<Value>(line) {
         Ok(Value::Object(entry)) => Some(entry),
         _ => None,

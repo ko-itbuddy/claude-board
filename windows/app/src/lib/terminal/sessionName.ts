@@ -14,10 +14,21 @@ export function sanitizeSessionName(raw: string): string {
   return cleaned || FALLBACK;
 }
 
+/** 이미 정리된 이름인가 — 정리 함수의 고정점이다(허용 글자·앞뒤 규칙의 유일한 정의가 sanitizeSessionName 이다) */
+const isSanitized = (name: string): boolean => name !== "" && sanitizeSessionName(name) === name;
+
 /** 이미 sanitizeSessionName 을 거친 이름만 받는다. 공백이 있으면 큰따옴표로 묶는다(허용 글자뿐이라 묶음 안에서 풀리는 것이 없다) */
 export function quoteSessionName(sanitized: string): string {
-  if (!/^[\p{L}\p{N} _.-]+$/u.test(sanitized) || /^[ \-.]|[ \-.]$/.test(sanitized)) {
-    throw new Error("정리되지 않은 세션 이름");
-  }
+  if (!isSanitized(sanitized)) throw new Error("정리되지 않은 세션 이름");
   return sanitized.includes(" ") ? `"${sanitized}"` : sanitized;
 }
+
+/** 명령줄에 들어가도 되는 `--name` 값인가 — sessionNameArg 의 결과 꼴(정리된 이름, 공백이 있으면 큰따옴표로 묶임)만 참 */
+export function isSessionNameArg(arg: string): boolean {
+  const quoted = arg.length >= 2 && arg.startsWith('"') && arg.endsWith('"');
+  const inner = quoted ? arg.slice(1, -1) : arg;
+  return isSanitized(inner) && (quoted || !inner.includes(" "));
+}
+
+/** 폴더·탭 글자 → 셸 명령줄에 그대로 넣을 수 있는 `--name` 값(정리 + 필요하면 큰따옴표) */
+export const sessionNameArg = (raw: string): string => quoteSessionName(sanitizeSessionName(raw));

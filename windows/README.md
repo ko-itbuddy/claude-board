@@ -26,7 +26,7 @@ Claude Board 는 그 확인을 보드 한 장으로 옮깁니다.
 
 ## 🧰 필요한 환경
 
-- 🪟 Windows 10 1809 이상 또는 Windows 11 — x64 (ARM64 Windows 에서는 확인하지 않았습니다)
+- 🪟 Windows 10 1809(빌드 17763) 이상 또는 Windows 11 — x64 (ARM64 Windows 에서는 확인하지 않았습니다). 더 낮으면 설치가 시작 전에 멈춥니다
 - 🌐 Microsoft Edge WebView2 런타임 — Windows 11 에는 기본으로 들어 있습니다. 없으면 setup.exe 는 설치 중에 받아 설치하고, PowerShell 설치는 없다고 알려 줍니다.
 - 🤖 Claude Code — 네이티브 설치(`irm https://claude.ai/install.ps1 | iex`)를 권장합니다. `claude-board` · `claude-board-tui` 명령이 들어가는 `%USERPROFILE%\.local\bin` 을 PATH 에 넣어 줍니다.
 - 🐍 python 은 필요 없습니다. hook 은 실행 파일 하나(`claude-board-hook.exe`)입니다.

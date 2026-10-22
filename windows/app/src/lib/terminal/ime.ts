@@ -3,10 +3,13 @@
 // 키 처리기 앞단에서 아래 두 가지만 바로잡는다.
 //  1) 조합 중이 아닌데 229 로 온 Escape·Ctrl 조합은 ev.code 로 읽어 바로 보낸다
 //  2) 조합 중에 눌린 Enter·Escape·방향키·Home/End·Ctrl 조합은 붙들었다가 compositionend 다음 틱에 보낸다
+//  3) 텍스트 칸이 포커스를 잃으며 끝난 조합은 xterm 이 읽기 전에 칸이 비워져 글자를 잃는다 — 그 글자를 대신 보낸다
 
 export interface ImeKeys {
   /** 키 이벤트를 먼저 거른다. false 면 이쪽에서 처리를 끝냈으니 xterm 이 다루지 않는다 */
   filter(ev: KeyboardEvent): boolean;
+  /** 조합 중이면 지금 확정한다. 칸이 숨겨지며 조합이 취소되면 입력기가 다음 키부터 낱글자로 확정하는 상태에 빠진다 */
+  commit(): void;
   dispose(): void;
 }
 
@@ -27,7 +30,8 @@ function controlKey(ev: KeyboardEvent): string | null {
 /** 조합 중에 붙들 키를 셸로 보낼 문자열로 바꾼다. 붙들지 않을 키는 null */
 function heldKey(ev: KeyboardEvent, applicationCursor: boolean): string | null {
   if (MODIFIER_CODE.test(ev.code)) return null;
-  if (isEnter(ev)) return ev.shiftKey ? "\n" : "\r";
+  // Alt+Enter 는 xterm 이 ESC CR 로 보낸다(Shift 는 보지 않는다). 조합 중이라고 ESC 를 잃지 않게 같은 값으로 붙든다
+  if (isEnter(ev)) return ev.altKey ? "\x1b\r" : ev.shiftKey ? "\n" : "\r";
   const control = controlKey(ev);
   if (control !== null) return control;
   const final = ARROW_FINAL[ev.code];
@@ -36,6 +40,8 @@ function heldKey(ev: KeyboardEvent, applicationCursor: boolean): string | null {
   if (modifier > 1) return `\x1b[1;${modifier}${final}`;
   return `${applicationCursor ? "\x1bO" : "\x1b["}${final}`;
 }
+
+const isTextField = (el: Element | null | undefined) => el?.tagName === "INPUT" || el?.tagName === "TEXTAREA";
 
 export function createImeKeys(
   textarea: HTMLTextAreaElement,
@@ -64,6 +70,31 @@ export function createImeKeys(
     // 같은 틱에 다시 쏘아지는 키가 있으면 거를 수 있게 한 틱 뒤에 보낸다
     flushTimer = setTimeout(flush, 0);
   };
+  // 포커스를 잃으며 끝난 조합 — 크롬은 compositionend(확정 "한", 취소 "") 직후 blur 를 내고, xterm 은 blur 에서 칸을 비워
+  // 한 틱 뒤에 읽는 조합 글자를 잃는다. 이 처리는 xterm 이 읽은 다음 틱에 돈다(xterm 의 리스너가 먼저 달려 있다)
+  let lastUpdate = "";
+  let disposed = false;
+  const update = (ev: CompositionEvent) => (lastUpdate = ev?.data ?? "");
+  const recover = (ev: CompositionEvent) => {
+    const done = ev?.data ?? "";
+    const last = lastUpdate;
+    lastUpdate = "";
+    setTimeout(() => {
+      if (disposed) return;
+      const active = textarea.ownerDocument?.activeElement;
+      // 다른 입력 칸(탭 이름 칸 등)으로 포커스가 옮겨 갔으면 입력기가 글자를 거기에 쓴다 — 셸로 또 보내면 두 번 들어간다
+      if (active !== textarea && isTextField(active)) return;
+      // 확정됐는데 칸이 비었다 = xterm 이 읽기 전에 blur 가 지웠다. 정상이면 칸에 확정한 글자가 남아 있다
+      if (done) {
+        if (textarea.value === "") send(done);
+      } else if (last && active !== textarea) {
+        // 취소됐고 포커스가 터미널 밖(숨김·본문)이다
+        send(last);
+      }
+    }, 0);
+  };
+  textarea.addEventListener("compositionupdate", update);
+  textarea.addEventListener("compositionend", recover);
   textarea.addEventListener("compositionstart", start);
   textarea.addEventListener("compositionend", end);
 
@@ -97,7 +128,16 @@ export function createImeKeys(
       }
       return true;
     },
+    commit() {
+      if (!composing) return;
+      // blur 가 조합을 확정으로 끝낸다(compositionend 에 글자가 실린다) — 글자는 위 recover 가 보낸다
+      textarea.blur();
+      textarea.focus();
+    },
     dispose() {
+      disposed = true;
+      textarea.removeEventListener("compositionupdate", update);
+      textarea.removeEventListener("compositionend", recover);
       textarea.removeEventListener("compositionstart", start);
       textarea.removeEventListener("compositionend", end);
       clearTimeout(flushTimer);

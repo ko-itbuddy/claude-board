@@ -12,7 +12,8 @@
   import TerminalToggle from "./TerminalToggle.svelte";
   import WinButtons from "./WinButtons.svelte";
   import { TERM_BG } from "./term";
-  import { beginRename, focusActive, hub, newSessionSheet, selectNumber, stepTab, stepWorkspace } from "./hub.svelte";
+  import { beginRename, commitComposition, focusActive, hub, newSessionSheet, selectNumber, stepTab, stepWorkspace } from "./hub.svelte";
+  import { confirmKeyAction, createRefireGuard } from "./keyGuards";
 
   let { expanded, side }: { expanded: boolean; side: BoardSide } = $props();
 
@@ -35,13 +36,24 @@
   // 터미널 단축키 — 펼친 동안만. xterm 이 받기 전에(캡처) 가로채 셸로 가지 않게 한다
   $effect(() => {
     if (!expanded) return;
+    const refire = createRefireGuard();
     const handle = (e: KeyboardEvent) => {
+      // Ctrl+Alt 단축키는 터미널 칸을 숨기거나 바꾼다. 조합 중에 칸이 숨겨지면 크롬이 조합을 취소하고
+      // 입력기가 이후 키를 낱글자로 확정하는 상태에 빠지므로(약 1/5) 단축키가 오기 전에 조합 글자를 확정해 둔다
+      if (e.ctrlKey && e.altKey && !e.getModifierState("AltGraph")) commitComposition();
+      // 조합 중에 누른 단축키는 입력기가 같은 키를 한 번 더 쏜다 — 두 번째는 처리하지 않고 삼킨다(셸로도 보내지 않는다)
+      if (refire.isRefire(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       if (hub.confirm || hub.sheet) return;
       // AltGr 은 Windows 가 Ctrl+Alt 로 보고한다 — 글자(@ { [ 등)를 치는 키라 가로채지 않는다
       if (e.getModifierState("AltGraph")) return;
       const run = (fn: () => void) => {
         e.preventDefault();
         e.stopPropagation();
+        refire.handled(e);
         fn();
       };
       if (e.ctrlKey && e.altKey && !e.shiftKey) {
@@ -64,9 +76,20 @@
     run?.();
   }
 
-  // 닫기 확인 창 — Esc 로 취소
+  // 확인 창 취소 — 포커스를 터미널로 돌려준다(안 돌리면 키 입력이 갈 데가 없다)
+  function cancelConfirm() {
+    hub.confirm = null;
+    focusActive();
+  }
+
+  // 닫기 확인 창 — Esc 로 취소. 포커스가 터미널에 남아 있어 창 밖 키는 삼킨다(keyGuards.ts)
   function confirmKey(e: KeyboardEvent) {
-    if (e.key === "Escape") hub.confirm = null;
+    const insideDialog = e.target instanceof Element && e.target.closest("[role=alertdialog]") !== null;
+    const action = confirmKeyAction(e.key, insideDialog);
+    if (action === "pass") return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (action === "cancel") cancelConfirm();
   }
 </script>
 
@@ -111,7 +134,7 @@
         <div class="text">{sheet.text}</div>
         <div class="buttons">
           <button class="primary" onclick={accept}>닫기</button>
-          <button onclick={() => (hub.confirm = null)}>취소 (Esc)</button>
+          <button onclick={cancelConfirm}>취소 (Esc)</button>
         </div>
       </div>
     </div>

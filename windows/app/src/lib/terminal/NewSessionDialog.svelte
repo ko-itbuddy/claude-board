@@ -4,7 +4,7 @@
   import { inTauri } from "$lib/backend";
   import { board } from "$lib/board/store.svelte";
   import { mockPickFolder } from "$lib/mock";
-  import { hub, workspaceHint, workspaceKey } from "./hub.svelte";
+  import { focusActive, hub, workspaceHint, workspaceKey } from "./hub.svelte";
   import { DEFAULT_SESSION_COMMAND, startSession } from "./launch";
 
   // 보드에 있는 경로(전체 경로). 열 때 한 번 정한다
@@ -25,6 +25,7 @@
 
   function cancel() {
     hub.sheet = false;
+    focusActive(); // 취소해도 키 입력이 터미널로 돌아오게
   }
 
   function start() {
@@ -41,15 +42,38 @@
     } else {
       picked = mockPickFolder();
     }
+    // 고르든 취소하든 포커스는 명령 칸으로 — 안 그러면 단추나 창 뒤 터미널에 남아 쳐 넣은 글자가 엉뚱한 데로 간다
+    focusCommand();
     if (typeof picked !== "string") return;
-    if (!paths.includes(picked) && !others.includes(picked)) others.push(picked);
-    dir = picked;
+    // 같은 폴더를 다른 꼴(슬래시 방향·대소문자·끝 \)로 고르면 새 줄을 만들지 않고 있던 줄을 고른다
+    const same = rows.find((path) => workspaceKey(path) === workspaceKey(picked));
+    if (same) dir = same;
+    else {
+      others.push(picked);
+      dir = picked;
+    }
   }
 
   // 보드 쪽 칸 위까지 창 전체를 덮도록 body 로 옮긴다(터미널 칸 안에 두면 오른쪽 보드가 위에 그려진다)
   function toBody(node: HTMLElement) {
     document.body.appendChild(node);
     return { destroy: () => node.remove() };
+  }
+
+  // 열리면 명령 칸이 포커스를 쥔다 — 안 그러면 xterm 의 textarea 가 포커스를 쥔 채 쳐 넣은 글자가 창 뒤 셸로 들어간다.
+  // toBody 가 창을 body 로 옮기면 포커스가 풀리므로 다음 프레임에 준다
+  let commandField = $state<HTMLInputElement>();
+  function focusCommand() {
+    commandField?.focus();
+    commandField?.select();
+  }
+
+  function focusSelect(node: HTMLInputElement) {
+    const frame = requestAnimationFrame(() => {
+      node.focus();
+      node.select();
+    });
+    return { destroy: () => cancelAnimationFrame(frame) };
   }
 
   // xterm 이 Esc·Enter 를 먼저 먹으므로 캡처로 받는다. 단추에 포커스가 있을 때의 Enter 는 그 단추의 누름에 맡긴다
@@ -94,7 +118,7 @@
 
     <div class="group">
       <div class="label">실행할 명령</div>
-      <input class="field" type="text" spellcheck="false" autocomplete="off" bind:value={command} />
+      <input class="field" type="text" spellcheck="false" autocomplete="off" bind:value={command} bind:this={commandField} use:focusSelect />
       <div class="caption">작업 경로의 셸에 쳐 넣어 실행합니다. claude 면 보드가 --session-id 를 붙입니다</div>
     </div>
 

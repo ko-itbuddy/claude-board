@@ -20,6 +20,7 @@
   import Divider from "$lib/terminal/Divider.svelte";
   import TerminalArea from "$lib/terminal/TerminalArea.svelte";
   import { setDragging, startHub } from "$lib/terminal/hub.svelte";
+  import { clampBoardWidth, MIN_BOARD, maxBoardWidth } from "$lib/terminal/paneLayout";
   import { stateName, stateRgb } from "$lib/board/format";
   import { hint } from "$lib/board/hint.svelte";
   import { pointer, trackWindow, win } from "$lib/board/pointer.svelte";
@@ -29,19 +30,15 @@
   const expanded = $derived(snap?.settings.terminalExpanded ?? false);
   const side = $derived(snap?.settings.boardSide ?? "right");
 
-  // 칸 크기 규칙(논리 px) — 보드 칸은 360 이상, 터미널 칸은 480 이상 남긴다. 경계는 8
-  const MIN_BOARD = 360;
-  const MIN_TERMINAL = 480;
-  const DIVIDER = 8;
-  const DEFAULT_BOARD_WIDTH = 454;
+  // 칸 크기 규칙(논리 px)은 paneLayout.ts — 보드 칸은 360 이상, 터미널 칸은 480 이상 남긴다. 경계는 8
 
   let rootEl = $state<HTMLElement>();
   let boardEl = $state<HTMLElement>();
   let winWidth = $state(0);
   // 경계를 끄는 동안의 보드 칸 폭. 놓으면 저장하고 비운다
   let dragWidth = $state<number | null>(null);
-  const maxBoard = $derived(Math.max(MIN_BOARD, winWidth - DIVIDER - MIN_TERMINAL));
-  const boardWidth = $derived(Math.min(Math.max(dragWidth ?? snap?.settings.boardPaneWidth ?? DEFAULT_BOARD_WIDTH, MIN_BOARD), maxBoard));
+  const maxBoard = $derived(maxBoardWidth(winWidth));
+  const boardWidth = $derived(clampBoardWidth(dragWidth, snap?.settings.boardPaneWidth, winWidth));
 
   $effect(() => connect());
   $effect(() => trackWindow(() => board.snap?.terminals.length ?? 5, () => ({ el: boardEl, side })));

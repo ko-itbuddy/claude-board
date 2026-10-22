@@ -7,6 +7,23 @@ import { inTauri, setTerminalExpanded, termKill, termList, termSpawn, termWrite 
 import { board } from "$lib/board/store.svelte";
 import { mockTabs } from "$lib/mock";
 import type { LeafPhase, PaneNode, Session, State, TermId, TermInfo, TerminalTab } from "$lib/types";
+import {
+  folderNameOf,
+  homeFromGroups,
+  insertIndexFor,
+  mostUrgent,
+  needsCloseConfirm,
+  nthTab,
+  pickAfterClose,
+  renamedTo,
+  shownTabOf,
+  tabsInWorkspace,
+  workspaceHintOf,
+  workspaceKeyOf,
+  workspaceLabelOf,
+  workspacesOf,
+  wrapStep,
+} from "./tabLogic";
 import { TermController } from "./term";
 
 export interface LeafState {
@@ -63,68 +80,36 @@ export function controllerOf(leafId: string): TermController {
 
 // 홈 폴더 — 상태 묶음의 그룹이 홈을 "~" 로 줄여 보내므로 id(전체 경로)와 path(줄인 경로)의 차이에서 알아낸다
 function homeDir(): string | null {
-  for (const g of board.snap?.groups ?? []) {
-    if (g.path === "~") return g.id;
-    if (g.path.startsWith("~") && g.id.endsWith(g.path.slice(1))) return g.id.slice(0, g.id.length - g.path.length + 1);
-  }
-  return null;
-}
-
-function norm(path: string) {
-  return path.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+  return homeFromGroups(board.snap?.groups ?? []);
 }
 
 /** 경로를 견주는 꼴 — 대소문자·슬래시 방향·끝 \ 차이로 같은 폴더가 어긋나지 않게, 홈은 "~" */
 export function workspaceKey(path: string): string {
-  const n = norm(path);
-  const home = homeDir();
-  return n === "~" || (home !== null && n === norm(home)) ? "~" : n;
-}
-
-function baseName(path: string) {
-  const parts = path.replace(/\//g, "\\").replace(/\\+$/, "").split("\\");
-  return parts.at(-1) || path;
+  return workspaceKeyOf(path, homeDir());
 }
 
 /** 폴더 이름(홈은 ~) */
 export function folderName(workspace: string) {
-  return workspaceKey(workspace) === "~" ? "~" : baseName(workspace);
+  return folderNameOf(workspace, homeDir());
 }
 
 /** 경로 줄 이름 — 폴더 이름(홈은 ~). 같은 이름이 둘 이상이면 부모 폴더를 붙여 가른다 */
 export function workspaceLabel(ws: string, among: string[]): string {
-  const name = folderName(ws);
-  if (name === "~" || among.filter((w) => folderName(w) === name).length < 2) return name;
-  const parts = ws.replace(/\//g, "\\").replace(/\\+$/, "").split("\\");
-  return `${parts.at(-2) ?? ""}/${name}`;
+  return workspaceLabelOf(ws, among, homeDir());
 }
 
 /** 경로 줄 항목의 힌트 — 전체 경로(홈은 ~) */
 export function workspaceHint(ws: string): string {
-  const key = workspaceKey(ws);
-  if (key === "~") return "~";
-  const home = homeDir();
-  if (home && norm(ws).startsWith(norm(home) + "\\")) return "~" + ws.slice(home.length);
-  return ws;
+  return workspaceHintOf(ws, homeDir());
 }
 
 /** 경로 줄의 경로들 — 탭 목록에 처음 나타난 순서 */
 export function workspaces(): string[] {
-  const keys: string[] = [];
-  const list: string[] = [];
-  for (const t of hub.tabs) {
-    const k = workspaceKey(t.workspace);
-    if (!keys.includes(k)) {
-      keys.push(k);
-      list.push(t.workspace);
-    }
-  }
-  return list;
+  return workspacesOf(hub.tabs, homeDir());
 }
 
 export function tabsIn(ws: string): TerminalTab[] {
-  const key = workspaceKey(ws);
-  return hub.tabs.filter((t) => workspaceKey(t.workspace) === key);
+  return tabsInWorkspace(hub.tabs, ws, homeDir());
 }
 
 /** 탭 줄에 보이는 이름 — 사용자가 바꾼 이름, 없으면 폴더 이름 */
@@ -133,9 +118,6 @@ export function shownName(tab: TerminalTab) {
 }
 
 // ── 탭 상태 ───────────────────────────────────────────────────
-
-// 급한 순위 — 낮을수록 급하다(ClaudeBoard.swift:43, 5286)
-const RANK: Record<State, number> = { waiting: 0, working: 1, paused: 2, idle: 2, ended: 3 };
 
 function sessionOf(tab: TerminalTab): Session | null {
   if (!tab.sessionId) return null;
@@ -153,8 +135,7 @@ export function tabState(tab: TerminalTab): State {
 
 /** 경로 상태 — 그 경로 탭들 가운데 가장 급한 상태 */
 export function workspaceState(ws: string): State {
-  const states = tabsIn(ws).map(tabState);
-  return states.length ? states.reduce((a, b) => (RANK[b] < RANK[a] ? b : a)) : "idle";
+  return mostUrgent(tabsIn(ws).map(tabState));
 }
 
 /** 탭이 지금 하는 일 — 승인 대기이고 message 가 있으면 message, 아니면 세션 제목. 셸 탭은 터미널 제목 */
@@ -166,8 +147,7 @@ export function doing(tab: TerminalTab): string {
 
 /** 탭에서 도는 프로그램이 있는가 — 짝 세션이 아직 끝나지 않았을 때(셸만 있는 탭은 바로 닫는다) */
 function isBusy(tab: TerminalTab): boolean {
-  const s = sessionOf(tab);
-  return !!s && s.state !== "ended";
+  return needsCloseConfirm(sessionOf(tab)?.state);
 }
 
 // ── 탭 만들기·찾기 ────────────────────────────────────────────
@@ -214,6 +194,12 @@ export function activeTab(): TerminalTab | undefined {
 export function focusActive() {
   const tab = activeTab();
   if (tab && !tab.renaming) controllers.get(tab.activeLeaf)?.focus();
+}
+
+/** 고른 탭에서 조합 중인 글자가 있으면 확정한다 */
+export function commitComposition() {
+  const tab = activeTab();
+  if (tab && !tab.renaming) controllers.get(tab.activeLeaf)?.commitComposition();
 }
 
 // 고른 탭이 그려진(보이게 된) 뒤에 터미널로 포커스를 돌려준다
@@ -264,9 +250,7 @@ export function select(id: string, focus = true) {
 
 // 경로에서 보일 탭 — 그 경로에서 마지막에 고른 탭(닫혔으면 첫 탭). 탭이 없으면 undefined
 function shownTab(ws: string): string | undefined {
-  const last = hub.lastTab[workspaceKey(ws)];
-  if (last && hub.tabs.some((t) => t.id === last)) return last;
-  return tabsIn(ws)[0]?.id;
+  return shownTabOf(hub.tabs, ws, hub.lastTab, homeDir());
 }
 
 /** 경로 줄 항목을 눌렀을 때 — 그 경로의 마지막에 고른 탭으로 */
@@ -279,13 +263,12 @@ export function showWorkspace(path: string) {
 export function stepTab(step: number) {
   const list = tabsIn(hub.workspace);
   if (!list.length) return;
-  const i = Math.max(0, list.findIndex((t) => t.id === hub.selected));
-  select(list[(i + step + list.length) % list.length].id);
+  select(list[wrapStep(list.length, list.findIndex((t) => t.id === hub.selected), step)].id);
 }
 
 /** 탭 줄 순서의 n 번째(1부터) 탭으로 */
 export function selectNumber(n: number) {
-  const tab = tabsIn(hub.workspace)[n - 1];
+  const tab = nthTab(tabsIn(hub.workspace), n);
   if (tab) select(tab.id);
 }
 
@@ -294,8 +277,7 @@ export function stepWorkspace(step: number) {
   const list = workspaces();
   if (!list.length) return;
   const key = workspaceKey(hub.workspace);
-  const i = Math.max(0, list.findIndex((w) => workspaceKey(w) === key));
-  const id = shownTab(list[(i + step + list.length) % list.length]);
+  const id = shownTab(list[wrapStep(list.length, list.findIndex((w) => workspaceKey(w) === key), step)]);
   if (id) select(id);
 }
 
@@ -306,15 +288,7 @@ export function openShell(dir: string | null = null, opts: { command?: string; s
   const tab = newTab(null, dir ?? "~");
   tab.command = opts.command ?? null;
   tab.sessionId = opts.sessionId ?? null;
-  const key = workspaceKey(tab.workspace);
-  let at = hub.tabs.length;
-  for (let i = hub.tabs.length - 1; i >= 0; i--) {
-    if (workspaceKey(hub.tabs[i].workspace) === key) {
-      at = i + 1;
-      break;
-    }
-  }
-  hub.tabs.splice(at, 0, tab);
+  hub.tabs.splice(insertIndexFor(hub.tabs, tab.workspace, homeDir()), 0, tab);
   select(tab.id);
   return hub.tabs.find((t) => t.id === tab.id);
 }
@@ -424,10 +398,8 @@ export function requestClose(tab: TerminalTab) {
 export function remove(tab: TerminalTab) {
   const i = hub.tabs.findIndex((t) => t.id === tab.id);
   if (i < 0) return;
-  const ws = tab.workspace;
-  const key = workspaceKey(ws);
-  const at = tabsIn(ws).findIndex((t) => t.id === tab.id); // 경로 안에서의 자리
-  const order = workspaces(); // 닫기 전 경로 줄
+  const key = workspaceKey(tab.workspace);
+  const next = pickAfterClose(hub.tabs, tab.id, hub.lastTab, homeDir());
   const gone = hub.tabs[i];
   const wasSelected = hub.selected === gone.id;
   hub.tabs.splice(i, 1);
@@ -441,11 +413,6 @@ export function remove(tab: TerminalTab) {
   }
   if (hub.lastTab[key] === gone.id) delete hub.lastTab[key];
   if (!wasSelected) return;
-  const rest = tabsIn(ws);
-  const others = order.filter((w) => workspaceKey(w) !== key);
-  let next: string | undefined;
-  if (rest.length) next = rest[Math.min(at, rest.length - 1)].id;
-  else if (others.length) next = shownTab(others[Math.min(order.findIndex((w) => workspaceKey(w) === key), others.length - 1)]);
   if (next) select(next);
   else {
     hub.selected = "";
@@ -476,8 +443,7 @@ export function endRename(tab: TerminalTab, name: string | null) {
   if (!tab.renaming) return;
   tab.renaming = false;
   if (name !== null) {
-    const n = name.trim();
-    if (n !== shownName(tab)) tab.customName = n === "" || n === folderName(tab.workspace) ? null : n;
+    tab.customName = renamedTo(tab.customName, folderName(tab.workspace), name);
   }
   focusSelected();
 }

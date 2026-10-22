@@ -62,3 +62,15 @@ test("조합 중 방향키도 중복 없이 한 번만", async () => {
   await tick();
   assert.deepEqual(sent, ["\x1b[D"]);
 });
+
+test("조합 중 Alt+Enter 는 idle 때처럼 ESC CR 로 한 번만 (Alt 를 잃고 CR 만 가던 것)", async () => {
+  const ta = fakeTextarea();
+  const sent = [];
+  const ime = createImeKeys(ta, (d) => sent.push(d), () => false);
+  ta.fire("compositionstart");
+  ime.filter(key("Enter", { isComposing: true, altKey: true }));
+  ta.fire("compositionend");
+  assert.equal(ime.filter(key("Enter", { keyCode: 13, altKey: true })), false);
+  await tick();
+  assert.deepEqual(sent, ["\x1b\r"]);
+});

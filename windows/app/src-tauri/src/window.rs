@@ -84,7 +84,8 @@ fn monitor_at(mons: &[Mon], f: Frame) -> Option<Mon> {
 
 /// 접힌 창(`snap_right` 명령·Ctrl+Alt+B 가 붙이는 자리) — 보드 쪽 가장자리에 `pane_width`(논리 픽셀) 폭, 작업 영역 높이 전체.
 pub fn dock_frame(m: &Mon, side: Side, pane_width: f64) -> Frame {
-    let w = (pane_width * m.scale).min(m.work.w);
+    // 폭을 먼저 물리 픽셀로 반올림한다 — 454 * 1.25·1.75 처럼 .5 로 끝나면 x 와 폭이 따로 반올림되어 오른쪽 가장자리가 1px 넘친다
+    let w = (pane_width * m.scale).round().min(m.work.w);
     let x = match side {
         Side::Right => m.work.x + m.work.w - w,
         Side::Left => m.work.x,
@@ -321,6 +322,20 @@ mod tests {
                 assert_eq!(s.frame, m.work);
                 assert_eq!(s.min, (848.0, 300.0));
                 assert!(!s.always_on_top, "펼친 동안은 항상 위가 아니다");
+            }
+        }
+    }
+
+    #[test]
+    fn collapsed_dock_stays_inside_the_work_area_at_fractional_scales() {
+        for scale in [1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 3.5] {
+            let m = mon(0.0, 0.0, 1920.0, 1044.0, scale);
+            for side in [Side::Left, Side::Right] {
+                let f = dock_frame(&m, side, 454.0);
+                // set_frame 이 x 와 폭을 따로 반올림해 넘기므로 그 값으로 견준다
+                let (x, w) = (f.x.round(), f.w.round());
+                assert_eq!(f.w, w, "폭은 이미 정수 픽셀 (scale {scale})");
+                assert!(x >= m.work.x && x + w <= m.work.x + m.work.w, "scale {scale} {side:?}: x {x} + w {w} 이 작업 영역을 넘는다");
             }
         }
     }

@@ -6,10 +6,8 @@
   import { hint } from "$lib/board/hint.svelte";
   import TabItem from "./TabItem.svelte";
   import { hub, newSessionSheet, tabsIn } from "./hub.svelte";
-
-  const MIN_WIDTH = 120;
-  const MAX_WIDTH = 250;
-  const GAP = 2;
+  import { badgeNumber } from "./tabLogic";
+  import { scrollTargetFor, tabStripLeast, tabStripWidth } from "./paneLayout";
 
   let barWidth = $state(0);
   let newWidth = $state(0); // + 단추 폭(앞 여백 포함) — 탭 칸에 줄 폭을 셀 때
@@ -18,8 +16,8 @@
   const tabs = $derived(tabsIn(hub.workspace));
   const count = $derived(tabs.length);
   // 탭이 모두 들어가면 탭마다 가장 넓게, 아니면 남는 폭 전부. 가장 좁게 해도 넘치면 안쪽 폭이 더 커서 가로로 밀린다
-  const shown = $derived(Math.max(0, Math.min(barWidth - 16 - newWidth, count * (MAX_WIDTH + GAP) - GAP)));
-  const least = $derived(Math.max(0, count * (MIN_WIDTH + GAP) - GAP));
+  const shown = $derived(tabStripWidth(barWidth, newWidth, count));
+  const least = $derived(tabStripLeast(count));
 
   // 고른 탭이 칸 밖이면 보이게 민다(가장 가까운 만큼만)
   function scrollToSelected(animated: boolean) {
@@ -28,9 +26,7 @@
     if (!box || !el) return;
     const left = el.offsetLeft;
     const right = left + el.offsetWidth;
-    let target = box.scrollLeft;
-    if (left < box.scrollLeft) target = left;
-    else if (right > box.scrollLeft + box.clientWidth) target = right - box.clientWidth;
+    const target = scrollTargetFor(left, right, box.scrollLeft, box.clientWidth);
     if (target !== box.scrollLeft) box.scrollTo({ left: target, behavior: animated ? "smooth" : "auto" });
   }
 
@@ -59,7 +55,7 @@
   <div class="scroller" bind:this={scroller} style:width="{shown}px" onwheel={wheel}>
     <div class="tabs" role="tablist" style:width="{Math.max(shown, least)}px">
       {#each tabs as tab, i (tab.id)}
-        <TabItem {tab} selected={tab.id === hub.selected} number={hub.commandHeld && i < 9 ? i + 1 : null} />
+        <TabItem {tab} selected={tab.id === hub.selected} number={badgeNumber(hub.commandHeld, i)} />
       {/each}
     </div>
   </div>

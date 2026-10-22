@@ -5,6 +5,7 @@ import { termAck, termAttach, termList, termResize, termWrite, termWriteBin } fr
 import type { TermFrame, TermId, TermInfo } from "$lib/types";
 import { createImeKeys, type ImeKeys } from "./ime";
 import { ReplayGate } from "./replayGate";
+import { disposeWebgl } from "./webglBlink";
 // 형식만 가져오므로 번들에 들어가지 않는다
 import type { Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
@@ -86,6 +87,11 @@ export class TermController {
   setDragging(dragging: boolean) {
     this.dragging = dragging;
     if (!dragging) this.requestFit();
+  }
+
+  /** 조합 중인 글자를 확정한다(칸이 숨겨져 조합이 취소되기 전에) */
+  commitComposition() {
+    this.ime?.commit();
   }
 
   /** 칸 크기가 바뀌었다 */
@@ -178,7 +184,7 @@ export class TermController {
         if (this.disposed) return;
         const addon = new WebglAddon();
         addon.onContextLoss(() => {
-          addon.dispose();
+          disposeWebgl(this.term, addon, false);
           if (this.webgl === addon) this.webgl = null;
         });
         term.loadAddon(addon);
@@ -351,7 +357,8 @@ export class TermController {
     this.waitingForSize?.();
     this.inputListeners?.abort();
     this.ime?.dispose();
-    this.webgl?.dispose();
+    if (this.webgl) disposeWebgl(this.term, this.webgl, true);
+    this.webgl = null;
     this.term?.dispose();
     this.host.remove();
   }

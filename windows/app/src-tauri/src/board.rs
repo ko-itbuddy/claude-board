@@ -401,6 +401,21 @@ impl Board {
         let _ = self.app.emit(TERMINAL_FOCUS_EVENT, ());
     }
 
+    /// 배율이 바뀌면(설정에서 바꿈·다른 배율 모니터로 끌어감) 펼친 창이 윈도우가 제안한 크기로 줄어 작업 영역과 가장자리마다 1px 어긋난다.
+    /// 접힌 창은 논리 크기 그대로 붙어 있으니 건드리지 않고, 펼친 창만 작업 영역 전체로 다시 맞춘다. tao 가 제안 크기를 적용한 뒤에 돌도록 잠깐 기다린다.
+    fn refit_expanded(self: &Arc<Self>) {
+        let board = self.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(250));
+            let app = board.app.clone();
+            let _ = app.run_on_main_thread(move || {
+                if board.settings.lock().unwrap().terminal_expanded {
+                    board.apply_terminal(true);
+                }
+            });
+        });
+    }
+
     /// 터미널을 접고 보드 쪽에 붙인다 — 이미 접혀 있어도 다시 붙인다. 앞으로 가져오되 포커스는 가져가지 않는다.
     fn snap_right(&self) {
         self.apply_terminal(false);
@@ -879,6 +894,7 @@ fn create_window(app: &AppHandle, board: &Arc<Board>, background: bool) -> tauri
             }
         }
         tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => b.mark_frame_dirty(),
+        tauri::WindowEvent::ScaleFactorChanged { .. } => b.refit_expanded(),
         _ => {}
     });
     Ok(())
