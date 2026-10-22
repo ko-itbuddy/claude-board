@@ -1,6 +1,7 @@
 // Claude Code 세션 보드 — 작업 경로별 카드로 세션 상태를 보여 주는 네이티브 창
 // 상태 파일: ~/.claude/notifier/sessions/*.json (state.py 가 hook 에서 기록)
 import AppKit
+import AuthenticationServices
 import Carbon.HIToolbox
 import Combine
 import CryptoKit
@@ -604,6 +605,35 @@ struct Account: Identifiable, Equatable {
     }
 }
 
+// macOS 로그인 창(ASWebAuthenticationSession) — 계정 추가의 브라우저 로그인. 돌아올 주소(콜백)는 로그인 명령의 localhost 라
+// 창이 스스로 끝나지 않는다: 완료는 AccountStore 가 cancel() 로 닫고, 사용자가 닫으면 closed 를 부른다
+final class BrowserLogin: NSObject, ASWebAuthenticationPresentationContextProviding {
+    private var session: ASWebAuthenticationSession?
+    private var ours = false   // 우리가 닫았다 — 사용자가 닫은 것으로 치지 않는다
+
+    init(_ url: URL, closed: @escaping () -> Void) {
+        super.init()
+        let s = ASWebAuthenticationSession(url: url, callbackURLScheme: "claude-board-never") { [weak self] _, error in
+            DispatchQueue.main.async {
+                guard let self, !self.ours else { return }
+                if let e = error as? ASWebAuthenticationSessionError, e.code == .canceledLogin { closed() }
+            }
+        }
+        s.presentationContextProvider = self
+        s.prefersEphemeralWebBrowserSession = false
+        session = s
+        if !s.start() { session = nil; NSWorkspace.shared.open(url) }   // 못 열면 기본 브라우저로(닫기는 알 수 없다)
+    }
+
+    func cancel() {
+        ours = true
+        session?.cancel()
+        session = nil
+    }
+
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor { window }
+}
+
 // 계정 전환: 계정마다 브라우저 로그인을 한 번 받아 토큰을 저장해 두고, 고르면 Claude Code 로그인 항목의 토큰만 바꿔 넣는다.
 // 실행 중인 세션은 요청을 보낼 때마다 키체인을 다시 읽으므로(최대 30초 캐시) 모든 세션이 다음 요청부터 새 계정으로 이어 간다
 final class AccountStore: ObservableObject {
@@ -641,6 +671,8 @@ final class AccountStore: ObservableObject {
     private var loginProcess: Process?                      // 계정 추가 로그인 명령(claude auth login) — pty 로 띄운다
     private var loginPty: FileHandle?                       // 그 명령의 터미널 쪽 — 코드를 써 넣는다
     private var loginText = ""                              // 그 명령의 출력(색 글자를 뺀 것)
+    private var browserLogin: BrowserLogin?                 // 그 명령이 열려던 주소를 연 로그인 창 — 닫으면 계정 추가를 취소한다
+    private var browserWait: Timer?
     private var tokenOnlySince: Date?       // 로그인 토큰은 생겼는데 계정 정보가 아직 없는 때
     private var polling = false
     private var noticeWork: DispatchWorkItem?
@@ -795,7 +827,12 @@ final class AccountStore: ObservableObject {
         do { try FileManager.default.createDirectory(atPath: slot, withIntermediateDirectories: true) } catch {
             return flash("로그인 자리를 만들지 못했습니다: \(error.localizedDescription)", error: true)
         }
-        var cmd = "CLAUDE_CONFIG_DIR=\(shellQuote(slot)) exec \(shellQuote(claude.path)) auth login --claudeai"
+        // 명령이 브라우저를 직접 열지 않고(BROWSER) 주소를 파일로 남기게 한다 — 보드가 그 주소를 macOS 로그인 창
+        // (ASWebAuthenticationSession)으로 열어, 사용자가 창을 닫으면 알아채고 취소한다(외부 브라우저 탭은 닫아도 알 길이 없다)
+        let opener = slot + "/open-browser", urlFile = slot + "/open-url"
+        try? "#!/bin/sh\nprintf '%s' \"$1\" > \(shellQuote(urlFile))\n".write(toFile: opener, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: opener)
+        var cmd = "CLAUDE_CONFIG_DIR=\(shellQuote(slot)) BROWSER=\(shellQuote(opener)) exec \(shellQuote(claude.path)) auth login --claudeai"
         if let email { cmd += " --email \(shellQuote(email))" }
         // 줄이 접히지 않게 넓은 터미널로 — 로그인 주소가 한 줄로 나와야 읽는다
         var size = winsize(ws_row: 50, ws_col: 1000, ws_xpixel: 0, ws_ypixel: 0)
@@ -836,6 +873,24 @@ final class AccountStore: ObservableObject {
         loginNote = nil
         login = (slot, Date())
         adding = true
+        // 명령이 BROWSER 를 부르면 주소가 생긴다 — 받으면 로그인 창을 연다(10초 넘게 없으면 그만 본다: 주소 복사·코드 칸은 그대로)
+        let started = Date()
+        browserWait = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] t in
+            guard let self, self.login?.slot == slot, Date().timeIntervalSince(started) < 10 else { t.invalidate(); return }
+            guard let s = try? String(contentsOfFile: urlFile, encoding: .utf8), let url = URL(string: s) else { return }
+            t.invalidate()
+            self.openBrowserLogin(url, slot: slot)
+        }
+    }
+
+    // 로그인 창 — 닫으면(완료 전) 계정 추가를 취소한다. 쿠키를 함께 쓰므로 브라우저에 이미 로그인돼 있으면 그대로 이어진다
+    func openBrowserLogin(_ url: URL, slot: String) {
+        browserLogin?.cancel()
+        browserLogin = BrowserLogin(url) { [weak self] in
+            guard let self, self.login?.slot == slot else { return }
+            self.cancelAdd()
+            self.flash("로그인 창을 닫아 계정 추가를 취소했습니다")
+        }
     }
 
     // 로그인 명령의 출력 — 색 글자를 빼고 모아 두고, 로그인 주소를 찾는다
@@ -885,6 +940,9 @@ final class AccountStore: ObservableObject {
         loginPty = nil
         loginProcess?.terminate()
         loginProcess = nil
+        browserWait?.invalidate()
+        browserLogin?.cancel()
+        browserLogin = nil
         queue.async { Self.dropSlot(l.slot) }
     }
 
@@ -938,6 +996,9 @@ final class AccountStore: ObservableObject {
                 self.loginPty = nil
                 self.loginProcess?.terminate()   // 보통은 이미 끝났다
                 self.loginProcess = nil
+                self.browserWait?.invalidate()
+                self.browserLogin?.cancel()      // 로그인 창은 localhost 완료 화면에 머물러 있다 — 닫는다
+                self.browserLogin = nil
                 self.loadSaved()
                 switch result {
                 case .success(let a): self.flash("\(a.email) 계정을 추가했습니다. 전환을 누르면 바로 바꿉니다")
@@ -9194,11 +9255,11 @@ struct AccountList: View {
                     Spacer()
                     SettingsButton("취소") { accounts.cancelAdd() }
                 }
-                step(1, "브라우저에서 추가할 계정으로 로그인하세요", detail: accounts.loginURL == nil ? "로그인 주소를 받는 중…"
-                     : "브라우저가 열리지 않았으면 아래 단추로 엽니다. 로그인을 마치면 저절로 추가됩니다") {
+                step(1, "열린 로그인 창에서 추가할 계정으로 로그인하세요", detail: accounts.loginURL == nil ? "로그인 주소를 받는 중…"
+                     : "로그인을 마치면 저절로 추가되고 창이 닫힙니다. 창을 닫으면 계정 추가를 취소합니다. 창이 뜨지 않았으면 다른 브라우저에서 열고 코드를 받아 아래에 넣습니다") {
                     if let url = accounts.loginURL {
                         HStack(spacing: 8) {
-                            SettingsButton("브라우저에서 열기") { NSWorkspace.shared.open(url) }
+                            SettingsButton("다른 브라우저에서 열기") { NSWorkspace.shared.open(url) }
                             SettingsLinkButton(copied ? "복사했습니다" : "링크 복사") {
                                 NSPasteboard.general.clearContents()
                                 NSPasteboard.general.setString(url.absoluteString, forType: .string)
