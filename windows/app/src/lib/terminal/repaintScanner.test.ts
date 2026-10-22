@@ -306,3 +306,17 @@ for (const name of ["d1-cap-flags0-120x30to120x20-r250", "d1-cap-flags0-120x30to
     }
   });
 }
+
+test("minSeq 아래의 ESC[H 는 후보가 아니다(앞 단계의 머리말 건너뛰기)", () => {
+  const first = `${E}[?25l
+${E}[H`; // 앞 단계의 머리말, cut 은 ESC[H 앞
+  const second = `${E}[?25l${E}[24;1H
+${E}[H`;
+  const data = LEAD + first + "mid" + second + "tail";
+  const firstCut = LEAD.length + first.length - 3;
+  const secondCut = LEAD.length + first.length + 3 + second.length - 3;
+  const plain = run(make({ anchorSeq: firstCut }), [data], 0);
+  assert.equal(plain.cut, firstCut, "minSeq 없이는 앞 단계의 ESC[H 에 걸린다");
+  const s = make({ anchorSeq: firstCut, minSeq: firstCut + 3 });
+  assert.equal(run(s, [data], 0).cut, secondCut);
+});

@@ -36,6 +36,7 @@ export class RepaintScanner {
   private readonly cutKind: Cut;
   private readonly alt: boolean;
   private readonly lower: number;
+  private readonly bareFrom: number; // 맨 ESC[H 거리의 시작(minSeq 와 무관하게 anchorSeq-64)
   private readonly budget: number;
 
   private mode: Mode = "scan";
@@ -50,11 +51,13 @@ export class RepaintScanner {
   private cutAt: number | null = null;
   private held = 0;
 
-  constructor(o: { target: Size; cut: Cut; alt: boolean; anchorSeq: number }) {
+  /** minSeq: 이 seq 아래 바이트는 후보로 쓰지 않는다(두 단계 계획에서 앞 단계의 ESC[H 를 건너뛰는 데 쓴다: 앞 cut + 3) */
+  constructor(o: { target: Size; cut: Cut; alt: boolean; anchorSeq: number; minSeq?: number }) {
     this.target = o.target;
     this.cutKind = o.cut;
     this.alt = o.alt;
-    this.lower = o.anchorSeq - ANCHOR_BACK;
+    this.bareFrom = o.anchorSeq - ANCHOR_BACK;
+    this.lower = Math.max(this.bareFrom, o.minSeq ?? this.bareFrom);
     this.scanned = this.lower;
     this.budget = o.target.rows * (o.target.cols * 4 + 16) + 256;
   }
@@ -189,7 +192,7 @@ export class RepaintScanner {
         this.accept(k);
         return;
       }
-      if (this.alt && k - this.lower < BARE_WINDOW) {
+      if (this.alt && k - this.bareFrom < BARE_WINDOW) {
         this.accept(k);
         return;
       }
