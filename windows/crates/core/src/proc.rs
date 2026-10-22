@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
+use crate::place::Host;
 use crate::state::ClaudeProcess;
 use crate::Record;
 
@@ -171,6 +172,17 @@ pub fn command_line(pid: u32) -> Option<Vec<String>> {
     sys::command_line(pid)
 }
 
+/// 그 프로세스가 쓰는 콘솔의 호스트 프로세스 — Windows 에 tty 가 없어 같은 터미널인지의 자료로 쓴다
+/// (W2 설계 (a) 방안). 같은 ConPTY 의 클라이언트들은 같은 콘솔 호스트(conhost/OpenConsole)를 본다.
+/// 콘솔이 없는 프로세스(분리로 뜬 `--bg`)는 `Host::Detached`, 읽지 못하면 `Host::Unknown` 이다.
+pub fn console_host(pid: u32) -> Host {
+    match sys::console_host(pid) {
+        Some(0) => Host::Detached,
+        Some(host_pid) => Host::Console(host_pid),
+        None => Host::Unknown,
+    }
+}
+
 /// 그 Claude 프로세스의 백그라운드 셸 수 — 자식 가운데 명령줄에 `shell-snapshots` 가 든 프로세스 (SPEC §5.1).
 pub fn shell_count(table: &ProcessTable, pid: u32) -> usize {
     table
@@ -205,6 +217,9 @@ mod sys {
 
     /// ProcessCommandLineInformation — windows-sys 에 상수가 없어 직접 둔다.
     const PROCESS_COMMAND_LINE_INFORMATION: i32 = 60;
+
+    /// ProcessConsoleHostProcess — windows-sys 에 상수가 없어 직접 둔다.
+    const PROCESS_CONSOLE_HOST_PROCESS: i32 = 49;
 
     pub(crate) struct Handle(pub HANDLE);
 
@@ -321,6 +336,25 @@ mod sys {
         None
     }
 
+    /// 콘솔 호스트 프로세스 pid(class 49). 못 읽으면 None(콘솔이 없다면 0 을 준다).
+    /// 하위 2 비트는 플래그라 가린다(System Informer 도 같이 본다).
+    pub fn console_host(pid: u32) -> Option<u32> {
+        let h = open(pid, PROCESS_QUERY_LIMITED_INFORMATION).ok()?;
+        let mut raw = 0usize;
+        let mut need = 0u32;
+        // SAFETY: 포인터 크기 버퍼(usize) 를 정확히 넘긴다
+        let status = unsafe {
+            NtQueryInformationProcess(
+                h.0,
+                PROCESS_CONSOLE_HOST_PROCESS,
+                (&mut raw as *mut usize).cast(),
+                size_of::<usize>() as u32,
+                &mut need,
+            )
+        };
+        (status >= 0).then_some((raw & !3) as u32)
+    }
+
     /// `CommandLineToArgvW` 로 나눈다(빈 문자열이면 그 함수가 자기 경로를 돌려주므로 먼저 거른다).
     pub(crate) fn split_command_line(units: &[u16]) -> Vec<String> {
         if units.is_empty() {
@@ -420,6 +454,10 @@ mod sys {
         None
     }
 
+    pub fn console_host(_pid: u32) -> Option<u32> {
+        None
+    }
+
     /// macOS: sysctl KERN_PROCARGS2 로 실행 인자를 공백 손실 없이 읽는다(`state.py:proc_args`).
     #[cfg(target_os = "macos")]
     pub fn command_line(pid: u32) -> Option<Vec<String>> {
@@ -478,6 +516,9 @@ mod sys {
         true
     }
     pub fn creation_time(_pid: u32) -> Option<f64> {
+        None
+    }
+    pub fn console_host(_pid: u32) -> Option<u32> {
         None
     }
     pub fn command_line(_pid: u32) -> Option<Vec<String>> {
@@ -546,6 +587,13 @@ mod tests {
         assert!(record_alive(&rec(serde_json::json!({"pid": null}))));
         assert!(record_alive(&rec(serde_json::json!({"pid": 0}))));
         assert!(record_alive(&rec(serde_json::json!({"pid": std::process::id()}))));
+    }
+
+    #[test]
+    fn console_host_of_unknown_pids() {
+        // pid 0 · 존재하지 않는 pid — 어느 플랫폼에서나 모름으로 본다
+        assert_eq!(console_host(0), Host::Unknown);
+        assert_eq!(console_host(u32::MAX), Host::Unknown);
     }
 
     #[cfg(unix)]

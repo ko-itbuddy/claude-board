@@ -11,6 +11,7 @@ pub mod fileio;
 pub mod hooks;
 pub mod notify;
 pub mod paths;
+pub mod place;
 pub mod proc;
 pub mod quote;
 pub mod state;
