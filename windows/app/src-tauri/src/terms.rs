@@ -177,20 +177,23 @@ impl TermHub {
         self.get(id)?.pty.write_all(data).map_err(|e| format!("터미널 입력 실패: {e}"))
     }
 
-    /// 열이 2 미만이거나 행이 1 미만이거나 지금과 같은 크기면 무시한다. 가짜 콘솔이 닫힌 뒤에는 Ok 로 아무 일도 하지 않는다
-    /// (닫힘과의 경합은 `Pty::resize` 가 막는다).
-    pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
+    /// 크기를 바꾼다 — 적용했으면 `size` 락을 쥔 채 `pty.resize` 직전에 읽은 고리의 다음 오프셋을 `Some(next)` 로,
+    /// 적용하지 않았으면(열이 2 미만·행이 1 미만·지금과 같은 크기·이미 끝남) `None` 을 돌려 준다.
+    /// 가짜 콘솔이 닫힌 뒤에는 Err 가 아니라 `Ok(None)` 로 아무 일도 하지 않는다(닫힘과의 경합은 `Pty::resize` 가 막는다).
+    pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<Option<u64>, String> {
         let t = self.get(id)?;
         if cols < 2 || rows < 1 || t.stream.exit_code().is_some() {
-            return Ok(());
+            return Ok(None);
         }
         let mut size = lock(&t.size);
         if *size == (cols, rows) {
-            return Ok(());
+            return Ok(None);
         }
+        // 웹뷰가 이 위치까지는 온전히 받았고 새 크기 아래의 출력은 이 위치부터 흐른다고 알 수 있게, 크기 락 아래 직전에 읽는다
+        let next = t.stream.bounds().next;
         t.pty.resize(cols, rows).map_err(|e| format!("터미널 크기 바꾸기 실패: {e}"))?;
         *size = (cols, rows);
-        Ok(())
+        Ok(Some(next))
     }
 
     /// 가짜 콘솔을 별도 스레드에서 닫는다. 6초 안에 프로세스가 안 끝나면 강제로 끝낸다. 기다리지 않고 돌아온다.
@@ -304,7 +307,7 @@ pub fn term_write_bin(hub: Hub<'_>, id: String, data: Vec<u8>) -> Result<(), Str
 }
 
 #[tauri::command(async)]
-pub fn term_resize(hub: Hub<'_>, id: String, cols: u16, rows: u16) -> Result<(), String> {
+pub fn term_resize(hub: Hub<'_>, id: String, cols: u16, rows: u16) -> Result<Option<u64>, String> {
     hub.resize(&id, cols, rows)
 }
 
