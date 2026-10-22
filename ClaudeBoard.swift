@@ -8296,7 +8296,11 @@ struct SettingsView: View {
     @AppStorage("autoUpdateCheck") private var autoUpdate = true
     @State private var position = notifyPosition()
     @State private var settle: DispatchWorkItem?
+    @State private var width: CGFloat = 900   // 설정 화면 폭 — 좁으면(터미널 최소 폭 480 근처) 목록을 줄이고 조절기를 설명 아래로
     @FocusState private var searching: Bool
+
+    private var sidebarWidth: CGFloat { width < 720 ? 164 : 200 }
+    private var compact: Bool { width - sidebarWidth < 520 }
 
     private var app: AppDelegate? { NSApp.delegate as? AppDelegate }
     private var hub: TerminalHub { .shared }   // 지켜보지 않는다 — 탭·⌘ 누름마다 바뀌어 설정 화면을 다시 그리게 된다
@@ -8312,6 +8316,9 @@ struct SettingsView: View {
             content
         }
         .background(SettingsStyle.content)
+        .background(GeometryReader { geo in
+            Color.clear.onAppear { width = geo.size.width }.onChange(of: geo.size.width) { _, w in width = w }
+        })
         .preferredColorScheme(.dark)
         .boardFont(13)
         .onAppear {
@@ -8328,7 +8335,7 @@ struct SettingsView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SettingsBackButton { model.close() }
+            SettingsBackButton(showKey: sidebarWidth >= 200) { model.close() }
                 .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 8)
             searchField.padding(.horizontal, 10).padding(.bottom, 12)
             ScrollView {
@@ -8347,7 +8354,7 @@ struct SettingsView: View {
                 .boardFont(10.5).foregroundStyle(.tertiary)
                 .padding(.horizontal, 20).padding(.vertical, 12)
         }
-        .frame(width: 200)
+        .frame(width: sidebarWidth)
         .background(SettingsStyle.sidebar)
     }
 
@@ -8389,7 +8396,7 @@ struct SettingsView: View {
                 }
             }
             .frame(maxWidth: 660, alignment: .leading)
-            .padding(.horizontal, 32).padding(.top, 26).padding(.bottom, 40)
+            .padding(.horizontal, compact ? 18 : 32).padding(.top, 26).padding(.bottom, 40)
             .frame(maxWidth: .infinity)
         }
         .scrollIndicators(.automatic)
@@ -8409,7 +8416,7 @@ struct SettingsView: View {
         let cards = list.map(\.card).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
         return VStack(alignment: .leading, spacing: 22) {
             ForEach(cards, id: \.self) { c in
-                SettingsCard(title: c, items: list.filter { $0.card == c })
+                SettingsCard(title: c, items: list.filter { $0.card == c }, compact: compact)
             }
             if model.section == .shortcuts, model.query.isEmpty { shortcutFooter }
         }
@@ -8462,7 +8469,7 @@ struct SettingsView: View {
             SettingsItem(id: "mascot", section: .general, card: "캐릭터", title: "제목 옆 캐릭터",
                          detail: "세션 상태를 말풍선으로 알려 주는 캐릭터. 캐릭터를 오른쪽 클릭해도 고를 수 있습니다",
                          keywords: Mascot.allCases.map(\.name).joined(separator: " "), kind: .block) {
-                AnyView(MascotGrid(selection: $mascot))
+                AnyView(MascotGrid(selection: $mascot, columns: compact ? 2 : 4))
             },
         ]
     }
@@ -8621,6 +8628,7 @@ struct SettingsView: View {
 struct SettingsCard: View {
     let title: String
     let items: [SettingsItem]
+    var compact = false   // 좁으면 줄의 조절기를 설명 아래로
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -8638,6 +8646,13 @@ struct SettingsCard: View {
 
     @ViewBuilder private func row(_ item: SettingsItem) -> some View {
         switch item.kind {
+        case .row where compact:
+            VStack(alignment: .leading, spacing: 10) {
+                label(item)
+                item.content()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
         case .row:
             HStack(alignment: .center, spacing: 16) {
                 label(item)
@@ -8650,6 +8665,7 @@ struct SettingsCard: View {
                 label(item)
                 item.content()
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(16)
         }
     }
@@ -8667,6 +8683,7 @@ struct SettingsCard: View {
 // MARK: 조절기
 
 struct SettingsBackButton: View {
+    var showKey = true   // 좁은 목록에서는 esc 표시를 뺀다
     let action: () -> Void
     @State private var hover = false
     var body: some View {
@@ -8674,10 +8691,13 @@ struct SettingsBackButton: View {
             HStack(spacing: 6) {
                 Image(systemName: "chevron.left").font(.system(size: 10, weight: .bold))
                 Text("터미널로 돌아가기").boardFont(12, weight: .medium)
+                    .lineLimit(1)
                 Spacer(minLength: 0)
-                Text("esc").boardFont(10, weight: .semibold).foregroundStyle(.tertiary)
-                    .padding(.horizontal, 5).padding(.vertical, 1)
-                    .background(RoundedRectangle(cornerRadius: 4).stroke(Color.white.opacity(0.14), lineWidth: 1))
+                if showKey {
+                    Text("esc").boardFont(10, weight: .semibold).foregroundStyle(.tertiary)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(RoundedRectangle(cornerRadius: 4).stroke(Color.white.opacity(0.14), lineWidth: 1))
+                }
             }
             .foregroundStyle(hover ? .primary : .secondary)
             .padding(.horizontal, 8).frame(height: 28)
@@ -8970,8 +8990,9 @@ struct NotifyPositionPicker: View {
 // 캐릭터 고르기 — 8명이 제자리에서 움직인다. 고른 캐릭터는 강조 테두리
 struct MascotGrid: View {
     @Binding var selection: Mascot
+    var columns = 4   // 8명이 고르게 나뉘게 4열, 좁으면 2열
     var body: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: columns), spacing: 8) {
             ForEach(Mascot.allCases) { m in MascotTile(mascot: m, on: m == selection) { selection = m } }
         }
     }
