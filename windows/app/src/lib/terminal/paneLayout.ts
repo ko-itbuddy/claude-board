@@ -1,19 +1,23 @@
 // 칸 크기 계산 — 보드 칸 폭 범위와 탭 줄의 탭 폭. 화면(+page.svelte·TerminalTabBar.svelte)이 쓰고, 외부를 import 하지 않아 node:test 로 시험한다.
 
-/** 보드 칸은 360 이상, 터미널 칸은 480 이상 남긴다. 경계는 8 (논리 px) */
-export const MIN_BOARD = 360;
-export const MIN_TERMINAL = 480;
-export const DIVIDER = 8;
-export const DEFAULT_BOARD_WIDTH = 454;
+// 칸 폭 상수(논리 px) — 정본은 Rust window.rs 이고(mac ClaudeBoard.swift 의 같은 이름), 여기는 값을 맞춰 둔 사본이다. 값을 바꾸면 둘을 함께 고친다.
+/** 보드 칸이 남길 최소 폭 — window.rs BOARD_MIN_WIDTH */
+export const boardMinWidth = 360;
+/** 터미널 칸이 남길 최소 폭 — window.rs TERMINAL_MIN_WIDTH */
+export const terminalMinWidth = 480;
+/** 두 칸 사이 경계 폭 — window.rs PANE_DIVIDER_WIDTH */
+export const paneDividerWidth = 8;
+/** 저장된 폭이 없을 때 보드 칸의 처음 폭 — window.rs BOARD_LAUNCH_WIDTH */
+export const boardLaunchWidth = 454;
 
-/** 창 폭에서 보드 칸이 가질 수 있는 가장 큰 폭 — 창이 좁아도 MIN_BOARD 아래로 내려가지 않는다 */
+/** 창 폭에서 보드 칸이 가질 수 있는 가장 큰 폭 — 창이 좁아도 boardMinWidth 아래로 내려가지 않는다 */
 export function maxBoardWidth(windowWidth: number): number {
-  return Math.max(MIN_BOARD, windowWidth - DIVIDER - MIN_TERMINAL);
+  return Math.max(boardMinWidth, windowWidth - paneDividerWidth - terminalMinWidth);
 }
 
-/** 보드 칸 폭 — 끄는 중의 값 → 저장된 값 → 기본값 순으로 고르고 [MIN_BOARD, maxBoardWidth] 로 자른다 */
+/** 보드 칸 폭 — 끄는 중의 값 → 저장된 값 → 기본값 순으로 고르고 [boardMinWidth, maxBoardWidth] 로 자른다 */
 export function clampBoardWidth(dragging: number | null, saved: number | null | undefined, windowWidth: number): number {
-  return Math.min(Math.max(dragging ?? saved ?? DEFAULT_BOARD_WIDTH, MIN_BOARD), maxBoardWidth(windowWidth));
+  return Math.min(Math.max(dragging ?? saved ?? boardLaunchWidth, boardMinWidth), maxBoardWidth(windowWidth));
 }
 
 export const TAB_MIN_WIDTH = 120;

@@ -20,7 +20,7 @@
   import PaneDivider from "$lib/terminal/PaneDivider.svelte";
   import TerminalAreaView from "$lib/terminal/TerminalAreaView.svelte";
   import { setDragging, startHub } from "$lib/terminal/hub.svelte";
-  import { clampBoardWidth, MIN_BOARD, maxBoardWidth } from "$lib/terminal/paneLayout";
+  import { clampBoardWidth, boardMinWidth, maxBoardWidth } from "$lib/terminal/paneLayout";
   import { stateName, stateRgb } from "$lib/board/format";
   import { hint } from "$lib/board/hint.svelte";
   import { pointer, trackWindow, win } from "$lib/board/pointer.svelte";
@@ -217,7 +217,7 @@
       <TerminalAreaView {expanded} {side} />
     </div>
     {#if expanded}
-      <PaneDivider root={rootEl} {side} min={MIN_BOARD} max={maxBoard} onresize={resizeBoard} oncommit={commitBoard} />
+      <PaneDivider root={rootEl} {side} min={boardMinWidth} max={maxBoard} onresize={resizeBoard} oncommit={commitBoard} />
     {/if}
   {/if}
   <div class="board" style:width={expanded ? `${boardWidth}px` : undefined} bind:this={boardEl}>

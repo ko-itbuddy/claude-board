@@ -3,16 +3,21 @@
 
 use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
 
-use crate::settings::{Frame, Settings, MIN_PANE_WIDTH};
+use crate::settings::{Frame, Settings};
 
-/// 보드 칸이 무너지지 않는 최소 폭 — 더 좁으면 미니로 그린다
-pub const BOARD_MIN_WIDTH: f64 = MIN_PANE_WIDTH;
+// 칸 폭 상수의 정본 — mac `ClaudeBoard.swift` 의 boardMinWidth·boardLaunchWidth·terminalMinWidth·paneDividerWidth 와 같은 값이다.
+// settings.rs 는 여기를 가리키고, 프론트의 paneLayout.ts(boardMinWidth·boardLaunchWidth·terminalMinWidth·paneDividerWidth)는 값을 맞춰 둔 사본이다.
+
+/// 보드 칸이 무너지지 않는 최소 폭(논리 픽셀) — 더 좁으면 미니로 그린다
+pub const BOARD_MIN_WIDTH: f64 = 360.0;
+/// 보드 칸 폭의 기본값(논리 픽셀) — 저장된 폭이 없을 때의 처음 폭
+pub const BOARD_LAUNCH_WIDTH: f64 = 454.0;
 /// 펼쳤을 때 터미널 칸과 보드 칸 사이 경계 폭
-pub const DIVIDER_WIDTH: f64 = 8.0;
+pub const PANE_DIVIDER_WIDTH: f64 = 8.0;
 /// 펼쳤을 때 터미널 칸의 최소 폭
 pub const TERMINAL_MIN_WIDTH: f64 = 480.0;
 /// 펼친 창의 최소 크기 — 보드 칸 360 + 경계 8 + 터미널 칸 480
-pub const EXPANDED_MIN_WIDTH: f64 = BOARD_MIN_WIDTH + DIVIDER_WIDTH + TERMINAL_MIN_WIDTH;
+pub const EXPANDED_MIN_WIDTH: f64 = BOARD_MIN_WIDTH + PANE_DIVIDER_WIDTH + TERMINAL_MIN_WIDTH;
 pub const EXPANDED_MIN_HEIGHT: f64 = 300.0;
 pub const MINI_WIDTH: f64 = 300.0;
 pub const MINI_MIN_HEIGHT: f64 = 144.0;
@@ -299,6 +304,13 @@ pub fn apply_vibrancy(win: &WebviewWindow) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 값은 mac 과 프론트 paneLayout.ts 가 같은 숫자를 쓴다 — 바꾸면 그쪽도 함께 고친다
+    #[test]
+    fn pane_constants_match_mac_and_frontend() {
+        assert_eq!((BOARD_MIN_WIDTH, BOARD_LAUNCH_WIDTH, TERMINAL_MIN_WIDTH, PANE_DIVIDER_WIDTH), (360.0, 454.0, 480.0, 8.0));
+        assert_eq!(EXPANDED_MIN_WIDTH, 848.0);
+    }
 
     fn mon(x: f64, y: f64, w: f64, h: f64, scale: f64) -> Mon {
         Mon { work: Frame { x, y, w, h }, scale }

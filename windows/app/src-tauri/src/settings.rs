@@ -8,6 +8,7 @@ use claude_board_core::{fileio, paths};
 use serde::{Deserialize, Serialize};
 
 use crate::model::SettingsView;
+use crate::window::{BOARD_LAUNCH_WIDTH, BOARD_MIN_WIDTH};
 
 /// 창 위치·크기(물리 픽셀).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -71,7 +72,7 @@ impl Default for Settings {
             board_restore_frame: None,
             window_frame: None,
             terminal_expanded: true,
-            board_pane_width: DEFAULT_PANE_WIDTH,
+            board_pane_width: BOARD_LAUNCH_WIDTH,
             board_side: "right".into(),
             mini_from_expanded: false,
         }
@@ -80,10 +81,6 @@ impl Default for Settings {
 
 pub const MASCOTS: [&str; 8] = ["tralalero", "bombardiro", "tungtung", "lirili", "patapim", "boneca", "cappuccino", "foreman"];
 pub const SIDES: [&str; 2] = ["right", "left"];
-/// 보드 칸 폭의 기본값(논리 픽셀)
-pub const DEFAULT_PANE_WIDTH: f64 = 454.0;
-/// 보드 칸이 이보다 좁으면 전체·중간 화면이 무너진다(논리 픽셀)
-pub const MIN_PANE_WIDTH: f64 = 360.0;
 pub const POSITIONS: [&str; 5] = ["center", "top-left", "top-right", "bottom-left", "bottom-right"];
 
 impl Settings {
@@ -167,9 +164,9 @@ pub fn clamp_opacity(v: f64) -> f64 {
 /// 보드 칸 폭 — 숫자가 아니면 기본값, 너무 좁으면 최소값.
 pub fn clamp_pane_width(v: f64) -> f64 {
     if v.is_finite() {
-        v.max(MIN_PANE_WIDTH)
+        v.max(BOARD_MIN_WIDTH)
     } else {
-        DEFAULT_PANE_WIDTH
+        BOARD_LAUNCH_WIDTH
     }
 }
 
