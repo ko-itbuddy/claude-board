@@ -812,9 +812,13 @@ final class AccountStore: ObservableObject {
         p.standardOutput = tty
         p.standardError = tty
         let pty = FileHandle(fileDescriptor: master, closeOnDealloc: true)
+        // read(2) 로 읽는다 — availableData 는 읽기 오류(명령이 끝난 뒤의 EIO)에 예외를 던진다. 글자 하나가 두 번에 나뉘어 와도
+        // 멈추지 않게 깨진 바이트는 대체 글자로 둔다(찾는 것은 ASCII 주소·안내뿐)
         pty.readabilityHandler = { [weak self] h in
-            let d = h.availableData
-            guard !d.isEmpty, let t = String(data: d, encoding: .utf8) else { h.readabilityHandler = nil; return }
+            var buf = [UInt8](repeating: 0, count: 8192)
+            let n = read(h.fileDescriptor, &buf, buf.count)
+            guard n > 0 else { h.readabilityHandler = nil; return }
+            let t = String(decoding: buf[0..<n], as: UTF8.self)
             DispatchQueue.main.async { self?.loginOutput(t, slot: slot) }
         }
         p.terminationHandler = { [weak self] p in
@@ -839,7 +843,7 @@ final class AccountStore: ObservableObject {
         guard login?.slot == slot else { return }
         loginText += chunk.replacingOccurrences(of: "\u{1B}\\[[0-9;?]*[ -/]*[@-~]|\u{1B}\\][^\u{07}]*\u{07}", with: "", options: .regularExpression)
         if loginText.count > 20_000 { loginText = String(loginText.suffix(10_000)) }
-        if loginURL == nil, let r = loginText.range(of: "https://[^\\s]+oauth/authorize[^\\s]*", options: .regularExpression) {
+        if loginURL == nil, let r = loginText.range(of: "https://[^\\s]+oauth/authorize[^\\s]*(?=\\s)", options: .regularExpression) {
             loginURL = URL(string: String(loginText[r]))
         }
     }
@@ -4809,6 +4813,8 @@ final class Updater: ObservableObject {
         // 보드 탭 세션은 보드와 함께 꺼진다 — 일하는 중인 것이 있으면 먼저 묻는다. 스크립트가 보드를 pkill 로 끄므로(종료 확인을 거치지 않음)
         // 목록·일시중지 표지는 여기서 남기고, 보드를 끄기 전에 스크립트가 멈추면(아래로 돌아오면) 남긴 표지를 지운다 — 세션은 그대로 도니까
         guard let marks = MainActor.assumeIsolated({ confirmShutdown(update: true) }) else { return }
+        // 설정 화면은 닫아 둔다 — 스크립트가 pkill 로 끄므로 applicationWillTerminate 를 거치지 않고, 잠깐 펼친 창이면 접혀야 다시 뜰 자리가 맞다
+        MainActor.assumeIsolated { SettingsScreen.shared.close(); TerminalHub.shared.slide?.finish() }
         running = true
         failed = false
         FileManager.default.createFile(atPath: logPath, contents: nil)
@@ -8208,6 +8214,7 @@ enum SettingsTransition: String, CaseIterable, Identifiable {
     @Published private(set) var focusSearch = 0   // 바뀌면 검색 칸에 포커스
     @Published var visible = false                 // 화면에 올라와 있다(내려가는 전환 중에도) — 아니면 내용을 그리지 않는다
     private var collapseOnClose = false            // 접힌 보드에서 열었다 — 닫을 때 다시 접는다
+    private var collapsedFrame: NSRect?            // 그때의 창 프레임(미니·손으로 줄인 크기 포함) — 닫을 때 그대로 돌린다
     private var observer: NSObjectProtocol?
 
     func toggle() { shown ? close() : open() }
@@ -8224,6 +8231,7 @@ enum SettingsTransition: String, CaseIterable, Identifiable {
         LoginItem.shared.refresh()
         shown = true
         collapseOnClose = !hub.expanded
+        collapsedFrame = collapseOnClose ? window.frame : nil
         // 접혀 있으면 설정 화면을 먼저 깔고 펼친다 — 펼치기(애니메이션 설정을 따른다)가 전환 효과다
         area.present(true, style: collapseOnClose ? .none : .current)
         if collapseOnClose {
@@ -8245,12 +8253,22 @@ enum SettingsTransition: String, CaseIterable, Identifiable {
         let hub = TerminalHub.shared
         if collapseOnClose, !keep {
             collapseOnClose = false
-            setTerminalExpanded(false)   // 접는 것이 전환 효과다 — 다 접힌 뒤 내린다
-            whenPaneSettled { if !self.shown { hub.area?.present(false, style: .none) } }
+            let frame = collapsedFrame
+            collapsedFrame = nil
+            setTerminalExpanded(false)   // 접는 것이 전환 효과다 — 다 접힌 뒤 내리고 열 때의 프레임으로
+            whenPaneSettled {
+                guard !self.shown else { return }
+                hub.area?.present(false, style: .none)
+                if let frame, frame != window.frame {
+                    window.setFrame(frame, display: true)
+                    BoardFit.shared.update()
+                }
+            }
             return
         }
         if collapseOnClose { hub.setExpanded(true) }
         collapseOnClose = false
+        collapsedFrame = nil
         hub.area?.present(false, style: .current)
         hub.focusSelected()
     }
@@ -8260,6 +8278,7 @@ enum SettingsTransition: String, CaseIterable, Identifiable {
         guard shown else { return }
         finish()
         collapseOnClose = false
+        collapsedFrame = nil
         TerminalHub.shared.area?.present(false, style: .none)
     }
 
@@ -8272,7 +8291,15 @@ enum SettingsTransition: String, CaseIterable, Identifiable {
 
     func escape() { if query.isEmpty { close() } else { query = "" } }
 
+    // 끄기·업데이트 직전 — 접힌 보드에서 잠깐 펼쳐 둔 것이면 접힌 프레임으로 돌려 둔다(다시 뜰 때 창 자리가 펼친 프레임을 따르지 않게)
+    func restoreBeforeQuit() {
+        guard shown, collapseOnClose, let f = collapsedFrame else { return }
+        TerminalHub.shared.setExpanded(false)
+        window.setFrame(f, display: false)
+    }
+
     func go(_ s: SettingsSection) {
+        if ShortcutSettings.shared.recording != nil { ShortcutSettings.shared.stopRecording() }
         withAnimation(.easeOut(duration: 0.15)) {
             section = s
             query = ""
@@ -9330,6 +9357,8 @@ struct ShortcutRow: View {
                 Text("전역 단축키로 등록하지 못했습니다").boardFont(11).foregroundStyle(.orange)
             }
         }
+        // 받는 중인 줄이 화면에서 사라지면(검색어로 걸러짐 등) 받기를 그만둔다 — 보이지 않는 줄에 키가 들어가지 않게
+        .onDisappear { if recorder.recording == action.id { recorder.stopRecording() } }
     }
 }
 
@@ -10161,6 +10190,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let left = UserDefaults.standard.string(forKey: "boardSide") == "left"
         if item.action == #selector(snapAction) { item.title = left ? "처음 크기로 왼쪽에 붙이기" : "처음 크기로 오른쪽에 붙이기" }
         return true
+    }
+
+    // 끌 때 — 계정 추가 로그인 명령을 끝내고, 설정 화면 때문에 잠깐 펼친 창은 접힌 프레임으로
+    func applicationWillTerminate(_ notification: Notification) {
+        accounts.cancelAdd()
+        MainActor.assumeIsolated { SettingsScreen.shared.restoreBeforeQuit() }
     }
 
     // Dock 아이콘을 누르면 닫아 둔 창을 다시 연다
