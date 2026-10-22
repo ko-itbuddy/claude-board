@@ -1,4 +1,4 @@
-// 터미널 영역의 키 처리에서 쓰는 순수 판단 두 가지 — TerminalArea.svelte 가 부른다. 아무것도 import 하지 않아 node:test 로 바로 시험한다.
+// 터미널 영역의 키 처리에서 쓰는 순수 판단 두 가지 — TerminalAreaView.svelte 가 부른다. 아무것도 import 하지 않아 node:test 로 바로 시험한다.
 
 /** 입력기가 같은 키를 다시 쏘는 데 걸리는 시간의 상한(ms). 실측은 2ms 안쪽이다 */
 const REFIRE_WINDOW_MS = 100;
