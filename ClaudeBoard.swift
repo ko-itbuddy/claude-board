@@ -7325,7 +7325,7 @@ struct ThemeListView: View {
         func p(_ i: Int) -> Color { themeColor(t?.palette[i] ?? t?.foreground) }
         func prompt(_ command: String) -> some View {
             HStack(spacing: 0) {
-                Text("~/claude-board").foregroundStyle(p(4))
+                Text("~/board").foregroundStyle(p(4))
                 Text(" on ").foregroundStyle(fg)
                 Text("main").foregroundStyle(p(5))
                 Text(" ❯ ").foregroundStyle(p(2))
@@ -7343,18 +7343,19 @@ struct ThemeListView: View {
             .padding(.bottom, 6)
             prompt("ls")
             HStack(spacing: 0) {
-                Text("docs  plugins").foregroundStyle(p(4)).bold()
+                Text("docs").foregroundStyle(p(4)).bold()
                 Text("  build.sh").foregroundStyle(p(2))
                 Text("  README.md").foregroundStyle(fg)
             }
-            prompt("git diff --cached")
-            Text("- let theme = \"Ghostty\"").foregroundStyle(p(1))
-            Text("+ let theme = \"\(t?.name ?? "")\"").foregroundStyle(p(2)).lineLimit(1)
+            prompt("git diff")
+            Text("- theme = \"Ghostty\"").foregroundStyle(p(1))
+            Text("+ theme = \"\(t?.name ?? "")\"").foregroundStyle(p(2))
             HStack(spacing: 0) {
                 prompt("")
                 Text(" ").background(themeColor(t?.cursorColor ?? t?.foreground))
             }
         }
+        .lineLimit(1)
         .boardFont(11, design: .monospaced)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
@@ -8683,7 +8684,8 @@ struct SettingsSectionButton: View {
             }
             .foregroundStyle(on ? .primary : .secondary)
             .padding(.horizontal, 9).frame(height: 30)
-            .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(on ? 0.09 : hover ? 0.05 : 0)))
+            .background(RoundedRectangle(cornerRadius: 7).fill(on ? SettingsStyle.accent.opacity(0.16) : Color.white.opacity(hover ? 0.04 : 0)))
+            .overlay(RoundedRectangle(cornerRadius: 7).stroke(on ? SettingsStyle.accent.opacity(0.25) : .clear, lineWidth: 1))
             .contentShape(Rectangle())
             .opacity(dim ? 0.4 : 1)
         }
