@@ -56,6 +56,12 @@
     inset: 0;
     user-select: text;
     -webkit-user-select: text;
+    /* :root 의 자간(0.025em)이 xterm 글자 폭 재는 요소로 상속되면 칸 폭과 행 간격이 어긋나 오른쪽 칸이 밀린다 */
+    letter-spacing: normal;
+  }
+  /* DOM 렌더러는 행에 자간을 인라인으로 넣는다 — 상속을 끊어도 남는 보정값(-0.33px)을 !important 로 눌러 0 으로 둔다 */
+  .pane :global(.term-host .xterm-rows) {
+    letter-spacing: 0 !important;
   }
   .pane :global(.term-host .xterm) {
     padding: 6px 0 4px 10px;
