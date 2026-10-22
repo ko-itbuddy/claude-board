@@ -612,6 +612,8 @@ final class AccountStore: ObservableObject {
     @Published private(set) var current: Account?          // 지금 로그인된 계정 — ~/.claude.json 의 oauthAccount
     @Published private(set) var saved: [Account] = []      // 전환할 수 있게 저장해 둔 계정
     @Published private(set) var adding = false              // 계정 추가 — 브라우저 로그인을 기다리는 중
+    @Published private(set) var loginURL: URL?              // 로그인 명령이 알려 준 브라우저 로그인 주소(설정 > 계정에 보인다)
+    @Published private(set) var loginNote: String?          // 로그인 명령의 마지막 안내(코드를 보냈다·실패 까닭 등)
     @Published private(set) var switching = false
     @Published private(set) var notice: Notice?
     // 사용 한도가 차면 다른 계정으로 자동 전환(AutoSwitcher) — 계정 메뉴에서 켜고 끈다. 기본은 꺼짐
@@ -636,6 +638,9 @@ final class AccountStore: ObservableObject {
     private var currentMtime: Date?
     private var timer: Timer?
     private var login: (slot: String, started: Date)?
+    private var loginProcess: Process?                      // 계정 추가 로그인 명령(claude auth login) — pty 로 띄운다
+    private var loginPty: FileHandle?                       // 그 명령의 터미널 쪽 — 코드를 써 넣는다
+    private var loginText = ""                              // 그 명령의 출력(색 글자를 뺀 것)
     private var tokenOnlySince: Date?       // 로그인 토큰은 생겼는데 계정 정보가 아직 없는 때
     private var polling = false
     private var noticeWork: DispatchWorkItem?
@@ -780,6 +785,9 @@ final class AccountStore: ObservableObject {
 
     // 계정 추가: 따로 정한 설정 폴더(CLAUDE_CONFIG_DIR)로 claude auth login 을 터미널에서 띄운다 — 지금 로그인은 건드리지 않는다.
     // 로그인이 끝나면 그 폴더 몫 키체인 항목에서 토큰을 가져와 저장하고 자리를 치운다
+    // 계정 추가(설정 > 계정, 계정 칩 메뉴는 설정 화면을 열고 여기로) — 따로 마련한 설정 폴더로 claude auth login 을 사용자 로그인 셸에서
+    // pty 로 띄운다. 명령이 브라우저를 열고, 로그인이 끝나면 localhost 콜백으로 저절로 마친다. 브라우저가 코드를 보여 주는 경우는
+    // 설정 화면의 칸에서 받아 명령에 써 넣는다(submitLoginCode). 끝났는지는 그 폴더를 지켜보는 pollLogin 이 판단한다
     func beginAdd(email: String? = nil) {
         guard login == nil else { return }
         guard let claude = findCommand("claude") else { return flash("claude 명령을 찾지 못했습니다", error: true) }
@@ -787,13 +795,79 @@ final class AccountStore: ObservableObject {
         do { try FileManager.default.createDirectory(atPath: slot, withIntermediateDirectories: true) } catch {
             return flash("로그인 자리를 만들지 못했습니다: \(error.localizedDescription)", error: true)
         }
-        var cmd = "CLAUDE_CONFIG_DIR=\(shellQuote(slot)) \(shellQuote(claude.path)) auth login --claudeai"
+        var cmd = "CLAUDE_CONFIG_DIR=\(shellQuote(slot)) exec \(shellQuote(claude.path)) auth login --claudeai"
         if let email { cmd += " --email \(shellQuote(email))" }
-        cmd += " && echo && echo 'Claude Board 에 계정을 추가했습니다. 이 창은 닫아도 됩니다.'"
-        runInTerminal(cmd)
+        // 줄이 접히지 않게 넓은 터미널로 — 로그인 주소가 한 줄로 나와야 읽는다
+        var size = winsize(ws_row: 50, ws_col: 1000, ws_xpixel: 0, ws_ypixel: 0)
+        var master: Int32 = -1, slave: Int32 = -1
+        guard openpty(&master, &slave, nil, nil, &size) == 0 else {
+            try? FileManager.default.removeItem(atPath: slot)
+            return flash("로그인 명령을 띄우지 못했습니다", error: true)
+        }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: userShell())
+        p.arguments = ["-l", "-c", cmd]   // 로그인 셸 — 터미널에서 친 것과 같은 PATH·환경
+        let tty = FileHandle(fileDescriptor: slave, closeOnDealloc: true)
+        p.standardInput = tty
+        p.standardOutput = tty
+        p.standardError = tty
+        let pty = FileHandle(fileDescriptor: master, closeOnDealloc: true)
+        pty.readabilityHandler = { [weak self] h in
+            let d = h.availableData
+            guard !d.isEmpty, let t = String(data: d, encoding: .utf8) else { h.readabilityHandler = nil; return }
+            DispatchQueue.main.async { self?.loginOutput(t, slot: slot) }
+        }
+        p.terminationHandler = { [weak self] p in
+            DispatchQueue.main.async { self?.loginEnded(p.terminationStatus, slot: slot) }
+        }
+        do { try p.run() } catch {
+            try? FileManager.default.removeItem(atPath: slot)
+            return flash("로그인 명령을 띄우지 못했습니다: \(error.localizedDescription)", error: true)
+        }
+        try? tty.close()   // 자식이 쥐었다 — 우리 쪽 사본은 닫아야 자식이 끝날 때 읽기가 끝난다
+        loginProcess = p
+        loginPty = pty
+        loginText = ""
+        loginURL = nil
+        loginNote = nil
         login = (slot, Date())
         adding = true
-        flash("터미널과 브라우저에서 추가할 계정으로 로그인해 주세요")
+    }
+
+    // 로그인 명령의 출력 — 색 글자를 빼고 모아 두고, 로그인 주소를 찾는다
+    private func loginOutput(_ chunk: String, slot: String) {
+        guard login?.slot == slot else { return }
+        loginText += chunk.replacingOccurrences(of: "\u{1B}\\[[0-9;?]*[ -/]*[@-~]|\u{1B}\\][^\u{07}]*\u{07}", with: "", options: .regularExpression)
+        if loginText.count > 20_000 { loginText = String(loginText.suffix(10_000)) }
+        if loginURL == nil, let r = loginText.range(of: "https://[^\\s]+oauth/authorize[^\\s]*", options: .regularExpression) {
+            loginURL = URL(string: String(loginText[r]))
+        }
+    }
+
+    // 로그인 명령이 끝났다 — 성공이면 pollLogin 이 곧 계정 정보를 찾는다. 실패면 마지막 줄을 까닭으로 보이고 그만둔다
+    private func loginEnded(_ status: Int32, slot: String) {
+        guard login?.slot == slot else { return }
+        loginProcess = nil
+        loginPty?.readabilityHandler = nil
+        loginPty = nil
+        guard status != 0 else { loginNote = "로그인을 마쳤습니다. 계정 정보를 확인하는 중…"; return }
+        // 실패 까닭은 코드 입력 안내와 같은 줄에 붙어 나온다("Paste code here if prompted > Login failed: …") — 안내를 떼고 마지막 줄
+        let last = loginText.split(whereSeparator: \.isNewline)
+            .map { line -> String in
+                let t = line.components(separatedBy: "prompted >").last ?? String(line)
+                return t.trimmingCharacters(in: .whitespaces)
+            }
+            .last { !$0.isEmpty } ?? ""
+        cancelAdd()
+        flash("계정을 추가하지 못했습니다" + (last.isEmpty ? "" : ": \(last.prefix(200))"), error: true)
+    }
+
+    // 브라우저가 보여 준 코드를 로그인 명령에 써 넣는다
+    func submitLoginCode(_ code: String) {
+        let c = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !c.isEmpty, let pty = loginPty else { return }
+        pty.write(Data((c + "\r").utf8))
+        loginNote = "코드를 보냈습니다. 확인하는 중…"
     }
 
     func cancelAdd() {
@@ -801,6 +875,12 @@ final class AccountStore: ObservableObject {
         login = nil
         tokenOnlySince = nil
         adding = false
+        loginURL = nil
+        loginNote = nil
+        loginPty?.readabilityHandler = nil
+        loginPty = nil
+        loginProcess?.terminate()
+        loginProcess = nil
         queue.async { Self.dropSlot(l.slot) }
     }
 
@@ -849,9 +929,14 @@ final class AccountStore: ObservableObject {
                 self.login = nil
                 self.tokenOnlySince = nil
                 self.adding = false
+                self.loginURL = nil
+                self.loginNote = nil
+                self.loginPty = nil
+                self.loginProcess?.terminate()   // 보통은 이미 끝났다
+                self.loginProcess = nil
                 self.loadSaved()
                 switch result {
-                case .success(let a): self.flash("\(a.email) 계정을 추가했습니다. 계정 메뉴에서 골라 바로 전환할 수 있습니다")
+                case .success(let a): self.flash("\(a.email) 계정을 추가했습니다. 전환을 누르면 바로 바꿉니다")
                 case .failure(let e): self.flash("계정을 추가하지 못했습니다: \(e.localizedDescription)", error: true)
                 }
             }
@@ -1842,6 +1927,12 @@ struct AccountChip: View {
               + (accounts.autoSwitch ? " · 한도 자동 전환 켜짐" : "") + "\n눌러서 다른 계정으로 전환하거나 계정을 추가합니다")
     }
 
+    // 계정 추가는 설정 > 계정 에서 로그인 링크·코드 칸을 보며 한다 — 열고 바로 시작
+    private func addInSettings(email: String? = nil) {
+        SettingsScreen.shared.open(.account)
+        accounts.beginAdd(email: email)
+    }
+
     private func showMenu() {
         let menu = NSMenu()
         menu.autoenablesItems = false
@@ -1856,7 +1947,7 @@ struct AccountChip: View {
                 + (!isCurrent && a.expired ? "  (다시 로그인 필요)" : "")
             let item = ActionItem(title, enabled: !accounts.switching) {
                 guard !isCurrent else { return }
-                a.expired ? accounts.beginAdd(email: a.email) : accounts.confirmSwitch(a, busy: busy())
+                a.expired ? addInSettings(email: a.email) : accounts.confirmSwitch(a, busy: busy())
             }
             item.state = isCurrent ? .on : .off
             if !a.org.isEmpty { item.toolTip = a.org }
@@ -1864,14 +1955,15 @@ struct AccountChip: View {
         }
         menu.addItem(.separator())
         if accounts.adding {
-            menu.addItem(ActionItem("계정 추가 취소 (로그인 기다리는 중)") { accounts.cancelAdd() })
+            menu.addItem(ActionItem("계정 추가 계속 (설정 > 계정)") { SettingsScreen.shared.open(.account) })
+            menu.addItem(ActionItem("계정 추가 취소") { accounts.cancelAdd() })
         } else {
-            menu.addItem(ActionItem("계정 추가… (터미널·브라우저에서 로그인)") { accounts.beginAdd() })
+            menu.addItem(ActionItem("계정 추가… (설정 > 계정에서 로그인)") { addInSettings() })
         }
         let removable = accounts.saved.filter { $0.id != accounts.current?.id }
         if !removable.isEmpty {
             let sub = NSMenu()
-            for a in removable { sub.addItem(ActionItem(a.email) { accounts.remove(a) }) }
+            for a in removable { sub.addItem(ActionItem(a.email) { accounts.confirmRemove(a) }) }
             let item = NSMenuItem(title: "저장한 계정 지우기", action: nil, keyEquivalent: "")
             item.submenu = sub
             menu.addItem(item)
@@ -1886,6 +1978,16 @@ struct AccountChip: View {
 }
 
 extension AccountStore {
+    @MainActor func confirmRemove(_ a: Account) {
+        let alert = NSAlert()
+        alert.messageText = "\(a.email) 계정을 지울까요?"
+        alert.informativeText = "보드에 저장한 이 계정의 로그인 정보를 지웁니다. 다시 쓰려면 계정을 다시 추가해야 합니다."
+        alert.addButton(withTitle: "지우기")
+        alert.addButton(withTitle: "취소")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn { remove(a) }
+    }
+
     // 계정 전환(계정 칩 메뉴·설정 > 계정) — 작업 중·승인 대기 세션이 있으면 이전 계정으로 일하는 중이라고 알리고 한 번 더 묻는다
     @MainActor func confirmSwitch(_ a: Account, busy working: [Session]) {
         guard TerminalHub.shared.slide == nil else { return whenPaneSettled { self.confirmSwitch(a, busy: working) } }
@@ -3011,7 +3113,8 @@ extension View {
     func change(_ step: Int?) {
         let tenths = step.map { min(15, max(8, Int((scale * 10).rounded()) + $0)) } ?? 10
         scale = CGFloat(tenths) / 10
-        UserDefaults.standard.set(Double(tenths) / 10, forKey: "boardFontScale")
+        if tenths == 10 { UserDefaults.standard.removeObject(forKey: "boardFontScale") }   // 원래 크기는 설정을 남기지 않는다
+        else { UserDefaults.standard.set(Double(tenths) / 10, forKey: "boardFontScale") }
         TerminalHub.shared.toast("보드 글자 \(tenths * 10)%")
     }
 }
@@ -3999,31 +4102,11 @@ final class TerminalAppStore: ObservableObject {
 
 func shellQuote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 
-// 셸 명령줄을 터미널 새 창에서 실행한다 — Ghostty 가 있으면 Ghostty, 없으면 macOS 터미널
-func runInTerminal(_ shellCmd: String) {
-    let quote = { (t: String) in "\"" + t.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
-    let script: String
-    if NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.mitchellh.ghostty") != nil {
-        script = """
-        tell application "Ghostty"
-          set cfg to new surface configuration
-          set initial working directory of cfg to \(quote(NSHomeDirectory()))
-          set initial input of cfg to \(quote(shellCmd)) & linefeed
-          new window with configuration cfg
-          activate
-        end tell
-        """
-    } else {
-        script = """
-        tell application "Terminal"
-          do script \(quote(shellCmd))
-          activate
-        end tell
-        """
-    }
-    ghosttyQueue.async { _ = runScript(script) }
+// 사용자의 로그인 셸(passwd 의 셸) — 없으면 zsh
+func userShell() -> String {
+    if let pw = getpwuid(getuid()), let sh = pw.pointee.pw_shell, case let path = String(cString: sh), !path.isEmpty { return path }
+    return "/bin/zsh"
 }
-
 // 오른쪽 아래 독: Ghostty·iTerm2·터미널·Orca 를 바로 연다.
 // 평소엔 창 오른쪽 아래 끝의 탭만 보이다가 그 탭(창 오른쪽 끝 아래쪽)에 마우스를 대면 보드 위로 미끄러져 나오고, 독에서 벗어나면 다시 숨는다.
 // 보드 위치가 왼쪽이면 보드의 왼쪽 끝(화면 바깥쪽)에 거울처럼 붙는다 — 오른쪽 끝은 터미널과의 경계라 경계를 잡으러 가다 열리지 않게
@@ -5380,7 +5463,9 @@ final class SplitNode {
         let d = UserDefaults.standard
         if let step {
             let now = d.object(forKey: "terminalFontSize") as? Double ?? ghosttyConfigFontSize()
-            d.set(min(40, max(8, now + Double(step))), forKey: "terminalFontSize")
+            let next = min(40, max(8, now + Double(step)))
+            // Ghostty 설정 크기로 돌아왔으면 설정을 지운다 — 원래 크기와 같은데 바꾼 것으로 남지 않게(설정 화면의 되돌리기 단추)
+            if next == ghosttyConfigFontSize() { d.removeObject(forKey: "terminalFontSize") } else { d.set(next, forKey: "terminalFontSize") }
         } else {
             d.removeObject(forKey: "terminalFontSize")
         }
@@ -7942,6 +8027,8 @@ struct ShortcutAction {
         if c == Self.settingsKey { SettingsScreen.shared.toggle(); return nil }
         // 설정 화면의 Esc — 검색어를 지우고, 없으면 닫는다(키 받기 취소는 위에서)
         if c == KeyCombo(53, []), SettingsScreen.shared.shown, e.window === window { SettingsScreen.shared.escape(); return nil }
+        // 설정 화면의 ⌘W — 보드 창을 닫지 않고 설정 화면을 닫는다
+        if c == KeyCombo(13, .command), SettingsScreen.shared.shown, e.window === window { SettingsScreen.shared.close(); return nil }
         guard let id = Self.actions.first(where: { combo($0.id) == c })?.id, let item = items[id], let sel = item.action else { return e }
         NSApp.sendAction(sel, to: item.target, from: item)
         return nil
@@ -9045,23 +9132,91 @@ struct AccountList: View {
             if list.isEmpty {
                 Text("로그인 정보가 없습니다").boardFont(12).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
             }
-            HStack {
-                if accounts.adding {
-                    ProgressView().controlSize(.small)
-                    Text("터미널·브라우저에서 로그인을 기다리는 중").boardFont(11.5).foregroundStyle(.secondary)
-                    Spacer()
-                    SettingsButton("취소") { accounts.cancelAdd() }
-                } else {
+            if accounts.adding {
+                AccountLoginPanel(accounts: accounts)
+                    .padding(.top, 4)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            } else {
+                HStack {
                     SettingsButton("계정 추가…") { accounts.beginAdd() }
-                    Text("터미널과 브라우저에서 로그인합니다").boardFont(11).foregroundStyle(.tertiary)
+                    Text("브라우저에서 추가할 계정으로 로그인합니다").boardFont(11).foregroundStyle(.tertiary)
                     Spacer()
                 }
+                .padding(.top, 4)
             }
-            .padding(.top, 4)
             if let n = accounts.notice {
                 Label(n.text, systemImage: n.error ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                     .boardFont(11.5).foregroundStyle(n.error ? Color.orange : .secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    // 계정 추가 중 — 1) 브라우저에서 로그인(열리지 않았으면 열기·링크 복사) 2) 브라우저가 코드를 보여 주면 붙여넣기
+    private struct AccountLoginPanel: View {
+        @ObservedObject var accounts: AccountStore
+        @State private var code = ""
+        @State private var copied = false
+        @FocusState private var focused: Bool
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("새 계정 로그인").boardFont(12.5, weight: .semibold)
+                    Spacer()
+                    SettingsButton("취소") { accounts.cancelAdd() }
+                }
+                step(1, "브라우저에서 추가할 계정으로 로그인하세요", detail: accounts.loginURL == nil ? "로그인 주소를 받는 중…"
+                     : "브라우저가 열리지 않았으면 아래 단추로 엽니다. 로그인을 마치면 저절로 추가됩니다") {
+                    if let url = accounts.loginURL {
+                        HStack(spacing: 8) {
+                            SettingsButton("브라우저에서 열기") { NSWorkspace.shared.open(url) }
+                            SettingsLinkButton(copied ? "복사했습니다" : "링크 복사") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                                copied = true
+                            }
+                        }
+                    }
+                }
+                step(2, "브라우저가 코드를 보여 주면 여기에 붙여넣으세요", detail: "로그인 뒤 \"코드를 복사해 Claude Code 에 붙여넣으라\"는 화면이 나올 때만 필요합니다") {
+                    HStack(spacing: 8) {
+                        TextField("인증 코드", text: $code)
+                            .textFieldStyle(.plain)
+                            .boardFont(12.5, design: .monospaced)
+                            .focused($focused)
+                            .onSubmit(send)
+                            .padding(.horizontal, 10).frame(height: 30)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.25)))
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(focused ? SettingsStyle.accent.opacity(0.7) : Color.white.opacity(0.1), lineWidth: 1))
+                        SettingsButton("확인", prominent: true, enabled: !code.trimmingCharacters(in: .whitespaces).isEmpty, action: send)
+                    }
+                }
+                if let n = accounts.loginNote {
+                    Label(n, systemImage: "hourglass").boardFont(11.5).foregroundStyle(.secondary)
+                }
+            }
+            .padding(14)
+            .background(RoundedRectangle(cornerRadius: 10).fill(SettingsStyle.accent.opacity(0.07)))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(SettingsStyle.accent.opacity(0.25), lineWidth: 1))
+        }
+
+        private func send() {
+            accounts.submitLoginCode(code)
+            code = ""
+        }
+
+        private func step<C: View>(_ n: Int, _ title: String, detail: String, @ViewBuilder _ content: () -> C) -> some View {
+            HStack(alignment: .top, spacing: 10) {
+                Text("\(n)").boardFont(11, weight: .bold).foregroundStyle(SettingsStyle.accent)
+                    .frame(width: 20, height: 20)
+                    .background(Circle().fill(SettingsStyle.accent.opacity(0.16)))
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(title).boardFont(12.5, weight: .medium)
+                    Text(detail).boardFont(11).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    content()
+                }
             }
         }
     }
@@ -9095,14 +9250,14 @@ struct AccountList: View {
                         .background(Capsule().fill(Palette.color("idle").opacity(0.12)))
                 } else {
                     if hover {
-                        Button { accounts.remove(account) } label: {
+                        Button { accounts.confirmRemove(account) } label: {
                             Image(systemName: "trash").font(.system(size: 11)).foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)
                         .transition(.opacity)
                     }
                     if account.expired {
-                        SettingsButton("다시 로그인", enabled: !accounts.switching) { accounts.beginAdd(email: account.email) }
+                        SettingsButton("다시 로그인", enabled: !accounts.switching && !accounts.adding) { accounts.beginAdd(email: account.email) }
                     } else {
                         SettingsButton("전환", enabled: !accounts.switching) { accounts.confirmSwitch(account, busy: busy()) }
                     }
