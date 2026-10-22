@@ -430,8 +430,8 @@ interface TermInfo {
 
 #### 5.12.5 프론트엔드 규칙 (`app/src/lib/terminal/`)
 
-- 구조: `hub.svelte.ts` 가 `terms`(TermId 키)와 `tabs: TerminalTab[]` 를 쥔다. 탭은 `{ id, root: PaneNode, activeLeaf, workspace, customName, renaming, sessionId, command, title }` 이다.
-  `PaneNode = { type: "leaf", leafId, termId } | { type: "split", dir: "row" | "col", ratio, first, second }`. 지금은 탭마다 잎 하나만 그린다. 안 고른 탭도 마운트한 채 숨겨 셸과 출력이 그대로 남는다.
+- 구조: `hub.svelte.ts` 의 `TerminalHub` 가 `terms`(TermId 키)와 `tabs: BoardTab[]`, `surfaces: BoardSurface[]`(`surfaceOf(id)`)를 쥔다. 탭(`BoardTab`)은 `workspace`, `customName`, `renaming`, `root: SplitNode`, `focused`(고른 서피스 id), `zoomed` 를 갖고, 서피스(`BoardSurface`)는 터미널 하나의 상태 `id`, `termId`, `sessionId`, `command`, `held`, `mdRenderOff`, `title` 을 갖는다.
+  `SplitNode = { leaf: 서피스 id } | { split: "right" | "down", ratio, first, second }`(`ratio` 는 `first`(왼쪽·위)의 몫). 나누기 트리 연산은 `terminal/split.ts` 의 순수 함수다. 지금은 탭마다 서피스 하나만 그린다. 안 고른 탭도 마운트한 채 숨겨 셸과 출력이 그대로 남는다.
   탭은 작업 경로(`workspace`)로 묶인다. 경로를 견주는 꼴(`workspaceKey`)은 소문자·`/`→`\`·끝 `\` 제거이고 홈은 `~` 다. 경로 줄은 탭 목록에 처음 나타난 순서다.
   페이지를 새로 고치면 `term_list` 에서 아직 도는 터미널을 탭으로 이어받는다(이름·세션 연결은 잃는다). 앱을 다시 켠 뒤의 탭 복원은 없다.
   `term.ts` 는 터미널마다 컨트롤러를 두고, 컨트롤러가 자기 host div 를 가져 다른 부모로 `appendChild` 해서 옮길 수 있다(나중의 분할용).
@@ -675,7 +675,7 @@ Windows CI 러너에서 실기로 확인: `#[cfg(windows)]` 시험(콘솔 제목
 | TM1 | 터미널 코어: ConPTY 래퍼·환경 블록·링 버퍼·스레드·채널 프레임(§5.12.1~§5.12.4) | `TerminalHub`·`BoardSurface` (설계.md 7·11장) | src-tauri `pty/`·`ring.rs`·`terms.rs` | ring 단위 시험, `#[cfg(windows)]` 시험 8개(§11.2) |
 | TM2 | 창 규칙: 펼침·접힘·보드 쪽·미니·Ctrl+Alt+T·트레이(§5.10) | `BoardRootView`, 보드 위치 메뉴 (설계.md) | src-tauri `window`·`settings`·`board`·`tray`·`model` | 프레임 단위 시험(펼침/접힘 × 양쪽 × 모니터 둘 × 배율 1.0·1.5, 미니 모서리), 설정 왕복 시험 |
 | TM3 | 터미널 화면: xterm.js·IME·fit·흐름 제어·칸 배치, 경로 줄·탭 줄·빈 상태(§5.12.5, §7.2) | `BoardTerminalView`·`PaneDivider` | app/src/lib/terminal, app/src/routes | `npm run check`·`npm run build`, 번들 청크 검사, 브라우저 목 확인, 실기 조작(§11.2) |
-| TM5 | 탭·새 세션: 탭이 셸을 쥐고 claude 를 쳐 넣음, `--session-id`·`--name`, 이름 바꾸기, 닫기 확인, 키(§5.12.6, §7.2) | `freshSessionCommand`·`named`·`TerminalTab`·새 세션 창 (ClaudeBoard.swift BoardSurface.type·TerminalHub.named·freshSessionCommand·NewSessionSheet) | app/src/lib/terminal/hub.svelte.ts·launch.ts·NewSessionSheet 외 | `npm run check`·`npm run build`, 실기 조작(§11.2) |
+| TM5 | 탭·새 세션: 탭이 셸을 쥐고 claude 를 쳐 넣음, `--session-id`·`--name`, 이름 바꾸기, 닫기 확인, 키(§5.12.6, §7.2) | `freshSessionCommand`·`named`·`BoardTab`·새 세션 창 (ClaudeBoard.swift BoardSurface.type·TerminalHub.named·freshSessionCommand·NewSessionSheet) | app/src/lib/terminal/hub.svelte.ts·launch.ts·NewSessionSheet 외 | `npm run check`·`npm run build`, 실기 조작(§11.2) |
 | TM4 | 문서 | | SPEC §0·§5.9·§5.10·§5.12·§6.2·§7.2, CHANGELOG 초안, README, 설치 가이드 | 검토 |
 
 ### 11.1 검증 결과 (2026-10-16, 첫 판 2.12)
