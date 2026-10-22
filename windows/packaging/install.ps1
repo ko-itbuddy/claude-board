@@ -168,7 +168,8 @@ function Install-ClaudeBoard {
           $bak = $null
           if (Test-Path -LiteralPath $dst) {
             $bak = "$dst.old-$stamp"
-            Move-Item -LiteralPath $dst -Destination $bak
+            # a folder is renamed in one step: Move-Item on a folder with an open file moves the other files one by one and stops half way
+            if (Test-Path -LiteralPath $dst -PathType Container) { [IO.Directory]::Move($dst, $bak) } else { Move-Item -LiteralPath $dst -Destination $bak }
           }
           [void]$done.Add(@($dst, $bak))
           New-Item -ItemType Directory -Path (Split-Path -Parent $dst) -Force | Out-Null
