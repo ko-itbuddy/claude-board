@@ -7,6 +7,8 @@ use std::path::PathBuf;
 
 #[cfg(windows)]
 mod conpty;
+#[cfg(all(test, windows))]
+mod capture;
 #[cfg(windows)]
 pub use conpty::{windows_build, ConPty as Pty};
 
