@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 터미널 영역(ClaudeBoard.swift:6602-6665 TerminalAreaView) — 위에서 아래로 제목 띠 · 경로 줄(탭이 있을 때만) · 탭 줄 · 화면 칸.
+  // 터미널 영역(ClaudeBoard.swift TerminalAreaView) — 위에서 아래로 제목 띠 · 경로 줄(탭이 있을 때만) · 탭 줄 · 화면 칸.
   // 탭이 없으면 화면 칸에 빈 상태를 보인다. 안 고른 탭도 마운트한 채 숨겨 셸과 출력이 그대로 남는다
   import { onTerminalFocus } from "$lib/backend";
   import { ui } from "$lib/board/store.svelte";

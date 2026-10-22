@@ -21,7 +21,7 @@ Windows 판 개발자(사람·에이전트)는 이 문서를 단일 기준으로
 ### 0.1 Latest 를 쓰지 않는 이유 (어기면 기존 macOS 사용자가 깨진다)
 
 설치된 모든 macOS 앱이 `https://github.com/suhojang/claude-board/releases/latest/download/VERSION`·`ClaudeBoard.zip`·`install.sh` 를 읽는다
-(`ClaudeBoard.swift:4101-4132`, `packaging/install.sh`). Windows 릴리스가 한 번이라도 Latest 가 되면 macOS 업데이트 확인·설치가 404 나 엉뚱한 버전을 받는다.
+(`ClaudeBoard.swift Updater`, `packaging/install.sh`). Windows 릴리스가 한 번이라도 Latest 가 되면 macOS 업데이트 확인·설치가 404 나 엉뚱한 버전을 받는다.
 그래서 Windows 판은 `/releases/latest/` 를 쓰지 않고 **릴리스 목록 API 에서 `windows-v` 로 시작하는 태그를 골라** 쓴다.
 macOS 의 `packaging/release.sh` 는 최상위 `CHANGELOG.md` 를 `## <버전>` 으로 찾으므로, Windows 변경 내역은 `windows/CHANGELOG.md` 에 따로 쓴다.
 
@@ -262,7 +262,7 @@ Claude Code 는 사용자가 Esc 로 응답을 끊으면 `Stop` hook 을 부르�
 
 ## 5. 보드 백엔드 (`app/src-tauri`)
 
-### 5.1 세션 읽기 — `Store.reload` (`ClaudeBoard.swift:941-1207`)
+### 5.1 세션 읽기 — `Store.reload` (`ClaudeBoard.swift Store.reload`)
 
 1초마다(그리고 표지 파일을 바꾼 직후 바로) `sessions/*.json` 을 읽는다. 파일 수정 시각이 같으면 이전에 푼 값을 쓴다.
 
@@ -285,34 +285,34 @@ Claude Code 는 사용자가 Esc 로 응답을 끊으면 `Stop` hook 을 부르�
 - 새로 승인 대기가 된 세션의 그룹은 접혀 있으면 편다.
 - `mute-all` 존재 여부.
 
-### 5.2 모델·effort — `ModelReader` (`ClaudeBoard.swift:97-147`)
+### 5.2 모델·effort — `ModelReader` (`ClaudeBoard.swift ModelReader`)
 
 파일 끝 400KB 를 거꾸로 보며 `"assistant"` 가 든 줄 가운데 `type=="assistant"`, `message.model` 이 `<synthetic>` 이 아닌 첫 줄 → `{model, effort: 줄의 effort}`. 수정 시각이 같거나 3초 안이면 다시 읽지 않는다. 없으면 세션 기록의 `model` 로 대신(effort 없음).
 계열 이름: opus/sonnet/haiku/fable 이 들어 있으면 첫 글자 대문자, 아니면 `claude-` 를 뺀 이름. 버전: `-(\d+)-(\d+)` → `5.5`. effort 단계: low 1 … max 5.
 
-### 5.3 컨텍스트 — `ContextReader` (`ClaudeBoard.swift:149-246`)
+### 5.3 컨텍스트 — `ContextReader` (`ClaudeBoard.swift ContextReader`)
 
 1순위 `context/<sid>.json`: `context_window_size > 0` 이고 transcript 수정 시각이 기록의 `at` 보다 60초 넘게 늦지 않으면 used = 세 입력 토큰 합(0 이면 `used_percentage`). 그 모델의 크기를 `context-windows.json` 에 배워 둔다.
 2순위 transcript 끝 1.5MB 에서 사이드체인이 아닌 마지막 assistant 의 usage 합. 크기 = 배운 값 또는 기본(`[1m]` 이나 `claude-opus-5`·`claude-sonnet-5`·`claude-haiku-5`·`claude-fable-5` 로 시작하면 1,000,000, 그 밖 200,000), used 가 크기보다 크면 1,000,000. pct = min(100, used×100/size).
 
-### 5.4 사용 한도 — `UsageStore` (`ClaudeBoard.swift:262-354`)
+### 5.4 사용 한도 — `UsageStore` (`ClaudeBoard.swift UsageStore`)
 
 30초마다. 캐시 파일이 120초 안에 쓰였으면 그것만 쓴다. 아니면 `~/.claude/.credentials.json` 의 `claudeAiOauth.accessToken`(없으면 조용히 실패 표시) — `expiresAt`(ms)이 지났으면 "로그인 토큰 갱신 전". `GET https://api.anthropic.com/api/oauth/usage` 헤더 `Authorization: Bearer <토큰>`, `anthropic-beta: oauth-2025-04-20`, 제한 10초.
 응답: `five_hour.utilization`→"5시간", `seven_day.utilization`→"주간 · 전체", `limits[]` 가운데 `kind=="weekly_scoped"` 의 `percent` → "주간 · <scope.model.display_name>", 각 `resets_at`(ISO8601). 성공하면 캐시에 쓴다. 계정을 바꾸면 캐시를 지우고 5초 동안 그 전 캐시는 믿지 않으며 진행 중이던 응답은 버린다.
 토큰은 메모리에만 두고 기록하지 않는다. **(`.credentials.json` 의 필드 이름은 문서에 없다 — 없으면 "사용량을 불러오지 못했습니다" 로 조용히 내려간다)**
 
-### 5.5 계정 전환 — `AccountStore` (`ClaudeBoard.swift:369-789`)
+### 5.5 계정 전환 — `AccountStore` (`ClaudeBoard.swift AccountStore`)
 
 macOS 키체인 대신:
 - 지금 로그인: `~/.claude/.credentials.json`(JSON, `claudeAiOauth` 와 그 밖의 키 — `mcpOAuth` 등은 그대로 둔다). 계정 정보: `~/.claude.json` 의 `oauthAccount`(3초마다 수정 시각이 바뀌면 다시 읽음).
 - 저장한 계정 토큰: `notifier\accounts\vault\<계정 id 의 sha256 앞 16자>.bin` = DPAPI(`CryptProtectData`, 현재 사용자) 로 암호화한 `{"claudeAiOauth": …}`. 표시 정보는 `notifier\accounts.json`(`{"accounts":[{oauthAccount, savedAt, refreshTokenExpiresAt?}]}`, macOS 와 같은 형식).
 - 계정 id = `accountUuid|organizationUuid`. 이메일·조직·요금제(`organizationType` 의 `claude_` 를 빼고 첫 글자 대문자 + `organizationRateLimitTier` 의 `_<n>x` → " 5x"), `refreshTokenExpiresAt` 지나면 "다시 로그인 필요".
-- 전환: `~/.claude/.storage-write.lock` 폴더 잠금(mkdir, 15초 넘은 잠금은 버림, 5초 기다림 — Claude Code 와 같은 방식) 안에서 지금 계정의 최신 토큰을 저장 → 대상 토큰을 `claudeAiOauth` 에 넣어 `.credentials.json` 을 원자적으로 씀. 그다음 `~/.claude.json.lock` 잠금 안에서 `oauthAccount` 를 바꾸고, 다른 계정이면 계정별 캐시 키(`ClaudeBoard.swift:535-539` 목록)를 지운다.
+- 전환: `~/.claude/.storage-write.lock` 폴더 잠금(mkdir, 15초 넘은 잠금은 버림, 5초 기다림 — Claude Code 와 같은 방식) 안에서 지금 계정의 최신 토큰을 저장 → 대상 토큰을 `claudeAiOauth` 에 넣어 `.credentials.json` 을 원자적으로 씀. 그다음 `~/.claude.json.lock` 잠금 안에서 `oauthAccount` 를 바꾸고, 다른 계정이면 계정별 캐시 키(`ClaudeBoard.swift AccountStore.accountCaches` 목록)를 지운다.
 - 계정 추가: 새 터미널 창에서 `CLAUDE_CONFIG_DIR=<notifier\accounts\login-<8자>>` 로 `claude auth login --claudeai [--email <이메일>]` 실행 후 안내 문구. 3초마다 그 폴더의 `.claude.json` 의 `oauthAccount` 와 `.credentials.json` 의 `claudeAiOauth` 가 생기면 저장하고 지금 계정도 저장한 뒤 폴더를 지운다. 토큰만 있고 계정 정보가 30초 넘게 없으면 실패 안내. 15분 넘으면 그만둔다. 시작할 때 남은 `login-*` 폴더를 치운다.
-- 작업 중·승인 대기 세션이 있으면 전환 전에 확인 대화상자(`ClaudeBoard.swift:1718-1740` 문구).
+- 작업 중·승인 대기 세션이 있으면 전환 전에 확인 대화상자(`ClaudeBoard.swift AccountChip` 의 확인 창 문구).
 - 안내 문구(notice)는 7초 뒤 사라진다. 문구는 macOS 와 같게.
 
-### 5.6 한도 자동 전환 — `AutoSwitcher` (`ClaudeBoard.swift:791-918`)
+### 5.6 한도 자동 전환 — `AutoSwitcher` (`ClaudeBoard.swift AutoSwitcher`)
 
 같은 규칙(3초 주기, settle 40초, recent 6시간, 찬 계정 기록과 풀리는 시각, 다음 계정 고르기, 이어 가기 요청 문구, `auto-switch.log`). 이어 가기는 Ghostty 대신 §5.7 의 콘솔 입력으로 `Esc → 0.5초 → 문구 → 0.2초 → Enter`. `canDrive` 가 아니면 직접 이어 달라고 안내.
 
@@ -322,15 +322,15 @@ macOS 키체인 대신:
 
 - 콘솔 입력: 보드 프로세스가 `FreeConsole` → `AttachConsole(pid)` → `CreateFileW("CONIN$")` → `WriteConsoleInputW` 로 KEY_EVENT(누름·뗌) 를 넣고 → `FreeConsole`. Esc = VK_ESCAPE/0x1B, Enter = VK_RETURN/`\r`, 글자는 UTF-16 단위마다 `wVirtualKeyCode=0` 에 문자. 붙어 있는 동안 `SetConsoleCtrlHandler(NULL, TRUE)`. 한 번에 한 세션씩(전역 잠금). `canDrive(s)` = headless 아님 + ended 아님 + 콘솔에 붙을 수 있음.
 - 일시중지 = Esc 후 `<sid>.paused` 기록. 재개 = 살아 있으면 `carryOnPrompt` 입력 + Enter 후 표지 삭제, 아니면 이어 열기(carryOn). 중단 = 확인 대화상자 → 표지 삭제 → canDrive 면 `Esc → 0.4초 → /exit → 0.2초 → Enter`, 아니면 프로세스 종료(`TerminateProcess` 대신 먼저 `GenerateConsoleCtrlEvent(CTRL_BREAK)` 를 시도하지 말고 macOS SIGTERM 처럼 바로 종료해도 된다 — 대화 기록은 남는다).
-  문구: `carryOnPrompt` = "보드에서 일시중지했던 세션을 재개합니다. 중단된 지점부터 직전 작업을 이어서 진행해 주세요." 자동 전환 문구 = `ClaudeBoard.swift:801`.
-- 세션으로 이동(더블 클릭): 콘솔에 붙어 `GetConsoleWindow` → 보이면 그 창, 아니면 소유 창(`GW_OWNER`)·조상 프로세스의 보이는 최상위 창 → 최소화면 복원 후 앞으로(`AllowSetForegroundWindow`/`SetForegroundWindow`, 막히면 `AttachThreadInput` 방식). Windows Terminal 이면 탭까지: 그 콘솔 제목을 표지 `CBFOCUS-<8자>` 로 잠깐 바꾸고 UI Automation 으로 이름이 그 표지인 TabItem 을 찾아 `SelectionItemPattern.Select` 한 뒤 제목을 되돌린다(`ClaudeBoard.swift:4831-4875` 와 같은 생각).
+  문구: `carryOnPrompt` = "보드에서 일시중지했던 세션을 재개합니다. 중단된 지점부터 직전 작업을 이어서 진행해 주세요." 자동 전환 문구 = `ClaudeBoard.swift AutoSwitcher`.
+- 세션으로 이동(더블 클릭): 콘솔에 붙어 `GetConsoleWindow` → 보이면 그 창, 아니면 소유 창(`GW_OWNER`)·조상 프로세스의 보이는 최상위 창 → 최소화면 복원 후 앞으로(`AllowSetForegroundWindow`/`SetForegroundWindow`, 막히면 `AttachThreadInput` 방식). Windows Terminal 이면 탭까지: 그 콘솔 제목을 표지 `CBFOCUS-<8자>` 로 잠깐 바꾸고 UI Automation 으로 이름이 그 표지인 TabItem 을 찾아 `SelectionItemPattern.Select` 한 뒤 제목을 되돌린다(`ClaudeBoard.swift focusGhostty` 와 같은 생각).
 - 한 번 클릭 = 그 세션의 터미널 앱 창만 앞으로(위 창 찾기의 결과), 모르면 Windows Terminal(없으면 아무것도 안 함).
 - 이어 열기(종료 세션 더블 클릭·"세션 다시 열기"): `resume_args`(없으면 `["--resume", "<id>"]`), carryOn 이면 문구를 인자 하나로 뒤에 붙이고 `.paused` 삭제.
   **셸(cmd.exe·PowerShell·wt.exe 명령줄)을 거치지 않는다** — `claude.exe`(PATH 또는 `%USERPROFILE%\.local\bin\claude.exe`)를 인자 배열로 `CREATE_NEW_CONSOLE` 로 직접 띄우고 작업 폴더는 `project_dir`(없으면 cwd — 보드 카드의 경로). Windows 11 에서 기본 터미널이 Windows Terminal 이면 그 안에 열린다. claude 가 끝나면 창도 닫힌다(macOS 는 셸 pane 이 남는다 — 안전을 위해 다르게 한다).
 - 명령을 새 터미널 창에서 실행(`runInTerminal`, 계정 추가): 같은 방식 — `claude.exe auth login --claudeai [--email <이메일>]` 를 환경변수 `CLAUDE_CONFIG_DIR=<로그인 폴더>` 만 더해 `CREATE_NEW_CONSOLE` 로 직접 띄운다. 홈 폴더에서 시작. 끝난 뒤 안내는 보드의 안내 문구가 맡는다.
 - `--action pause|resume|stop|reopen|focus <id>` 로 실행되면 떠 있는 보드에 넘긴다(단일 실행 플러그인의 인자 전달) — stop 은 확인 없이.
 
-### 5.8 업데이트 — `Updater` (`ClaudeBoard.swift:4097-4224`)
+### 5.8 업데이트 — `Updater` (`ClaudeBoard.swift Updater`)
 
 - 현재 버전 = 빌드 때 `windows/VERSION`. 개발 빌드(`VERSION` 을 못 읽었거나 환경변수로 dev 표시)는 확인하지 않고 제목 옆에 `dev`.
 - 켤 때와 1시간마다 `GET https://api.github.com/repos/suhojang/claude-board/releases?per_page=30`(헤더 `User-Agent: ClaudeBoard-Windows`, `Accept: application/vnd.github+json`) → draft·prerelease 가 아니고 `tag_name` 이 `windows-v` 로 시작하는 첫 릴리스 → 버전 = 태그에서 `windows-v` 를 뺀 것(숫자 비교). 더 새로우면 알림 줄. **`/releases/latest` 를 쓰지 않는다.**
@@ -364,7 +364,7 @@ macOS 키체인 대신:
 - Windows Terminal(`WindowsTerminal.exe`)이 새로 실행되면 보드를 보이게(포커스는 그대로) — 3초 주기 프로세스 확인. (macOS 의 Ghostty 연동 대응)
 - 설치된 Claude Code 버전: `%USERPROFILE%\.local\share\claude\versions\` 의 가장 높은 이름, 없으면 표시 안 함(1분 캐시).
 
-### 5.11 터미널 독 (`EdgeDock`, `ClaudeBoard.swift:3391-3627`)
+### 5.11 터미널 독 (`EdgeDock`, `ClaudeBoard.swift EdgeDock`)
 
 창 오른쪽 아래 끝 탭에 마우스를 대면 나오는 실행 단추 묶음. Windows 목록: Windows Terminal(`wt.exe`), PowerShell 7(`pwsh.exe`), Windows PowerShell(`powershell.exe`), 명령 프롬프트(`cmd.exe`), Git Bash(`git-bash.exe` — `%ProgramFiles%\Git`). 설치 여부(PATH·알려진 위치), 실행 중 점, 힌트 문구("<이름> 창으로 이동"/"<이름> 실행"/"<이름> · 설치되지 않음"). 아이콘은 직접 그린 SVG.
 
@@ -517,26 +517,26 @@ interface Account { id: string; email: string; org: string; plan: string; expire
 
 props `{ groups: Group[]; limits: Limit[]; now: number; compact?: boolean; mascot: MascotKind; onPickMascot: (kind) => void }`. 말풍선 문구·시계·그림·오른쪽 클릭 캐릭터 메뉴를 모두 안에서 처리한다. 이름·유행어 목록은 `app/src/lib/mascot/mascots.ts` 의 `MASCOTS`.
 
-## 7. 보드 화면 (프론트엔드) — `ClaudeBoard.swift:1247-2483, 2584-2930, 3772-4095, 4246-4460` 와 스크린샷 `docs/images/*.png`
+## 7. 보드 화면 (프론트엔드) — `ClaudeBoard.swift` 의 「화면」·「창 크기 단계」 구역(`BoardView`·`GroupCard`·`SessionRow`·`MiniBoard`)과 스크린샷 `docs/images/*.png`
 
-- 어두운 테마 고정. 바탕(`Backdrop`, `ClaudeBoard.swift:2608-2622`), 상태 색(`Palette`, 923-939): working `rgb(115,168,255)`, waiting `rgb(255,168,92)`, idle `rgb(179,191,219)`, paused `rgb(242,204,89)`, ended 회색, accent `rgb(217,120,87)`.
+- 어두운 테마 고정. 바탕(`Backdrop`, `ClaudeBoard.swift Backdrop`), 상태 색(`ClaudeBoard.swift Palette`): working `rgb(115,168,255)`, waiting `rgb(255,168,92)`, idle `rgb(179,191,219)`, paused `rgb(242,204,89)`, ended 회색, accent `rgb(217,120,87)`.
 - 상태 아이콘 애니메이션: 작업 중 도는 그라데이션 호(0.9초), 승인 대기 퍼지는 파문(1.1초), 대기 통통 튀며 나타나는 체크, 일시중지 ⏸, 종료 빨간 ⊖. 작업 중 줄에 2.4초 주기로 지나가는 빛(Shimmer). 승인 대기 카드 테두리가 2.4초 주기로 숨 쉼. 창이 가려지거나 숨으면 애니메이션 멈춤.
-- 단계(tier, `ClaudeBoard.swift:4246-4283`): 폭은 창 폭이 아니라 보드 칸의 폭(ResizeObserver)이다(§7.2). 폭 360 미만 = mini. 아니면 목록 칸이 120 이상 남으면 full, 56 이상이면 medium, 그 밖 mini. medium 은 사용 한도 한 줄, 카드는 접힌 한 줄(눌러서 그 카드만 펼침, 저장된 접기 상태는 그대로). mini 는 캐릭터 줄 + 경로마다 한 줄 + 아래 줄(한도·투명도), 제목 막대에 상태별 개수와 ⤢.
+- 단계(tier, `ClaudeBoard.swift BoardTier`): 폭은 창 폭이 아니라 보드 칸의 폭(ResizeObserver)이다(§7.2). 폭 360 미만 = mini. 아니면 목록 칸이 120 이상 남으면 full, 56 이상이면 medium, 그 밖 mini. medium 은 사용 한도 한 줄, 카드는 접힌 한 줄(눌러서 그 카드만 펼침, 저장된 접기 상태는 그대로). mini 는 캐릭터 줄 + 경로마다 한 줄 + 아래 줄(한도·투명도), 제목 막대에 상태별 개수와 ⤢.
 - 최대축소(↘↖): 보드 쪽 위 모서리(오른쪽이 기본) 기준 폭 300, 높이 = 144 + (min(max(그룹 수,2),6) − 2) × 26. ⤢ 는 기억한 위치(작업 영역과 겹치고 폭 ≥ 360)로, 없으면 처음 크기로 보드 쪽에 붙이기. 터미널이 펼쳐진 채 미니로 들어갔으면 ⤢ 가 다시 펼친다(§5.10).
 - 윗줄: 앱 아이콘 + "Claude Board" + 버전 캡슐, 아래 "활성 세션 n개 · Claude Code <v>", 오른쪽 캐릭터(§7.1). 둘째 줄: 상태 칩(승인 대기·작업 중·대기, 누르면 그 상태만 보기/다시 누르면 모두), 전체 알림 단추(꺼지면 붉은 "알림 꺼짐"), 업데이트 확인 ⟳, 모두 접기/펼치기(full 에서만), 위에 고정.
-- 사용 한도 카드(1479-1628): 계정 칩(메뉴: 계정 목록·체크·"다시 로그인 필요"·계정 추가…/추가 취소·저장한 계정 지우기 ▸·한도 자동 전환 체크), 간략/상세 단추, 한도 막대(색: <50 초록, <80 주황, 그 밖 빨강), 남은 시간 문구(`resetText`), 안내 문구.
-- 경로 카드(2221-2395): 접기 화살표, 폴더(접혀 있으면 대표 세션 상태 아이콘), 이름·경로(접히면 "<상태> · <하는 일>" +n), 별(상단 고정)·X(목록에서 지우기), 상태별 개수, 오른쪽 클릭 메뉴. 안: 터미널/백그라운드 구역 머리글(접기), 세션 줄, "종료된 세션 n개"(접기, 마우스 올리면 휴지통 "모두 지우기").
-- 세션 줄(1743-1913): 서브에이전트 접기 화살표, 상태 아이콘, 제목, 알림 스위치(전체 알림 꺼짐이면 잠김), … 메뉴(ended: 세션 다시 열기/재개, paused: 재개·중단, 그 밖: 일시중지(idle 이거나 canDrive 아니면 비활성)·중단), ended 면 ⓧ 지우기. 둘째 줄: 경과 시간(ended "HH:mm 종료", idle "<경과> 전"), 하위 작업 n(running/count), 셸 n개, 세션 이름 라벨(태그 아이콘 + 이름, 아래), 모델 라벨(계열 색 Opus `rgb(255,153,115)` Sonnet `rgb(122,179,255)` Haiku `rgb(140,224,204)` Fable `rgb(224,179,255)` + effort 막대 5칸), 컨텍스트 라벨(<30 초록, <70 노랑, 그 밖 빨강). 폭이 좁으면 3단계로 줄임(0·1단계에만 이름 라벨을 보이고 3번째 단계부터 뺀다).
+- 사용 한도 카드(`UsagePanel`): 계정 칩(메뉴: 계정 목록·체크·"다시 로그인 필요"·계정 추가…/추가 취소·저장한 계정 지우기 ▸·한도 자동 전환 체크), 간략/상세 단추, 한도 막대(색: <50 초록, <80 주황, 그 밖 빨강), 남은 시간 문구(`resetText`), 안내 문구.
+- 경로 카드(`GroupCard`): 접기 화살표, 폴더(접혀 있으면 대표 세션 상태 아이콘), 이름·경로(접히면 "<상태> · <하는 일>" +n), 별(상단 고정)·X(목록에서 지우기), 상태별 개수, 오른쪽 클릭 메뉴. 안: 터미널/백그라운드 구역 머리글(접기), 세션 줄, "종료된 세션 n개"(접기, 마우스 올리면 휴지통 "모두 지우기").
+- 세션 줄(`SessionRow`): 서브에이전트 접기 화살표, 상태 아이콘, 제목, 알림 스위치(전체 알림 꺼짐이면 잠김), … 메뉴(ended: 세션 다시 열기/재개, paused: 재개·중단, 그 밖: 일시중지(idle 이거나 canDrive 아니면 비활성)·중단), ended 면 ⓧ 지우기. 둘째 줄: 경과 시간(ended "HH:mm 종료", idle "<경과> 전"), 하위 작업 n(running/count), 셸 n개, 세션 이름 라벨(태그 아이콘 + 이름, 아래), 모델 라벨(계열 색 Opus `rgb(255,153,115)` Sonnet `rgb(122,179,255)` Haiku `rgb(140,224,204)` Fable `rgb(224,179,255)` + effort 막대 5칸), 컨텍스트 라벨(<30 초록, <70 노랑, 그 밖 빨강). 폭이 좁으면 3단계로 줄임(0·1단계에만 이름 라벨을 보이고 3번째 단계부터 뺀다).
   세션 이름 라벨: `name` 이 있을 때만. 24 코드포인트를 넘으면 앞 11자 + `…` + 뒤 11자로 줄이고(코드포인트 기준), 마우스를 올리면 힌트 "세션 이름 <name>" 에 전체 이름이 나온다. 승인 대기면 ✋ 메시지(2줄). 한 번 클릭 = activate, 더블 클릭 = ended 면 resume, 아니면 focus.
-- 서브에이전트 줄(2144-2201): 트리 연결선, 작은 상태 아이콘, 설명(없으면 종류), 라벨 "서브에이전트"·종류·경과("<시간> 걸려 완료"/"승인 대기")·모델·🔧도구.
+- 서브에이전트 줄(`SubagentRow`): 트리 연결선, 작은 상태 아이콘, 설명(없으면 종류), 라벨 "서브에이전트"·종류·경과("<시간> 걸려 완료"/"승인 대기")·모델·🔧도구.
 - 아래로 가려진 카드가 있으면 "아래에 경로 n개 더[ · 승인 대기 있음]"(누르면 그 카드로 스크롤). 세션이 없으면 "아직 기록된 세션이 없습니다 / Claude Code 세션에서 요청을 보내면 여기에 나타납니다".
 - 힌트(설명 말풍선): 0.35초 뒤, 방금 떠 있었으면 바로. 누르거나 스크롤하면 사라짐. 모든 단추의 설명 문구는 macOS `.hint(…)` 문구를 그대로 쓴다.
-- 업데이트 알림 줄(4186-4224), 오른쪽 아래 투명도 슬라이더, 오른쪽 아래 끝 터미널 독(§5.11).
+- 업데이트 알림 줄(`UpdateBanner`), 오른쪽 아래 투명도 슬라이더, 오른쪽 아래 끝 터미널 독(§5.11).
 
-### 7.1 캐릭터 (`ClaudeBoard.swift:2643-3388`)
+### 7.1 캐릭터 (`ClaudeBoard.swift Foreman`·`BrainrotFigure`)
 
-말풍선 문구(`foremanQuips`, 2674-2726) 그대로. 3.2초마다 다음 말, 3.7초마다 눈 깜빡임, 말이 바뀌면 0.45초 폴짝. 기분 urgent/busy/idle/sleepy 별 색·동작.
-8종(트랄랄레로 트랄랄라·봄바르디로 크로코딜로·퉁 퉁 퉁 사후르·리릴리 라릴라·브르르 브르르 파타핌·보네카 암발라부·카푸치노 아사시노·현장 감독)과 유행어(2949-2961), 그림·동작은 `BrainrotFigure`(3019-3388)와 감독 `figure`(2806-2927)를 SVG 로 옮긴다(46×44, mini 0.75배). 누르면 다음 말, 오른쪽 클릭 = 캐릭터 고르기.
+말풍선 문구(`foremanQuips`) 그대로. 3.2초마다 다음 말, 3.7초마다 눈 깜빡임, 말이 바뀌면 0.45초 폴짝. 기분 urgent/busy/idle/sleepy 별 색·동작.
+8종(트랄랄레로 트랄랄라·봄바르디로 크로코딜로·퉁 퉁 퉁 사후르·리릴리 라릴라·브르르 브르르 파타핌·보네카 암발라부·카푸치노 아사시노·현장 감독)과 유행어(`Mascot.catchphrase`), 그림·동작은 `BrainrotFigure` 와 감독 `Foreman.figure`를 SVG 로 옮긴다(46×44, mini 0.75배). 누르면 다음 말, 오른쪽 클릭 = 캐릭터 고르기.
 
 ### 7.2 내장 터미널이 들어간 레이아웃
 
@@ -641,18 +641,18 @@ Windows CI 러너에서 실기로 확인: `#[cfg(windows)]` 시험(콘솔 제목
 | I1 | hook 등록·제거(exec form, 표시, 백업) | hooks.py | crates/core `hooks` | 단위 테스트 |
 | I2 | setup·uninstall | user-setup.sh, Uninstall.command | crates/hook | smoke 설치 확인 |
 | I3 | install.ps1·uninstall.ps1·해시 확인 | install.sh | windows/packaging | smoke 설치 확인(Windows PowerShell 5.1) |
-| B1 | 세션 읽기·정렬·보정 | ClaudeBoard.swift:941-1207 | src-tauri `store` | 단위 테스트(가짜 세션 폴더) |
-| B2 | 모델·effort·컨텍스트 | 97-246 | src-tauri `readers` | 단위 테스트 |
-| B3 | 사용 한도 | 262-354 | src-tauri `usage` | 응답 파싱 테스트 |
-| B4 | 계정 전환·추가·지우기 | 369-789 | src-tauri `accounts` | 파일 조작 테스트(DPAPI 는 Windows) |
-| B5 | 한도 자동 전환 | 791-918 | src-tauri `autoswitch` | 선택 규칙 테스트 |
-| B6 | 터미널 제어 | 4525-4910 | src-tauri `terminal` | Windows 실기 시험(콘솔 입력·창 찾기·새 콘솔), 탭 고르기 미확인 |
-| B7 | 업데이트(Latest 금지) | 4097-4184 | src-tauri `updater` | 릴리스 목록 파싱 테스트 |
+| B1 | 세션 읽기·정렬·보정 | ClaudeBoard.swift Store.reload | src-tauri `store` | 단위 테스트(가짜 세션 폴더) |
+| B2 | 모델·effort·컨텍스트 | ClaudeBoard.swift ModelReader·InterruptReader·ClaudeNames·ContextReader | src-tauri `readers` | 단위 테스트 |
+| B3 | 사용 한도 | ClaudeBoard.swift UsageStore | src-tauri `usage` | 응답 파싱 테스트 |
+| B4 | 계정 전환·추가·지우기 | ClaudeBoard.swift AccountStore | src-tauri `accounts` | 파일 조작 테스트(DPAPI 는 Windows) |
+| B5 | 한도 자동 전환 | ClaudeBoard.swift AutoSwitcher | src-tauri `autoswitch` | 선택 규칙 테스트 |
+| B6 | 터미널 제어 | ClaudeBoard.swift focusGhostty·driveSession·TerminalAppStore | src-tauri `terminal` | Windows 실기 시험(콘솔 입력·창 찾기·새 콘솔), 탭 고르기 미확인 |
+| B7 | 업데이트(Latest 금지) | ClaudeBoard.swift Updater | src-tauri `updater` | 릴리스 목록 파싱 테스트 |
 | B8 | 설정 저장 | UserDefaults 키 | src-tauri `settings` | 단위 테스트 |
-| B9 | 창·트레이·단축키·단일 실행·자동 실행 | 4226-5204 | src-tauri `main` | macOS 실행(트레이), smoke 화면 확인(창·단일 실행) |
-| U1 | 보드 화면 전체(단계 3개) | 1247-4460 | app/src | macOS 실행 스크린샷 |
-| U2 | 캐릭터 8종·말풍선 | 2643-3388 | app/src/lib/mascot | 스크린샷 |
-| U3 | 세션 이름 라벨 | ClaudeBoard.swift:ClaudeNames | src-tauri `readers`·`store`, app/src `SessionRow.svelte` | 단위 테스트(이름 읽기·ended 숨김), macOS 실행 스크린샷, Windows 보드 화면(합성 세션 파일: 이름 라벨, 24자 넘는 이름 줄임) |
+| B9 | 창·트레이·단축키·단일 실행·자동 실행 | ClaudeBoard.swift AppDelegate·SizeGuard | src-tauri `main` | macOS 실행(트레이), smoke 화면 확인(창·단일 실행) |
+| U1 | 보드 화면 전체(단계 3개) | ClaudeBoard.swift BoardView·MiniBoard | app/src | macOS 실행 스크린샷 |
+| U2 | 캐릭터 8종·말풍선 | ClaudeBoard.swift Foreman·BrainrotFigure | app/src/lib/mascot | 스크린샷 |
+| U3 | 세션 이름 라벨 | ClaudeBoard.swift ClaudeNames | src-tauri `readers`·`store`, app/src `SessionRow.svelte` | 단위 테스트(이름 읽기·ended 숨김), macOS 실행 스크린샷, Windows 보드 화면(합성 세션 파일: 이름 라벨, 24자 넘는 이름 줄임) |
 | T1 | TUI | board-tui.py | crates/hook `tui` | macOS 실행 |
 | L1 | Esc 중단·Claude Code status 로 상태 덮기(알림 요약·TUI·보드) | notify.py·board-tui.py:interrupted_at·claude_status, ClaudeBoard.swift:InterruptReader·ClaudeNames, Store.reload | crates/core `claude_live`, `notify`, hook `tui`, src-tauri `store`·`readers` | 단위 테스트(가짜 대화 기록·가짜 claude 폴더), 합성 세션 파일로 보드 화면 확인(실제 세션 미확인) |
 | R1 | CI·자동 릴리스(Latest 금지) | release.sh | .github/workflows/windows.yml | 브랜치 push 후 CI |
@@ -660,7 +660,7 @@ Windows CI 러너에서 실기로 확인: `#[cfg(windows)]` 시험(콘솔 제목
 | TM1 | 터미널 코어: ConPTY 래퍼·환경 블록·링 버퍼·스레드·채널 프레임(§5.12.1~§5.12.4) | `TerminalHub`·`BoardSurface` (설계.md 7·11장) | src-tauri `pty/`·`ring.rs`·`terms.rs` | ring 단위 시험, `#[cfg(windows)]` 시험 8개(§11.2) |
 | TM2 | 창 규칙: 펼침·접힘·보드 쪽·미니·Ctrl+Alt+T·트레이(§5.10) | `BoardRootView`, 보드 위치 메뉴 (설계.md) | src-tauri `window`·`settings`·`board`·`tray`·`model` | 프레임 단위 시험(펼침/접힘 × 양쪽 × 모니터 둘 × 배율 1.0·1.5, 미니 모서리), 설정 왕복 시험 |
 | TM3 | 터미널 화면: xterm.js·IME·fit·흐름 제어·칸 배치, 경로 줄·탭 줄·빈 상태(§5.12.5, §7.2) | `BoardTerminalView`·`PaneDivider` | app/src/lib/terminal, app/src/routes | `npm run check`·`npm run build`, 번들 청크 검사, 브라우저 목 확인, 실기 조작(§11.2) |
-| TM5 | 탭·새 세션: 탭이 셸을 쥐고 claude 를 쳐 넣음, `--session-id`·`--name`, 이름 바꾸기, 닫기 확인, 키(§5.12.6, §7.2) | `freshSessionCommand`·`named`·`TerminalTab`·새 세션 창 (ClaudeBoard.swift 5088-5096, 5481-5500, 6270-6277, 7039-7124) | app/src/lib/terminal/hub.svelte.ts·launch.ts·NewSessionDialog 외 | `npm run check`·`npm run build`, 실기 조작(§11.2) |
+| TM5 | 탭·새 세션: 탭이 셸을 쥐고 claude 를 쳐 넣음, `--session-id`·`--name`, 이름 바꾸기, 닫기 확인, 키(§5.12.6, §7.2) | `freshSessionCommand`·`named`·`TerminalTab`·새 세션 창 (ClaudeBoard.swift BoardSurface.type·TerminalHub.named·freshSessionCommand·NewSessionSheet) | app/src/lib/terminal/hub.svelte.ts·launch.ts·NewSessionDialog 외 | `npm run check`·`npm run build`, 실기 조작(§11.2) |
 | TM4 | 문서 | | SPEC §0·§5.9·§5.10·§5.12·§6.2·§7.2, CHANGELOG 초안, README, 설치 가이드 | 검토 |
 
 ### 11.1 검증 결과 (2026-10-16, 첫 판 2.12)

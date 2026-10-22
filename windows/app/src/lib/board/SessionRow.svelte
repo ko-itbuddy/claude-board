@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 세션 한 줄(ClaudeBoard.swift:1743-1913): 서브에이전트 접기 화살표·상태 아이콘·제목·알림 스위치·… 메뉴(종료면 ⓧ),
+  // 세션 한 줄(ClaudeBoard.swift SessionRow): 서브에이전트 접기 화살표·상태 아이콘·제목·알림 스위치·… 메뉴(종료면 ⓧ),
   // 둘째 줄에 경과 시간·하위 작업·셸·세션 이름·모델·컨텍스트(좁으면 3단계로 줄이고 세션 이름은 앞 두 단계에만 보임), 승인 대기면 ✋ 요청 내용
   import { cubicOut } from "svelte/easing";
   import { fly, fade } from "svelte/transition";

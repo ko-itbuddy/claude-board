@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 경로 카드(ClaudeBoard.swift:2203-2395): 머리(접기 화살표·폴더 또는 대표 상태·이름·경로·별·X·상태별 개수, 오른쪽 클릭 메뉴),
+  // 경로 카드(ClaudeBoard.swift GroupCard): 머리(접기 화살표·폴더 또는 대표 상태·이름·경로·별·X·상태별 개수, 오른쪽 클릭 메뉴),
   // 안에 터미널/백그라운드 구역과 세션 줄, "종료된 세션 n개"(접기, 마우스를 올리면 휴지통)
   import { cubicOut } from "svelte/easing";
   import { fade, fly, slide } from "svelte/transition";

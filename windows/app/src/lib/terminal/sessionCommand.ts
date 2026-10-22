@@ -1,5 +1,5 @@
 // 셸에 치는 claude 명령줄을 만드는 순수 함수 — launch.ts 에서 떼어 냈다. sessionName.ts 말고는 import 하지 않아 node:test 로 바로 시험한다.
-// macOS 보드의 freshSessionCommand(ClaudeBoard.swift:6270-6277)와 named(5481-5500)에 맞춘 것이다.
+// macOS 보드의 ClaudeBoard.swift freshSessionCommand 와 ClaudeBoard.swift TerminalHub.named에 맞춘 것이다.
 import { isSessionNameArg } from "./sessionName.ts";
 
 /** 새 세션 기본 명령 — 승인 대기가 거의 없게 권한 확인을 건너뛴다(ClaudeBoard.swift defaultSessionCommand) */

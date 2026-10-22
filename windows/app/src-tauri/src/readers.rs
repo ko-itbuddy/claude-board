@@ -1,4 +1,4 @@
-//! 대화 기록에서 모델·effort(SPEC §5.2)와 컨텍스트 사용량(§5.3), Esc 중단 표시(§3.9)와 Claude Code 세션 파일(§2.3)을 읽는다 — `ClaudeBoard.swift:97-246`.
+//! 대화 기록에서 모델·effort(SPEC §5.2)와 컨텍스트 사용량(§5.3), Esc 중단 표시(§3.9)와 Claude Code 세션 파일(§2.3)을 읽는다 — `ClaudeBoard.swift ModelReader`·`InterruptReader`·`ClaudeNames`·`ContextReader`.
 
 use std::collections::HashMap;
 use std::fs;
@@ -70,7 +70,7 @@ fn stamp(path: &Path) -> Option<(SystemTime, u64)> {
 }
 
 /// Esc 로 끊은 응답 — 대화 기록 끝의 마지막 대화 줄이 중단 표시면 그 시각(유닉스 초)을 돌려준다
-/// (`InterruptReader`, `ClaudeBoard.swift:156`). 파일 수정 시각과 크기가 같으면 이전 결과를 쓴다.
+/// (`InterruptReader`, `ClaudeBoard.swift InterruptReader`). 파일 수정 시각과 크기가 같으면 이전 결과를 쓴다.
 #[derive(Default)]
 pub struct InterruptReader {
     parsed: HashMap<PathBuf, ((SystemTime, u64), Option<f64>)>,
@@ -103,7 +103,7 @@ impl InterruptReader {
 }
 
 /// Claude Code 가 `~/.claude/sessions/<pid>.json` 에 쓰는 세션 이름·status — pid 별로 파일 수정 시각과 크기가 같으면 다시 읽지 않는다
-/// (`ClaudeNames`, `ClaudeBoard.swift:193`). 파일이 없거나 객체가 아니면 None.
+/// (`ClaudeNames`, `ClaudeBoard.swift ClaudeNames`). 파일이 없거나 객체가 아니면 None.
 pub struct ClaudeNames {
     dir: PathBuf,
     cache: HashMap<u32, ((SystemTime, u64), Option<ClaudeSession>)>,

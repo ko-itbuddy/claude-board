@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 보드 화면(SPEC §7, ClaudeBoard.swift:3772-4095·4246-4460) — 창 크기에 따라 전체·중간·미니 세 단계로 그린다.
+  // 보드 화면(SPEC §7, ClaudeBoard.swift BoardView·BoardTier·MiniBoard) — 창 크기에 따라 전체·중간·미니 세 단계로 그린다.
   // 창은 [터미널 칸 │ 경계 │ 보드 칸]으로 나뉜다(보드가 왼쪽이면 뒤집는다). 터미널을 접으면 보드 칸이 창 전체다
   import { tick } from "svelte";
   import { flip } from "svelte/animate";
@@ -307,7 +307,7 @@
 <MenuLayer />
 
 <style>
-  /* 창 바탕(Backdrop, ClaudeBoard.swift:2608-2622): 짙은 남색 그라데이션 위에 왼쪽 위에서 강조색 빛, 오른쪽 아래에서 푸른 빛.
+  /* 창 바탕(ClaudeBoard.swift Backdrop): 짙은 남색 그라데이션 위에 왼쪽 위에서 강조색 빛, 오른쪽 아래에서 푸른 빛.
      Tauri 창이 투명·테두리 없음이라 둥근 모서리와 바탕을 여기서 직접 그린다(뒤의 Mica 가 살짝 비치게 조금 투명) */
   .root {
     position: fixed;

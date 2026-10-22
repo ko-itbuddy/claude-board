@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 미니 화면(ClaudeBoard.swift:4372-4460) — 캐릭터 줄, 경로마다 한 줄(상태 · 이름 · 지금 하는 일), 아래 줄에 사용 한도와 투명도.
+  // 미니 화면(ClaudeBoard.swift MiniBoard) — 캐릭터 줄, 경로마다 한 줄(상태 · 이름 · 지금 하는 일), 아래 줄에 사용 한도와 투명도.
   // 한 줄을 누르면 대표 세션의 터미널 앱을, 두 번 누르면 그 세션의 터미널 창을 앞으로
   import { flip } from "svelte/animate";
   import type { Group, Snapshot } from "$lib/types";

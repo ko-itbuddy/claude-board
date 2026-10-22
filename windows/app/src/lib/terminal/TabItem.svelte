@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 탭 하나(ClaudeBoard.swift:6941-6989 TerminalTabButton) — 높이 40. 점(상태) · 이름 · 하는 일 · 닫기.
+  // 탭 하나(ClaudeBoard.swift TerminalTabButton) — 높이 40. 점(상태) · 이름 · 하는 일 · 닫기.
   // 수정키(Ctrl+Alt)를 누르는 동안은 × 자리에 탭 번호, 고른 탭의 하는 일 자리에 이름 바꾸기 키를 보인다
   import Icon from "$lib/board/Icon.svelte";
   import { hint } from "$lib/board/hint.svelte";

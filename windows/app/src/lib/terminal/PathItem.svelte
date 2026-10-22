@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 경로 줄 항목(ClaudeBoard.swift:6896-6929 WorkspaceButton) — 상태 점 · 폴더 이름 · 탭 수. 지금 경로는 고른 탭처럼 보인다
+  // 경로 줄 항목(ClaudeBoard.swift WorkspaceButton) — 상태 점 · 폴더 이름 · 탭 수. 지금 경로는 고른 탭처럼 보인다
   import { hint } from "$lib/board/hint.svelte";
   import { stateRgb } from "$lib/board/format";
   import { showWorkspace } from "./hub.svelte";

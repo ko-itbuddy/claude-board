@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 탭이 하나도 없을 때(ClaudeBoard.swift:7347-7366 TerminalEmptyView)
+  // 탭이 하나도 없을 때(ClaudeBoard.swift TerminalEmptyView)
   import Icon from "$lib/board/Icon.svelte";
   import { newSessionSheet } from "./hub.svelte";
 </script>

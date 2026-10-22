@@ -1,4 +1,4 @@
-//! 세션 읽기 — `Store.reload` (`ClaudeBoard.swift:941-1207`, SPEC §5.1).
+//! 세션 읽기 — `Store.reload` (`ClaudeBoard.swift Store.reload`, SPEC §5.1).
 //! 1초마다 `sessions/*.json` 을 읽어 경로별 그룹으로 묶는다. 프로세스 확인(셸 수·콘솔에 붙을 수 있는지)은
 //! 느리므로 백그라운드에서 3초마다 센 값(`Probe`)을 받아 쓴다.
 

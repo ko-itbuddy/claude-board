@@ -1,5 +1,5 @@
 // 터미널 저장소(TerminalHub) — 화면이 보는 터미널 목록·탭·경로·고른 탭과 칸별 컨트롤러.
-// macOS 보드의 TerminalHub(ClaudeBoard.swift:5388-5455, 5847, 6008-6115)와 같은 규칙이다: 탭은 작업 경로(workspace)로 묶여 경로 줄에 서고,
+// macOS 보드의 TerminalHub(ClaudeBoard.swift TerminalHub)와 같은 규칙이다: 탭은 작업 경로(workspace)로 묶여 경로 줄에 서고,
 // 탭 줄은 지금 경로의 탭만 보인다. 셸이 끝나면 그 탭이 닫히고 선택은 같은 경로의 이웃 탭 → 이웃 경로 → 빈 상태로 간다.
 // 터미널 출력은 보드의 1초 상태 묶음에 싣지 않고, 여기서 term_list 와 채널로 채운다(이벤트 기반).
 import { tick } from "svelte";
@@ -300,7 +300,7 @@ export function newSessionSheet() {
   hub.sheet = true;
 }
 
-/** 셸이 첫 출력을 낸 뒤 300ms 조용해지면(5초 상한) 명령을 쳐 넣고 100ms 뒤 Enter(\r) — 셸의 줄 편집이 시작된 뒤에 넣는다(ClaudeBoard.swift:5088-5096) */
+/** 셸이 첫 출력을 낸 뒤 300ms 조용해지면(5초 상한) 명령을 쳐 넣고 100ms 뒤 Enter(\r) — 셸의 줄 편집이 시작된 뒤에 넣는다(ClaudeBoard.swift BoardSurface.type) */
 const QUIET_MS = 300;
 const QUIET_CAP_MS = 5000;
 const ENTER_DELAY_MS = 100;

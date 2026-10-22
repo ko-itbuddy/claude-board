@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 새 세션 창(ClaudeBoard.swift:7039-7124 NewSessionSheet) — 작업 폴더(보드에 있는 경로 + 다른 폴더)와 실행할 명령을 고르고 새 탭에서 시작한다.
+  // 새 세션 창(ClaudeBoard.swift NewSessionSheet) — 작업 폴더(보드에 있는 경로 + 다른 폴더)와 실행할 명령을 고르고 새 탭에서 시작한다.
   // 창 맨 위 가운데에서 내려오는 모달이다(mac 의 시트). Esc 는 취소, Enter 는 시작
   import { inTauri } from "$lib/backend";
   import { board } from "$lib/board/store.svelte";

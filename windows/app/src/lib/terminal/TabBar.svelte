@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 탭 줄(ClaudeBoard.swift:6773-6855 TerminalTabBar) — 높이 40, 지금 경로의 탭만. 탭은 120~250 폭으로 나눠 갖고, 120 씩도 안 들어가면 가로로 민다.
+  // 탭 줄(ClaudeBoard.swift TerminalTabBar) — 높이 40, 지금 경로의 탭만. 탭은 120~250 폭으로 나눠 갖고, 120 씩도 안 들어가면 가로로 민다.
   // + 단추는 밀리는 칸 밖이라 늘 보이고 그 오른쪽은 비어 있다
   import { tick } from "svelte";
   import Icon from "$lib/board/Icon.svelte";

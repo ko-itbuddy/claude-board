@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 상태 표시(ClaudeBoard.swift:1276-1340): 작업 중 도는 그라데이션 호(0.9초), 승인 대기 퍼지는 파문(1.1초),
+  // 상태 표시(ClaudeBoard.swift StateIcon): 작업 중 도는 그라데이션 호(0.9초), 승인 대기 퍼지는 파문(1.1초),
   // 대기 통통 튀며 나타나는 체크, 일시중지 ⏸, 종료 빨간 ⊖. 상태가 바뀌면 새로 그려 등장 애니메이션을 다시 낸다
   import Icon from "./Icon.svelte";
   import { stateRgb } from "./format";

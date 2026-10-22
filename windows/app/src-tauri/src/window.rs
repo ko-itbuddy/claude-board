@@ -1,4 +1,4 @@
-//! 보드 창 — 터미널 펼침·접힘 모양, 보드 쪽에 붙이기, 최대축소, 항상 위, 보이기 (SPEC §5.10, §7, `ClaudeBoard.swift:4246-4475, 4934-5014`).
+//! 보드 창 — 터미널 펼침·접힘 모양, 보드 쪽에 붙이기, 최대축소, 항상 위, 보이기 (SPEC §5.10, §7, `ClaudeBoard.swift BoardTier`·`toggleTerminal`·`toggleWindowSize`·`snapToSide`).
 //! 위치·크기는 모두 물리 픽셀로 다룬다(모니터마다 배율이 다를 수 있어 그 모니터의 배율을 곱한다).
 
 use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};

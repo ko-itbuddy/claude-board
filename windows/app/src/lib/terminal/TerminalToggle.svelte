@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 제목 막대의 "터미널" 단추(ClaudeBoard.swift:7369-7398 TerminalToggleButton) — 캡슐. 펼침은 작업 중 색, 접힘은 흰 반투명.
+  // 제목 막대의 "터미널" 단추(ClaudeBoard.swift TerminalToggleButton) — 캡슐. 펼침은 작업 중 색, 접힘은 흰 반투명.
   // 미니 단계에서는 부르는 쪽이 그리지 않는다
   import { setTerminalExpanded } from "$lib/backend";
   import { hint } from "$lib/board/hint.svelte";

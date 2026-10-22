@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 탭 이름 입력 칸(ClaudeBoard.swift:6994-7034) — 이름 자리를 대신한다. 열릴 때 전체 선택, Enter 저장, Esc 취소, 포커스를 잃으면 저장(창이 포커스를 잃은 것은 제외).
+  // 탭 이름 입력 칸(ClaudeBoard.swift TabNameField) — 이름 자리를 대신한다. 열릴 때 전체 선택, Enter 저장, Esc 취소, 포커스를 잃으면 저장(창이 포커스를 잃은 것은 제외).
   // 처음 값(탭 줄에 보이던 이름)을 고치지 않고 저장하면 허브가 아무 일도 하지 않는다
   import { untrack } from "svelte";
   import type { TerminalTab } from "$lib/types";

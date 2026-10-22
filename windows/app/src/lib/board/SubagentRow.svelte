@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 서브에이전트 한 줄(ClaudeBoard.swift:2144-2201) — 트리 연결선, 작은 상태 아이콘, 설명(없으면 종류),
+  // 서브에이전트 한 줄(ClaudeBoard.swift SubagentRow) — 트리 연결선, 작은 상태 아이콘, 설명(없으면 종류),
   // 아래 줄에 라벨 "서브에이전트"·종류·경과·모델·🔧도구. 좁으면 라벨을 아이콘만, 더 좁으면 종류·도구 이름을 뺀다
   import type { Sub } from "$lib/types";
   import Fit from "./Fit.svelte";

@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 지금 로그인 계정 — 누르면 저장해 둔 계정으로 전환하거나 계정을 추가하는 메뉴(ClaudeBoard.swift:1630-1741).
+  // 지금 로그인 계정 — 누르면 저장해 둔 계정으로 전환하거나 계정을 추가하는 메뉴(ClaudeBoard.swift AccountChip).
   // 작업 중인 세션이 있을 때의 전환 확인 대화상자는 백엔드가 띄운다
   import type { Snapshot } from "$lib/types";
   import { addAccount, cancelAddAccount, removeAccount, setAutoSwitch, switchAccount } from "$lib/backend";
