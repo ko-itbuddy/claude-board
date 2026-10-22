@@ -72,7 +72,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
 
 ### 실행 파일
 
-- `ClaudeBoard.swift` (약 6,700줄) — 보드 앱 전체. AppKit 창 위에 SwiftUI 화면을 얹었고 `// MARK:` 로 나뉜다.
+- `ClaudeBoard.swift` (약 10,400줄) — 보드 앱 전체. AppKit 창 위에 SwiftUI 화면을 얹었고 `// MARK:` 로 나뉜다.
   주요 부분: `Store`(세션 파일을 mtime 캐시로 1초마다 읽어 경로별 `Group` 으로 묶음), `UsageStore`(키체인의 OAuth 토큰으로 `api.anthropic.com/api/oauth/usage` 조회),
   `AccountStore`·`AutoSwitcher`(키체인 `Claude Code-credentials` 와 `~/.claude.json` 의 `oauthAccount` 를 `/usr/bin/security` 로 바꿔 끼워 계정 전환, 저장 계정은 키체인 서비스 `Claude Board-account`),
   `Updater`(최신 릴리스의 `VERSION` 비교 후 `install.sh` 실행), 다른 터미널 포커스·조작(Ghostty·iTerm2·Terminal 에 AppleScript, `focusGhostty`·`ghosttySend` 등).
@@ -86,6 +86,8 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
   `confirmShutdown`(업데이트·종료 전 확인, 끊기는 탭의 주 세션에 `.paused`), `driveSession`(보드 탭은 탭에 직접, Ghostty 는 AppleScript),
   `mdRenderDir`·`mdRenderCommand`(md-render 를 `~/.claude/notifier/plugins/` 로 옮기고 `--plugin-dir` 을 한 번만 붙임, 끈 세션은 `mdRenderOff`). 보드 쪽 문제는 `~/.claude/notifier/board.log`.
   설계·결정·실측은 `docs/내장 터미널/설계.md`(11장 단계별 메모) — 이 기능을 바꿀 때 먼저 본다.
+  `// MARK: - 설정 화면` — 앱 메뉴 > 설정…(⌘,)이 터미널 영역을 덮는 `SettingsView`(`SettingsHostingView` 에 얹음, 열고 닫기는 `SettingsScreen`). 항목은 `SettingsItem` 표 하나에서 그리고 검색도 이 표로 한다.
+  `// MARK: - 단축키` — `Shortcuts.actions` 가 바꿀 수 있는 보드 단축키 표(메뉴·안내 글자도 여기서 읽음). 로그인할 때 열기는 `LoginItem`(LaunchAgent plist 를 쓰고 지우고, 끄면 `login-launch-off` 표지).
 - `ClaudeNotifier.swift` — 알림 패널. 인자는 파일 머리 주석 참고. 여러 패널이 동시에 뜨면 슬롯 파일로 자리를 나눈다. `--session` 을 받으면 누를 때 보드에 `focus` 동작을 알린다.
 - `board-tui.py` — 터미널판 보드(`claude-board-tui`).
 - `AppIcon.swift` — 앱 아이콘 PNG(iconset 이름 규칙)를 인자로 준 폴더에 그린다. 결과 `AppIcon.icns` 는 저장소에 커밋되어 있다.
