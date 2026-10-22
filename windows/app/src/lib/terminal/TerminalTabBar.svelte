@@ -4,7 +4,7 @@
   import { tick } from "svelte";
   import Icon from "$lib/board/Icon.svelte";
   import { hint } from "$lib/board/hint.svelte";
-  import TabItem from "./TabItem.svelte";
+  import TerminalTabButton from "./TerminalTabButton.svelte";
   import { hub, newSessionSheet, tabsIn } from "./hub.svelte";
   import { badgeNumber } from "./tabLogic";
   import { scrollTargetFor, tabStripLeast, tabStripWidth } from "./paneLayout";
@@ -55,7 +55,7 @@
   <div class="scroller" bind:this={scroller} style:width="{shown}px" onwheel={wheel}>
     <div class="tabs" role="tablist" style:width="{Math.max(shown, least)}px">
       {#each tabs as tab, i (tab.id)}
-        <TabItem {tab} selected={tab.id === hub.selected} number={badgeNumber(hub.commandHeld, i)} />
+        <TerminalTabButton {tab} selected={tab.id === hub.selected} number={badgeNumber(hub.commandHeld, i)} />
       {/each}
     </div>
   </div>

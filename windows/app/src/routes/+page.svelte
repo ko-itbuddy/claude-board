@@ -17,8 +17,8 @@
   import TitleBar from "$lib/board/TitleBar.svelte";
   import UpdateBanner from "$lib/board/UpdateBanner.svelte";
   import UsagePanel from "$lib/board/UsagePanel.svelte";
-  import Divider from "$lib/terminal/Divider.svelte";
-  import TerminalArea from "$lib/terminal/TerminalArea.svelte";
+  import PaneDivider from "$lib/terminal/PaneDivider.svelte";
+  import TerminalAreaView from "$lib/terminal/TerminalAreaView.svelte";
   import { setDragging, startHub } from "$lib/terminal/hub.svelte";
   import { clampBoardWidth, MIN_BOARD, maxBoardWidth } from "$lib/terminal/paneLayout";
   import { stateName, stateRgb } from "$lib/board/format";
@@ -214,10 +214,10 @@
   {#if snap}
     <!-- 접어도 언마운트하지 않고 숨긴다 — 셸과 출력이 그대로 남는다 -->
     <div class="termPane" class:hidden={!expanded}>
-      <TerminalArea {expanded} {side} />
+      <TerminalAreaView {expanded} {side} />
     </div>
     {#if expanded}
-      <Divider root={rootEl} {side} min={MIN_BOARD} max={maxBoard} onresize={resizeBoard} oncommit={commitBoard} />
+      <PaneDivider root={rootEl} {side} min={MIN_BOARD} max={maxBoard} onresize={resizeBoard} oncommit={commitBoard} />
     {/if}
   {/if}
   <div class="board" style:width={expanded ? `${boardWidth}px` : undefined} bind:this={boardEl}>

@@ -4,12 +4,12 @@
   import { onTerminalFocus } from "$lib/backend";
   import { ui } from "$lib/board/store.svelte";
   import type { BoardSide } from "$lib/types";
-  import NewSessionDialog from "./NewSessionDialog.svelte";
+  import NewSessionSheet from "./NewSessionSheet.svelte";
   import PaneView from "./PaneView.svelte";
-  import PathRow from "./PathRow.svelte";
-  import TabBar from "./TabBar.svelte";
-  import TerminalEmpty from "./TerminalEmpty.svelte";
-  import TerminalToggle from "./TerminalToggle.svelte";
+  import TerminalWorkspaceBar from "./TerminalWorkspaceBar.svelte";
+  import TerminalTabBar from "./TerminalTabBar.svelte";
+  import TerminalEmptyView from "./TerminalEmptyView.svelte";
+  import TerminalToggleButton from "./TerminalToggleButton.svelte";
   import WinButtons from "./WinButtons.svelte";
   import { TERM_BG } from "./term";
   import { beginRename, commitComposition, focusActive, hub, newSessionSheet, selectNumber, stepTab, stepWorkspace } from "./hub.svelte";
@@ -100,7 +100,7 @@
   <!-- 제목 띠 — 터미널 단추는 앞쪽 가장자리 x=8, 미니 단계에서는 숨긴다. 보드가 왼쪽이면 최소화·닫기가 이 띠 오른쪽 끝에 있다 -->
   <div class="band" data-tauri-drag-region>
     {#if ui.tier !== "mini"}
-      <TerminalToggle expanded={true} {side} />
+      <TerminalToggleButton expanded={true} {side} />
     {/if}
     <div class="drag" data-tauri-drag-region></div>
     {#if side === "left"}
@@ -108,9 +108,9 @@
     {/if}
   </div>
   {#if hub.tabs.length}
-    <PathRow />
+    <TerminalWorkspaceBar />
   {/if}
-  <TabBar />
+  <TerminalTabBar />
   <div class="container">
     {#each hub.tabs as tab (tab.id)}
       <div class="surface" class:shown={tab.id === hub.selected}>
@@ -118,12 +118,12 @@
       </div>
     {/each}
     {#if hub.tabs.length === 0}
-      <TerminalEmpty />
+      <TerminalEmptyView />
     {/if}
   </div>
 
   {#if hub.sheet}
-    <NewSessionDialog />
+    <NewSessionSheet />
   {/if}
 
   {#if hub.confirm}

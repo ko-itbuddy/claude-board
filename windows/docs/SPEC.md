@@ -40,7 +40,7 @@ windows/
   app/                        Tauri 앱(프론트엔드 package.json·src/ 는 여기)
   app/src-tauri/              Tauri 백엔드(별도 Cargo.lock) — 보드 상태 읽기·사용 한도·계정·업데이트·터미널 제어·트레이·창
                               내장 터미널: src/pty/(ConPTY 래퍼·환경 블록)·src/ring.rs(출력 링 버퍼)·src/terms.rs(명령·`TermHub`)
-  app/src/lib/terminal/       내장 터미널 프론트엔드(hub·term·ime·TerminalPane·PaneView·Divider)
+  app/src/lib/terminal/       내장 터미널 프론트엔드(hub·term·ime·TerminalPane·PaneView·PaneDivider)
   packaging/install.ps1       설치·업데이트 스크립트(업데이트 단추도 이것을 실행)
   packaging/uninstall.ps1     제거 스크립트
 .github/workflows/windows.yml Windows CI·릴리스
@@ -544,11 +544,11 @@ props `{ groups: Group[]; limits: Limit[]; now: number; compact?: boolean; masco
 - 단계(§7 첫 항목)는 창 폭이 아니라 보드 칸의 폭으로 고른다. 칸 폭이 바뀌면 단계가 다시 정해진다.
 - 터미널이 펼쳐진 동안 문서 전체 불투명도(§5.10)는 쓰지 않는다.
 - 제목 막대에 터미널 펼치기/접기 단추가 있다. 터미널 독(`EdgeDock`)과 마우스 가장자리 판정(`pointer.atEdge`)은 창이 아니라 보드 칸의 가장자리를 기준으로 하고, 보드가 왼쪽이면 좌우를 뒤집는다.
-- 터미널 칸의 경계(Divider)는 끄는 동안 fit 을 멈추고(§5.12.5), 놓으면 `set_board_width` 로 보드 칸 폭을 저장한다.
+- 터미널 칸의 경계(PaneDivider)는 끄는 동안 fit 을 멈추고(§5.12.5), 놓으면 `set_board_width` 로 보드 칸 폭을 저장한다.
 - 브라우저 개발용 목(`mock.ts`)에는 입력을 그대로 되돌려 주는 에코 터미널이 있다.
 - 내장 터미널의 새 화면 문자열에는 긴 줄표(—)를 쓰지 않는다.
 
-터미널 영역(`TerminalArea.svelte`)은 위에서 아래로 제목 띠 · 경로 줄(탭이 있을 때만) · 탭 줄 · 화면 칸이다. 값은 CSS 픽셀이다.
+터미널 영역(`TerminalAreaView.svelte`)은 위에서 아래로 제목 띠 · 경로 줄(탭이 있을 때만) · 탭 줄 · 화면 칸이다. 값은 CSS 픽셀이다.
 
 | 부분 | 값 |
 |---|---|
@@ -660,7 +660,7 @@ Windows CI 러너에서 실기로 확인: `#[cfg(windows)]` 시험(콘솔 제목
 | TM1 | 터미널 코어: ConPTY 래퍼·환경 블록·링 버퍼·스레드·채널 프레임(§5.12.1~§5.12.4) | `TerminalHub`·`BoardSurface` (설계.md 7·11장) | src-tauri `pty/`·`ring.rs`·`terms.rs` | ring 단위 시험, `#[cfg(windows)]` 시험 8개(§11.2) |
 | TM2 | 창 규칙: 펼침·접힘·보드 쪽·미니·Ctrl+Alt+T·트레이(§5.10) | `BoardRootView`, 보드 위치 메뉴 (설계.md) | src-tauri `window`·`settings`·`board`·`tray`·`model` | 프레임 단위 시험(펼침/접힘 × 양쪽 × 모니터 둘 × 배율 1.0·1.5, 미니 모서리), 설정 왕복 시험 |
 | TM3 | 터미널 화면: xterm.js·IME·fit·흐름 제어·칸 배치, 경로 줄·탭 줄·빈 상태(§5.12.5, §7.2) | `BoardTerminalView`·`PaneDivider` | app/src/lib/terminal, app/src/routes | `npm run check`·`npm run build`, 번들 청크 검사, 브라우저 목 확인, 실기 조작(§11.2) |
-| TM5 | 탭·새 세션: 탭이 셸을 쥐고 claude 를 쳐 넣음, `--session-id`·`--name`, 이름 바꾸기, 닫기 확인, 키(§5.12.6, §7.2) | `freshSessionCommand`·`named`·`TerminalTab`·새 세션 창 (ClaudeBoard.swift BoardSurface.type·TerminalHub.named·freshSessionCommand·NewSessionSheet) | app/src/lib/terminal/hub.svelte.ts·launch.ts·NewSessionDialog 외 | `npm run check`·`npm run build`, 실기 조작(§11.2) |
+| TM5 | 탭·새 세션: 탭이 셸을 쥐고 claude 를 쳐 넣음, `--session-id`·`--name`, 이름 바꾸기, 닫기 확인, 키(§5.12.6, §7.2) | `freshSessionCommand`·`named`·`TerminalTab`·새 세션 창 (ClaudeBoard.swift BoardSurface.type·TerminalHub.named·freshSessionCommand·NewSessionSheet) | app/src/lib/terminal/hub.svelte.ts·launch.ts·NewSessionSheet 외 | `npm run check`·`npm run build`, 실기 조작(§11.2) |
 | TM4 | 문서 | | SPEC §0·§5.9·§5.10·§5.12·§6.2·§7.2, CHANGELOG 초안, README, 설치 가이드 | 검토 |
 
 ### 11.1 검증 결과 (2026-10-16, 첫 판 2.12)

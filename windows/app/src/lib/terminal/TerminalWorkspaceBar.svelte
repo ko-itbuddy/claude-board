@@ -2,7 +2,7 @@
   // 경로 줄(ClaudeBoard.swift TerminalWorkspaceBar) — 탭이 있는 작업 경로들(탭 목록에 처음 나온 순서). 높이 32.
   // 넘치면 가로로 밀고(이름은 줄이지 않는다) 지금 경로가 늘 보이게 한다. 경로를 닫는 단추는 없다
   import { tick } from "svelte";
-  import PathItem from "./PathItem.svelte";
+  import WorkspaceButton from "./WorkspaceButton.svelte";
   import { hub, tabsIn, workspaceHint, workspaceKey, workspaceLabel, workspaceState, workspaces } from "./hub.svelte";
 
   let scroller = $state<HTMLDivElement>();
@@ -46,7 +46,7 @@
   <div class="scroller" bind:this={scroller} onwheel={wheel}>
     <div class="items">
       {#each list as ws (workspaceKey(ws))}
-        <PathItem
+        <WorkspaceButton
           path={ws}
           label={workspaceLabel(ws, list)}
           count={tabsIn(ws).length}

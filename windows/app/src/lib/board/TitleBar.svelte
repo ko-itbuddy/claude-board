@@ -5,7 +5,7 @@
   // 보드가 왼쪽이면 최소화·닫기도 터미널 제목 띠(창의 오른쪽 끝)로 간다
   import type { BoardSide, State } from "$lib/types";
   import { enterMini, leaveMini, snapRight } from "$lib/backend";
-  import TerminalToggle from "$lib/terminal/TerminalToggle.svelte";
+  import TerminalToggleButton from "$lib/terminal/TerminalToggleButton.svelte";
   import WinButtons from "$lib/terminal/WinButtons.svelte";
   import Fit from "./Fit.svelte";
   import Icon from "./Icon.svelte";
@@ -23,7 +23,7 @@
     <span class="cap"><Icon name="snap-right" size={11} /></span>
   </button>
   {#if !expanded && !mini}
-    <TerminalToggle expanded={false} {side} />
+    <TerminalToggleButton expanded={false} {side} />
   {/if}
   {#if mini}
     <Fit count={2} class="chips" data-tauri-drag-region>

@@ -1,4 +1,4 @@
-// 칸 크기 계산 — 보드 칸 폭 범위와 탭 줄의 탭 폭. 화면(+page.svelte·TabBar.svelte)이 쓰고, 외부를 import 하지 않아 node:test 로 시험한다.
+// 칸 크기 계산 — 보드 칸 폭 범위와 탭 줄의 탭 폭. 화면(+page.svelte·TerminalTabBar.svelte)이 쓰고, 외부를 import 하지 않아 node:test 로 시험한다.
 
 /** 보드 칸은 360 이상, 터미널 칸은 480 이상 남긴다. 경계는 8 (논리 px) */
 export const MIN_BOARD = 360;

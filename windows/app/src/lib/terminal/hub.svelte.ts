@@ -32,7 +32,7 @@ export interface LeafState {
   error: string;
 }
 
-/** 탭을 닫기 전에 묻는 창 — TerminalArea 가 그린다 */
+/** 탭을 닫기 전에 묻는 창 — TerminalAreaView 가 그린다 */
 export interface Confirm {
   title: string;
   text: string;
