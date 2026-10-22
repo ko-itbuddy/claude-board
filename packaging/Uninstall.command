@@ -18,7 +18,7 @@ sudo /bin/sh -c 'rm -rf "/Applications/Claude Board.app"; pkgutil --forget com.c
   || echo "   (/Applications/Claude Board.app 을 지우지 못했습니다. Finder 에서 휴지통으로 옮기세요)"
 
 echo "3) 알림 패널·hook 스크립트·저장한 계정 제거"
-for f in claude-notifier notify.py state.py board-tui.py hooks.py notify-position; do rm -f "$N/$f"; done
+for f in claude-notifier notify.py state.py board-tui.py hooks.py notify-position login-launch-off; do rm -f "$N/$f"; done
 rm -rf "$N/sessions" "$N/__pycache__" "$N/plugins"
 # 계정 전환용으로 저장해 둔 로그인 토큰(키체인)과 계정 목록 — 지금 Claude Code 로그인("Claude Code-credentials")은 그대로 둔다
 while security delete-generic-password -s "Claude Board-account" >/dev/null 2>&1; do :; done
