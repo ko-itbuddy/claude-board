@@ -109,8 +109,7 @@ impl ProcessTable {
 }
 
 /// Windows 의 Claude Code 프로세스 판별 — `claude.exe`, 또는 명령줄에 `claude` 가 든 `node.exe`·`bun.exe`.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn is_claude_exe(name: &str, cmdline: impl FnOnce() -> Option<Vec<String>>) -> bool {
+pub fn is_claude_exe(name: &str, cmdline: impl FnOnce() -> Option<Vec<String>>) -> bool {
     let name = name.to_ascii_lowercase();
     match name.as_str() {
         "claude.exe" => true,

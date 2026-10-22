@@ -10,6 +10,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use claude_board_core::paths;
+use claude_board_core::place::BoardTerm;
+use claude_board_core::proc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -145,6 +147,18 @@ impl TermHub {
     pub fn list(&self) -> Vec<TermInfo> {
         Self::reap(&self.terms);
         lock(&self.terms).iter().map(|t| t.info()).collect()
+    }
+
+    /// 도는 터미널들의 짝짓기 자료 — 셸 pid·생성 시각·콘솔 호스트(`pairing` 이 세션 pid 와 맞춘다).
+    pub fn hosts(&self) -> Vec<BoardTerm> {
+        let all: Vec<Arc<Term>> = lock(&self.terms).clone();
+        all.iter()
+            .filter(|t| t.stream.exit_code().is_none())
+            .map(|t| {
+                let pid = t.pty.pid();
+                BoardTerm { id: t.id.clone(), shell_pid: pid, shell_ctime: proc::creation_time(pid), host: proc::console_host(pid) }
+            })
+            .collect()
     }
 
     /// 보는 쪽을 `sink` 로 바꾸고 `from_seq`(0 이면 고리에 남은 처음)부터 보낸다.
@@ -298,6 +312,8 @@ pub fn term_resize(hub: Hub<'_>, id: String, cols: u16, rows: u16) -> Result<(),
 pub fn term_kill(hub: Hub<'_>, id: String) -> Result<(), String> {
     hub.kill(&id)
 }
+
+pub mod pairing;
 
 #[cfg(test)]
 mod tests;

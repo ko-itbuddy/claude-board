@@ -21,7 +21,8 @@ use crate::model::{Counts, Group, Session, Snapshot};
 use crate::settings::{self, set_in, toggle, Frame, Settings};
 use crate::store::{Probe, Store};
 use crate::terminal::{self, Terminals};
-use crate::terms::TermHub;
+use crate::terms::{pairing, TermHub};
+use claude_board_core::place::SessionProc;
 use crate::updater::{self, Updater};
 use crate::usage::{self, Next, Usage};
 use crate::util::{board_log, ms};
@@ -173,6 +174,7 @@ impl Board {
             settings,
             claude_version: self.claude_version(now),
             terminals: self.terminals.lock().unwrap().view(),
+            runs_claude: self.probe.lock().unwrap().runs_claude.clone(),
         }
     }
 
@@ -281,25 +283,27 @@ impl Board {
         if self.probe_busy.swap(true, Ordering::SeqCst) {
             return;
         }
-        let pids: Vec<(u32, bool)> = self
+        let procs: Vec<SessionProc> = self
             .sessions()
             .iter()
             .filter(|s| s.pid > 0 && s.state != "ended")
-            .map(|s| (s.pid, !s.headless))
+            .map(|s| SessionProc { pid: s.pid, headless: s.headless, ended: false })
             .collect();
         let board = self.clone();
         std::thread::spawn(move || {
             let table = ProcessTable::capture();
             let mut probe = Probe::default();
-            for &(pid, terminal) in &pids {
+            let pairing = pairing::pair_all(&board.app.state::<TermHub>().hosts(), &procs, &table);
+            for &SessionProc { pid, headless, .. } in &procs {
                 let n = proc::shell_count(&table, pid);
                 if n > 0 {
                     probe.shells.insert(pid, n);
                 }
-                if terminal && console::can_attach(pid) {
+                if !headless && !pairing.no_attach.contains(&pid) && console::can_attach(pid) {
                     probe.drivable.insert(pid);
                 }
             }
+            (probe.places, probe.runs_claude) = (pairing.places, pairing.runs_claude);
             *board.probe.lock().unwrap() = probe;
             board.terminals.lock().unwrap().refresh(&table, clock::now());
             board.watch_windows_terminal(&table);

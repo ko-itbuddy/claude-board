@@ -28,6 +28,9 @@ pub struct Probe {
     pub shells: HashMap<u32, usize>,
     /// 콘솔에 붙을 수 있는 Claude 프로세스 pid
     pub drivable: HashSet<u32>,
+    /// pid → 보드 터미널 짝(W2). 지금 claude 가 도는 보드 터미널 id 들.
+    pub places: HashMap<u32, crate::model::PidPlace>,
+    pub runs_claude: Vec<String>,
 }
 
 pub struct Store {
@@ -286,7 +289,8 @@ impl Store {
         } else {
             "요청 전".to_string()
         };
-        let headless = j.get("headless").and_then(Value::as_bool).unwrap_or(false);
+        let place = probe.places.get(&pid).cloned().unwrap_or_default();
+        let headless = j.get("headless").and_then(Value::as_bool).unwrap_or(false) && place.tty.is_none();
         let limit_s = obj(j.get("limit_hit")).and_then(|l| num(l.get("at")));
         let resume_args = j
             .get("resume_args")
@@ -314,6 +318,7 @@ impl Store {
             muted,
             limit_at: limit_s.map(ms),
             can_drive,
+            place,
             pid,
             pid_ctime: num(j.get("pid_ctime")),
             file: path.to_path_buf(),
@@ -638,7 +643,7 @@ mod tests {
         f.session("s3", json!({"state": "working", "pid": 30, "cwd": cwd, "updated": NOW, "since": NOW - 20.0}), true);
         fs::write(f.sessions.join("s3.paused"), b"{}").unwrap();
         fs::write(f.sessions.join("s2.mute"), b"").unwrap();
-        let probe = Probe { shells: HashMap::from([(20, 2), (30, 5)]), drivable: HashSet::from([10, 30]) };
+        let probe = Probe { shells: HashMap::from([(20, 2), (30, 5)]), drivable: HashSet::from([10, 30]), ..Probe::default() };
         let mut st = f.store();
         let mut s = Settings::default();
         let r = st.reload(&mut s, &probe, &|_| true, true, NOW);
