@@ -6,7 +6,6 @@ import Combine
 import CryptoKit
 import GhosttyTerminal
 import GhosttyTheme
-import ServiceManagement
 import SwiftUI
 
 // MARK: - 데이터
@@ -8189,18 +8188,30 @@ enum SettingsTransition: String, CaseIterable, Identifiable {
     }
 }
 
-// 로그인 시 실행(설정 > 일반) — macOS 로그인 항목(SMAppService.mainApp). 켜짐 여부는 시스템에서 읽는다(시스템 설정에서 끌 수도 있다)
+// 로그인할 때 열기(설정 > 일반) — 설치가 등록하는 LaunchAgent(~/Library/LaunchAgents/<번들 id>.plist, user-setup.sh 6)를 켜고 끈다.
+// 끄면 plist 를 지우고 표지 파일 login-launch-off 를 남겨 업데이트(user-setup.sh)가 다시 등록하지 않게 한다. 지금 도는 보드는 그대로 둔다
+// (bootout 하면 launchd 가 띄운 이 보드가 꺼진다). 켜면 plist 를 다시 쓴다 — 다음 로그인부터. 시험 빌드는 번들 id 가 달라 설치판 것을 건드리지 않는다
 @MainActor final class LoginItem: ObservableObject {
     static let shared = LoginItem()
-    @Published private(set) var status = SMAppService.mainApp.status
+    private let label = Bundle.main.bundleIdentifier ?? "com.claude.board"
+    private var agent: String { NSHomeDirectory() + "/Library/LaunchAgents/\(label).plist" }
+    private var offMark: String? { label == "com.claude.board" ? NSHomeDirectory() + "/.claude/notifier/login-launch-off" : nil }
+    @Published private(set) var on = false
 
-    func refresh() { status = SMAppService.mainApp.status }
+    init() { refresh() }
 
-    func set(_ on: Bool) {
-        do {
-            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
-        } catch {
-            boardLog("로그인 항목 \(on ? "등록" : "해제") 실패: \(error)")
+    func refresh() { on = FileManager.default.fileExists(atPath: agent) }
+
+    func set(_ v: Bool) {
+        let fm = FileManager.default
+        if v {
+            let plist: NSDictionary = ["Label": label, "ProgramArguments": [Bundle.main.executablePath ?? ""], "RunAtLoad": true]
+            try? fm.createDirectory(atPath: (agent as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+            if !plist.write(toFile: agent, atomically: true) { boardLog("로그인 항목 등록 실패: \(agent)") }
+            if let offMark { try? fm.removeItem(atPath: offMark) }
+        } else {
+            try? fm.removeItem(atPath: agent)
+            if let offMark { fm.createFile(atPath: offMark, contents: Data()) }
         }
         refresh()
     }
@@ -8426,15 +8437,8 @@ struct SettingsView: View {
                 AnyView(SettingsSwitch(isOn: Binding(get: { pinned }, set: { setPinned($0) })))
             },
             SettingsItem(id: "login", section: .general, card: "보드", title: "로그인할 때 열기",
-                         detail: login.status == .requiresApproval ? "시스템 설정 > 일반 > 로그인 항목에서 허용해 주세요"
-                         : "Mac 에 로그인하면 보드를 띄웁니다", keywords: "로그인 시 실행 시작") {
-                AnyView(HStack(spacing: 8) {
-                    if login.status == .requiresApproval {
-                        SettingsLinkButton("시스템 설정 열기") { SMAppService.openSystemSettingsLoginItems() }
-                    }
-                    SettingsSwitch(isOn: Binding(get: { login.status == .enabled || login.status == .requiresApproval },
-                                                 set: { login.set($0) }))
-                })
+                         detail: "Mac 에 로그인하면 보드를 띄웁니다. 바꾸면 다음 로그인부터 적용돼요", keywords: "로그인 시 실행 시작 자동 실행") {
+                AnyView(SettingsSwitch(isOn: Binding(get: { login.on }, set: { login.set($0) })))
             },
             SettingsItem(id: "mascot", section: .general, card: "캐릭터", title: "제목 옆 캐릭터",
                          detail: "세션 상태를 말풍선으로 알려 주는 캐릭터. 캐릭터를 오른쪽 클릭해도 고를 수 있어요",
