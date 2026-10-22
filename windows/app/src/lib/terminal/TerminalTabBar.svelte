@@ -5,7 +5,7 @@
   import Icon from "$lib/board/Icon.svelte";
   import { hint } from "$lib/board/hint.svelte";
   import TerminalTabButton from "./TerminalTabButton.svelte";
-  import { hub, newSessionSheet, tabsIn } from "./hub.svelte";
+  import { TerminalHub, newSessionSheet, tabsIn } from "./hub.svelte";
   import { badgeNumber } from "./tabLogic";
   import { scrollTargetFor, tabStripLeast, tabStripWidth } from "./paneLayout";
 
@@ -13,7 +13,7 @@
   let newWidth = $state(0); // + 단추 폭(앞 여백 포함) — 탭 칸에 줄 폭을 셀 때
   let scroller = $state<HTMLDivElement>();
 
-  const tabs = $derived(tabsIn(hub.workspace));
+  const tabs = $derived(tabsIn(TerminalHub.workspace));
   const count = $derived(tabs.length);
   // 탭이 모두 들어가면 탭마다 가장 넓게, 아니면 남는 폭 전부. 가장 좁게 해도 넘치면 안쪽 폭이 더 커서 가로로 밀린다
   const shown = $derived(tabStripWidth(barWidth, newWidth, count));
@@ -22,7 +22,7 @@
   // 고른 탭이 칸 밖이면 보이게 민다(가장 가까운 만큼만)
   function scrollToSelected(animated: boolean) {
     const box = scroller;
-    const el = box?.querySelector<HTMLElement>(`[data-tab="${hub.selected}"]`);
+    const el = box?.querySelector<HTMLElement>(`[data-tab="${TerminalHub.selected}"]`);
     if (!box || !el) return;
     const left = el.offsetLeft;
     const right = left + el.offsetWidth;
@@ -33,7 +33,7 @@
   // 처음 나타날 때·고른 탭이 바뀔 때(번호 키·새 탭 포함)·칸 폭이 바뀔 때 — 배치가 끝난 뒤에 민다
   let first = true;
   $effect(() => {
-    void hub.selected;
+    void TerminalHub.selected;
     void count;
     const animated = !first;
     first = false;
@@ -55,7 +55,7 @@
   <div class="scroller" bind:this={scroller} style:width="{shown}px" onwheel={wheel}>
     <div class="tabs" role="tablist" style:width="{Math.max(shown, least)}px">
       {#each tabs as tab, i (tab.id)}
-        <TerminalTabButton {tab} selected={tab.id === hub.selected} number={badgeNumber(hub.commandHeld, i)} />
+        <TerminalTabButton {tab} selected={tab.id === TerminalHub.selected} number={badgeNumber(TerminalHub.commandHeld, i)} />
       {/each}
     </div>
   </div>

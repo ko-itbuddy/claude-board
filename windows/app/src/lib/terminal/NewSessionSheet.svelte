@@ -4,13 +4,13 @@
   import { inTauri } from "$lib/backend";
   import { board } from "$lib/board/store.svelte";
   import { mockPickFolder } from "$lib/mock";
-  import { focusActive, hub, workspaceHint, workspaceKey } from "./hub.svelte";
+  import { focusActive, TerminalHub, workspaceHint, workspaceKey } from "./hub.svelte";
   import { DEFAULT_SESSION_COMMAND, startSession } from "./launch";
 
   // 보드에 있는 경로(전체 경로). 열 때 한 번 정한다
   const paths = (board.snap?.groups ?? []).map((group) => group.id);
   // 지금 경로와 같은 보드 경로(없으면 첫 경로, 보드에 경로가 없으면 홈)
-  const initial = paths.find((path) => workspaceKey(path) === workspaceKey(hub.workspace)) ?? paths[0] ?? "~";
+  const initial = paths.find((path) => workspaceKey(path) === workspaceKey(TerminalHub.workspace)) ?? paths[0] ?? "~";
 
   let dir = $state(initial);
   let others = $state<string[]>(paths.includes(initial) ? [] : [initial]);
@@ -24,13 +24,13 @@
   const lastComponent = (path: string) => path.replace(/[\\/]+$/, "").split(/[\\/]/).at(-1) || path;
 
   function cancel() {
-    hub.sheet = false;
+    TerminalHub.sheet = false;
     focusActive(); // 취소해도 키 입력이 터미널로 돌아오게
   }
 
   function start() {
     if (!canStart) return;
-    hub.sheet = false;
+    TerminalHub.sheet = false;
     startSession(command, dir);
   }
 

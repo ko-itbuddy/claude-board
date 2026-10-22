@@ -6,7 +6,7 @@
   import { stateRgb } from "$lib/board/format";
   import type { TerminalTab } from "$lib/types";
   import TabNameField from "./TabNameField.svelte";
-  import { doing, hub, requestClose, select, shownName, tabState } from "./hub.svelte";
+  import { doing, TerminalHub, requestClose, select, shownName, tabState } from "./hub.svelte";
 
   let { tab, selected, number }: { tab: TerminalTab; selected: boolean; number: number | null } = $props();
 </script>
@@ -32,7 +32,7 @@
   {:else}
     <span class="name">{shownName(tab)}</span>
   {/if}
-  {#if hub.commandHeld && selected}
+  {#if TerminalHub.commandHeld && selected}
     <span class="doing">Ctrl+Shift+R 이름 바꾸기</span>
   {:else}
     <span class="doing">{doing(tab)}</span>

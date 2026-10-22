@@ -12,7 +12,7 @@
   import TerminalToggleButton from "./TerminalToggleButton.svelte";
   import WinButtons from "./WinButtons.svelte";
   import { TERM_BG } from "./term";
-  import { beginRename, commitComposition, focusActive, hub, newSessionSheet, selectNumber, stepTab, stepWorkspace } from "./hub.svelte";
+  import { beginRename, commitComposition, focusActive, TerminalHub, newSessionSheet, selectNumber, stepTab, stepWorkspace } from "./hub.svelte";
   import { confirmKeyAction, createRefireGuard } from "./keyGuards";
 
   let { expanded, side }: { expanded: boolean; side: BoardSide } = $props();
@@ -21,8 +21,8 @@
 
   // 수정키 — 누르는 즉시(다른 키와 함께여도) 번호 배지가 나타나고, 떼거나 창이 포커스를 잃으면 사라진다
   $effect(() => {
-    const sync = (e: KeyboardEvent) => (hub.commandHeld = e.ctrlKey && e.altKey && !e.getModifierState("AltGraph"));
-    const off = () => (hub.commandHeld = false);
+    const sync = (e: KeyboardEvent) => (TerminalHub.commandHeld = e.ctrlKey && e.altKey && !e.getModifierState("AltGraph"));
+    const off = () => (TerminalHub.commandHeld = false);
     window.addEventListener("keydown", sync, true);
     window.addEventListener("keyup", sync, true);
     window.addEventListener("blur", off);
@@ -47,7 +47,7 @@
         e.stopPropagation();
         return;
       }
-      if (hub.confirm || hub.sheet) return;
+      if (TerminalHub.confirm || TerminalHub.sheet) return;
       // AltGr 은 Windows 가 Ctrl+Alt 로 보고한다 — 글자(@ { [ 등)를 치는 키라 가로채지 않는다
       if (e.getModifierState("AltGraph")) return;
       const run = (fn: () => void) => {
@@ -71,14 +71,14 @@
 
   // 확인 창의 [닫기] — 창을 지우기 전에 할 일을 꺼내 둔다
   function accept() {
-    const run = hub.confirm?.run;
-    hub.confirm = null;
+    const run = TerminalHub.confirm?.run;
+    TerminalHub.confirm = null;
     run?.();
   }
 
   // 확인 창 취소 — 포커스를 터미널로 돌려준다(안 돌리면 키 입력이 갈 데가 없다)
   function cancelConfirm() {
-    hub.confirm = null;
+    TerminalHub.confirm = null;
     focusActive();
   }
 
@@ -94,7 +94,7 @@
 </script>
 
 <!-- xterm 이 Esc 를 먼저 먹어 버블 단계에는 안 오므로 캡처로 받는다 -->
-<svelte:window onkeydowncapture={hub.confirm ? confirmKey : undefined} />
+<svelte:window onkeydowncapture={TerminalHub.confirm ? confirmKey : undefined} />
 
 <div class="area" style:--term-bg={TERM_BG}>
   <!-- 제목 띠 — 터미널 단추는 앞쪽 가장자리 x=8, 미니 단계에서는 숨긴다. 보드가 왼쪽이면 최소화·닫기가 이 띠 오른쪽 끝에 있다 -->
@@ -107,27 +107,27 @@
       <WinButtons />
     {/if}
   </div>
-  {#if hub.tabs.length}
+  {#if TerminalHub.tabs.length}
     <TerminalWorkspaceBar />
   {/if}
   <TerminalTabBar />
   <div class="container">
-    {#each hub.tabs as tab (tab.id)}
-      <div class="surface" class:shown={tab.id === hub.selected}>
-        <PaneView node={tab.root} tabId={tab.id} visible={expanded && tab.id === hub.selected} />
+    {#each TerminalHub.tabs as tab (tab.id)}
+      <div class="surface" class:shown={tab.id === TerminalHub.selected}>
+        <PaneView node={tab.root} tabId={tab.id} visible={expanded && tab.id === TerminalHub.selected} />
       </div>
     {/each}
-    {#if hub.tabs.length === 0}
+    {#if TerminalHub.tabs.length === 0}
       <TerminalEmptyView />
     {/if}
   </div>
 
-  {#if hub.sheet}
+  {#if TerminalHub.sheet}
     <NewSessionSheet />
   {/if}
 
-  {#if hub.confirm}
-    {@const sheet = hub.confirm}
+  {#if TerminalHub.confirm}
+    {@const sheet = TerminalHub.confirm}
     <div class="scrim" role="presentation">
       <div class="sheet" role="alertdialog" aria-label={sheet.title}>
         <div class="title">{sheet.title}</div>

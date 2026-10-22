@@ -3,7 +3,7 @@
   // 넘치면 가로로 밀고(이름은 줄이지 않는다) 지금 경로가 늘 보이게 한다. 경로를 닫는 단추는 없다
   import { tick } from "svelte";
   import WorkspaceButton from "./WorkspaceButton.svelte";
-  import { hub, tabsIn, workspaceHint, workspaceKey, workspaceLabel, workspaceState, workspaces } from "./hub.svelte";
+  import { TerminalHub, tabsIn, workspaceHint, workspaceKey, workspaceLabel, workspaceState, workspaces } from "./hub.svelte";
 
   let scroller = $state<HTMLDivElement>();
   let width = $state(0);
@@ -13,7 +13,7 @@
   function scrollToCurrent(animated: boolean) {
     const box = scroller;
     if (!box) return;
-    const el = [...box.querySelectorAll<HTMLElement>("[data-ws]")].find((x) => workspaceKey(x.dataset.ws ?? "") === workspaceKey(hub.workspace));
+    const el = [...box.querySelectorAll<HTMLElement>("[data-ws]")].find((x) => workspaceKey(x.dataset.ws ?? "") === workspaceKey(TerminalHub.workspace));
     if (!el) return;
     const left = el.offsetLeft - 8;
     const right = el.offsetLeft + el.offsetWidth + 8;
@@ -25,7 +25,7 @@
 
   let first = true;
   $effect(() => {
-    void hub.workspace;
+    void TerminalHub.workspace;
     void list.length;
     const animated = !first;
     first = false;
@@ -51,7 +51,7 @@
           label={workspaceLabel(ws, list)}
           count={tabsIn(ws).length}
           state={workspaceState(ws)}
-          current={workspaceKey(ws) === workspaceKey(hub.workspace)}
+          current={workspaceKey(ws) === workspaceKey(TerminalHub.workspace)}
           tip={workspaceHint(ws)}
         />
       {/each}

@@ -3,13 +3,13 @@
   // 접혀도 언마운트하지 않고 숨기기만 한다(출력은 계속 쌓인다). 셸이 끝나면 허브가 그 탭을 닫으므로 안내는 없고,
   // 시작하지 못했을 때만(Windows 에만 있는 경우) 안내와 [다시 시도] [탭 닫기] 를 얹는다
   import { onMount } from "svelte";
-  import { controllerOf, hub, remove, retry, startLeaf } from "./hub.svelte";
+  import { controllerOf, TerminalHub, remove, retry, startLeaf } from "./hub.svelte";
 
   let { leafId, tabId, visible }: { leafId: string; tabId: string; visible: boolean } = $props();
 
   const ctl = $derived(controllerOf(leafId));
-  const leaf = $derived(hub.leaves[leafId]);
-  const tab = $derived(hub.tabs.find((t) => t.id === tabId));
+  const leaf = $derived(TerminalHub.leaves[leafId]);
+  const tab = $derived(TerminalHub.tabs.find((t) => t.id === tabId));
   let box = $state<HTMLDivElement>();
 
   onMount(() => {

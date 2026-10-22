@@ -1,7 +1,7 @@
 // 새 세션 띄우기 — 명령을 고쳐(--session-id, --name) 그 폴더의 셸 탭에 쳐 넣는다. 명령줄을 만드는 순수 함수는 sessionCommand.ts 에 있다.
 import { setTerminalExpanded } from "$lib/backend";
 import { board } from "$lib/board/store.svelte";
-import { folderName, hub, openShell, shownName } from "./hub.svelte";
+import { folderName, TerminalHub, openShell, shownName } from "./hub.svelte";
 import { DEFAULT_SESSION_COMMAND, freshSessionCommand, namedCommand } from "./sessionCommand";
 import { quoteSessionName, sanitizeSessionName } from "./sessionName";
 
@@ -9,7 +9,7 @@ export { DEFAULT_SESSION_COMMAND };
 
 /** 다른 탭이 쓰는 이름과 겹치지 않는 이름 — 겹치면 -2, -3 …(대소문자는 가리지 않는다) */
 export function uniqueTabName(base: string): string {
-  const used = new Set(hub.tabs.map((tab) => shownName(tab).toLowerCase()));
+  const used = new Set(TerminalHub.tabs.map((tab) => shownName(tab).toLowerCase()));
   let name = base;
   for (let n = 2; used.has(name.toLowerCase()); n++) name = `${base}-${n}`;
   return name;
