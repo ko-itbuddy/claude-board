@@ -6,7 +6,7 @@ import { tick } from "svelte";
 import { inTauri, setTerminalExpanded, termKill, termList, termSpawn, termWrite } from "$lib/backend";
 import { board } from "$lib/board/store.svelte";
 import { mockTabs } from "$lib/mock";
-import type { LeafPhase, PaneNode, Session, State, TermId, TermInfo, TerminalTab } from "$lib/types";
+import type { BoardSurface, BoardTab, LeafPhase, Session, State, TermId, TermInfo } from "$lib/types";
 import {
   folderNameOf,
   homeFromGroups,
@@ -24,6 +24,7 @@ import {
   workspacesOf,
   wrapStep,
 } from "./tabLogic";
+import { hasLeaf, leaves } from "./split";
 import { TermController } from "./term";
 
 export interface LeafState {
@@ -41,7 +42,9 @@ export interface Confirm {
 
 export const TerminalHub = $state({
   terms: {} as Record<TermId, TermInfo>,
-  tabs: [] as TerminalTab[],
+  tabs: [] as BoardTab[],
+  /** 모든 화면(mac BoardSurface). 탭의 root 트리가 id 로 가리킨다 */
+  surfaces: [] as BoardSurface[],
   /** 고른 탭 id. 탭이 없으면 빈 문자열 */
   selected: "",
   /** 지금 경로 줄에서 고른 경로(탭 줄이 보여 주는 경로). 탭이 없으면 빈 문자열 */
@@ -66,9 +69,9 @@ export function controllerOf(leafId: string): TermController {
     ctl = new TermController(leafId, {
       onExit: (code) => terminalDidClose(leafId, code),
       onTitle: (title) => {
-        const tab = tabOfLeaf(leafId);
+        const surface = surfaceOf(leafId);
         // 셸이 처음에 보내는 제목은 실행 파일 경로(C:\Program Files\...\pwsh.exe)라 보이지 않게 한다
-        if (tab) tab.title = /\.exe"?$/i.test(title.trim()) ? "" : title;
+        if (surface) surface.title = /\.exe"?$/i.test(title.trim()) ? "" : title;
       },
     });
     controllers.set(leafId, ctl);
@@ -108,28 +111,34 @@ export function workspaces(): string[] {
   return workspacesOf(TerminalHub.tabs, homeDir());
 }
 
-export function tabsIn(ws: string): TerminalTab[] {
+export function tabsIn(ws: string): BoardTab[] {
   return tabsInWorkspace(TerminalHub.tabs, ws, homeDir());
 }
 
 /** 탭 줄에 보이는 이름 — 사용자가 바꾼 이름, 없으면 폴더 이름 */
-export function shownName(tab: TerminalTab) {
+export function shownName(tab: BoardTab) {
   return tab.customName ?? folderName(tab.workspace);
 }
 
 // ── 탭 상태 ───────────────────────────────────────────────────
 
-function sessionOf(tab: TerminalTab): Session | null {
-  if (!tab.sessionId) return null;
+/** 탭에서 고른 화면 */
+function focusedSurface(tab: BoardTab): BoardSurface | undefined {
+  return surfaceOf(tab.focused);
+}
+
+function sessionOf(tab: BoardTab): Session | null {
+  const sessionId = focusedSurface(tab)?.sessionId;
+  if (!sessionId) return null;
   for (const g of board.snap?.groups ?? []) {
-    const s = g.sessions.find((x) => x.id === tab.sessionId);
+    const s = g.sessions.find((x) => x.id === sessionId);
     if (s) return s;
   }
   return null;
 }
 
 /** 탭 상태 — 그 탭 화면들의 세션 가운데 가장 급한 것(세션이 없으면 idle). 지금은 탭마다 세션 하나다 */
-export function tabState(tab: TerminalTab): State {
+export function tabState(tab: BoardTab): State {
   return sessionOf(tab)?.state ?? "idle";
 }
 
@@ -139,67 +148,64 @@ export function workspaceState(ws: string): State {
 }
 
 /** 탭이 지금 하는 일 — 승인 대기이고 message 가 있으면 message, 아니면 세션 제목. 셸 탭은 터미널 제목 */
-export function doing(tab: TerminalTab): string {
+export function doing(tab: BoardTab): string {
   const s = sessionOf(tab);
-  if (!s) return tab.title;
+  if (!s) return focusedSurface(tab)?.title ?? "";
   return s.state === "waiting" && s.message ? s.message : s.title;
 }
 
 /** 탭에서 도는 프로그램이 있는가 — 짝 세션이 아직 끝나지 않았을 때(셸만 있는 탭은 바로 닫는다) */
-function isBusy(tab: TerminalTab): boolean {
+function isBusy(tab: BoardTab): boolean {
   return needsCloseConfirm(sessionOf(tab)?.state);
 }
 
 // ── 탭 만들기·찾기 ────────────────────────────────────────────
 
-function newTab(termId: TermId | null, workspace: string): TerminalTab {
-  const leafId = crypto.randomUUID();
-  TerminalHub.leaves[leafId] = { phase: "idle", exitCode: null, error: "" };
-  const root: PaneNode = { type: "leaf", leafId, termId };
+function newTab(termId: TermId | null, workspace: string): BoardTab {
+  const surface: BoardSurface = {
+    id: crypto.randomUUID(),
+    termId,
+    sessionId: null,
+    command: null,
+    held: null,
+    mdRenderOff: false,
+    title: "",
+  };
+  TerminalHub.surfaces.push(surface);
+  TerminalHub.leaves[surface.id] = { phase: "idle", exitCode: null, error: "" };
   return {
     id: crypto.randomUUID(),
-    root,
-    activeLeaf: leafId,
     workspace,
     customName: null,
     renaming: false,
-    sessionId: null,
-    command: null,
-    title: "",
+    root: { leaf: surface.id },
+    focused: surface.id,
+    zoomed: false,
   };
 }
 
-export function findLeaf(node: PaneNode, leafId: string): (PaneNode & { type: "leaf" }) | null {
-  if (node.type === "leaf") return node.leafId === leafId ? node : null;
-  return findLeaf(node.first, leafId) ?? findLeaf(node.second, leafId);
+/** 화면 id 로 화면을 찾는다 */
+export function surfaceOf(id: string): BoardSurface | undefined {
+  return TerminalHub.surfaces.find((s) => s.id === id);
 }
 
-function leavesOf(node: PaneNode): Array<PaneNode & { type: "leaf" }> {
-  return node.type === "leaf" ? [node] : [...leavesOf(node.first), ...leavesOf(node.second)];
+function tabOfLeaf(leafId: string): BoardTab | undefined {
+  return TerminalHub.tabs.find((t) => hasLeaf(t.root, leafId));
 }
 
-function tabOfLeaf(leafId: string): TerminalTab | undefined {
-  return TerminalHub.tabs.find((t) => findLeaf(t.root, leafId));
-}
-
-function leafOf(leafId: string) {
-  const tab = tabOfLeaf(leafId);
-  return tab ? findLeaf(tab.root, leafId) : null;
-}
-
-export function selectedTab(): TerminalTab | undefined {
+export function selectedTab(): BoardTab | undefined {
   return TerminalHub.tabs.find((t) => t.id === TerminalHub.selected);
 }
 
 export function focusActive() {
   const tab = selectedTab();
-  if (tab && !tab.renaming) controllers.get(tab.activeLeaf)?.focus();
+  if (tab && !tab.renaming) controllers.get(tab.focused)?.focus();
 }
 
 /** 고른 탭에서 조합 중인 글자가 있으면 확정한다 */
 export function commitComposition() {
   const tab = selectedTab();
-  if (tab && !tab.renaming) controllers.get(tab.activeLeaf)?.commitComposition();
+  if (tab && !tab.renaming) controllers.get(tab.focused)?.commitComposition();
 }
 
 // 고른 탭이 그려진(보이게 된) 뒤에 터미널로 포커스를 돌려준다
@@ -284,10 +290,13 @@ export function stepWorkspace(step: number) {
 // ── 열기 ──────────────────────────────────────────────────────
 
 /** 그 폴더(없으면 홈)의 셸 탭을 같은 경로 탭들의 끝에(새 경로면 맨 끝에) 연다. command 는 셸이 뜬 뒤 한 번 칠 명령 */
-export function openShell(dir: string | null = null, opts: { command?: string; sessionId?: string } = {}): TerminalTab | undefined {
+export function openShell(dir: string | null = null, opts: { command?: string; sessionId?: string } = {}): BoardTab | undefined {
   const tab = newTab(null, dir ?? "~");
-  tab.command = opts.command ?? null;
-  tab.sessionId = opts.sessionId ?? null;
+  const surface = focusedSurface(tab);
+  if (surface) {
+    surface.command = opts.command ?? null;
+    surface.sessionId = opts.sessionId ?? null;
+  }
   TerminalHub.tabs.splice(insertIndexFor(TerminalHub.tabs, tab.workspace, homeDir()), 0, tab);
   select(tab.id);
   return TerminalHub.tabs.find((t) => t.id === tab.id);
@@ -312,7 +321,7 @@ async function typeCommand(ctl: TermController, leafId: string, termId: TermId, 
   const quiet = () => ctl.lastOutputAt > 0 && Date.now() - ctl.lastOutputAt >= QUIET_MS;
   while (!quiet() && Date.now() - startedAt < QUIET_CAP_MS) await sleep(50);
   // 기다리는 사이 탭이 닫혔거나 같은 칸에 다른 셸이 붙었으면 치지 않는다
-  const alive = () => TerminalHub.leaves[leafId] && leafOf(leafId)?.termId === termId && TerminalHub.terms[termId];
+  const alive = () => TerminalHub.leaves[leafId] && surfaceOf(leafId)?.termId === termId && TerminalHub.terms[termId];
   if (!alive()) return;
   termWrite(termId, command);
   await sleep(ENTER_DELAY_MS);
@@ -321,7 +330,7 @@ async function typeCommand(ctl: TermController, leafId: string, termId: TermId, 
 
 /** 칸의 셸을 띄우거나(없으면 새로, 있으면 이어서) 붙는다. 칸이 처음 보일 때 부른다 */
 export async function startLeaf(leafId: string) {
-  const leaf = leafOf(leafId);
+  const leaf = surfaceOf(leafId);
   const tab = tabOfLeaf(leafId);
   const state = TerminalHub.leaves[leafId];
   if (!leaf || !tab || !state || state.phase !== "idle") return;
@@ -355,9 +364,9 @@ export async function startLeaf(leafId: string) {
     }
     if (state.phase === "starting") state.phase = "running";
     // 새로 띄운 셸에만 명령을 한 번 친다(셸 준비를 기다린 뒤). 기다리는 동안 칸은 이미 running
-    if (spawnedId && tab.command) {
-      const command = tab.command;
-      tab.command = null;
+    if (spawnedId && leaf.command) {
+      const command = leaf.command;
+      leaf.command = null;
       void typeCommand(ctl, leafId, spawnedId, command);
     }
   } catch (e) {
@@ -373,7 +382,7 @@ export async function startLeaf(leafId: string) {
 
 /** 시작에 실패한 칸에 새 셸을 다시 띄운다. 칸은 그대로 두고 터미널만 바꾼다 */
 export function retry(leafId: string) {
-  const leaf = leafOf(leafId);
+  const leaf = surfaceOf(leafId);
   const state = TerminalHub.leaves[leafId];
   if (!leaf || !state || state.phase !== "failed") return;
   controllerOf(leafId).reset();
@@ -385,7 +394,7 @@ export function retry(leafId: string) {
 // ── 닫기 ──────────────────────────────────────────────────────
 
 /** 탭의 ×. 그 탭의 짝 세션이 아직 끝나지 않았을 때만 묻고, 아니면 바로 닫는다 */
-export function requestClose(tab: TerminalTab) {
+export function requestClose(tab: BoardTab) {
   if (!isBusy(tab)) return remove(tab);
   TerminalHub.confirm = {
     title: "탭을 닫을까요?",
@@ -395,7 +404,7 @@ export function requestClose(tab: TerminalTab) {
 }
 
 /** 탭을 닫고 셸을 끝낸다. 고른 탭이었으면 같은 경로의 이웃 탭 → 이웃 경로 → 빈 상태로 */
-export function remove(tab: TerminalTab) {
+export function remove(tab: BoardTab) {
   const i = TerminalHub.tabs.findIndex((t) => t.id === tab.id);
   if (i < 0) return;
   const key = workspaceKey(tab.workspace);
@@ -403,13 +412,15 @@ export function remove(tab: TerminalTab) {
   const gone = TerminalHub.tabs[i];
   const wasSelected = TerminalHub.selected === gone.id;
   TerminalHub.tabs.splice(i, 1);
-  for (const leaf of leavesOf(gone.root)) {
-    const termId = leaf.termId;
+  for (const id of leaves(gone.root)) {
+    const termId = surfaceOf(id)?.termId;
     if (termId && TerminalHub.terms[termId]?.status !== "exited") termKill(termId);
     if (termId) delete TerminalHub.terms[termId];
-    controllers.get(leaf.leafId)?.dispose();
-    controllers.delete(leaf.leafId);
-    delete TerminalHub.leaves[leaf.leafId];
+    controllers.get(id)?.dispose();
+    controllers.delete(id);
+    delete TerminalHub.leaves[id];
+    const at = TerminalHub.surfaces.findIndex((x) => x.id === id);
+    if (at >= 0) TerminalHub.surfaces.splice(at, 1);
   }
   if (TerminalHub.lastTab[key] === gone.id) delete TerminalHub.lastTab[key];
   if (!wasSelected) return;
@@ -439,7 +450,7 @@ export function beginRename() {
 }
 
 /** 이름 바꾸기 끝 — name 이 null 이면 취소. 비우거나 폴더 이름과 같게 저장하면 사용자 이름을 지운다. 끝나면 포커스는 늘 터미널로 */
-export function endRename(tab: TerminalTab, name: string | null) {
+export function endRename(tab: BoardTab, name: string | null) {
   if (!tab.renaming) return;
   tab.renaming = false;
   if (name !== null) {

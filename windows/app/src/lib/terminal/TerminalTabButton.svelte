@@ -1,14 +1,14 @@
 <script lang="ts">
-  // 탭 하나(ClaudeBoard.swift TerminalTabButton) — 높이 40. 점(상태) · 이름 · 하는 일 · 닫기.
+  // 탭 하나(ClaudeBoard.swift BoardTabButton) — 높이 40. 점(상태) · 이름 · 하는 일 · 닫기.
   // 수정키(Ctrl+Alt)를 누르는 동안은 × 자리에 탭 번호, 고른 탭의 하는 일 자리에 이름 바꾸기 키를 보인다
   import Icon from "$lib/board/Icon.svelte";
   import { hint } from "$lib/board/hint.svelte";
   import { stateRgb } from "$lib/board/format";
-  import type { TerminalTab } from "$lib/types";
+  import type { BoardTab } from "$lib/types";
   import TabNameField from "./TabNameField.svelte";
   import { doing, TerminalHub, requestClose, select, shownName, tabState } from "./hub.svelte";
 
-  let { tab, selected, number }: { tab: TerminalTab; selected: boolean; number: number | null } = $props();
+  let { tab, selected, number }: { tab: BoardTab; selected: boolean; number: number | null } = $props();
 </script>
 
 <!-- 탭은 포커스를 터미널에 두므로 키보드는 단축키(Ctrl+Alt+1~9·좌우)가 맡는다 -->

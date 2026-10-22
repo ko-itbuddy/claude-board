@@ -161,7 +161,7 @@ export interface NotifyOptions {
 
 // ── 내장 터미널 — 계약은 windows/docs/SPEC.md 터미널 절(백엔드 terms.rs)과 같게 유지한다 ──────────────
 
-// 백엔드가 프로세스 수명 동안 유일하게 내는 터미널 번호("t1", "t2", …). 칸(leaf)은 따로 leafId 를 갖는다
+// 백엔드가 프로세스 수명 동안 유일하게 내는 터미널 번호("t1", "t2", …). 화면(BoardSurface)은 따로 id 를 갖는다
 export type TermId = string;
 
 export interface TermSpec {
@@ -190,21 +190,33 @@ export type TermFrame =
   | { kind: "gap"; seq: number }
   | { kind: "exit"; code: number | null };
 
-// 터미널 칸 배치. 1단계는 잎 하나만 그리지만 나누기를 넣을 수 있는 트리 모양이다
-export type PaneNode =
-  | { type: "leaf"; leafId: string; termId: TermId | null }
-  | { type: "split"; dir: "row" | "col"; ratio: number; first: PaneNode; second: PaneNode };
+// 화면 나누기 트리(mac SplitNode). 잎은 화면(BoardSurface) 하나의 id, 가지는 둘로 나눈 것:
+// right 면 왼쪽|오른쪽, down 이면 위/아래. ratio 는 앞쪽(first = 왼쪽·위)의 몫
+export type SplitDirection = "right" | "down";
+export type SplitNode =
+  | { leaf: string }
+  | { split: SplitDirection; ratio: number; first: SplitNode; second: SplitNode };
 
-export interface TerminalTab {
+// 화면 하나(mac BoardSurface) — 터미널 하나와 그 셸에 붙은 세션 정보. id 는 TerminalHub.leaves·컨트롤러의 열쇠다
+export interface BoardSurface {
   id: string;
-  root: PaneNode;
-  activeLeaf: string;
+  termId: TermId | null;          // 이 화면에 붙은 셸(백엔드 터미널 번호), 아직 안 띄웠으면 null
+  sessionId: string | null;       // 이 화면의 claude 세션(보드 상태 묶음의 Session.id), 셸 화면은 null. 끝난 뒤에도 남는다
+  command: string | null;         // 셸이 뜬 뒤 한 번 칠 claude 명령, 없으면 null(셸 화면)
+  held: Record<string, string> | null; // 다시 뜰 때 셸만 띄우고 들어갈 때 이어 열 값(resumeHeld, 아직 안 씀)
+  mdRenderOff: boolean;           // 답변 꾸미기를 끄고 띄운 화면(아직 안 씀)
+  title: string;                  // 터미널이 알려 준 제목(xterm onTitleChange)
+}
+
+// 보드 터미널 탭 하나(mac BoardTab) — 화면 나누기 트리 하나와 그 가운데 고른 화면. 지금은 탭마다 화면 하나뿐이다
+export interface BoardTab {
+  id: string;
   workspace: string;          // 경로 줄 항목 — 이 탭을 연 작업 경로("~" = 홈)
   customName: string | null;  // 사용자가 바꾼 탭 이름, 없으면 폴더 이름
   renaming: boolean;          // 이름 바꾸기 입력 칸이 열려 있는지
-  sessionId: string | null;   // 이 탭의 claude 세션(보드 상태 묶음의 Session.id), 셸 탭은 null
-  command: string | null;     // 셸이 뜬 뒤 한 번 칠 명령(claude …), 없으면 null
-  title: string;              // 터미널이 알려 준 제목(xterm onTitleChange)
+  root: SplitNode;
+  focused: string;            // 고른 화면의 id
+  zoomed: boolean;            // 고른 화면 하나 크게 보기
 }
 
 // 칸의 셸 상태 — idle(아직 안 띄움) · starting · running · exited · failed
