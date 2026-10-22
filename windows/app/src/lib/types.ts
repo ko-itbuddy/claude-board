@@ -55,6 +55,12 @@ export interface Session {
   // 없으면 칩을 그리지 않는다. macOS PlaceChip(ClaudeBoard.swift) 대응:
   //   tab = 보드 탭(CB), terminal = 다른 터미널(appName), background = 터미널 없이(mode: -p·--bg), ended = 끝난 세션
   place?: SessionPlace;
+  // 세션 짝짓기(SPEC §5.12, W2) — 백엔드가 보내는 값. tty = 이 세션의 콘솔이 보드의 어느 터미널(TermId)인지(mac Session.tty 대응),
+  // tabAncestor = headless 세션이 어느 보드 터미널의 자손인지, mode = -p · --bg, appName = 다른 터미널 앱 이름. 백엔드가 채우기 전에는 없다.
+  tty?: string | null;
+  tabAncestor?: string | null;
+  mode?: "-p" | "--bg" | null;
+  appName?: string | null;
 }
 
 export interface SessionPlace {
@@ -119,6 +125,7 @@ export interface TerminalApp {
 
 export interface Snapshot {
   now: number;
+  runsClaude?: string[];  // 지금 claude 가 도는 보드 터미널(TermId) — 서피스의 세션이 끝났는지 가르는 데 쓴다 (W2)
   groups: Group[];
   allMuted: boolean;
   counts: Record<State, number>;
