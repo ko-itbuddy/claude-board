@@ -145,8 +145,8 @@ export interface Snapshot {
   terminals: TerminalApp[];
 }
 
-// 세션 줄·카드에서 부르는 동작 — 백엔드 명령 session_action 의 action 값
-export type SessionAction = "activate" | "focus" | "resume" | "pause" | "resume_paused" | "stop";
+// 세션 줄·카드에서 부르는 동작 — 백엔드 명령 session_action 의 action 값. mac performAction 의 어휘(pause·resume·stop·reopen·focus)와 Windows 전용 activate
+export type SessionAction = "activate" | "focus" | "reopen" | "pause" | "resume" | "stop";
 
 // 알림 패널(/notify) 인자 — 백엔드 명령 get_notify_options 가 준다
 export interface NotifyOptions {

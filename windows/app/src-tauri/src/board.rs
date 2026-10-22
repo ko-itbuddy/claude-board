@@ -268,10 +268,10 @@ impl Board {
         d.blocking_show()
     }
 
-    /// 세션 동작(`session_action`·`--action`).
-    pub fn perform_action(self: &Arc<Self>, action: &str, id: &str, confirm: bool) {
+    /// 세션 동작(`session_action`·`--action`). `carry_on` 은 `reopen` 에만 쓰인다.
+    pub fn perform_action(self: &Arc<Self>, action: &str, id: &str, confirm: bool, carry_on: Option<bool>) {
         match self.session(id) {
-            Some(s) => terminal::perform(self, action, s, confirm),
+            Some(s) => terminal::perform(self, action, carry_on, s, confirm),
             None => board_log(&format!("세션 동작 {action}: 세션을 찾지 못했습니다 ({id})")),
         }
     }
@@ -614,8 +614,8 @@ fn reveal(board: B<'_>, cwd: String) {
 }
 
 #[tauri::command(async)]
-fn session_action(board: B<'_>, action: String, id: String) {
-    board.perform_action(&action, &id, true);
+fn session_action(board: B<'_>, action: String, id: String, carry_on: Option<bool>) {
+    board.perform_action(&action, &id, true, carry_on);
 }
 
 /// 작업 중·승인 대기 세션이 있으면 이전 계정으로 일하는 중이라고 알리고 한 번 더 묻는다.
@@ -793,13 +793,12 @@ fn log(text: String) {
 
 // ── 실행 ────────────────────────────────────────────────────
 
-/// 명령줄에서 `--action <동작> <세션 id>` — macOS 판과 같은 이름(pause·resume·stop·reopen·focus)을
-/// 세션 동작 이름으로 바꾼다(명령줄의 resume 은 일시중지한 세션 재개, reopen 은 이어서 다시 열기).
+/// 명령줄에서 `--action <동작> <세션 id>` — macOS 판과 같은 이름(pause·resume·stop·reopen·focus) 그대로
+/// (resume 은 일시중지한 세션 재개, reopen 은 이어서 다시 열기. 이름 뜻은 `session_action.rs`).
 pub fn action_arg(argv: &[String]) -> Option<(String, String)> {
     let i = argv.iter().position(|a| a == "--action")?;
     let action = match argv.get(i + 1)?.as_str() {
-        "resume" => "resume_paused",
-        a @ ("pause" | "stop" | "reopen" | "focus") => a,
+        a @ ("pause" | "resume" | "stop" | "reopen" | "focus") => a,
         _ => return None,
     };
     Some((action.to_string(), argv.get(i + 2)?.clone()))
@@ -816,7 +815,7 @@ fn second_instance(app: &AppHandle, argv: Vec<String>) {
 
 fn queue_action(board: &Arc<Board>, action: String, id: String) {
     if board.session(&id).is_some() {
-        board.perform_action(&action, &id, false);
+        board.perform_action(&action, &id, false, None);
     } else {
         *board.pending_action.lock().unwrap() = Some((action, id));
     }
@@ -920,7 +919,7 @@ fn start_ticker(board: Arc<Board>) {
             board.publish();
             if let Some((action, id)) = board.pending_action.lock().unwrap().take() {
                 if board.session(&id).is_some() {
-                    board.perform_action(&action, &id, false);
+                    board.perform_action(&action, &id, false, None);
                 } else {
                     board_log(&format!("--action {action}: 세션을 찾지 못했습니다 ({id})"));
                 }
@@ -1039,7 +1038,7 @@ mod tests {
     fn action_args() {
         let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(action_arg(&v(&["ClaudeBoard.exe", "--action", "stop", "abc"])), Some(("stop".into(), "abc".into())));
-        assert_eq!(action_arg(&v(&["ClaudeBoard.exe", "--action", "resume", "abc"])), Some(("resume_paused".into(), "abc".into())));
+        assert_eq!(action_arg(&v(&["ClaudeBoard.exe", "--action", "resume", "abc"])), Some(("resume".into(), "abc".into())));
         assert_eq!(action_arg(&v(&["ClaudeBoard.exe", "--action", "reopen", "abc"])), Some(("reopen".into(), "abc".into())));
         assert_eq!(action_arg(&v(&["ClaudeBoard.exe", "--action", "activate", "abc"])), None);
         assert_eq!(action_arg(&v(&["ClaudeBoard.exe", "--action", "stop"])), None);

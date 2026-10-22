@@ -329,6 +329,7 @@ macOS 키체인 대신:
   **셸(cmd.exe·PowerShell·wt.exe 명령줄)을 거치지 않는다** — `claude.exe`(PATH 또는 `%USERPROFILE%\.local\bin\claude.exe`)를 인자 배열로 `CREATE_NEW_CONSOLE` 로 직접 띄우고 작업 폴더는 `project_dir`(없으면 cwd — 보드 카드의 경로). Windows 11 에서 기본 터미널이 Windows Terminal 이면 그 안에 열린다. claude 가 끝나면 창도 닫힌다(macOS 는 셸 pane 이 남는다 — 안전을 위해 다르게 한다).
 - 명령을 새 터미널 창에서 실행(`runInTerminal`, 계정 추가): 같은 방식 — `claude.exe auth login --claudeai [--email <이메일>]` 를 환경변수 `CLAUDE_CONFIG_DIR=<로그인 폴더>` 만 더해 `CREATE_NEW_CONSOLE` 로 직접 띄운다. 홈 폴더에서 시작. 끝난 뒤 안내는 보드의 안내 문구가 맡는다.
 - `--action pause|resume|stop|reopen|focus <id>` 로 실행되면 떠 있는 보드에 넘긴다(단일 실행 플러그인의 인자 전달) — stop 은 확인 없이.
+- 동작 이름은 mac `performAction` 어휘와 같고 명령줄·`session_action` 이 같은 집합을 쓴다(`session_action.rs` 의 `SessionAction::parse`): `pause`(`pause_session`) · `resume` = 일시중지한 세션 재개(mac `resumePaused`, `resume_paused`) · `stop`(`stop_session`) · `reopen` = 꺼진 세션 이어 열기(mac `resumeSession(carryOn:)`, `resume_session`; `session_action` 의 `carryOn` 을 안 주면 명령줄처럼 true) · `focus`(`focus_session`) · Windows 전용 `activate`(`activate_owner`). 옛 이름 `resume_paused` 는 받지 않는다.
 
 ### 5.8 업데이트 — `Updater` (`ClaudeBoard.swift Updater`)
 
@@ -503,7 +504,7 @@ interface Account { id: string; email: string; org: string; plan: string; expire
 
 `get_snapshot` · `toggle_collapsed(cwd)` · `set_all_collapsed(collapse)` · `toggle_ended_open(cwd)` · `toggle_pin_group(cwd)` · `hide_group(cwd)` · `remove_ended(cwd)` · `remove_session(id)` ·
 `toggle_kind_collapsed(key)` · `toggle_sub_collapsed(id)` · `set_usage_compact(bool)` · `set_mute(id, muted)` · `set_all_muted(bool)` · `reveal(cwd)` ·
-`session_action(action: "activate"|"focus"|"resume"|"pause"|"resume_paused"|"stop", id)` · `switch_account(id)` · `add_account(email?)` · `cancel_add_account` · `remove_account(id)` · `set_auto_switch(bool)` ·
+`session_action(action: "activate"|"focus"|"reopen"|"pause"|"resume"|"stop", id, carryOn?)` · `switch_account(id)` · `add_account(email?)` · `cancel_add_account` · `remove_account(id)` · `set_auto_switch(bool)` ·
 `check_update(manual)` · `run_update` · `open_changelog` · `set_pinned(bool)` · `set_mascot(kind)` · `set_opacity(v)` · `set_notify_position(pos)` · `open_terminal(id)` ·
 `enter_mini(rows)` · `leave_mini` · `snap_right`(이름은 그대로 두고 `boardSide` 쪽에 붙인다) · `hide_board` · `minimize_board` · `log(text)`.
 내장 터미널 창·설정 명령(`board.rs`): `set_terminal_expanded(on)` · `set_board_side(side: "left"|"right")` · `set_board_width(width)`(논리 px, 경계를 놓을 때 저장). 이벤트 `board://terminal-focus`(프론트가 활성 터미널에 `focus()`).

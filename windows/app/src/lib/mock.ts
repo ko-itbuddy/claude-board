@@ -320,9 +320,9 @@ export async function handle(cmd: string, a: Record<string, unknown>): Promise<u
       console.info(`[mock] session_action ${action} ${str("id")}`);
       if (!s) break;
       const now = Date.now();
-      if (action === "resume" && s.state === "ended") Object.assign(s, { state: "working", since: now, updated: now, paused: false });
+      if (action === "reopen" && s.state === "ended") Object.assign(s, { state: "working", since: now, updated: now, paused: false });
       if (action === "pause") Object.assign(s, { state: "paused", paused: true, updated: now });
-      if (action === "resume_paused") Object.assign(s, { state: "working", paused: false, since: now, updated: now });
+      if (action === "resume") Object.assign(s, { state: "working", paused: false, since: now, updated: now });
       if (action === "stop") Object.assign(s, { state: "ended", paused: false, subagents: [], updated: now });
       break;
     }

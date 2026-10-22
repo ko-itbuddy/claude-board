@@ -17,6 +17,7 @@
   import { clock, elapsed, stateName, stateRgb } from "./format";
   import { hint } from "./hint.svelte";
   import { openMenu, type MenuItem } from "./menu.svelte";
+  import { rowClickCall, sessionMenuEntries } from "./sessionActions";
 
   let { s, now, locked, subCollapsed }: { s: Session; now: number; locked: boolean; subCollapsed: boolean } = $props();
 
@@ -29,31 +30,19 @@
     toggleSubCollapsed(s.id);
   }
 
-  // 한 번 클릭 = 그 세션의 터미널 앱만 앞으로, 두 번 클릭 = 종료 세션은 다시 열기, 아니면 그 세션 창으로 이동.
-  // 클릭 횟수로 나눈다 — 한 번·두 번 클릭을 따로 기다리면 줄 안의 스위치·단추까지 늦게 반응한다
+  // 클릭 횟수로 나눈다(동작은 sessionActions.ts) — 한 번·두 번 클릭을 따로 기다리면 줄 안의 스위치·단추까지 늦게 반응한다
   function click(e: MouseEvent) {
-    if (e.detail >= 2) sessionAction(ended ? "resume" : "focus", s.id);
-    else sessionAction("activate", s.id);
+    const call = rowClickCall(s, e.detail);
+    sessionAction(call.action, s.id, call.carryOn);
   }
 
   function showMenu(e: MouseEvent) {
     e.stopPropagation();
-    let items: MenuItem[];
-    if (s.state === "ended") {
-      items = [{ label: s.paused ? "세션 재개 (이어서 진행)" : "세션 다시 열기", action: () => sessionAction("resume", s.id) }];
-    } else if (s.state === "paused") {
-      items = [
-        { label: "세션 재개", action: () => sessionAction("resume_paused", s.id) },
-        { separator: true },
-        { label: "세션 중단", action: () => sessionAction("stop", s.id) },
-      ];
-    } else {
-      items = [
-        { label: "일시중지", enabled: s.state !== "idle" && s.canDrive, action: () => sessionAction("pause", s.id) },
-        { separator: true },
-        { label: "세션 중단", action: () => sessionAction("stop", s.id) },
-      ];
-    }
+    const items: MenuItem[] = sessionMenuEntries(s).map((entry) =>
+      "separator" in entry
+        ? entry
+        : { label: entry.label, enabled: entry.enabled, action: () => sessionAction(entry.action, s.id, entry.carryOn) },
+    );
     openMenu(items, e);
   }
 

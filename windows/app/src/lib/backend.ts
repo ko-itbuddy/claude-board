@@ -221,10 +221,10 @@ export function setBoardMini(on: boolean) {
 
 // ── 세션·계정·업데이트 ─────────────────────────────────────────
 
-// activate = 그 세션의 터미널 앱만 앞으로, focus = 그 세션 창(탭)으로 이동, resume = 종료 세션 이어 열기,
-// pause·resume_paused·stop = 일시중지·재개·중단(중단 확인 대화상자는 백엔드가 띄운다)
-export function sessionAction(action: SessionAction, id: string) {
-  fire("session_action", { action, id });
+// activate = 그 세션의 터미널 앱만 앞으로, focus = 그 세션 창(탭)으로 이동, reopen = 꺼진 세션 이어 열기(carryOn 이면 "이어서 진행" 문구 포함),
+// pause·resume·stop = 일시중지·일시중지한 세션 재개·중단(중단 확인 대화상자는 백엔드가 띄운다)
+export function sessionAction(action: SessionAction, id: string, carryOn?: boolean) {
+  fire("session_action", { action, id, carryOn });
 }
 
 export function switchAccount(id: string) {

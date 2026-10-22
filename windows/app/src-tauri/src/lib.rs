@@ -11,6 +11,7 @@ mod notify;
 mod pty;
 mod readers;
 mod ring;
+mod session_action;
 mod settings;
 mod store;
 mod terminal;
