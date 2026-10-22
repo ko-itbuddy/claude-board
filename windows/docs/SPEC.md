@@ -585,28 +585,42 @@ Ctrl+Alt 를 누르는 동안(창이 포커스를 잃으면 해제) 탭의 × �
 
 | 자산 | 내용 |
 |---|---|
-| `ClaudeBoard-windows-x64.zip` | `ClaudeBoard.exe`, `claude-board-hook.exe`, `LICENSE`, `README.md` |
+| `ClaudeBoard-windows-x64.zip` | 최상위 `ClaudeBoard.exe`, `claude-board-hook.exe`, `LICENSE`, `README.md`, `THIRD_PARTY_NOTICES.txt` + `plugins\md-render\` 아래 다섯 파일(아래 「md-render 배치」) |
 | `ClaudeBoard-windows-x64.zip.sha256` | `<sha256 16진수>  ClaudeBoard-windows-x64.zip` |
-| `ClaudeBoard-<버전>-setup.exe` | Tauri NSIS 설치 프로그램(사용자 단위 설치, 설치 후 `claude-board-hook.exe setup` 실행) |
+| `ClaudeBoard-<버전>-setup.exe` | Tauri NSIS 설치 프로그램(사용자 단위 설치, 설치 후 `claude-board-hook.exe setup` 실행). 설치 폴더에 zip 과 같은 배치로 풀린다 |
 | `install.ps1`, `uninstall.ps1` | 설치·업데이트·제거 스크립트 |
 | `VERSION` | 버전 한 줄 |
 
 OS 빌드 검사: `ClaudeBoard.exe` 가 `CreatePseudoConsole` 을 정적으로 가져오므로 Windows 10 1809(빌드 17763) 미만에서는 실행 때 진입점 오류로 뜨지 않는다. 두 설치 경로 모두 시작 전에 빌드를 보고 17763 미만이면 멈춘다. 빌드는 레지스트리 `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\CurrentBuildNumber` 를 먼저 읽는다(호환 매니페스트가 없는 프로세스는 `OSVersion`·`GetVersionEx` 가 거짓 버전을 받는다). 못 읽을 때만 `OSVersion`(install.ps1)·`WinVer.nsh`(setup.exe)로 대신하고, 그것도 못 얻으면 검사를 건너뛴다. install.ps1 은 `throw`(exit 없음), setup.exe 는 `packaging/nsis-hooks.nsh` 의 숨은 첫 Section `-ClaudeBoardOsBuild` 가 MessageBox(`/SD IDOK` 라 `/S` 에서 멈추지 않음) 뒤 `Abort`(`/S` 종료 코드 2)한다. Tauri 템플릿의 `NSIS_HOOK_PREINSTALL` 은 `Section WebView2`(부트스트래퍼 내려받기) 뒤에 불리므로 쓰지 않는다. 시험: `windows/ci/os-build-check.ps1`(5.1·pwsh 단위 시험).
+
+**md-render 배치.** macOS 앱이 `Contents/Resources/plugins/md-render/` 에 싣는 것과 같은 다섯 파일만 이름으로 골라(`tests\`·Claude Code 가 만드는 `tsconfig.json`·`.claude-plugin\types\` 는 싣지 않는다) 설치 폴더 아래 같은 상대 경로로 둔다. 릴리스 zip 과 setup.exe(Tauri `bundle.resources`)가 똑같다.
+
+```
+<설치 폴더>\ClaudeBoard.exe, claude-board-hook.exe, LICENSE, README.md, THIRD_PARTY_NOTICES.txt (+ setup.exe 는 uninstall.exe)
+<설치 폴더>\plugins\md-render\LICENSE
+<설치 폴더>\plugins\md-render\README.md
+<설치 폴더>\plugins\md-render\.claude-plugin\plugin.json
+<설치 폴더>\plugins\md-render\hooks\hooks.json
+<설치 폴더>\plugins\md-render\hooks\register.tsx
+```
+
+설치 폴더는 setup.exe 가 `%LOCALAPPDATA%\Claude Board`, `install.ps1` 이 `%LOCALAPPDATA%\Programs\Claude Board`(setup.exe 로 깐 폴더가 있으면 그쪽)다. 보드는 시작할 때 이 폴더를 `%USERPROFILE%\.claude\notifier\plugins\md-render` 로 옮겨 쓰고(앱 쪽 몫) 그 경로를 `--plugin-dir` 로 넘긴다. 설치 폴더 안 경로를 바로 넘기지 않는 것은 Claude Code 가 플러그인 폴더에 `tsconfig.json` 등을 쓰기 때문이다.
+`THIRD_PARTY_NOTICES.txt` 의 원본은 저장소의 `windows/packaging/THIRD_PARTY_NOTICES.txt`(xterm.js·애드온 셋·md-render 의 라이선스 원문)다. zip 은 자산 묶기 단계가 최상위에 복사하고, setup.exe 는 `bundle.resources` 에 같은 파일을 넣어 설치 폴더 최상위에 둔다.
 
 setup.exe 메모(실기 확인): `/S` 로 같은 버전을 다시 설치하면 Tauri NSIS 는 옛 제거 프로그램을 부르지 않는다 — PREUNINSTALL 의 제자리 건너뛰기(`$EXEDIR == $INSTDIR`)는 GUI 업그레이드에서 쓰인다(제자리 제거 `uninstall.exe /S _?=<폴더>` 는 금고·hook·자동 실행 값을 남김을 확인). NSIS 제거 프로그램이 스스로 지우는 Run 값 이름은 `Claude Board` 이고 setup 이 쓰는 값은 `ClaudeBoard` 라, 자동 실행 값은 PREUNINSTALL 의 `uninstall` 이 지운다.
 
 ### 8.2 `install.ps1`
 
 `irm https://raw.githubusercontent.com/suhojang/claude-board/main/windows/packaging/install.ps1 | iex` (처음 설치·업데이트 같은 명령). 인자 `-Version <v>`(없으면 API 로 최신 `windows-v*`), `-Update`(묻지 않음).
-1) 처음 설치(settings.json 에 `.claude/notifier/` 가 없음)이고 `-Update` 가 아니면 hook 11개와 환경변수를 등록할지 묻는다(Enter = 예). 2) zip·sha256 받기 → 해시 확인(다르면 중단) → 임시 폴더에 풀기. 3) 실행 중인 `ClaudeBoard.exe` 종료 → `%LOCALAPPDATA%\Programs\Claude Board\` 에 바꿔 넣기(실패하면 되돌리기) → `Unblock-File`. 4) `claude-board-hook.exe setup --app <경로>`. 5) 보드 실행. 6) 처음 설치면 "이미 실행 중인 Claude Code 세션은 다시 시작해야 hook 이 적용됩니다". Windows PowerShell 5.1 에서도 돌게 쓴다.
-`uninstall.ps1`: `claude-board-hook.exe uninstall` → 앱 폴더 삭제 → 안내.
+1) 처음 설치(settings.json 에 `.claude/notifier/` 가 없음)이고 `-Update` 가 아니면 hook 11개와 환경변수를 등록할지 묻는다(Enter = 예). 2) zip·sha256 받기 → 해시 확인(다르면 중단) → 임시 폴더에 풀기. 3) 실행 중인 `ClaudeBoard.exe` 종료 → `%LOCALAPPDATA%\Programs\Claude Board\` 에 바꿔 넣기(실패하면 되돌리기) → `Unblock-File`. 바꿔 넣는 단위는 zip 최상위 파일마다 하나와 `plugins\md-render\` 폴더 하나다. 원래 것은 `.old-<시각>`(폴더는 `plugins\md-render.old-<시각>`)으로 비켜 두었다가 모두 끝나면 지우고, 하나라도 실패하면 거꾸로 되돌린다. 2)가 끝나면 3)에 들어가기 전에 zip 에 `ClaudeBoard.exe`·`claude-board-hook.exe` 와 `plugins\md-render\` 의 다섯 파일이 모두 있는지, `plugins\md-render\` 밖 하위 폴더에 모르는 파일이 없는지 확인해 어긋나면 아무것도 건드리지 않고 `받은 zip 에 <경로> 가 없습니다.` 로 멈춘다. 4) `claude-board-hook.exe setup --app <경로>`. 5) 보드 실행. 6) 처음 설치면 "이미 실행 중인 Claude Code 세션은 다시 시작해야 hook 이 적용됩니다". Windows PowerShell 5.1 에서도 돌게 쓴다.
+`uninstall.ps1`: 보드가 옮겨 쓴 `%USERPROFILE%\.claude\notifier\plugins\md-render` 사본 삭제(macOS `Uninstall.command` 가 `plugins` 를 지우는 것과 같다. 이 경로는 보드가 쓰는 자리 하나뿐이고 Claude Code 가 플러그인 폴더에 만드는 파일은 `tsconfig.json`·`.claude-plugin\types\` 뿐이라 경로만 보고 통째로 지운다. 링크(junction)면 링크만 뗀다. 비어 있으면 `plugins` 도 지운다. `claude-board-hook.exe uninstall` 이 notifier 를 비었을 때만 지우므로 그보다 먼저 한다) → `claude-board-hook.exe uninstall` → 앱 폴더 삭제(`plugins\md-render\` 포함) → 안내. setup.exe 로 제거할 때의 사본 삭제는 `claude-board-hook.exe uninstall` 이 맡는다.
 
 ### 8.3 CI·자동 릴리스 — `.github/workflows/windows.yml`
 
 - 계기: `windows/**`·워크플로 파일이 바뀐 push(모든 브랜치)·pull_request, workflow_dispatch.
-- build 작업(windows-latest): Rust stable, Node 22, `cargo test`(windows 워크스페이스), `cargo build --release -p claude-board-hook`, 앱 `npm ci` → `npx tauri build`(NSIS), 자산 묶기(§8.1), `actions/upload-artifact` 로 올리기.
+- build 작업(windows-latest): Rust stable, Node 22, `claude plugin validate plugins/md-render --strict`·`claude plugin test plugins/md-render`(Claude Code `@anthropic-ai/claude-code@2.1.288` 고정 설치, 인증 불필요)와 같은 검사를 `C:\Temp\한글 폴더\md-render` 사본에서, `cargo test`(windows 워크스페이스), `cargo build --release -p claude-board-hook`, 앱 `npm ci` → `npx tauri build`(NSIS), 자산 묶기(§8.1), `actions/upload-artifact` 로 올리기.
 - smoke 작업(windows-latest, build 뒤): 아티팩트로 실제 설치·화면을 확인한다. 러너는 화면 세션이 있는 Windows Server 2025 이고 기본 터미널이 Windows Terminal 이다.
-  `windows/ci/install-checks.ps1`(설치 확인 — 실패하면 작업 실패): setup.exe `/S` 설치 → 등록된 hook 을 가짜 Claude Code(node.exe 를 `claude.exe` 로 복사) 아래에서 그대로 실행 → 같은 버전 재설치·제자리 제거 → `/S` 제거, install.ps1·uninstall.ps1 을 Windows PowerShell 5.1 에서 웹 호출을 같은 이름의 함수로 가로채 실행(처음 설치 거부·`-Update` 설치·틀린 sha256 거부).
+  `windows/ci/install-checks.ps1`(설치 확인 — 실패하면 작업 실패. 모든 설치 시나리오가 `plugins\md-render\` 다섯 파일의 유무를 확인한다. 시나리오 5 는 zip 에 파일이 빠졌을 때의 거부, 폴더가 막혔을 때의 되돌리기, uninstall.ps1 의 notifier 사본 삭제도 확인한다): setup.exe `/S` 설치 → 등록된 hook 을 가짜 Claude Code(node.exe 를 `claude.exe` 로 복사) 아래에서 그대로 실행 → 같은 버전 재설치·제자리 제거 → `/S` 제거, install.ps1·uninstall.ps1 을 Windows PowerShell 5.1 에서 웹 호출을 같은 이름의 함수로 가로채 실행(처음 설치 거부·`-Update` 설치·틀린 sha256 거부).
   `windows/ci/screen-checks.ps1`(화면 확인 — 정보용, `continue-on-error`): 보드 창·단일 실행·알림 패널의 포커스·확장 스타일·스스로 닫힘, 스크린샷. 결과표·로그·스크린샷은 `smoke-results` 아티팩트.
 - release 작업: main 의 push 일 때만, build·smoke 뒤(설치 확인이 실패하면 릴리스하지 않는다). `windows/VERSION` 을 읽어 태그 `windows-v<버전>` 이 아직 없고 `windows/CHANGELOG.md` 에 `## <버전>` 항목이 있으면 그 항목을 설명으로 `gh release create windows-v<버전> … --latest=false --title "Claude Board for Windows <버전>"`. 항목이 없으면 실패로 끝낸다(macOS release.sh 와 같은 규칙).
 - 배포 순서(관리자): `windows/CHANGELOG.md` 맨 위에 항목 → `windows/VERSION` 올리기(`windows/packaging/release.sh <버전>` — README·설치 가이드의 setup.exe·릴리스 링크도 바꾼다) → main 에 push → CI 가 빌드·릴리스.
