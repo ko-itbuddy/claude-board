@@ -3,10 +3,10 @@
 // 탭 줄은 지금 경로의 탭만 보인다. 셸이 끝나면 그 탭이 닫히고 선택은 같은 경로의 이웃 탭 → 이웃 경로 → 빈 상태로 간다.
 // 터미널 출력은 보드의 1초 상태 묶음에 싣지 않고, 여기서 term_list 와 채널로 채운다(이벤트 기반).
 import { tick } from "svelte";
-import { inTauri, setTerminalExpanded, termKill, termList, termSpawn, termWrite } from "$lib/backend";
+import { inTauri, onSnapshot, setTerminalExpanded, termKill, termList, termSpawn, termWrite } from "$lib/backend";
 import { board } from "$lib/board/store.svelte";
 import { mockTabs } from "$lib/mock";
-import type { BoardSurface, BoardTab, LeafPhase, Session, State, TermId, TermInfo } from "$lib/types";
+import type { BoardSurface, BoardTab, LeafPhase, Session, Snapshot, State, TermId, TermInfo } from "$lib/types";
 import {
   folderNameOf,
   homeFromGroups,
@@ -24,6 +24,7 @@ import {
   workspacesOf,
   wrapStep,
 } from "./tabLogic";
+import { pairSessions, placeOf, type SessionPlace, type SurfaceChange } from "./place";
 import { hasLeaf, leaves } from "./split";
 import { TermController } from "./term";
 
@@ -57,6 +58,10 @@ export const TerminalHub = $state({
   /** 새 세션 창이 떠 있는가 */
   sheet: false,
   leaves: {} as Record<string, LeafState>,
+  /** 세션·화면 짝짓기(SPEC §5.12, W2) — 사는 세션 id → 그 세션이 달린 화면 id. pair() 가 상태 묶음마다 다시 쥔다 */
+  paired: {} as Record<string, string>,
+  /** 화면 안에서 시작한 headless 세션만(mac TerminalHub.tabOwnedHeadless) — 칩 "CB -p" 의 함께 끝남 근거 */
+  tabOwnedHeadless: {} as Record<string, true>,
 });
 
 // 컨트롤러는 xterm 을 쥔 일반 객체라 반응형 상태에 넣지 않는다
@@ -215,6 +220,43 @@ function focusSelected() {
 
 const expanded = () => board.snap?.settings.terminalExpanded ?? false;
 
+// ── 세션·화면 짝짓기(SPEC §5.12, W2) ──────────────────────────
+
+// 스냅샷의 모든 세션 — 경로 그룹에 묶여 도는 세션들을 평평하게 편다
+function allSessions(snap: Snapshot): Session[] {
+  return snap.groups.flatMap((g) => g.sessions);
+}
+
+/**
+ * 화면 하나에 짝짓기 고침을 새긴다(place.ts 의 changes 는 hub 만 화면을 고친다).
+ * 화면이 이미 닫혔으면 건너뛴다 — 스냅샷이 고침보다 뒤에 도는 것은 닫힘과의 경합이라 숱하게 일어나는 일이고,
+ * 닫힌 화면에 새길 고침은 더는 의미가 없다(다음 스냅샷이 여는 화면에 새 고침을 준다)
+ */
+function applyChange(change: SurfaceChange) {
+  const surface = surfaceOf(change.surfaceId);
+  if (!surface) return;
+  if (change.kind === "sessionId") surface.sessionId = change.sessionId;
+  else if (change.kind === "command") surface.command = change.command;
+  else {
+    // claude 가 끝나 셸 화면으로 돌아간다 — 명령을 비우고 꾸미기 끔을 푼다(place.test 의 surfaceAfter 가 같은 몸을 쓴다)
+    surface.command = null;
+    surface.mdRenderOff = false;
+  }
+}
+
+/** 상태 묶음 세션들로 짝짓기를 다시 쥔다 — 화면을 먼저 고치고 짝·소유 표를 갈아낸다(mac TerminalHub.pair) */
+export function pair(sessions: Session[], runsClaude: TermId[] | null) {
+  const plan = pairSessions({ sessions, surfaces: TerminalHub.surfaces, runsClaude });
+  for (const change of plan.changes) applyChange(change);
+  TerminalHub.paired = { ...plan.paired };
+  TerminalHub.tabOwnedHeadless = { ...plan.owned };
+}
+
+/** 세션이 어디서 도는지 화면 고침 뒤의 상태로 가른다(mac TerminalHub.place) — 세션 줄의 위치 칩이 부른다 */
+export function place(s: Session): SessionPlace {
+  return placeOf(s, { paired: TerminalHub.paired, owned: TerminalHub.tabOwnedHeadless }, TerminalHub.surfaces, board.snap?.runsClaude ?? null);
+}
+
 // ── 시작 ──────────────────────────────────────────────────────
 
 /** 페이지를 새로 고친 뒤 아직 도는 터미널을 탭으로 이어받는다. 빈 탭은 만들지 않는다 — 탭이 생길 때까지 빈 상태. 여러 번 불러도 한 번만 한다 */
@@ -240,6 +282,8 @@ export async function startHub() {
       if (tab && t.name) tab.customName = t.name;
     }
   }
+  // 상태 묶음이 올 때마다 세션·화면 짝짓기를 다시 쥔다(SPEC §5.12, W2) — 화면 sessionId·명령은 여기서 따라간다
+  onSnapshot((snap) => pair(allSessions(snap), snap.runsClaude ?? null));
 }
 
 // ── 고르기 ────────────────────────────────────────────────────

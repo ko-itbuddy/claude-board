@@ -5,6 +5,7 @@
   import { fly, fade } from "svelte/transition";
   import type { Session } from "$lib/types";
   import { removeSession, sessionAction, toggleSubCollapsed } from "$lib/backend";
+  import { place } from "$lib/terminal/hub.svelte";
   import ContextLabel from "./ContextLabel.svelte";
   import Fit from "./Fit.svelte";
   import Icon from "./Icon.svelte";
@@ -94,7 +95,7 @@
         {#snippet content(level)}
           <span class="items">
             <span class="num el">{ended ? `${clock(s.updated)} 종료` : s.state === "idle" ? `${elapsed(s.since, now)} 전` : elapsed(s.since, now)}</span>
-            {#if s.place}<PlaceChip place={s.place} headless={s.headless} />{/if}
+            <PlaceChip place={place(s)} headless={s.headless} appName={s.appName} mode={s.state === "ended" ? null : s.mode} />
             {#if s.subagents.length || s.shells > 0 || s.ctx || s.brain}<span>·</span>{/if}
             {#if s.subagents.length}
               {@const n = running > 0 && running < s.subagents.length ? `${running}/${s.subagents.length}` : `${s.subagents.length}`}

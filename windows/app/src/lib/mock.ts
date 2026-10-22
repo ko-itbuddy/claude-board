@@ -49,6 +49,12 @@ function session(cwd: string, p: Partial<Session> & { id: string; state: State }
     muted: false,
     limitAt: null,
     canDrive: !p.headless,
+    // 세션 짝짓기 입력(SPEC §5.12, W2) — 브라우저 개발 화면은 파일 pid·콘솔이 없어 전부 null 로 둔다.
+    // 탭 화면의 sessionId(mockTabs)로 이어진 세션이 place 의 held 길로 탭 소속(CB 칩)이 된다
+    tty: null,
+    tabAncestor: null,
+    mode: null,
+    appName: null,
     ...p,
   };
 }
@@ -145,6 +151,7 @@ const old: Account = { id: "acc-old|org-old", email: "old@example.com", org: "",
 
 const S: Snapshot = {
   now: t0,
+  runsClaude: [], // 지금 claude 가 도는 보드 터미널 — 가짜 화면에서 실제로 도는 claude 는 없다
   groups: initialGroups(),
   allMuted: false,
   counts: { waiting: 0, working: 0, idle: 0, paused: 0, ended: 0 },
