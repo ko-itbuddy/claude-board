@@ -6695,6 +6695,7 @@ final class TerminalAreaView: NSView {
         let away = base.offsetBy(dx: TerminalHub.shared.boardOnLeft ? base.width : -base.width, dy: 0)
         settingsMoving += 1
         let turn = settingsMoving
+        if on { SettingsScreen.shared.visible = true }
         if on, settings.isHidden {
             settings.frame = style == .slide ? away : base
             settings.alphaValue = style == .none ? 1 : 0
@@ -6710,7 +6711,10 @@ final class TerminalAreaView: NSView {
             MainActor.assumeIsolated {
                 guard let self, turn == self.settingsMoving else { return }
                 self.settingsMoving = 0
-                if !on { self.settings.isHidden = true }
+                if !on {
+                    self.settings.isHidden = true
+                    SettingsScreen.shared.visible = false
+                }
                 self.needsLayout = true
             }
         })
@@ -8115,6 +8119,7 @@ enum SettingsTransition: String, CaseIterable, Identifiable {
     @Published var section: SettingsSection = .general
     @Published var query = ""
     @Published private(set) var focusSearch = 0   // 바뀌면 검색 칸에 포커스
+    @Published var visible = false                 // 화면에 올라와 있다(내려가는 전환 중에도) — 아니면 내용을 그리지 않는다
     private var collapseOnClose = false            // 접힌 보드에서 열었다 — 닫을 때 다시 접는다
     private var observer: NSObjectProtocol?
 
@@ -8243,8 +8248,13 @@ enum SettingsStyle {
 }
 
 // 설정 화면 호스팅 뷰 — 글자 칸이 포커스를 받아야 해서 PassiveHostingView 가 아니다. 창 바탕 끌기(isMovableByWindowBackground)로 창이 움직이지 않게
+// 빈 곳(SwiftUI 가 받지 않는 자리)을 눌러도 뒤에 가려진 터미널 화면으로 가지 않게 자기가 받는다
 final class SettingsHostingView<Content: View>: NSHostingView<Content> {
     override var mouseDownCanMoveWindow: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden else { return nil }
+        return super.hitTest(point) ?? (frame.contains(point) ? self : nil)
+    }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
@@ -8274,7 +8284,7 @@ struct SettingsView: View {
     @ObservedObject private var fontScale = BoardFontScale.shared
     @ObservedObject private var updater = Updater.shared
     @ObservedObject private var login = LoginItem.shared
-    @ObservedObject private var hub = TerminalHub.shared
+    @AppStorage("boardSide") private var boardSide = "right"
     @AppStorage("pinned") private var pinned = true
     @AppStorage("mascot") private var mascot: Mascot = .tralalero
     @AppStorage("terminalAnimation") private var animation = false
@@ -8289,8 +8299,13 @@ struct SettingsView: View {
     @FocusState private var searching: Bool
 
     private var app: AppDelegate? { NSApp.delegate as? AppDelegate }
+    private var hub: TerminalHub { .shared }   // 지켜보지 않는다 — 탭·⌘ 누름마다 바뀌어 설정 화면을 다시 그리게 된다
 
     var body: some View {
+        if model.visible { screen } else { Color.clear }
+    }
+
+    private var screen: some View {
         HStack(spacing: 0) {
             sidebar
             Rectangle().fill(SettingsStyle.line).frame(width: 1)
@@ -8299,6 +8314,10 @@ struct SettingsView: View {
         .background(SettingsStyle.content)
         .preferredColorScheme(.dark)
         .boardFont(13)
+        .onAppear {
+            position = notifyPosition()
+            DispatchQueue.main.async { searching = true }
+        }
         .onChange(of: model.focusSearch) { _, _ in
             position = notifyPosition()
             DispatchQueue.main.async { searching = true }
@@ -8433,15 +8452,15 @@ struct SettingsView: View {
     private var general: [SettingsItem] {
         [
             SettingsItem(id: "pin", section: .general, card: "보드", title: "항상 위에 고정",
-                         detail: "다른 앱을 눌러도 보드가 위에 남습니다. 화면 전체로 펼친 동안에는 쉬어요", keywords: "⌘P 플로팅") {
+                         detail: "다른 앱을 눌러도 보드가 위에 남습니다. 화면 전체로 펼친 동안에는 쉽니다", keywords: "⌘P 플로팅") {
                 AnyView(SettingsSwitch(isOn: Binding(get: { pinned }, set: { setPinned($0) })))
             },
             SettingsItem(id: "login", section: .general, card: "보드", title: "로그인할 때 열기",
-                         detail: "Mac 에 로그인하면 보드를 띄웁니다. 바꾸면 다음 로그인부터 적용돼요", keywords: "로그인 시 실행 시작 자동 실행") {
+                         detail: "Mac 에 로그인하면 보드를 띄웁니다. 바꾸면 다음 로그인부터 적용됩니다", keywords: "로그인 시 실행 시작 자동 실행") {
                 AnyView(SettingsSwitch(isOn: Binding(get: { login.on }, set: { login.set($0) })))
             },
             SettingsItem(id: "mascot", section: .general, card: "캐릭터", title: "제목 옆 캐릭터",
-                         detail: "세션 상태를 말풍선으로 알려 주는 캐릭터. 캐릭터를 오른쪽 클릭해도 고를 수 있어요",
+                         detail: "세션 상태를 말풍선으로 알려 주는 캐릭터. 캐릭터를 오른쪽 클릭해도 고를 수 있습니다",
                          keywords: Mascot.allCases.map(\.name).joined(separator: " "), kind: .block) {
                 AnyView(MascotGrid(selection: $mascot))
             },
@@ -8452,7 +8471,7 @@ struct SettingsView: View {
         [
             SettingsItem(id: "side", section: .window, card: "배치", title: "보드 위치",
                          detail: "펼치면 터미널 반대쪽, 접으면 화면 그쪽 끝에 붙습니다", keywords: "오른쪽 왼쪽") {
-                AnyView(BoardSidePicker(left: Binding(get: { hub.boardOnLeft }, set: { setBoardSide(left: $0) })))
+                AnyView(BoardSidePicker(left: Binding(get: { boardSide == "left" }, set: { setBoardSide(left: $0) })))
             },
             SettingsItem(id: "opacity", section: .window, card: "배치", title: "투명도",
                          detail: "마우스가 보드 창 밖에 있을 때의 투명도. 화면 전체로 펼친 창은 늘 불투명합니다", keywords: "투명 불투명") {
@@ -8486,7 +8505,7 @@ struct SettingsView: View {
         guard let app else { return [] }
         return [
             SettingsItem(id: "allMute", section: .notify, card: "알림", title: "모든 알림 끄기",
-                         detail: "켜면 모든 세션의 작업 완료·승인 대기 알림을 띄우지 않습니다. 끄면 세션마다 정해 둔 대로 돌아가요",
+                         detail: "켜면 모든 세션의 작업 완료·승인 대기 알림을 띄우지 않습니다. 끄면 세션마다 정해 둔 대로 돌아갑니다",
                          keywords: "음소거 종") {
                 AnyView(AllMuteSwitch(store: app.store))
             },
@@ -8518,7 +8537,7 @@ struct SettingsView: View {
                 AnyView(SettingsTextField(text: $sessionCommand, placeholder: builtinSessionCommand))
             },
             SettingsItem(id: "sessionMd", section: .terminal, card: "새 세션", title: "답변 마크다운 꾸미기",
-                         detail: "새 세션을 열 때 기본으로 켭니다(md-render). 새 세션 창에서 세션마다 바꿀 수 있어요", keywords: "md-render") {
+                         detail: "새 세션을 열 때 기본으로 켭니다(md-render). 새 세션 창에서 세션마다 바꿀 수 있습니다", keywords: "md-render") {
                 AnyView(SettingsSwitch(isOn: $sessionMdRender).disabled(mdRenderDir == nil))
             },
         ]
