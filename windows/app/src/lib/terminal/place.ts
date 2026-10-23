@@ -33,7 +33,15 @@ export interface PairInput {
   sessions: Session[]; // 세션 파일 묶음
   surfaces: BoardSurface[]; // 지금 열린 모든 보드 화면(탭 트리의 잎)
   runsClaude?: TermId[] | null; // 지금 claude 가 도는 보드 터미널
+  now?: number; // 지금 시각(ms) — typedAt 창을 재는 기준, 비우면 Date.now()
 }
+
+/** 셸에 claude 명령을 친 지 이만큼은 claude 가 도는 것으로 본다(mac runsClaude 의 typedAt < 3초) */
+export const TYPED_WINDOW_MS = 3000;
+
+/** 화면에 방금(3초 안) claude 명령을 쳤나 — 프로세스 스냅샷이 따라오기 전의 찰나를 메운다 */
+const typedRecently = (surface: BoardSurface, now: number): boolean =>
+  surface.typedAt != null && now - surface.typedAt < TYPED_WINDOW_MS;
 
 /**
  * 세션을 화면들과 짝짓는다 — mac ClaudeBoard.swift TerminalHub.pair 의 순수 판. 끝난 세션은 짝짓지 않는다:
@@ -47,7 +55,7 @@ export interface PairInput {
  * 3.(화면 고침) 명령이 없는 셸 화면에 주 세션(mode 없는 대화형)이 짝지어 오면 command = "claude" 고침; 주 세션도 없고
  *   runsClaude 도 없어 돌지 않는 화면에 명령이 남아 있으면 명령 비움 + 꾸미기 끔 품음(셸 화면으로 돌아간다) 고침.
  */
-export function pairSessions({ sessions, surfaces, runsClaude }: PairInput): SurfacePlan {
+export function pairSessions({ sessions, surfaces, runsClaude, now = Date.now() }: PairInput): SurfacePlan {
   const runningTerms = new Set<TermId>(runsClaude ?? []);
   const paired: Record<string, string> = {};
   const owned: Record<string, true> = {};
@@ -84,7 +92,10 @@ export function pairSessions({ sessions, surfaces, runsClaude }: PairInput): Sur
   // 규칙 3 — 화면마다 명령 새기기·비우기. 돌고 있음 = 주 세션이 있거나 그 termId 에서 claude 가 도는 중(runsClaude)
   for (const surface of surfaces) {
     const session = main.get(surface.id);
-    const running = session !== undefined || (surface.termId !== null && runningTerms.has(surface.termId));
+    const running =
+      session !== undefined
+      || (surface.termId !== null && runningTerms.has(surface.termId))
+      || typedRecently(surface, now);
     // 셸 프롬프트에서 사람이 친 대화형 claude(mode 없음)도 claude 화면으로 끝나면 이어 열린다(-p·--bg 는 뺀다)
     if (surface.command === null && session !== undefined && (session.mode ?? null) === null) {
       changes.push({ kind: "command", surfaceId: surface.id, command: "claude" });
@@ -110,12 +121,15 @@ export function placeOf(
   pairing: SessionPairing,
   surfaces: BoardSurface[],
   runsClaude?: TermId[] | null,
+  now: number = Date.now(),
 ): SessionPlace {
   const runningTerms = new Set<TermId>(runsClaude ?? []);
   const held = surfaces.find(
     (surface) =>
       surface.sessionId === session.id
-      && (session.state !== "ended" || (surface.termId !== null && runningTerms.has(surface.termId))),
+      && (session.state !== "ended"
+        || (surface.termId !== null && runningTerms.has(surface.termId))
+        || typedRecently(surface, now)),
   );
   const surfaceId: string | undefined = pairing.paired[session.id] ?? held?.id;
   if (surfaceId !== undefined) {

@@ -219,3 +219,32 @@ test("pairSessions 는 입력을 고치지 않는다 — 고침은 계획(change
   assert.deepEqual(f1, beforeSurface); // 세션 id 대신을 hub 의 mutator 가 하도록 화면은 그대로다
   assert.deepEqual(a, beforeSession);
 });
+
+// ── typedAt — 명령을 친 직후 3초는 claude 가 도는 것으로 본다 ─────────────────
+
+test("typedAt 3초 안 — 끝난 id 를 쥔 화면은 tab 으로 남고 reset 이 나오지 않는다", () => {
+  const f1 = surface({ id: "f1", termId: "t1", sessionId: "old", command: "claude", typedAt: 10_000 });
+  const ended = session({ id: "old", state: "ended" });
+  const plan = pairSessions({ sessions: [ended], surfaces: [f1], now: 12_999 });
+  assert.deepEqual(plan.changes, []);
+  assert.deepEqual(placeOf(ended, plan, [f1], [], 12_999), { kind: "tab", surfaceId: "f1", headless: false });
+});
+
+test("typedAt 3초가 지나고 runsClaude 도 없으면 ended 가 되고 reset 이 나온다", () => {
+  const f1 = surface({ id: "f1", termId: "t1", sessionId: "old", command: "claude", typedAt: 10_000 });
+  const ended = session({ id: "old", state: "ended" });
+  const plan = pairSessions({ sessions: [ended], surfaces: [f1], now: 13_000 });
+  assert.deepEqual(plan.changes, [{ kind: "reset", surfaceId: "f1" }]);
+  assert.deepEqual(placeOf(ended, plan, [f1], [], 13_000), { kind: "ended" });
+});
+
+test("typedAt 가 null 이면 기존 동작 그대로, now 를 비우면 Date.now() 를 쓴다", () => {
+  const f1 = surface({ id: "f1", termId: "t1", sessionId: "old", command: "claude", typedAt: null });
+  const ended = session({ id: "old", state: "ended" });
+  assert.deepEqual(pairSessions({ sessions: [ended], surfaces: [f1] }).changes, [{ kind: "reset", surfaceId: "f1" }]);
+  const fresh = surface({ id: "f2", termId: "t2", sessionId: "old2", command: "claude", typedAt: Date.now() });
+  assert.deepEqual(pairSessions({ sessions: [], surfaces: [fresh] }).changes, []);
+  assert.deepEqual(placeOf(session({ id: "old2", state: "ended" }), { paired: {}, owned: {} }, [fresh]), {
+    kind: "tab", surfaceId: "f2", headless: false,
+  });
+});
