@@ -47,6 +47,9 @@ async function checkOf(sessionId: string) {
   }
 }
 
+/** 글을 넣은 뒤 Enter 까지 기다리는 시간(ms) — 재개 문구의 200ms 와 같다 */
+const TYPE_TO_ENTER_MS = 200;
+
 // 화면 하나의 걸음 — 글을 붙인 직후에는 한 번 더 확인하고 Enter 까지 간다(그 사이 창이 떴으면 typed 로 남는다)
 async function advance(surfaceId: string) {
   for (let round = 0; round < 2; round++) {
@@ -67,6 +70,8 @@ async function advance(surfaceId: string) {
     if (!ok) return forget(surfaceId);
     if (next.emit === "enter") return;
     steps.set(surfaceId, { kind: "typed" });
+    // 글과 Enter 를 한 덩어리로 보내면 Claude Code 가 붙여넣기로 볼 수 있어 재개 흐름처럼 사이를 띄운다
+    await new Promise<void>((resolve) => setTimeout(resolve, TYPE_TO_ENTER_MS));
   }
 }
 
