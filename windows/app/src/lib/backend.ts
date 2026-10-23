@@ -227,21 +227,21 @@ export function sessionAction(action: SessionAction, id: string, carryOn?: boole
   fire("session_action", { action, id, carryOn });
 }
 
-// 보드가 아직 안 떠 있을 때 쌓인 "세션 열기" 요청 하나를 꺼낸다 — 처음 부르면 프런트엔드가 준비됐다는 표시도 된다 (W3)
-export function takeOpenSession(): Promise<OpenSessionPayload | null> {
-  return call<OpenSessionPayload | null>("take_open_session");
+// 보드가 안 떠 있던 동안 쌓인 "세션 열기" 요청을 모두 꺼낸다(오래된 것부터) — 처음 부르면 프런트엔드가 준비됐다는 표시도 된다.
+// onOpenSession 의 듣기가 끝난 뒤에 불러야 그 사이에 오는 요청을 놓치지 않는다 (W3)
+export function takeOpenSession(): Promise<OpenSessionPayload[]> {
+  return call<OpenSessionPayload[]>("take_open_session");
 }
 
-// 백엔드가 보내는 "세션 열기" 요청(끝난 세션 이어 열기·창으로 이동)
-export function onOpenSession(fn: (p: OpenSessionPayload) => void): () => void {
+// 이어 열기를 마쳤다고 알린다 — 백엔드가 그제서야 일시중지 표시를 지운다
+export function reopenDone(id: string): Promise<void> {
+  return call<void>("reopen_done", { id });
+}
+
+// 백엔드가 보내는 "세션 열기" 요청(끝난 세션 이어 열기·창으로 이동). 듣기가 시작되면 풀린다
+export async function onOpenSession(fn: (p: OpenSessionPayload) => void): Promise<() => void> {
   if (!inTauri) return () => {};
-  let off: (() => void) | undefined;
-  let closed = false;
-  listen<OpenSessionPayload>("board://open-session", (e) => fn(e.payload)).then((unlisten) => (closed ? unlisten() : (off = unlisten)));
-  return () => {
-    closed = true;
-    off?.();
-  };
+  return listen<OpenSessionPayload>("board://open-session", (e) => fn(e.payload));
 }
 
 // 보드 탭이나 콘솔에 단계별 입력을 넣는다(일시중지 Esc, 재개 문구, /rename). 넣을 곳이 없으면 false

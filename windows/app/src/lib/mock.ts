@@ -426,7 +426,9 @@ export async function handle(cmd: string, a: Record<string, unknown>): Promise<u
       fakeTerms.get(str("id"))?.input(String.fromCharCode(...(a.data as number[])));
       return;
     case "take_open_session":
-      return null;
+      return [];
+    case "reopen_done":
+      return;
     case "drive_session":
       return false;
     case "rename_check":

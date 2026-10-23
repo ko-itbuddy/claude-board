@@ -108,12 +108,15 @@ impl ProcessTable {
     }
 }
 
-/// Windows 의 Claude Code 프로세스 판별 — `claude.exe`, 또는 명령줄에 `claude` 가 든 `node.exe`·`bun.exe`.
+const CLAUDE_PACKAGE: &str = "@anthropic-ai/claude-code";
+
+/// Windows 의 Claude Code 프로세스 판별 — `claude.exe`, 또는 명령줄에 Claude Code 패키지(`@anthropic-ai/claude-code`)가 든 `node.exe`·`bun.exe`.
+/// 폴더 이름에 `claude` 가 든 것만으로는 세지 않는다(예: `claude-board` 아래의 node 도구).
 pub fn is_claude_exe(name: &str, cmdline: impl FnOnce() -> Option<Vec<String>>) -> bool {
     let name = name.to_ascii_lowercase();
     match name.as_str() {
         "claude.exe" => true,
-        "node.exe" | "bun.exe" => cmdline().is_some_and(|a| a.iter().any(|s| s.to_lowercase().contains("claude"))),
+        "node.exe" | "bun.exe" => cmdline().is_some_and(|a| a.iter().any(|s| s.to_lowercase().replace('\\', "/").contains(CLAUDE_PACKAGE))),
         _ => false,
     }
 }
@@ -568,6 +571,19 @@ mod tests {
         assert!(!is_claude_exe("node.exe", || Some(vec!["node".into(), "server.js".into()])));
         assert!(!is_claude_exe("bun.exe", || None));
         assert!(!is_claude_exe("claude", || None));
+        // 폴더 이름에만 claude 가 든 node 도구는 아니다
+        let board = || Some(vec!["node.exe".to_string(), r"C:\Users\me\work\claude-board\tools\build.js".to_string()]);
+        assert!(!is_claude_exe("node.exe", board));
+        assert!(!is_claude_exe("bun.exe", || Some(vec!["bun.exe".into(), "/home/me/claude/app.ts".into()])));
+        // 실제 npm 전역 설치 모양
+        let npm = || {
+            Some(vec![
+                r"C:\Program Files\nodejs\node.exe".to_string(),
+                r"C:\Users\me\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\cli.js".to_string(),
+                "--dangerously-skip-permissions".to_string(),
+            ])
+        };
+        assert!(is_claude_exe("node.exe", npm));
     }
 
     #[test]

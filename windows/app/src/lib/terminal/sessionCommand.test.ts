@@ -46,33 +46,52 @@ test("namedCommand 는 정리하지 않은 이름을 명령줄에 넣지 않는�
 
 const ID = "8f3c2a10-1111-4222-8333-444455556666";
 
+// state.rs 가 기록하는 실제 모양 — resumeArgs 는 늘 `--resume <id>` 로 끝난다
+const real = (args) => [...args, "--resume", ID];
+
 test("resumeCommand — 기본은 인자 없이 claude --resume <id>", () => {
+  assert.equal(resumeCommand(real([]), ID, false), `claude --resume ${ID}`);
   assert.equal(resumeCommand([], ID, false), `claude --resume ${ID}`);
 });
 
 test("resumeCommand — 허용 글자만 든 인자는 그대로 남긴다", () => {
   assert.equal(
-    resumeCommand(["--model", "claude-opus-5-5", "--dangerously-skip-permissions"], ID, false),
+    resumeCommand(real(["--model", "claude-opus-5-5", "--dangerously-skip-permissions"]), ID, false),
     `claude --resume ${ID} --model claude-opus-5-5 --dangerously-skip-permissions`,
   );
-  assert.equal(resumeCommand(["--permission-mode=plan"], ID, false), `claude --resume ${ID} --permission-mode=plan`);
+  assert.equal(resumeCommand(real(["--permission-mode=plan"]), ID, false), `claude --resume ${ID} --permission-mode=plan`);
 });
 
 test("resumeCommand — -p·--print 는 뺀다", () => {
-  assert.equal(resumeCommand(["-p", "--model", "m"], ID, false), `claude --resume ${ID} --model m`);
-  assert.equal(resumeCommand(["--print"], ID, false), `claude --resume ${ID}`);
+  assert.equal(resumeCommand(real(["-p", "--model", "m"]), ID, false), `claude --resume ${ID} --model m`);
+  assert.equal(resumeCommand(real(["--print"]), ID, false), `claude --resume ${ID}`);
 });
 
 test("resumeCommand — 허용 밖 글자가 든 인자가 하나라도 있으면 인자를 모두 버린다", () => {
   for (const bad of ["a b", "a&b", "100%", 'a"b', "$HOME", "a;b", "a`b", "한글", "a^b", "a!b", "", "a\nb"]) {
-    assert.equal(resumeCommand(["--model", "ok", bad], ID, false), `claude --resume ${ID}`, JSON.stringify(bad));
+    assert.equal(resumeCommand(real(["--model", "ok", bad]), ID, false), `claude --resume ${ID}`, JSON.stringify(bad));
   }
 });
 
 test("resumeCommand — 이어 열기와 부딪히는 인자(--resume·--name 따위)도 기본 줄로 돌아간다", () => {
   for (const flag of ["--resume", "-r", "--continue", "-c", "--session-id", "--name", "-n", "--name=x", "--resume=abc"]) {
-    assert.equal(resumeCommand([flag, "--model", "m"], ID, false), `claude --resume ${ID}`, flag);
+    assert.equal(resumeCommand(real([flag, "--model", "m"]), ID, false), `claude --resume ${ID}`, flag);
   }
+});
+
+test("resumeCommand — 끝의 --resume <id> 쌍은 떼고 앞의 --model·권한 인자는 살린다", () => {
+  const args = ["--model", "claude-opus-5-5", "--permission-mode", "plan", "--dangerously-skip-permissions", "--resume", ID];
+  assert.equal(
+    resumeCommand(args, ID, false),
+    `claude --resume ${ID} --model claude-opus-5-5 --permission-mode plan --dangerously-skip-permissions`,
+  );
+});
+
+test("resumeCommand — 맨 앞이 @ 인 인자는 파일 첨부로 읽히니 인자를 모두 버린다", () => {
+  for (const bad of ["@secret.txt", "@C:/x"]) {
+    assert.equal(resumeCommand(real(["--model", "m", bad]), ID, false), `claude --resume ${ID}`, bad);
+  }
+  assert.equal(resumeCommand(real(["--model", "a@b"]), ID, false), `claude --resume ${ID} --model a@b`);
 });
 
 test("resumeCommand — 세션 id 모양이 틀리면 던진다", () => {

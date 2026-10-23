@@ -161,8 +161,8 @@ test("살아 있는 메뉴는 항목-구분선-중단 모양이고 중단이 마
 });
 
 // 건너뜀: sessionActions.ts:19 의 STOP_ENTRY 상수 하나를 모든 메뉴가 같은 객체로 돌려준다(복사하지 않음).
-// 호출자가 항목을 고치면 다음 메뉴까지 오염된다. 제품 코드를 고치면(`{ ...STOP_ENTRY }`) skip 을 푼다.
-test("메뉴를 두 번 만들어도 한쪽을 고쳐 다른 쪽이 변하지 않는다(공유 중단 항목 오염)", { skip: "sessionActions.ts:19 STOP_ENTRY 가 호출 사이에 공유된다" }, () => {
+// 호출자가 항목을 고치면 다음 메뉴까지 오염된다. 중단 항목은 호출마다 복사해 돌려준다.
+test("메뉴를 두 번 만들어도 한쪽을 고쳐 다른 쪽이 변하지 않는다(공유 중단 항목 오염)", () => {
   const a = sessionMenuEntries(sessionOf("working"), TAB);
   const b = sessionMenuEntries(sessionOf("working"), TAB);
   a[2].label = "오염";

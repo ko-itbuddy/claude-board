@@ -4,6 +4,7 @@ import {
   doubleClickTime,
   onOpenSession,
   onSnapshot,
+  reopenDone,
   sessionAction,
   setTerminalExpanded,
   showBoard,
@@ -17,6 +18,7 @@ import { TerminalHub, folderName, openShell, pair, place, select, surfaceOf, wor
 import { uniqueTabName } from "./launch";
 import { applyRenames } from "./renameFlow.svelte";
 import { namedCommand, resumeCommand } from "./sessionCommand";
+import { canTakeAsIdle, reopeningActive, type Reopening } from "./reopenGuard";
 import { quoteSessionName, sanitizeSessionName } from "./sessionName";
 import { hasLeaf } from "./split";
 import { typeAtPrompt } from "./typeCommand";
@@ -50,14 +52,27 @@ export function reveal(surfaceId: string) {
   showBoard();
 }
 
+// 이어 열기를 시작한 끝난 세션의 표지 — 세션이 끝남을 벗어나거나 그 터미널에 claude 가 뜨거나 10초가 지날 때까지 같은 세션을 다시 열지 않는다
+const reopening = new Map<string, Reopening>();
+
+function isReopening(id: string): boolean {
+  const r = reopening.get(id);
+  const surface = r && surfaceOf(r.surfaceId);
+  const termRunsClaude = !!surface?.termId && (board.snap?.runsClaude ?? []).includes(surface.termId);
+  const active = reopeningActive(r, { now: Date.now(), sessionEnded: findSession(id)?.state === "ended", termRunsClaude });
+  if (!active) reopening.delete(id);
+  return active;
+}
+
 // 셸 프롬프트에 있고 claude 가 없는 같은 경로의 화면 — 끝난 세션을 새 탭 대신 이어 열 자리(mac launch 의 idle 탭)
 function idleSurface(dir: string): BoardSurface | undefined {
+  const reopeningIds = new Set([...reopening.keys()].filter(isReopening));
   const atPrompt = new Set(board.snap?.atPrompt ?? []);
   const key = workspaceKey(dir);
   return TerminalHub.surfaces.find((x) => {
     const tab = tabOfSurface(x.id);
     const typing = x.typedAt != null && Date.now() - x.typedAt < 3000;
-    return x.termId !== null && atPrompt.has(x.termId) && x.command === null && !typing && tab && workspaceKey(tab.workspace) === key;
+    return canTakeAsIdle(x.sessionId, reopeningIds) && x.termId !== null && atPrompt.has(x.termId) && x.command === null && !typing && tab && workspaceKey(tab.workspace) === key;
   });
 }
 
@@ -68,12 +83,14 @@ function resumeSession(p: OpenSessionPayload) {
   if (where?.kind === "tab") return reveal(where.surfaceId);
   const pending = TerminalHub.surfaces.find((x) => x.sessionId === p.id && x.command !== null);
   if (pending) return reveal(pending.id);
+  if (isReopening(p.id)) return reveal(reopening.get(p.id)!.surfaceId);
   let command: string;
   try {
     const name = quoteSessionName(uniqueTabName(sanitizeSessionName(folderName(p.projectDir || "~"))));
     command = namedCommand(resumeCommand(p.resumeArgs, p.id, p.carryOn), name);
   } catch (e) {
-    return toast(`세션을 이어 열 수 없습니다: ${e instanceof Error ? e.message : e}`);
+    console.error("세션 이어 열기 명령을 만들지 못했습니다", e);
+    return toast("세션을 이어 열 수 없습니다");
   }
   if (!board.snap?.settings.terminalExpanded) setTerminalExpanded(true);
   const idle = idleSurface(p.projectDir);
@@ -81,19 +98,33 @@ function resumeSession(p: OpenSessionPayload) {
     const termId = idle.termId;
     idle.sessionId = p.id;
     idle.command = command;
+    reopening.set(p.id, { since: Date.now(), surfaceId: idle.id });
     void typeAtPrompt(termId, command, {
       alive: () => surfaceOf(idle.id)?.termId === termId && !!TerminalHub.terms[termId],
       touch: () => {
         idle.typedAt = Date.now();
       },
-    });
+    }).then(() => confirmReopened(p));
     return reveal(idle.id);
   }
   const tab = openShell(p.projectDir || null, { command, sessionId: p.id });
-  if (tab) reveal(tab.focused);
+  if (tab) {
+    reopening.set(p.id, { since: Date.now(), surfaceId: tab.focused });
+    reveal(tab.focused);
+    confirmReopened(p);
+  }
 }
 
+// 이어 열기를 마쳤다고 백엔드에 알린다 — 일시중지 표시는 그때 지워진다(실패하면 남아 다시 시도할 수 있다)
+function confirmReopened(p: OpenSessionPayload) {
+  if (p.carryOn) void reopenDone(p.id).catch(() => {});
+}
+
+// 첫 상태 묶음이 오기 전의 요청은 세션 모양을 모르니 미뤄 둔다
+const deferred: OpenSessionPayload[] = [];
+
 function handleOpenRequest(p: OpenSessionPayload) {
+  if (!board.snap) return void deferred.push(p);
   if (p.action === "reopen") return resumeSession(p);
   const s = findSession(p.id);
   if (s) runEffect(s, openSession(s, place(s), true));
@@ -112,11 +143,14 @@ export function startSessionFlow() {
   onSnapshot((snap) => {
     pair(allSessions(snap.groups), snap.runsClaude ?? null);
     void applyRenames();
+    // 화면 상태(board.snap)가 이 묶음으로 갱신된 뒤에 흘린다
+    if (deferred.length) queueMicrotask(() => deferred.splice(0).forEach(handleOpenRequest));
   });
-  onOpenSession(handleOpenRequest);
-  takeOpenSession()
-    .then((p) => p && handleOpenRequest(p))
-    .catch(() => {});
+  // 듣기가 시작된 뒤에 쌓인 요청을 꺼낸다 — 그 사이의 요청은 이벤트로 오거나 줄에 있다
+  void onOpenSession(handleOpenRequest)
+    .then(() => takeOpenSession())
+    .then((queued) => queued.forEach(handleOpenRequest))
+    .catch((e) => console.error("세션 열기 요청을 받지 못했습니다", e));
   void doubleClickTime().then((ms) => (doubleClickMs = ms));
 }
 
@@ -132,9 +166,10 @@ export interface RowClick {
  */
 export function createRowClick(getSession: () => Session | undefined): RowClick {
   let gate: ClickGate | undefined;
+  // 지연된 activate 가 눌린 세션을 가리키도록 클릭 때 세션 id 를 쥔다(그사이 줄의 대표 세션이 바뀌어도 눌린 세션에 간다)
+  let clickedId: string | undefined;
   const act = (action: "activate" | "focus") => {
-    const s = getSession();
-    if (s) sessionAction(action, s.id);
+    if (clickedId) sessionAction(action, clickedId);
   };
   const gateOf = () =>
     (gate ??= createClickGate({
@@ -149,7 +184,10 @@ export function createRowClick(getSession: () => Session | undefined): RowClick 
       const s = getSession();
       if (!s) return;
       const where = place(s);
-      if (where.kind === "terminal") return gateOf().press(e.detail);
+      if (where.kind === "terminal") {
+        if (e.detail <= 1) clickedId = s.id;
+        return gateOf().press(e.detail);
+      }
       gate?.dispose();
       if (where.kind === "ended" && e.detail >= 2) return;
       runEffect(s, openSession(s, where, e.detail >= 2));

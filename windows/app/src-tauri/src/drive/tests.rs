@@ -489,3 +489,5 @@ fn step_spec_edges() {
     let step = parse(r#"{"text":"a\u001bb"}"#).unwrap().into_step().unwrap();
     assert!(encode(&step).is_err());
 }
+
+mod guard;

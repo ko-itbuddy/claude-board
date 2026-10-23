@@ -33,12 +33,12 @@ export function sessionMenuEntries(s: MenuSession, place: SessionPlace): Session
   }
   if (place.kind === "background") return [];
   if (s.state === "paused") {
-    return [{ label: "세션 재개", detail: "멈춘 지점부터 이어서 진행하게 합니다", action: "resume" }, { separator: true }, STOP_ENTRY];
+    return [{ label: "세션 재개", detail: "멈춘 지점부터 이어서 진행하게 합니다", action: "resume" }, { separator: true }, { ...STOP_ENTRY }];
   }
   const canPause = s.state !== "idle" && s.canDrive;
   return [
     { label: "일시중지", detail: pauseDetail(s, canPause), enabled: canPause, action: "pause" },
     { separator: true },
-    STOP_ENTRY,
+    { ...STOP_ENTRY },
   ];
 }

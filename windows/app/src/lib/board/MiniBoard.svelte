@@ -41,6 +41,15 @@
     }
     return clicker;
   }
+  // 사라진 경로 줄의 처리기는 타이머째 치운다
+  $effect(() => {
+    const live = new Set(snap.groups.map((g) => g.id));
+    for (const [id, clicker] of clickers) {
+      if (live.has(id)) continue;
+      clicker.dispose();
+      clickers.delete(id);
+    }
+  });
   onDestroy(() => clickers.forEach((clicker) => clicker.dispose()));
 </script>
 
@@ -63,7 +72,7 @@
           animate:flip={{ duration: 400 }}
           onclick={(e) => clickerOf(g).click(e)}
           onkeydown={() => {}}
-          use:hint={r.live ? `${g.path} — 눌러서 터미널 앱, 두 번 눌러서 그 세션으로 이동` : g.path}
+          use:hint={r.live ? `${g.path} · 눌러서 터미널 앱, 두 번 눌러서 그 세션으로 이동` : g.path}
         >
           <StateIcon state={u} scale={0.8} />
           <span class="name">{g.name}</span>
