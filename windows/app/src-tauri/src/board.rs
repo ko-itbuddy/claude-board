@@ -968,6 +968,7 @@ pub fn run(argv: Vec<String>, context: tauri::Context<tauri::Wry>) {
             crate::drive::rename_check,
             crate::open_session::show_board,
             crate::open_session::take_open_session,
+            crate::win::double_click_time,
             switch_account,
             add_account,
             cancel_add_account,
