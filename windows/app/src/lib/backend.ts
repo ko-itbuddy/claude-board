@@ -4,7 +4,7 @@
 import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
-  BoardSide, MascotKind, NotifyOptions, NotifyPosition, SessionAction, Snapshot, State, TermFrame, TermId, TermInfo, TermSpec,
+  BoardSide, DriveStep, MascotKind, NotifyOptions, NotifyPosition, OpenSessionPayload, RenameCheck, SessionAction, Snapshot, State, TermFrame, TermId, TermInfo, TermSpec,
 } from "./types";
 
 export const inTauri = isTauri();
@@ -225,6 +225,38 @@ export function setBoardMini(on: boolean) {
 // pause·resume·stop = 일시중지·일시중지한 세션 재개·중단(중단 확인 대화상자는 백엔드가 띄운다)
 export function sessionAction(action: SessionAction, id: string, carryOn?: boolean) {
   fire("session_action", { action, id, carryOn });
+}
+
+// 보드가 아직 안 떠 있을 때 쌓인 "세션 열기" 요청 하나를 꺼낸다 — 처음 부르면 프런트엔드가 준비됐다는 표시도 된다 (W3)
+export function takeOpenSession(): Promise<OpenSessionPayload | null> {
+  return call<OpenSessionPayload | null>("take_open_session");
+}
+
+// 백엔드가 보내는 "세션 열기" 요청(끝난 세션 이어 열기·창으로 이동)
+export function onOpenSession(fn: (p: OpenSessionPayload) => void): () => void {
+  if (!inTauri) return () => {};
+  let off: (() => void) | undefined;
+  let closed = false;
+  listen<OpenSessionPayload>("board://open-session", (e) => fn(e.payload)).then((unlisten) => (closed ? unlisten() : (off = unlisten)));
+  return () => {
+    closed = true;
+    off?.();
+  };
+}
+
+// 보드 탭이나 콘솔에 단계별 입력을 넣는다(일시중지 Esc, 재개 문구, /rename). 넣을 곳이 없으면 false
+export function driveSession(id: string, steps: DriveStep[]): Promise<boolean> {
+  return call<boolean>("drive_session", { id, steps });
+}
+
+// /rename 을 보내도 되는 세션인가 — 신선한 세션 상태와 대화 기록 유무 (mac renameSafe·hasTranscript)
+export function renameCheck(id: string): Promise<RenameCheck> {
+  return call<RenameCheck>("rename_check", { id });
+}
+
+// 보드 창을 펼쳐 앞으로 가져온다 (mac showBoard)
+export function showBoard() {
+  fire("show_board");
 }
 
 export function switchAccount(id: string) {

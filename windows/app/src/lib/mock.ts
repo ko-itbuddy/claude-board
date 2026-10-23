@@ -425,6 +425,14 @@ export async function handle(cmd: string, a: Record<string, unknown>): Promise<u
     case "term_write_bin":
       fakeTerms.get(str("id"))?.input(String.fromCharCode(...(a.data as number[])));
       return;
+    case "take_open_session":
+      return null;
+    case "drive_session":
+      return false;
+    case "rename_check":
+      return { safe: false, transcript: false };
+    case "show_board":
+      return;
     case "term_resize":
       fakeTerms.get(str("id"))?.resize(Number(a.cols), Number(a.rows));
       return null; // 기준 seq 없음 — 장벽이 바로 적용한다

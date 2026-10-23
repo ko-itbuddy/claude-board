@@ -115,6 +115,7 @@ export interface TerminalApp {
 
 export interface Snapshot {
   now: number;
+  atPrompt?: string[];  // 셸이 프롬프트에 있는(자식 프로세스가 없는) 보드 터미널(TermId) — 끝난 세션을 그 탭에서 이어 열 때 쓴다 (W3)
   runsClaude?: TermId[];  // 지금 claude 가 도는 보드 터미널(TermId) — 서피스의 세션이 끝났는지 가르는 데 쓴다 (W2)
   groups: Group[];
   allMuted: boolean;
@@ -203,6 +204,7 @@ export interface BoardSurface {
   held: Record<string, string> | null; // 다시 뜰 때 셸만 띄우고 들어갈 때 이어 열 값(resumeHeld, 아직 안 씀)
   mdRenderOff: boolean;           // 답변 꾸미기를 끄고 띄운 화면(아직 안 씀)
   title: string;                  // 터미널이 알려 준 제목(xterm onTitleChange)
+  typedAt?: number | null;        // 셸에 claude 명령을 친 시각(ms) — 3초 동안은 claude 가 도는 것으로 본다(mac typedAt, W3)
 }
 
 // 보드 터미널 탭 하나(mac BoardTab) — 화면 나누기 트리 하나와 그 가운데 고른 화면. 지금은 탭마다 화면 하나뿐이다
@@ -218,3 +220,22 @@ export interface BoardTab {
 
 // 칸의 셸 상태 — idle(아직 안 띄움) · starting · running · exited · failed
 export type LeafPhase = "idle" | "starting" | "running" | "exited" | "failed";
+
+// ── 세션 열기·구동(W3) ───────────────────────────────────────
+
+// 백엔드가 보드로 보내는 "세션 열기" 요청(board://open-session) — 끝난 세션 이어 열기(reopen)·창으로 이동(focus)
+export interface OpenSessionPayload {
+  id: string;
+  action: "reopen" | "focus";
+  carryOn: boolean;
+  projectDir: string;
+  resumeArgs: string[];
+}
+
+// drive_session 이 보드 터미널이나 콘솔에 넣을 입력 한 단계(mac driveSession)
+export type DriveStep = { key: "escape" | "enter" } | { text: string } | { wait: number };
+
+export interface RenameCheck {
+  safe: boolean;
+  transcript: boolean;
+}
