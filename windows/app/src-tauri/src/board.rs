@@ -42,9 +42,10 @@ pub struct Board {
     pub app: AppHandle,
     settings_path: PathBuf,
     pub settings: Mutex<Settings>,
-    store: Mutex<Store>,
+    pub(crate) store: Mutex<Store>,
     view: Mutex<View>,
-    probe: Mutex<Probe>,
+    pub(crate) probe: Mutex<Probe>,
+    pub open_queue: Mutex<crate::open_session::OpenQueue>,
     probe_busy: AtomicBool,
     pub usage: Mutex<Usage>,
     pub accounts: Mutex<Accounts>,
@@ -83,6 +84,7 @@ impl Board {
             store: Mutex::new(store),
             view: Mutex::new(View::default()),
             probe: Mutex::new(Probe::default()),
+            open_queue: Mutex::default(),
             probe_busy: AtomicBool::new(false),
             usage: Mutex::new(Usage::new(std::env::temp_dir().join(".claude-usage-cache.json"))),
             accounts: Mutex::new(acc),
@@ -175,6 +177,7 @@ impl Board {
             claude_version: self.claude_version(now),
             terminals: self.terminals.lock().unwrap().view(),
             runs_claude: self.probe.lock().unwrap().runs_claude.clone(),
+            at_prompt: self.probe.lock().unwrap().at_prompt.clone(),
         }
     }
 
@@ -303,7 +306,7 @@ impl Board {
                     probe.drivable.insert(pid);
                 }
             }
-            (probe.places, probe.runs_claude) = (pairing.places, pairing.runs_claude);
+            (probe.places, probe.runs_claude, probe.at_prompt) = (pairing.places, pairing.runs_claude, pairing.at_prompt);
             *board.probe.lock().unwrap() = probe;
             board.terminals.lock().unwrap().refresh(&table, clock::now());
             board.watch_windows_terminal(&table);
@@ -961,6 +964,10 @@ pub fn run(argv: Vec<String>, context: tauri::Context<tauri::Wry>) {
             set_all_muted,
             reveal,
             session_action,
+            crate::drive::drive_session,
+            crate::drive::rename_check,
+            crate::open_session::show_board,
+            crate::open_session::take_open_session,
             switch_account,
             add_account,
             cancel_add_account,

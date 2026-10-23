@@ -2,7 +2,7 @@
 //! Windows 전용 `activate`. 프론트의 `session_action`(IPC)과 명령줄 `--action` 이 같은 이름을 쓴다.
 //!
 //! - `resume` = 일시중지한 세션 재개(mac `resumePaused`)
-//! - `reopen` = 꺼진 세션을 새 콘솔에서 이어 열기(mac `resumeSession(carryOn:)`). carryOn 을 안 주면 명령줄처럼 true
+//! - `reopen` = 꺼진 세션을 보드 터미널 탭에서 이어 열기(mac `resumeSession(carryOn:)`) — 허브에 `board://open-session` 으로 요청한다. carryOn 을 안 주면 명령줄처럼 true
 
 /// 이름이 가리키는 세션 동작.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

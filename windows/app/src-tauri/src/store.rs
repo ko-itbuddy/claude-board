@@ -12,6 +12,7 @@ use claude_board_core::{fileio, Record};
 use serde_json::Value;
 
 use crate::model::{last_name, Group, Session, Sub};
+use crate::drive::can_drive;
 use crate::readers::{ClaudeNames, ContextReader, InterruptReader, ModelReader};
 use crate::settings::{set_in, Settings};
 use crate::util::{ms, num, obj};
@@ -31,6 +32,7 @@ pub struct Probe {
     /// pid → 보드 터미널 짝(W2). 지금 claude 가 도는 보드 터미널 id 들.
     pub places: HashMap<u32, crate::model::PidPlace>,
     pub runs_claude: Vec<String>,
+    pub at_prompt: Vec<String>,
 }
 
 pub struct Store {
@@ -42,7 +44,7 @@ pub struct Store {
     contexts: ContextReader,
     /// Esc 중단 표시(대화 기록 끝)와 Claude Code 의 `sessions\<pid>.json` — 둘 다 파일 수정 시각이 같으면 다시 읽지 않는다
     interrupts: InterruptReader,
-    names: ClaudeNames,
+    pub(crate) names: ClaudeNames,
     /// 직전 reload 때 승인 대기였던 세션 — 새로 승인 대기가 된 세션만 골라 그 그룹을 편다
     waiting_ids: HashSet<String>,
 }
@@ -299,7 +301,7 @@ impl Store {
             .filter(|a| !a.is_empty())
             .unwrap_or_else(|| vec!["--resume".to_string(), sid.clone()]);
         let name = if state == "ended" { None } else { self.names.get(pid).as_ref().and_then(session_name).map(str::to_string) };
-        let can_drive = !headless && state != "ended" && pid > 0 && probe.drivable.contains(&pid);
+        let can_drive = can_drive(&state, pid, headless, &place, &probe.runs_claude, probe.drivable.contains(&pid));
         Some(Session {
             id: sid,
             cwd,

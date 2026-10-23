@@ -39,6 +39,8 @@ pub trait ProcessView {
     fn host(&self, pid: u32) -> Host;
     /// 실행 인자에서 본 세션 시작 방식.
     fn mode(&self, pid: u32) -> Option<Mode>;
+    /// 실행 파일 이름. 모르면 None.
+    fn name(&self, pid: u32) -> Option<String>;
 }
 
 /// 보드가 쥔 터미널 탭 하나 — ConPTY 의 pid 와 그 콘솔 정보(`TermHub::hosts` 가 모아 준다).
@@ -228,6 +230,21 @@ pub fn runs_claude(term: &BoardTerm, claude_pids: &[u32], view: &impl ProcessVie
     // 콘솔을 읽은 호스트끼리만 같은 터미널이다 — Unknown·Detached 끼리 같다고 보면 엉뚱한 터미널에 claude 가 도는 것으로 오인한다
     let Host::Console(host) = term.host else { return false };
     claude_pids.iter().any(|&pid| view.host(pid) == Host::Console(host))
+}
+
+/// 셸이 프롬프트에 있는지 — 셸에 살아 있는 자식이 없다(콘솔 호스트 `conhost.exe`·`OpenConsole.exe` 는 빼고)
+/// (mac `atPrompt`: 셸의 자식 프로세스가 없다). `children` 는 어댑터가 프로세스 표에서 고른 셸의 직접 자식 pid.
+/// 생성 시각이 셸보다 앞서는 자식은 pid 재사용으로 남은 옛 부모 기록이라 살아 있는 자식으로 세지 않는다.
+/// 셸의 생성 시각을 모르면 그 판정을 못 하므로 자식을 모두 센다 — 실행 중인 프로그램에 글자를 치지 않는 쪽으로 틀린다.
+pub fn at_prompt(shell_pid: u32, view: &impl ProcessView, children: &[u32]) -> bool {
+    let shell_ctime = view.ctime(shell_pid);
+    children.iter().all(|&pid| {
+        let host = view.name(pid).is_some_and(|n| {
+            n.eq_ignore_ascii_case("conhost.exe") || n.eq_ignore_ascii_case("OpenConsole.exe")
+        });
+        let stale = matches!((shell_ctime, view.ctime(pid)), (Some(shell), Some(child)) if child + CTIME_TOLERANCE < shell);
+        host || stale
+    })
 }
 
 #[cfg(test)]
