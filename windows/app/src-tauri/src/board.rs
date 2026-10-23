@@ -165,6 +165,11 @@ impl Board {
             let s = self.settings.lock().unwrap();
             (s.view(settings::notify_position()), s.auto_switch)
         };
+        // probe 잠금은 한 번만 잡는다 — 구조체 리터럴 안에서 두 번 잡으면 첫 임시 값이 함수 끝까지 살아 같은 스레드가 멈춘다
+        let (runs_claude, at_prompt) = {
+            let p = self.probe.lock().unwrap();
+            (p.runs_claude.clone(), p.at_prompt.clone())
+        };
         Snapshot {
             now: ms(now),
             counts: Counts::of(&groups),
@@ -176,8 +181,8 @@ impl Board {
             settings,
             claude_version: self.claude_version(now),
             terminals: self.terminals.lock().unwrap().view(),
-            runs_claude: self.probe.lock().unwrap().runs_claude.clone(),
-            at_prompt: self.probe.lock().unwrap().at_prompt.clone(),
+            runs_claude,
+            at_prompt,
         }
     }
 
