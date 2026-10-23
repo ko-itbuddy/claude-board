@@ -71,7 +71,7 @@ mod stub {
             unsupported()
         }
 
-        pub fn resize(&self, _cols: u16, _rows: u16) -> io::Result<()> {
+        pub fn resize(&self, _cols: u16, _rows: u16) -> io::Result<bool> {
             unsupported()
         }
 

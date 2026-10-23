@@ -124,4 +124,15 @@ mod resize {
         }
         assert_eq!(hub.resize(&info.id, 100, 40).unwrap(), None, "끝난 터미널은 적용하지 않는다");
     }
+
+    /// 가짜 콘솔이 닫힌 터미널의 resize 는 None 이고 기록된 크기도 그대로.
+    #[test]
+    fn closed_console_returns_none_and_keeps_size() {
+        let hub = Sweep(TermHub::default());
+        let info = idle_cmd(&hub);
+        hub.get(&info.id).unwrap().pty.close_console();
+        assert_eq!(hub.resize(&info.id, 100, 40).unwrap(), None, "닫힌 콘솔은 적용하지 않는다");
+        let after = &hub.list()[0];
+        assert_eq!((after.cols, after.rows), (80, 24), "적용하지 않은 크기는 반영하지 않는다");
+    }
 }
