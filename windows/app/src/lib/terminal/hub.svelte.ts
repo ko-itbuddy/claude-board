@@ -3,10 +3,10 @@
 // 탭 줄은 지금 경로의 탭만 보인다. 셸이 끝나면 그 탭이 닫히고 선택은 같은 경로의 이웃 탭 → 이웃 경로 → 빈 상태로 간다.
 // 터미널 출력은 보드의 1초 상태 묶음에 싣지 않고, 여기서 term_list 와 채널로 채운다(이벤트 기반).
 import { tick } from "svelte";
-import { inTauri, onSnapshot, setTerminalExpanded, termKill, termList, termSpawn, termWrite } from "$lib/backend";
+import { inTauri, setTerminalExpanded, termKill, termList, termSpawn } from "$lib/backend";
 import { board } from "$lib/board/store.svelte";
 import { mockTabs } from "$lib/mock";
-import type { BoardSurface, BoardTab, LeafPhase, Session, Snapshot, State, TermId, TermInfo } from "$lib/types";
+import type { BoardSurface, BoardTab, LeafPhase, Session, State, TermId, TermInfo } from "$lib/types";
 import {
   folderNameOf,
   homeFromGroups,
@@ -26,7 +26,10 @@ import {
 } from "./tabLogic";
 import { pairSessions, placeOf, type SessionPlace, type SurfaceChange } from "./place";
 import { hasLeaf, leaves } from "./split";
+import { startTabRenames } from "./renameFlow.svelte";
+import { startSessionFlow } from "./sessionFlow.svelte";
 import { TermController } from "./term";
+import { typeCommand } from "./typeCommand";
 
 export interface LeafState {
   phase: LeafPhase;
@@ -62,6 +65,8 @@ export const TerminalHub = $state({
   paired: {} as Record<string, string>,
   /** 화면 안에서 시작한 headless 세션만(mac TerminalHub.tabOwnedHeadless) — 칩 "CB -p" 의 함께 끝남 근거 */
   tabOwnedHeadless: {} as Record<string, true>,
+  /** 보드 안 알림 한 줄(mac TerminalHub.notice) — 6초 뒤 사라진다. TerminalNotice 가 그린다 */
+  notice: null as string | null,
 });
 
 // 컨트롤러는 xterm 을 쥔 일반 객체라 반응형 상태에 넣지 않는다
@@ -175,6 +180,7 @@ function newTab(termId: TermId | null, workspace: string): BoardTab {
     held: null,
     mdRenderOff: false,
     title: "",
+    typedAt: null,
   };
   TerminalHub.surfaces.push(surface);
   TerminalHub.leaves[surface.id] = { phase: "idle", exitCode: null, error: "" };
@@ -221,11 +227,6 @@ function focusSelected() {
 const expanded = () => board.snap?.settings.terminalExpanded ?? false;
 
 // ── 세션·화면 짝짓기(SPEC §5.12, W2) ──────────────────────────
-
-// 스냅샷의 모든 세션 — 경로 그룹에 묶여 도는 세션들을 평평하게 편다
-function allSessions(snap: Snapshot): Session[] {
-  return snap.groups.flatMap((g) => g.sessions);
-}
 
 /**
  * 화면 하나에 짝짓기 고침을 새긴다(place.ts 의 changes 는 hub 만 화면을 고친다).
@@ -282,8 +283,7 @@ export async function startHub() {
       if (tab && t.name) tab.customName = t.name;
     }
   }
-  // 상태 묶음이 올 때마다 세션·화면 짝짓기를 다시 쥔다(SPEC §5.12, W2) — 화면 sessionId·명령은 여기서 따라간다
-  onSnapshot((snap) => pair(allSessions(snap), snap.runsClaude ?? null));
+  startSessionFlow(); // 상태 묶음마다 짝짓기(pair)를 다시 쥐고, 세션 열기 요청·이름 바꾸기를 받는다
 }
 
 // ── 고르기 ────────────────────────────────────────────────────
@@ -340,6 +340,8 @@ export function openShell(dir: string | null = null, opts: { command?: string; s
   if (surface) {
     surface.command = opts.command ?? null;
     surface.sessionId = opts.sessionId ?? null;
+    // 명령을 넣을 화면은 막 claude 가 뜨는 것으로 본다 — 셸이 뜨기 전 스냅샷이 명령을 비우지 않게
+    surface.typedAt = opts.command ? Date.now() : null;
   }
   TerminalHub.tabs.splice(insertIndexFor(TerminalHub.tabs, tab.workspace, homeDir()), 0, tab);
   select(tab.id);
@@ -351,25 +353,6 @@ export function newSessionSheet() {
   if (TerminalHub.sheet) return;
   if (!expanded()) setTerminalExpanded(true);
   TerminalHub.sheet = true;
-}
-
-/** 셸이 첫 출력을 낸 뒤 300ms 조용해지면(5초 상한) 명령을 쳐 넣고 100ms 뒤 Enter(\r) — 셸의 줄 편집이 시작된 뒤에 넣는다(ClaudeBoard.swift BoardSurface.type) */
-const QUIET_MS = 300;
-const QUIET_CAP_MS = 5000;
-const ENTER_DELAY_MS = 100;
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-async function typeCommand(ctl: TermController, leafId: string, termId: TermId, command: string) {
-  const startedAt = Date.now();
-  // 첫 출력(lastOutputAt > 0)이 있고 그 뒤 300ms 조용하면 준비된 것. 5초가 지나면 그냥 친다
-  const quiet = () => ctl.lastOutputAt > 0 && Date.now() - ctl.lastOutputAt >= QUIET_MS;
-  while (!quiet() && Date.now() - startedAt < QUIET_CAP_MS) await sleep(50);
-  // 기다리는 사이 탭이 닫혔거나 같은 칸에 다른 셸이 붙었으면 치지 않는다
-  const alive = () => TerminalHub.leaves[leafId] && surfaceOf(leafId)?.termId === termId && TerminalHub.terms[termId];
-  if (!alive()) return;
-  termWrite(termId, command);
-  await sleep(ENTER_DELAY_MS);
-  if (alive()) termWrite(termId, "\r");
 }
 
 /** 칸의 셸을 띄우거나(없으면 새로, 있으면 이어서) 붙는다. 칸이 처음 보일 때 부른다 */
@@ -411,7 +394,13 @@ export async function startLeaf(leafId: string) {
     if (spawnedId && leaf.command) {
       const command = leaf.command;
       leaf.command = null;
-      void typeCommand(ctl, leafId, spawnedId, command);
+      const termId = spawnedId;
+      void typeCommand(ctl, termId, command, {
+        alive: () => !!TerminalHub.leaves[leafId] && surfaceOf(leafId)?.termId === termId && !!TerminalHub.terms[termId],
+        touch: () => {
+          leaf.typedAt = Date.now();
+        },
+      });
     }
   } catch (e) {
     if (closed()) {
@@ -499,6 +488,7 @@ export function endRename(tab: BoardTab, name: string | null) {
   tab.renaming = false;
   if (name !== null) {
     tab.customName = renamedTo(tab.customName, folderName(tab.workspace), name);
+    startTabRenames(tab);
   }
   focusSelected();
 }

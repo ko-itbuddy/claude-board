@@ -254,6 +254,16 @@ export function renameCheck(id: string): Promise<RenameCheck> {
   return call<RenameCheck>("rename_check", { id });
 }
 
+// 시스템 더블 클릭 시간(ms) — 다른 터미널 줄의 한 번 클릭을 이만큼 미룬다. 읽지 못하면(브라우저 개발 화면 포함) 500
+export async function doubleClickTime(): Promise<number> {
+  try {
+    const ms = await call<number>("double_click_time");
+    return typeof ms === "number" && ms > 0 ? ms : 500;
+  } catch {
+    return 500;
+  }
+}
+
 // 보드 창을 펼쳐 앞으로 가져온다 (mac showBoard)
 export function showBoard() {
   fire("show_board");

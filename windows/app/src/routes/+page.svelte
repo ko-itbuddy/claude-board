@@ -19,6 +19,7 @@
   import UsagePanel from "$lib/board/UsagePanel.svelte";
   import PaneDivider from "$lib/terminal/PaneDivider.svelte";
   import TerminalAreaView from "$lib/terminal/TerminalAreaView.svelte";
+  import TerminalNotice from "$lib/terminal/TerminalNotice.svelte";
   import { setDragging, startHub } from "$lib/terminal/hub.svelte";
   import { clampBoardWidth, boardMinWidth, maxBoardWidth } from "$lib/terminal/paneLayout";
   import { stateName, stateRgb } from "$lib/board/format";
@@ -304,6 +305,7 @@
 </div>
 
 <HintLayer />
+<TerminalNotice />
 <MenuLayer />
 
 <style>
