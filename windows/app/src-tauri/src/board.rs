@@ -973,6 +973,7 @@ pub fn run(argv: Vec<String>, context: tauri::Context<tauri::Wry>) {
             crate::drive::rename_check,
             crate::open_session::show_board,
             crate::open_session::take_open_session,
+            crate::open_session::reopen_done,
             crate::win::double_click_time,
             switch_account,
             add_account,
@@ -1060,5 +1061,23 @@ mod tests {
         assert_eq!(action_arg(&v(&["ClaudeBoard.exe", "--action", "activate", "abc"])), None);
         assert_eq!(action_arg(&v(&["ClaudeBoard.exe", "--action", "stop"])), None);
         assert_eq!(action_arg(&v(&["ClaudeBoard.exe", "--show"])), None);
+    }
+
+    /// `snapshot` 안에서 같은 잠금을 두 번 잡으면(구조체 리터럴 속 임시 값이 함수 끝까지 산다) 같은 스레드가 멈춘다 — 필드마다 한 번만 잡는지 본다.
+    #[test]
+    fn snapshot_locks_each_field_once() {
+        let mut body = String::new();
+        for line in include_str!("board.rs").lines().skip_while(|l| !l.contains("pub fn snapshot(&self)")) {
+            body.push_str(line);
+            body.push('\n');
+            if line.trim_end() == "    }" {
+                break;
+            }
+        }
+        assert!(body.lines().count() > 10, "snapshot 본문을 찾지 못했다");
+        for field in ["view", "settings", "probe", "terminals", "store", "claude_version"] {
+            let needle = format!("self.{field}.lock()");
+            assert!(body.matches(&needle).count() <= 1, "{field} 잠금을 두 번 이상 잡는다");
+        }
     }
 }
