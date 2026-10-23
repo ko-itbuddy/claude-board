@@ -91,3 +91,81 @@ test("키를 넣을 수 없으면 일시중지가 꺼지고 키 설명이 붙는
   assert.equal(entry.enabled, false);
   assert.equal(entry.detail, "이 터미널에는 키를 넣을 수 없습니다");
 });
+
+test("끝난 headless 이면서 일시중지 표시가 있으면 재개 문구(carryOn true)다", () => {
+  const [entry] = sessionMenuEntries(sessionOf("ended", { headless: true, paused: true }), ENDED);
+  assert.deepEqual({ label: entry.label, carryOn: entry.carryOn }, { label: "세션 재개 (이어서 진행)", carryOn: true });
+});
+
+test("끝난 세션은 자리와 canDrive 와 상관없이 같은 항목 하나", () => {
+  const baseline = JSON.stringify(sessionMenuEntries(sessionOf("ended"), ENDED));
+  for (const place of [TAB, TERMINAL, BACKGROUND, ENDED]) {
+    for (const canDrive of [true, false]) {
+      assert.equal(JSON.stringify(sessionMenuEntries(sessionOf("ended", { canDrive }), place)), baseline, place.kind);
+    }
+  }
+});
+
+test("끝난 세션의 메뉴는 reopen 뿐이다", () => {
+  for (const paused of [true, false]) {
+    for (const headless of [true, false]) {
+      assert.deepEqual(names(sessionMenuEntries(sessionOf("ended", { paused, headless }), ENDED)), ["reopen"]);
+    }
+  }
+});
+
+test("살아 있는 background 는 canDrive 와 상관없이 메뉴가 없다", () => {
+  for (const state of ["working", "waiting", "idle", "paused"] as const) {
+    for (const canDrive of [true, false]) {
+      assert.deepEqual(sessionMenuEntries(sessionOf(state, { canDrive, headless: false }), BACKGROUND), []);
+    }
+  }
+});
+
+test("idle 이고 키도 못 넣으면 대기 설명이 이긴다", () => {
+  const entry = pauseEntry("idle", false);
+  assert.equal(entry.enabled, false);
+  assert.equal(entry.detail, "대기 중이라 멈출 응답이 없습니다");
+});
+
+test("waiting 이고 키를 못 넣으면 꺼지고 키 설명이다", () => {
+  const entry = pauseEntry("waiting", false);
+  assert.equal(entry.enabled, false);
+  assert.equal(entry.detail, "이 터미널에는 키를 넣을 수 없습니다");
+});
+
+test("terminal 자리에서도 pause 규칙은 tab 과 같다", () => {
+  for (const state of ["working", "waiting", "idle"] as const) {
+    for (const canDrive of [true, false]) {
+      const inTab = JSON.stringify(sessionMenuEntries(sessionOf(state, { canDrive }), TAB));
+      assert.equal(JSON.stringify(sessionMenuEntries(sessionOf(state, { canDrive }), TERMINAL)), inTab);
+    }
+  }
+});
+
+test("일시중지 세션의 재개는 canDrive 와 상관없이 꺼지지 않는다", () => {
+  for (const canDrive of [true, false]) {
+    const [resume] = sessionMenuEntries(sessionOf("paused", { canDrive }), TERMINAL);
+    assert.equal(resume.action, "resume");
+    assert.notEqual(resume.enabled, false);
+  }
+});
+
+test("살아 있는 메뉴는 항목-구분선-중단 모양이고 중단이 마지막이다", () => {
+  for (const state of ["working", "waiting", "idle", "paused"] as const) {
+    const entries = sessionMenuEntries(sessionOf(state), TAB);
+    assert.equal(entries.length, 3);
+    assert.deepEqual(entries[1], { separator: true });
+    assert.equal(entries[2].action, "stop");
+  }
+});
+
+// 건너뜀: sessionActions.ts:19 의 STOP_ENTRY 상수 하나를 모든 메뉴가 같은 객체로 돌려준다(복사하지 않음).
+// 호출자가 항목을 고치면 다음 메뉴까지 오염된다. 제품 코드를 고치면(`{ ...STOP_ENTRY }`) skip 을 푼다.
+test("메뉴를 두 번 만들어도 한쪽을 고쳐 다른 쪽이 변하지 않는다(공유 중단 항목 오염)", { skip: "sessionActions.ts:19 STOP_ENTRY 가 호출 사이에 공유된다" }, () => {
+  const a = sessionMenuEntries(sessionOf("working"), TAB);
+  const b = sessionMenuEntries(sessionOf("working"), TAB);
+  a[2].label = "오염";
+  assert.equal(b[2].label, "세션 중단");
+  assert.equal(sessionMenuEntries(sessionOf("idle"), TAB)[2].label, "세션 중단");
+});

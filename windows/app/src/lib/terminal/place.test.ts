@@ -248,3 +248,79 @@ test("typedAt 가 null 이면 기존 동작 그대로, now 를 비우면 Date.no
     kind: "tab", surfaceId: "f2", headless: false,
   });
 });
+test("typedAt 경계 — 2999ms 는 아직 돈다, 3000ms 는 아니다(< 3초)", () => {
+  const f1 = surface({ id: "f1", termId: "t1", sessionId: "old", command: "claude", typedAt: 0 });
+  const ended = session({ id: "old", state: "ended" });
+  assert.deepEqual(placeOf(ended, { paired: {}, owned: {} }, [f1], [], 2999), { kind: "tab", surfaceId: "f1", headless: false });
+  assert.deepEqual(placeOf(ended, { paired: {}, owned: {} }, [f1], [], 3000), { kind: "ended" });
+});
+
+test("typedAt 는 그 화면이 쥔 세션 id 에만 걸린다 — 다른 화면의 typedAt 이 끝난 세션을 붙들지 않는다", () => {
+  const mine = surface({ id: "f1", termId: "t1", sessionId: "old", typedAt: null });
+  const other = surface({ id: "f2", termId: "t2", sessionId: "else", typedAt: 10_000 });
+  const ended = session({ id: "old", state: "ended" });
+  assert.deepEqual(placeOf(ended, { paired: {}, owned: {} }, [mine, other], [], 10_500), { kind: "ended" });
+});
+
+test("typedAt 는 살아 있는 세션에는 영향이 없다 — terminal·background 그대로", () => {
+  const f1 = surface({ id: "f1", termId: "t1", sessionId: "x", typedAt: 10_000 });
+  const live = session({ id: "live", state: "working" });
+  const bg = session({ id: "bg", state: "working", headless: true });
+  assert.deepEqual(placeOf(live, { paired: {}, owned: {} }, [f1], [], 10_100), { kind: "terminal" });
+  assert.deepEqual(placeOf(bg, { paired: {}, owned: {} }, [f1], [], 10_100), { kind: "background" });
+});
+
+test("typedAt 창 안에서 두 번째 클릭이 와도 두 번 다 tab 이라 reopen 이 다시 나가지 않는다", () => {
+  const f1 = surface({ id: "f1", termId: "t1", sessionId: "old", command: "claude", typedAt: 5_000 });
+  const ended = session({ id: "old", state: "ended" });
+  for (const now of [5_001, 6_500, 7_999]) {
+    const plan = pairSessions({ sessions: [ended], surfaces: [f1], now });
+    assert.equal(placeOf(ended, plan, [f1], [], now).kind, "tab", String(now));
+    assert.deepEqual(plan.changes, [], String(now));
+  }
+});
+
+test("미래의 typedAt(시계가 뒤로 감김)도 창 안으로 본다 — 3초 안이라 tab 으로 남는다", () => {
+  const f1 = surface({ id: "f1", termId: "t1", sessionId: "old", typedAt: 20_000 });
+  const ended = session({ id: "old", state: "ended" });
+  assert.equal(placeOf(ended, { paired: {}, owned: {} }, [f1], [], 10_000).kind, "tab");
+});
+
+test("typedAt 가 undefined(필드 없음)여도 null 과 같다", () => {
+  const f1 = surface({ id: "f1", termId: "t1", sessionId: "old", command: "claude" });
+  delete f1.typedAt;
+  const ended = session({ id: "old", state: "ended" });
+  assert.equal(placeOf(ended, { paired: {}, owned: {} }, [f1], [], 1).kind, "ended");
+  assert.deepEqual(pairSessions({ sessions: [ended], surfaces: [f1], now: 1 }).changes, [{ kind: "reset", surfaceId: "f1" }]);
+});
+
+test("runsClaude 가 null·undefined 여도 typedAt 창은 그대로 동작한다", () => {
+  const f1 = surface({ id: "f1", termId: "t1", sessionId: "old", command: "claude", typedAt: 1_000 });
+  const ended = session({ id: "old", state: "ended" });
+  for (const runsClaude of [null, undefined]) {
+    assert.equal(placeOf(ended, { paired: {}, owned: {} }, [f1], runsClaude, 1_500).kind, "tab");
+    assert.deepEqual(pairSessions({ sessions: [ended], surfaces: [f1], runsClaude, now: 1_500 }).changes, []);
+  }
+});
+
+test("termId 가 null 인 화면은 runsClaude 로는 못 붙들어도 typedAt 으로는 붙든다(셸이 아직 안 뜬 찰나)", () => {
+  const f1 = surface({ id: "f1", termId: null, sessionId: "old", command: "claude", typedAt: 100 });
+  const ended = session({ id: "old", state: "ended" });
+  assert.equal(placeOf(ended, { paired: {}, owned: {} }, [f1], ["t1"], 200).kind, "tab");
+  assert.equal(placeOf(ended, { paired: {}, owned: {} }, [f1], ["t1"], 5_000).kind, "ended");
+});
+
+test("typedAt 창이 지나면 reset 은 나오지만 runsClaude 가 그 termId 를 가르키는 동안은 나오지 않는다", () => {
+  const f1 = surface({ id: "f1", termId: "t1", sessionId: "old", command: "claude", typedAt: 0 });
+  const ended = session({ id: "old", state: "ended" });
+  assert.deepEqual(pairSessions({ sessions: [ended], surfaces: [f1], runsClaude: ["t1"], now: 60_000 }).changes, []);
+  assert.deepEqual(pairSessions({ sessions: [ended], surfaces: [f1], runsClaude: ["t2"], now: 60_000 }).changes, [{ kind: "reset", surfaceId: "f1" }]);
+});
+
+test("끝난 세션을 같은 id 로 화면이 둘 쥐면 먼저 나온 화면이 이긴다(find) — 결정적이다", () => {
+  const a = surface({ id: "fa", termId: "t1", sessionId: "old", typedAt: 1_000 });
+  const b = surface({ id: "fb", termId: "t2", sessionId: "old", typedAt: 1_000 });
+  const ended = session({ id: "old", state: "ended" });
+  assert.equal(placeOf(ended, { paired: {}, owned: {} }, [a, b], [], 1_100).surfaceId, "fa");
+  assert.equal(placeOf(ended, { paired: {}, owned: {} }, [b, a], [], 1_100).surfaceId, "fb");
+});

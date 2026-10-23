@@ -324,3 +324,62 @@ fn at_prompt_counts_children_when_shell_ctime_unknown() {
     view.add_named(40, 10, 50.0, "claude.exe");
     assert!(!at_prompt(10, &view, &[40]));
 }
+
+#[test]
+fn at_prompt_console_host_names_ignore_case_but_need_the_whole_name() {
+    let (mut view, _) = base();
+    view.add_named(11, 10, 101.0, "ConHost.EXE");
+    view.add_named(12, 10, 102.0, "openconsole.exe");
+    assert!(at_prompt(10, &view, &[11, 12]));
+    // 이름이 비슷할 뿐인 프로그램은 호스트가 아니다
+    for name in ["myconhost.exe", "conhost.exe.bak", "conhost", "OpenConsole2.exe"] {
+        let (mut view, _) = base();
+        view.add_named(13, 10, 103.0, name);
+        assert!(!at_prompt(10, &view, &[13]), "{name}");
+    }
+}
+
+#[test]
+fn at_prompt_child_with_unknown_name_or_ctime_counts_as_running() {
+    let (mut view, _) = base();
+    // 이름을 모르는 자식(조사 실패)은 호스트로 믿지 않는다
+    view.add(14, 10, 105.0, Host::Unknown, None);
+    assert!(!at_prompt(10, &view, &[14]));
+    // 생성 시각을 모르는 자식은 옛 기록이라고 단정할 수 없어 센다
+    view.add_without_ctime(15, 10, Host::Unknown, None);
+    assert!(!at_prompt(10, &view, &[15]));
+    // 아예 모르는 pid 도 센다
+    assert!(!at_prompt(10, &view, &[999]));
+}
+
+#[test]
+fn at_prompt_only_hosts_and_stale_children_is_true_but_one_live_program_flips_it() {
+    let (mut view, _) = base();
+    view.add_named(11, 10, 101.0, "conhost.exe");
+    view.add_named(40, 10, 50.0, "claude.exe"); // 옛 기록
+    assert!(at_prompt(10, &view, &[11, 40]));
+    view.add_named(41, 10, 130.0, "node.exe");
+    assert!(!at_prompt(10, &view, &[11, 40, 41]));
+}
+
+#[test]
+fn at_prompt_stale_boundary_uses_the_tolerance() {
+    let (mut view, _) = base();
+    // 셸(100)과 같은 시각이거나 허용 오차 안으로 앞선 자식은 옛 기록이 아니다
+    view.add_named(42, 10, 100.0, "claude.exe");
+    assert!(!at_prompt(10, &view, &[42]));
+    view.add_named(43, 10, 100.0 - 0.0005, "claude.exe");
+    assert!(!at_prompt(10, &view, &[43]));
+    view.add_named(44, 10, 100.0 - 0.01, "claude.exe");
+    assert!(at_prompt(10, &view, &[44]));
+}
+
+#[test]
+fn at_prompt_unknown_shell_still_ignores_console_hosts() {
+    let (mut view, _) = base();
+    view.add_without_ctime(10, 1, Host::Console(700), None);
+    view.add_named(11, 10, 101.0, "OpenConsole.exe");
+    assert!(at_prompt(10, &view, &[11]));
+    // 셸 자체가 표에 없어도 호스트만 있으면 프롬프트다
+    assert!(at_prompt(555, &view, &[11]));
+}
