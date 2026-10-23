@@ -31,6 +31,7 @@ pub struct Probe {
     /// pid → 보드 터미널 짝(W2). 지금 claude 가 도는 보드 터미널 id 들.
     pub places: HashMap<u32, crate::model::PidPlace>,
     pub runs_claude: Vec<String>,
+    pub at_prompt: Vec<String>,
 }
 
 pub struct Store {

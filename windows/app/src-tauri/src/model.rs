@@ -329,6 +329,8 @@ pub struct Snapshot {
     pub terminals: Vec<TerminalApp>,
     /// 지금 claude 가 도는 보드 터미널 `TermId`들.
     pub runs_claude: Vec<String>,
+    /// 셸이 프롬프트에 있는 보드 터미널 `TermId`들.
+    pub at_prompt: Vec<String>,
 }
 
 #[cfg(test)]

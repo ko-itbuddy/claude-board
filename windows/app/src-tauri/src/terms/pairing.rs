@@ -23,6 +23,8 @@ pub struct Pairing {
     pub places: HashMap<u32, PidPlace>,
     /// 지금 claude 가 도는 보드 터미널 `TermId`.
     pub runs_claude: Vec<String>,
+    /// 셸이 프롬프트에 있는(자식 프로세스가 없는) 보드 터미널 `TermId` — 끝난 세션을 그 탭에서 이어 열 수 있다.
+    pub at_prompt: Vec<String>,
     /// 콘솔에 붙어 보지 않을 pid — 보드 터미널 세션(자기 ConPTY 에 붙지 않는다)과 콘솔을 못 읽은 pid.
     pub no_attach: HashSet<u32>,
 }
@@ -66,6 +68,10 @@ impl ProcessView for Win32View<'_> {
 
     fn host(&self, pid: u32) -> Host {
         proc::console_host(pid)
+    }
+
+    fn name(&self, pid: u32) -> Option<String> {
+        self.table.name(pid).map(str::to_string)
     }
 
     fn mode(&self, pid: u32) -> Option<Mode> {
@@ -147,6 +153,9 @@ fn compute(
         if place::runs_claude(term, &claudes, view) {
             out.runs_claude.push(term.id.clone());
         }
+        if place::at_prompt(term.shell_pid, view, &table.children(term.shell_pid)) {
+            out.at_prompt.push(term.id.clone());
+        }
     }
     out
 }
@@ -186,6 +195,9 @@ mod tests {
         fn mode(&self, _pid: u32) -> Option<Mode> {
             None
         }
+        fn name(&self, _pid: u32) -> Option<String> {
+            None
+        }
     }
 
     fn term(id: &str, shell: u32, host: Host) -> BoardTerm {
@@ -222,6 +234,15 @@ mod tests {
         // 콘솔을 못 읽은 pid 는 이름도 붙이지 않는다
         assert_eq!(out.places[&40].app_name, None);
         assert_eq!(out.runs_claude, vec!["t1".to_string()]);
+    }
+
+    #[test]
+    fn at_prompt_follows_shell_children() {
+        let (table, view) = world();
+        // t1 의 셸(10)에는 claude(20)가 자식으로 돈다 — 프롬프트가 아니다. t2 의 셸(30)은 자식이 없다
+        let terms = [term("t1", 10, Host::Console(100)), term("t2", 30, Host::Console(200))];
+        let out = compute(&terms, &[], &table, &view, &|_| false, &|_| None);
+        assert_eq!(out.at_prompt, vec!["t2".to_string()]);
     }
 
     #[test]

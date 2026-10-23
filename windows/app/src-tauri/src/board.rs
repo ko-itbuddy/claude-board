@@ -175,6 +175,7 @@ impl Board {
             claude_version: self.claude_version(now),
             terminals: self.terminals.lock().unwrap().view(),
             runs_claude: self.probe.lock().unwrap().runs_claude.clone(),
+            at_prompt: self.probe.lock().unwrap().at_prompt.clone(),
         }
     }
 
@@ -303,7 +304,7 @@ impl Board {
                     probe.drivable.insert(pid);
                 }
             }
-            (probe.places, probe.runs_claude) = (pairing.places, pairing.runs_claude);
+            (probe.places, probe.runs_claude, probe.at_prompt) = (pairing.places, pairing.runs_claude, pairing.at_prompt);
             *board.probe.lock().unwrap() = probe;
             board.terminals.lock().unwrap().refresh(&table, clock::now());
             board.watch_windows_terminal(&table);

@@ -7,6 +7,7 @@ use super::*;
 /// 보고 싶은 프로세스 사실 하나.
 #[derive(Debug, Clone)]
 struct Node {
+    name: Option<String>,
     ppid: u32,
     ctime: Option<f64>,
     host: Host,
@@ -24,11 +25,15 @@ impl FakeView {
     }
 
     fn add(&mut self, pid: u32, ppid: u32, ctime: f64, host: Host, mode: Option<Mode>) {
-        self.nodes.insert(pid, Node { ppid, ctime: Some(ctime), host, mode });
+        self.nodes.insert(pid, Node { name: None, ppid, ctime: Some(ctime), host, mode });
+    }
+
+    fn add_named(&mut self, pid: u32, ppid: u32, ctime: f64, name: &str) {
+        self.nodes.insert(pid, Node { name: Some(name.to_string()), ppid, ctime: Some(ctime), host: Host::Unknown, mode: None });
     }
 
     fn add_without_ctime(&mut self, pid: u32, ppid: u32, host: Host, mode: Option<Mode>) {
-        self.nodes.insert(pid, Node { ppid, ctime: None, host, mode });
+        self.nodes.insert(pid, Node { name: None, ppid, ctime: None, host, mode });
     }
 }
 
@@ -47,6 +52,10 @@ impl ProcessView for FakeView {
 
     fn mode(&self, pid: u32) -> Option<Mode> {
         self.nodes.get(&pid).and_then(|n| n.mode)
+    }
+
+    fn name(&self, pid: u32) -> Option<String> {
+        self.nodes.get(&pid).and_then(|n| n.name.clone())
     }
 }
 
@@ -274,4 +283,44 @@ fn term_shell_ctime_mismatch_blocks_fallback() {
         host: Host::Console(700),
     };
     assert_eq!(place(&session(40, false), &[no_ctime], &view), placed(None, None, None));
+}
+#[test]
+fn at_prompt_without_children_is_true() {
+    let (view, _) = base();
+    assert!(at_prompt(10, &view, &[]));
+}
+
+#[test]
+fn at_prompt_ignores_console_host_children() {
+    let (mut view, _) = base();
+    view.add_named(11, 10, 101.0, "conhost.exe");
+    view.add_named(12, 10, 102.0, "OpenConsole.exe");
+    assert!(at_prompt(10, &view, &[11, 12]));
+}
+
+#[test]
+fn at_prompt_false_while_a_program_runs() {
+    let (mut view, _) = base();
+    view.add_named(11, 10, 101.0, "conhost.exe");
+    view.add_named(30, 10, 120.0, "pwsh.exe");
+    assert!(!at_prompt(10, &view, &[11, 30]));
+    // pwsh → claude: 셸의 직접 자식이 pwsh 하나여도 프롬프트가 아니다
+    view.add_named(31, 30, 121.0, "claude.exe");
+    assert!(!at_prompt(10, &view, &[30]));
+}
+
+#[test]
+fn at_prompt_ignores_stale_child_with_older_ctime() {
+    let (mut view, _) = base();
+    // 자식 기록의 생성 시각(50)이 셸(100)보다 앞서면 pid 재사용으로 남은 옛 기록이다
+    view.add_named(40, 10, 50.0, "claude.exe");
+    assert!(at_prompt(10, &view, &[40]));
+}
+
+#[test]
+fn at_prompt_counts_children_when_shell_ctime_unknown() {
+    let (mut view, _) = base();
+    view.add_without_ctime(10, 1, Host::Console(700), None);
+    view.add_named(40, 10, 50.0, "claude.exe");
+    assert!(!at_prompt(10, &view, &[40]));
 }
