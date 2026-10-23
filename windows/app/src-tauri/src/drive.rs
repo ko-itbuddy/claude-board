@@ -24,6 +24,8 @@ pub const CARRY_ON_PROMPT: &str = "보드에서 일시중지했던 세션을 재
 
 /// 한 번에 기다릴 수 있는 상한(ms) — 프론트가 보낸 단계가 보드를 오래 붙잡지 않게.
 const MAX_WAIT_MS: u64 = 5000;
+/// 한 요청의 기다림 합계 상한(ms).
+const MAX_TOTAL_WAIT_MS: u64 = 10_000;
 
 /// 입력 한 단계.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,17 +156,37 @@ pub fn run(target: &Target, steps: &[Step], purpose: Purpose, io: &impl Io) -> b
     }
 }
 
-struct RealIo<'a>(&'a TermHub);
+/// 확인 창·대기 사이에 세션이 바뀌었는지 가른다 — 같은 세션(같은 pid·생성 시각)이 아직 살아 있을 때만 새 기록을 돌려준다.
+/// 끝났거나 사라졌거나 pid 가 바뀌었으면 None: 옛 스냅샷으로 다른 프로세스를 끝내지 않는다.
+pub fn still_same_session(old: &Session, fresh: Option<Session>) -> Option<Session> {
+    fresh.filter(|f| f.state != "ended" && f.pid != 0 && f.pid == old.pid && f.pid_ctime == old.pid_ctime)
+}
+
+/// `run` 에 중단의 안전망을 더한다 — 탭(Surface)에 /exit 를 쓰지 못했으면 프로세스를 끝낸다(mac 과 같다).
+pub fn run_with_fallback(target: &Target, pid: u32, steps: &[Step], purpose: Purpose, io: &impl Io) -> bool {
+    run(target, steps, purpose, io) || (purpose == Purpose::Stop && matches!(target, Target::Surface(_)) && io.kill(pid))
+}
+
+/// 합계 기다림이 상한 안인가.
+fn total_wait_ok(steps: &[Step]) -> bool {
+    steps.iter().map(|s| if let Step::Wait(ms) = s { *ms } else { 0 }).sum::<u64>() <= MAX_TOTAL_WAIT_MS
+}
+
+/// `kill` 때 pid 가 그 세션의 것인지 다시 확인하는 어댑터 — 생성 시각이 다르면(pid 재사용) 끝내지 않는다.
+struct RealIo<'a> {
+    hub: &'a TermHub,
+    pid_ctime: Option<f64>,
+}
 
 impl Io for RealIo<'_> {
     fn surface(&self, id: &str, bytes: &[u8]) -> bool {
-        self.0.write(id, bytes).is_ok()
+        self.hub.write(id, bytes).is_ok()
     }
     fn console(&self, pid: u32, inputs: &[Input]) -> bool {
         console::send_input(pid, inputs)
     }
     fn kill(&self, pid: u32) -> bool {
-        proc::terminate(pid)
+        proc::alive(pid, self.pid_ctime) && proc::terminate(pid)
     }
     fn sleep(&self, ms: u64) {
         std::thread::sleep(Duration::from_millis(ms));
@@ -173,12 +195,16 @@ impl Io for RealIo<'_> {
 
 /// 세션을 구동한다 — 지금의 프로브(claude 가 도는 터미널·콘솔 접근)로 목적지를 다시 정한다. 성공했으면 true.
 pub fn drive(board: &Board, s: &Session, steps: &[Step], purpose: Purpose) -> bool {
+    let Some(s) = &still_same_session(s, board.session(&s.id)) else {
+        board_log(&format!("세션 {} 이(가) 이미 끝났거나 바뀌어 구동하지 않습니다", s.id));
+        return false;
+    };
     let (runs, attachable) = {
         let probe = board.probe.lock().unwrap();
         (probe.runs_claude.clone(), probe.drivable.contains(&s.pid))
     };
     let target = drive_target(s, &runs, attachable, purpose);
-    run(&target, steps, purpose, &RealIo(&board.app.state::<TermHub>()))
+    run_with_fallback(&target, s.pid, steps, purpose, &RealIo { hub: &board.app.state::<TermHub>(), pid_ctime: s.pid_ctime })
 }
 
 /// 프론트가 보내는 입력 단계 — `{key:"escape"|"enter"}` · `{text}` · `{wait:ms}`.
@@ -217,6 +243,10 @@ type B<'a> = State<'a, Arc<Board>>;
 pub fn drive_session(board: B<'_>, id: String, steps: Vec<StepSpec>) -> bool {
     let steps: Result<Vec<Step>, String> = steps.into_iter().map(StepSpec::into_step).collect();
     match (board.session(&id), steps) {
+        (_, Ok(steps)) if !total_wait_ok(&steps) => {
+            board_log("drive_session: 기다림 합계가 너무 길다");
+            false
+        }
         (Some(s), Ok(steps)) => drive(&board, &s, &steps, Purpose::Keys),
         (_, Err(e)) => {
             board_log(&format!("drive_session: {e}"));
