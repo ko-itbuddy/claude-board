@@ -53,3 +53,50 @@ test("ended + headless — 아무것도 하지 않는다", () => {
     assert.deepEqual(openSession(sessionOf({ headless: true, mode: "-p" }), { kind: "ended" }, double), { kind: "none" });
   }
 });
+
+test("ended + headless + paused — 일시중지 표시가 있어도 아무것도 하지 않는다", () => {
+  for (const double of [false, true]) {
+    assert.deepEqual(openSession(sessionOf({ headless: true, paused: true }), { kind: "ended" }, double), { kind: "none" });
+  }
+});
+
+test("tab — 화면 안 headless 소유(-p)여도 reveal 이고 알림을 내지 않는다", () => {
+  const owned = sessionOf({ headless: true, mode: "-p" });
+  for (const double of [false, true]) {
+    assert.deepEqual(openSession(owned, { kind: "tab", surfaceId: "s2", headless: true }, double), { kind: "reveal", surfaceId: "s2" });
+  }
+});
+
+test("terminal — paused·headless 표시는 동작을 바꾸지 않는다", () => {
+  for (const over of [{ paused: true }, { headless: true }, { mode: "-p" }]) {
+    assert.deepEqual(openSession(sessionOf(over), { kind: "terminal" }, false), { kind: "action", action: "activate" });
+    assert.deepEqual(openSession(sessionOf(over), { kind: "terminal" }, true), { kind: "action", action: "focus" });
+  }
+});
+
+test("background — 일시중지 표시와 무관하게 알림만, 제목이 문구 앞에 온다", () => {
+  const s = sessionOf({ headless: true, paused: true, mode: "-p", title: "야간 배치" });
+  const effect = openSession(s, { kind: "background" }, false);
+  assert.equal(effect.kind, "notice");
+  assert.ok(effect.text.startsWith("야간 배치: claude -p 로"));
+});
+
+test("모든 자리 × 한·두 번 — 효과는 정해진 네 종류뿐이고 입력 세션을 고치지 않는다", () => {
+  const places = [{ kind: "tab", surfaceId: "s1", headless: false }, { kind: "terminal" }, { kind: "background" }, { kind: "ended" }];
+  const s = sessionOf({ paused: true });
+  const before = JSON.stringify(s);
+  for (const place of places) {
+    for (const double of [false, true]) {
+      assert.ok(["reveal", "action", "notice", "none"].includes(openSession(s, place, double).kind));
+    }
+  }
+  assert.equal(JSON.stringify(s), before);
+});
+
+test("reopen 의 carryOn 은 일시중지 표시를 그대로 따르고 클릭 횟수와 무관하다", () => {
+  for (const paused of [true, false]) {
+    for (const double of [false, true]) {
+      assert.equal(openSession(sessionOf({ paused }), { kind: "ended" }, double).carryOn, paused);
+    }
+  }
+});

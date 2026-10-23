@@ -94,3 +94,79 @@ test("CARRY_ON_PROMPT — 큰따옴표 안에서 풀리는 셸 특수문자가 �
 test("resumeCommand 결과에 namedCommand 가 --name 을 claude 바로 뒤에 붙인다", () => {
   assert.equal(namedCommand(resumeCommand([], ID, false), sessionNameArg("proj")), `claude --name proj --resume ${ID}`);
 });
+
+test("resumeCommand — 세션 id 길이 경계: 8자·64자는 되고 7자·65자는 던진다", () => {
+  assert.equal(resumeCommand([], "abcdefgh", false), "claude --resume abcdefgh");
+  assert.equal(resumeCommand([], "a".repeat(64), false), `claude --resume ${"a".repeat(64)}`);
+  assert.throws(() => resumeCommand([], "abcdefg", false));
+  assert.throws(() => resumeCommand([], "a".repeat(65), false));
+});
+
+test("resumeCommand — 끝에 줄바꿈이 붙은 id·인자는 허용하지 않는다($ 가 줄바꿈 앞에서 맞는 함정)", () => {
+  assert.throws(() => resumeCommand([], `${ID}\n`, false));
+  assert.throws(() => resumeCommand([], `${ID}\r`, false));
+  assert.equal(resumeCommand(["--model\n"], ID, false), `claude --resume ${ID}`);
+  assert.equal(resumeCommand(["--model", "m\r"], ID, false), `claude --resume ${ID}`);
+});
+
+test("resumeCommand — 전각·유니코드 비슷한 글자와 NUL 은 허용 밖이다", () => {
+  for (const bad of ["a＆b", "a；b", "ａｂ", "a\u0000b", "a\u00a0b", "a\u200bb", "—model"]) {
+    assert.equal(resumeCommand(["--model", bad], ID, false), `claude --resume ${ID}`, JSON.stringify(bad));
+  }
+});
+
+test("resumeCommand — 경로 구분자 \\ 가 든 인자는 허용 밖(cmd 이스케이프 혼동)이고 / 는 허용", () => {
+  assert.equal(resumeCommand(["--add-dir=C:\\x"], ID, false), `claude --resume ${ID}`);
+  assert.equal(resumeCommand(["--add-dir=C:/x"], ID, false), `claude --resume ${ID} --add-dir=C:/x`);
+});
+
+test("resumeCommand — -p 가 여럿이어도 모두 빠지고 나머지 순서는 유지된다, 입력 배열은 그대로", () => {
+  const args = ["-p", "--model", "m", "--print", "-p", "--verbose"];
+  const copy = [...args];
+  assert.equal(resumeCommand(args, ID, false), `claude --resume ${ID} --model m --verbose`);
+  assert.deepEqual(args, copy);
+});
+
+test("resumeCommand — -p 와 허용 밖 인자가 함께 있으면 -p 도 버려진 기본 줄이다", () => {
+  assert.equal(resumeCommand(["-p", "a b"], ID, false), `claude --resume ${ID}`);
+});
+
+test("resumeCommand — 값 없는 단독 하이픈·=·점 인자는 모양만 맞으면 그대로 간다(의미는 claude 가 판단)", () => {
+  assert.equal(resumeCommand(["-", "=", "."], ID, false), `claude --resume ${ID} - = .`);
+});
+
+test("resumeCommand — 대소문자만 다른 충돌 인자(--Resume·-R)는 다른 인자라 그대로 남는다", () => {
+  assert.equal(resumeCommand(["--Resume", "-R"], ID, false), `claude --resume ${ID} --Resume -R`);
+});
+
+test("resumeCommand — 접두가 비슷한 인자(--name-x·--resumed·-nx)는 충돌이 아니다", () => {
+  assert.equal(resumeCommand(["--resumed", "--name-x", "-nx"], ID, false), `claude --resume ${ID} --resumed --name-x -nx`);
+});
+
+test("resumeCommand — carryOn 줄에는 큰따옴표가 정확히 둘이고 문구는 맨 끝이다", () => {
+  const line = resumeCommand(["--model", "m"], ID, true);
+  assert.equal((line.match(/"/g) ?? []).length, 2);
+  assert.ok(line.endsWith(`"${CARRY_ON_PROMPT}"`));
+  assert.equal(line.indexOf('"'), line.lastIndexOf(`"${CARRY_ON_PROMPT}"`));
+});
+
+test("resumeCommand — 허용 밖 인자가 있어도 carryOn 문구는 기본 줄 뒤에 붙는다", () => {
+  assert.equal(resumeCommand(["a b"], ID, true), `claude --resume ${ID} "${CARRY_ON_PROMPT}"`);
+});
+
+test("resumeCommand + namedCommand — 문구가 든 줄에도 --name 은 claude 바로 뒤에 한 번만 붙는다", () => {
+  const line = namedCommand(resumeCommand([], ID, true), sessionNameArg("proj"));
+  assert.equal(line, `claude --name proj --resume ${ID} "${CARRY_ON_PROMPT}"`);
+  assert.equal(line.match(/--name/g).length, 1);
+});
+
+test("resumeCommand — 어떤 입력에서도 결과에 개행·셸 메타문자가 큰따옴표 밖에 나오지 않는다", () => {
+  const nasty = ["a&b", "a|b", "a^b", "%x%", "!x!", "a;b", "a`b", "$x", "a>b", "a<b", "a\r\nb", "(x)", "한글", "a b"];
+  for (const bad of nasty) {
+    for (const carryOn of [false, true]) {
+      const line = resumeCommand(["--model", bad], ID, carryOn);
+      const outsideQuotes = line.replace(/"[^"]*"/g, "");
+      assert.doesNotMatch(outsideQuotes, /[&|^%!;`$<>()\r\n]/u, `${JSON.stringify(bad)} carryOn=${carryOn}`);
+    }
+  }
+});
