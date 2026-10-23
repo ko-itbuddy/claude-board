@@ -18,7 +18,7 @@ use claude_board_core::{clock, paths, quote};
 use serde_json::json;
 
 use crate::board::Board;
-use crate::drive::{drive, steps_for, Purpose};
+use crate::drive::{drive, steps_for, still_same_session, Purpose};
 use crate::model::{Session, TerminalApp};
 use crate::open_session;
 use crate::session_action::SessionAction;
@@ -195,17 +195,16 @@ fn stop_session(board: &Arc<Board>, s: &Session, confirm: bool) {
             return;
         }
     }
-    let _ = fs::remove_file(paused_mark(board, s));
-    drive(board, s, &steps_for(SessionAction::Stop), Purpose::Stop);
+    // 확인 창이 떠 있는 동안 세션이 끝났거나 pid 가 바뀌었을 수 있다 — 새로 읽어 같은 세션일 때만 끝낸다
+    let Some(fresh) = still_same_session(s, board.session(&s.id)) else { return };
+    let _ = fs::remove_file(paused_mark(board, &fresh));
+    drive(board, &fresh, &steps_for(SessionAction::Stop), Purpose::Stop);
     board.publish();
 }
 
 /// 이어 열기: 보드 터미널 허브가 그 세션을 탭에서 `claude <resume_args…>` 로 이어 열게 요청한다.
-/// 일시중지했던 세션(carryOn)은 표시를 지운다 — 허브가 첫 요청으로 이어서 진행하라는 문구를 넘긴다.
+/// 일시중지 표시는 여기서 지우지 않는다 — 허브가 열기를 마친 뒤 `reopen_done` 으로 알리면 그때 지운다.
 fn reopen_session(board: &Arc<Board>, s: &Session, carry_on: bool) {
-    if carry_on {
-        let _ = fs::remove_file(paused_mark(board, s));
-    }
     open_session::request(board, s, "reopen", carry_on);
     board.publish();
 }
