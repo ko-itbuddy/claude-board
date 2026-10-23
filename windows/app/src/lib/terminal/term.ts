@@ -250,13 +250,14 @@ export class TermController {
     this.replayEnd = Number.POSITIVE_INFINITY;
     const attached = await termAttach(info.id, this.expectedSeq, (frame) => this.onFrame(frame));
     this.replayEnd = attached.nextSeq;
-    // 마지막으로 알린 크기와 다르면 한 번 알린다(같으면 백엔드가 null 을 돌려 장벽이 바로 끝낸다)
-    this.barrier.request({ cols: term.cols, rows: term.rows });
+    // 이어 붙은(이미 도는) 터미널의 ConPTY 는 이 칸의 크기를 모른다: 같은 크기여도 한 번 알린다(백엔드가 같으면 null 을 돌려 장벽이 바로 끝낸다)
+    this.barrier.request({ cols: term.cols, rows: term.rows }, { force: true });
     this.requestFit();
   }
 
   /** 새 셸로 바꿀 때 — 화면을 비우고 출력 오프셋을 처음으로 돌린다 */
   reset() {
+    this.barrier.reset(); // 붙잡은 프레임을 먼저 풀어 낡은 단계가 새 셸에 크기를 적용하지 못하게 한다
     this.termId = null;
     this.term?.reset();
     this.expectedSeq = 0;
@@ -272,7 +273,8 @@ export class TermController {
     const term = this.term;
     if (!term || this.disposed) return;
     if (frame.kind === "gap") {
-      // 링이 덮여 처음부터 다시 온다 — 앞서 쓴 출력 다음 순서로 화면을 비우고(RIS) 다시 받은 것으로 센다
+      // 링이 덮여 처음부터 다시 온다 — 장벽이 붙잡은 프레임을 먼저 쓴 다음 순서로 화면을 비우고(RIS) 다시 받은 것으로 센다
+      this.barrier.interrupt("gap");
       this.safeWrite("\x1bc", () => {});
       this.expectedSeq = frame.seq;
       this.ackedSeq = frame.seq;
@@ -282,7 +284,7 @@ export class TermController {
       return;
     }
     if (frame.kind === "exit") {
-      // 앞서 쓴 출력이 모두 그려진 뒤에 알린다
+      // 붙잡은 프레임을 먼저 쓰고(interrupt), 앞서 쓴 출력이 모두 그려진 뒤에 알린다
       this.barrier.interrupt("exit");
       this.safeWrite("", () => this.hooks.onExit(frame.code));
       return;

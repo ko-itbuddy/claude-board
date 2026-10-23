@@ -163,12 +163,15 @@ test("applied=null 이면 기다리지 않고 바로 바꾼다", async () => {
   assert.equal(h.events.at(-2), "write:after");
 });
 
-test("sendResize 가 거부돼도 바로 바꾼다", async () => {
+test("sendResize 가 거부되면 xterm 을 옛 크기로 두고 붙잡은 프레임만 푼다", async () => {
   const h = makeHarness();
   h.barrier.request(SHRINK);
+  h.frame("queued");
   h.sends[0].reject(new Error("boom"));
   await flushPromises();
-  assert.ok(h.events.includes("apply:60x24"));
+  assert.equal(only(h.events, "apply").length, 0);
+  assert.deepEqual(h.size(), { cols: 80, rows: 24 });
+  assert.ok(only(h.events, "write").includes("write:queued"));
   assert.ok(only(h.events, "log").some((l) => l.includes("boom")));
 });
 
@@ -260,7 +263,7 @@ test("스캔 중 gap 이면 기다림을 버리고 계획한 크기로 바꾼 �
   h.frame(`a${E}`); // 끝의 ESC 가 붙잡힌다
   assert.deepEqual(h.events.slice(1), ["write:a"]);
   h.barrier.interrupt("gap");
-  assert.deepEqual(h.events.slice(2).filter((e) => !e.startsWith("log")), ["apply:60x24", "write:~", "done:1"], "붙잡은 것은 바꾼 뒤에 푼다");
+  assert.deepEqual(h.events.slice(2).filter((e) => !e.startsWith("log")), ["write:~", "done:1", "apply:60x24"], "붙잡은 것을 먼저 쓰고 해석된 뒤에 바꾼다");
   assert.equal(h.events.filter((e) => e === "apply:60x24").length, 1);
   const before = h.events.length;
   h.tick(5000);
@@ -274,7 +277,7 @@ test("Sending 중 exit 이면 바로 바꾸고 늦은 응답과 밀린 요청은
   h.frame("data");
   h.barrier.request({ cols: 40, rows: 24 });
   h.barrier.interrupt("exit");
-  assert.deepEqual(h.events.slice(1).filter((e) => !e.startsWith("log")), ["apply:60x24", "write:data", "done:1"]);
+  assert.deepEqual(h.events.slice(1).filter((e) => !e.startsWith("log")), ["write:data", "done:1", "apply:60x24"]);
   await h.resolveSend(0, 0);
   assert.equal(only(h.events, "send").length, 1);
   assert.equal(h.events.length, 5);
