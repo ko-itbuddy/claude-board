@@ -6,8 +6,10 @@
 mod accounts;
 mod autoswitch;
 mod board;
+mod drive;
 mod model;
 mod notify;
+mod open_session;
 mod pty;
 mod readers;
 mod ring;
