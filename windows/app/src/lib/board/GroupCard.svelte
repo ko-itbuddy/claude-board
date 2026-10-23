@@ -4,6 +4,7 @@
   import { cubicOut } from "svelte/easing";
   import { fade, fly, slide } from "svelte/transition";
   import type { BoardSettings, Group } from "$lib/types";
+  import { place } from "$lib/terminal/hub.svelte";
   import { DEFAULT_SESSION_COMMAND, startSession } from "$lib/terminal/launch";
   import { hideGroup, removeEnded, toggleEndedOpen, toggleKindCollapsed, togglePinGroup } from "$lib/backend";
   import HeaderButton from "./HeaderButton.svelte";
@@ -31,8 +32,9 @@
   const pinned = $derived(settings.pinnedGroups.includes(g.id));
   const endedOpen = $derived(settings.endedOpen.includes(g.id));
   const live = $derived(g.sessions.filter((s) => s.state !== "ended"));
-  const terminal = $derived(live.filter((s) => !s.headless));
-  const background = $derived(live.filter((s) => s.headless));
+  // 구역은 세션이 도는 자리로 나눈다(mac 구역 머리글) — 보드 탭 안에서 시작한 claude -p 는 터미널 구역이다
+  const terminal = $derived(live.filter((s) => place(s).kind !== "background"));
+  const background = $derived(live.filter((s) => place(s).kind === "background"));
   const ended = $derived(g.sessions.filter((s) => s.state === "ended"));
   const termFolded = $derived(settings.kindCollapsed.includes(`${g.id}|term`));
   const bgFolded = $derived(settings.kindCollapsed.includes(`${g.id}|bg`));

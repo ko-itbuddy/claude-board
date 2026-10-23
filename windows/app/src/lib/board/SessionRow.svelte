@@ -4,8 +4,10 @@
   import { cubicOut } from "svelte/easing";
   import { fly, fade } from "svelte/transition";
   import type { Session } from "$lib/types";
+  import { onDestroy } from "svelte";
   import { removeSession, sessionAction, toggleSubCollapsed } from "$lib/backend";
   import { place } from "$lib/terminal/hub.svelte";
+  import { createRowClick } from "$lib/terminal/sessionFlow.svelte";
   import ContextLabel from "./ContextLabel.svelte";
   import Fit from "./Fit.svelte";
   import Icon from "./Icon.svelte";
@@ -18,7 +20,7 @@
   import { clock, elapsed, stateName, stateRgb } from "./format";
   import { hint } from "./hint.svelte";
   import { openMenu, type MenuItem } from "./menu.svelte";
-  import { rowClickCall, sessionMenuEntries } from "./sessionActions";
+  import { sessionMenuEntries } from "./sessionActions";
 
   let { s, now, locked, subCollapsed }: { s: Session; now: number; locked: boolean; subCollapsed: boolean } = $props();
 
@@ -31,15 +33,17 @@
     toggleSubCollapsed(s.id);
   }
 
-  // 클릭 횟수로 나눈다(동작은 sessionActions.ts) — 한 번·두 번 클릭을 따로 기다리면 줄 안의 스위치·단추까지 늦게 반응한다
-  function click(e: MouseEvent) {
-    const call = rowClickCall(s, e.detail);
-    sessionAction(call.action, s.id, call.carryOn);
-  }
+  // 클릭 횟수로 나눈다(동작은 openSession.ts 표) — 다른 터미널의 줄만 한 번 클릭을 더블 클릭 시간만큼 미룬다(clickGate)
+  const rowClick = createRowClick(() => s);
+  onDestroy(rowClick.dispose);
+
+  // 터미널 없이 도는 살아 있는 세션은 신호를 보내지 않으므로 메뉴가 없다(mac SessionRow)
+  const where = $derived(place(s));
+  const hasMenu = $derived(sessionMenuEntries(s, where).length > 0);
 
   function showMenu(e: MouseEvent) {
     e.stopPropagation();
-    const items: MenuItem[] = sessionMenuEntries(s).map((entry) =>
+    const items: MenuItem[] = sessionMenuEntries(s, where).map((entry) =>
       "separator" in entry
         ? entry
         : { label: entry.label, enabled: entry.enabled, action: () => sessionAction(entry.action, s.id, entry.carryOn) },
@@ -52,7 +56,7 @@
 
 <div class="session">
   <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <div class="row" role="button" tabindex="-1" style:--c={stateRgb(s.state)} onclick={click}>
+  <div class="row" role="button" tabindex="-1" style:--c={stateRgb(s.state)} onclick={rowClick.click}>
     <div class="lead">
       {#if s.subagents.length === 0}
         <span class="slot"></span>
@@ -73,9 +77,11 @@
       <div class="top">
         <span class="title" class:dim={ended}>{s.title}</span>
         {#if !ended}<MuteSwitch {s} {locked} />{/if}
-        <button class="more" onclick={showMenu} ondblclick={stop} use:hint={"세션 일시중지·재개·중단"}>
-          <Icon name="ellipsis" size={12} />
-        </button>
+        {#if hasMenu}
+          <button class="more" onclick={showMenu} ondblclick={stop} use:hint={"세션 일시중지·재개·중단"}>
+            <Icon name="ellipsis" size={12} />
+          </button>
+        {/if}
         {#if ended}
           <button
             class="remove"
@@ -95,7 +101,7 @@
         {#snippet content(level)}
           <span class="items">
             <span class="num el">{ended ? `${clock(s.updated)} 종료` : s.state === "idle" ? `${elapsed(s.since, now)} 전` : elapsed(s.since, now)}</span>
-            <PlaceChip place={place(s)} headless={s.headless} appName={s.appName} mode={s.state === "ended" ? null : s.mode} />
+            <PlaceChip place={where} headless={s.headless} appName={s.appName} mode={s.state === "ended" ? null : s.mode} />
             {#if s.subagents.length || s.shells > 0 || s.ctx || s.brain}<span>·</span>{/if}
             {#if s.subagents.length}
               {@const n = running > 0 && running < s.subagents.length ? `${running}/${s.subagents.length}` : `${s.subagents.length}`}

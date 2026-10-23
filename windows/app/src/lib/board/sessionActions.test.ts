@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { rowClickCall, sessionMenuEntries, type SessionMenuEntry } from "./sessionActions.ts";
+import { sessionMenuEntries, type SessionMenuEntry } from "./sessionActions.ts";
 
 const ALLOWED = ["activate", "focus", "reopen", "pause", "resume", "stop"];
 const STATES = ["working", "waiting", "idle", "paused", "ended"] as const;
@@ -90,24 +90,4 @@ test("키를 넣을 수 없으면 일시중지가 꺼지고 키 설명이 붙는
   const entry = pauseEntry("working", false);
   assert.equal(entry.enabled, false);
   assert.equal(entry.detail, "이 터미널에는 키를 넣을 수 없습니다");
-});
-
-test("place 를 생략한 옛 호출도 터미널 세션으로 본다", () => {
-  assert.deepEqual(names(sessionMenuEntries(sessionOf("working"))), ["pause", "stop"]);
-});
-
-test("(deprecated) 클릭 — 한 번은 activate, 두 번은 끝난 세션이면 reopen 아니면 focus", () => {
-  assert.deepEqual(rowClickCall({ state: "working" }, 1), { action: "activate" });
-  assert.deepEqual(rowClickCall({ state: "ended" }, 1), { action: "activate" });
-  assert.deepEqual(rowClickCall({ state: "working" }, 2), { action: "focus" });
-  assert.deepEqual(rowClickCall({ state: "ended" }, 2), { action: "reopen", carryOn: false });
-  assert.deepEqual(rowClickCall({ state: "ended" }, 3), { action: "reopen", carryOn: false });
-});
-
-test("(deprecated) 클릭이 내는 이름도 허용 집합 안이다", () => {
-  for (const state of STATES) {
-    for (const detail of [1, 2]) {
-      assert.ok(ALLOWED.includes(rowClickCall({ state }, detail).action));
-    }
-  }
 });

@@ -23,8 +23,7 @@ function pauseDetail(s: MenuSession, canPause: boolean): string {
 }
 
 // 끝난 세션은 이어 열기, 일시중지는 재개·중단, 그 밖은 일시중지·중단. 터미널 없이 도는 살아 있는 세션은 신호를 보내지 않으므로 메뉴가 없다
-// place 를 생략하면(옛 호출) 터미널 있는 세션으로 본다 — UI 단계에서 SessionRow 가 place 를 넘기면 필수로 바꾼다
-export function sessionMenuEntries(s: MenuSession, place?: SessionPlace): SessionMenuEntry[] {
+export function sessionMenuEntries(s: MenuSession, place: SessionPlace): SessionMenuEntry[] {
   if (s.state === "ended") {
     if (s.paused) {
       return [{ label: "세션 재개 (이어서 진행)", detail: "보드 새 탭에서 열고 멈춘 작업을 이어 갑니다", action: "reopen", carryOn: true }];
@@ -32,7 +31,7 @@ export function sessionMenuEntries(s: MenuSession, place?: SessionPlace): Sessio
     const detail = s.headless ? "보드 새 탭에서 대화형으로 이어 엽니다" : "보드 새 탭에서 이 대화를 이어 엽니다";
     return [{ label: "세션 다시 열기", detail, action: "reopen", carryOn: false }];
   }
-  if (place?.kind === "background") return [];
+  if (place.kind === "background") return [];
   if (s.state === "paused") {
     return [{ label: "세션 재개", detail: "멈춘 지점부터 이어서 진행하게 합니다", action: "resume" }, { separator: true }, STOP_ENTRY];
   }
@@ -42,10 +41,4 @@ export function sessionMenuEntries(s: MenuSession, place?: SessionPlace): Sessio
     { separator: true },
     STOP_ENTRY,
   ];
-}
-
-/** @deprecated openSession.ts 의 openSession 이 대신한다 — UI 단계에서 SessionRow 가 옮겨 가면 지운다 */
-export function rowClickCall(s: Pick<Session, "state">, detail: number): SessionCall {
-  if (detail < 2) return { action: "activate" };
-  return s.state === "ended" ? { action: "reopen", carryOn: false } : { action: "focus" };
 }
