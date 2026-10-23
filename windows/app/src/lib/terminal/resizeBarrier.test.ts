@@ -11,7 +11,7 @@ const flushPromises = () => new Promise((resolve) => setImmediate(resolve));
 const label = (s) => `${s.cols}x${s.rows}`;
 
 /** 가짜 port: 이벤트 기록 + 손으로 돌리는 시계 + 손으로 푸는 sendResize */
-function makeHarness({ cur = { cols: 80, rows: 24 }, alt = false, bound = true, manualWrites = false } = {}) {
+function makeHarness({ cur = { cols: 80, rows: 24 }, alt = false, bound = true, manualWrites = false, lazyFlush = false, altAfterFlush = null } = {}) {
   const events = [];
   let size = { ...cur };
   let clock = 0;
@@ -19,6 +19,8 @@ function makeHarness({ cur = { cols: 80, rows: 24 }, alt = false, bound = true, 
   const timers = new Map();
   const sends = [];
   const pendingWrites = [];
+  const pendingFlushes = [];
+  let altNow = alt;
   const port = {
     sendResize(s) {
       events.push(`send:${label(s)}`);
@@ -34,7 +36,16 @@ function makeHarness({ cur = { cols: 80, rows: 24 }, alt = false, bound = true, 
       else done();
     },
     current: () => ({ ...size }),
-    altScreen: () => alt,
+    flush(done) {
+      if (lazyFlush) {
+        events.push("flush");
+        pendingFlushes.push(done);
+      } else {
+        if (altAfterFlush !== null) altNow = altAfterFlush;
+        done();
+      }
+    },
+    altScreen: () => altNow,
     bound: () => bound,
     setTimer(fn, ms) {
       const id = nextTimer++;
@@ -82,6 +93,12 @@ function makeHarness({ cur = { cols: 80, rows: 24 }, alt = false, bound = true, 
       pendingWrites.shift()();
     },
     pendingWrites,
+    pendingFlushes,
+    /** 대기 중인 flush 를 끝낸다: 그제야 altScreen() 이 따라잡는다 */
+    completeFlush() {
+      if (altAfterFlush !== null) altNow = altAfterFlush;
+      pendingFlushes.shift()();
+    },
     size: () => size,
   };
   return h;
@@ -324,4 +341,91 @@ test("같은 크기 요청은 아무것도 하지 않는다", () => {
   const h = makeHarness();
   h.barrier.request({ cols: 80, rows: 24 });
   assert.deepEqual(h.events, []);
+});
+
+test("flush 가 끝나기 전에는 altScreen 이 낡아 있어도 그 뒤 값으로 계획한다", async () => {
+  // 화면 전환 직후의 요청: xterm 이 아직 해석 못 해 altScreen() 이 false 로 남아 있다가 flush 뒤에 true 가 된다
+  const h = makeHarness({ cur: { cols: 120, rows: 40 }, alt: false, altAfterFlush: true, lazyFlush: true });
+  h.barrier.request({ cols: 60, rows: 30 });
+  assert.deepEqual(h.events, ["flush"], "flush 전에는 계획도 sendResize 도 없다");
+  h.completeFlush();
+  // 알트 화면이면 한 단계(60x30, cut A). 낡은 값(비알트)이었다면 두 단계(120x30 → 60x30)가 됐을 것이다
+  assert.deepEqual(h.events, ["flush", "send:60x30"]);
+  await h.resolveSend(0, 0);
+  h.frame(`${PRE}${E}[Hx`);
+  assert.equal(only(h.events, "send").length, 1);
+});
+
+test("flush 중에 온 요청은 슬롯에 합치고 계획은 하나만 돈다", async () => {
+  const h = makeHarness({ lazyFlush: true });
+  h.barrier.request({ cols: 70, rows: 24 });
+  h.barrier.request({ cols: 60, rows: 24 });
+  h.barrier.request({ cols: 50, rows: 24 });
+  assert.equal(only(h.events, "flush").length, 1, "flush 하나만 진행 중");
+  const held = h.frame("during");
+  assert.equal(only(h.events, "write").length, 0, "계획 중 프레임은 붙잡는다");
+  h.completeFlush();
+  assert.deepEqual(only(h.events, "send"), ["send:50x24"], "마지막 요청만 계획한다");
+  assert.deepEqual(h.pendingFlushes, []);
+  await h.resolveSend(0, null);
+  assert.ok(h.events.includes("apply:50x24"));
+  assert.ok(h.events.includes("write:during"));
+  assert.ok(only(h.events, "done").includes(`done:${held}`));
+});
+
+test("계획할 단계가 없으면 붙잡은 프레임을 풀고 Idle 로 돌아간다", () => {
+  const h = makeHarness({ lazyFlush: true });
+  h.barrier.request({ cols: 80, rows: 24 }); // 같은 크기
+  h.frame("held");
+  h.completeFlush();
+  assert.deepEqual(only(h.events, "write"), ["write:held"]);
+  h.frame("direct");
+  assert.equal(h.events.at(-2), "write:direct");
+});
+
+test("flush 중에 dispose 하면 이후 port 를 부르지 않는다", () => {
+  const h = makeHarness({ lazyFlush: true });
+  h.barrier.request(SHRINK);
+  h.frame("held");
+  const before = h.events.length;
+  h.barrier.dispose();
+  h.completeFlush();
+  assert.equal(h.events.length, before, "dispose 뒤 sendResize·write·applyLocal 없음");
+});
+
+test("flush 중에 exit 가 오면 계획을 접고 붙잡은 프레임만 푼다", () => {
+  const h = makeHarness({ lazyFlush: true });
+  h.barrier.request(SHRINK);
+  h.frame("held");
+  h.barrier.interrupt("exit");
+  h.completeFlush();
+  assert.equal(only(h.events, "send").length, 0);
+  assert.deepEqual(only(h.events, "write"), ["write:held"]);
+});
+
+test("CR 뒤에 LF 가 이어지면 4 x tailIdleMs 를 기다리지 않고 LF 뒤에서 자른다", async () => {
+  const h = makeHarness();
+  h.barrier.request(SHRINK);
+  await h.resolveSend(0, 0);
+  h.tick(1000); // 기한: 줄 폴백
+  h.frame("abc\r");
+  h.tick(50);
+  assert.equal(only(h.events, "apply").length, 0, "첫 조용한 구간에는 CR-LF 를 가르지 않는다");
+  h.frame("\nx");
+  assert.deepEqual(h.events.slice(-4), ["write:\n", "apply:60x24", "write:x", "done:2"]);
+});
+
+test("CR 에서 끝난 스트림은 새 바이트 없이 4 x tailIdleMs 가 지나면 거기서 자르고 적용한다", async () => {
+  const h = makeHarness();
+  h.barrier.request(SHRINK);
+  await h.resolveSend(0, 0);
+  h.tick(1000);
+  h.frame("abc\r");
+  h.tick(50);
+  assert.equal(only(h.events, "apply").length, 0);
+  h.tick(199);
+  assert.equal(only(h.events, "apply").length, 0, "4 x 50ms 전");
+  h.tick(1);
+  assert.deepEqual(h.events.slice(-3), ["write:abc\r", "done:1", "apply:60x24"]);
+  assert.equal(h.size().cols, 60);
 });

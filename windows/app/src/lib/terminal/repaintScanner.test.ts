@@ -236,6 +236,14 @@ test("lineFallback: CR 과 LF 사이에서는 자르지 않는다", () => {
   assert.equal(t.flushIdle(), 2); // 줄 중간이어도 바로 자른다
 });
 
+test("flushIdle(force): CR 바로 뒤여도 자른다(스트림이 CR 에서 끝났다)", () => {
+  const s = make({ anchorSeq: 0 });
+  s.feed(0, bytes("ab\r"));
+  s.lineFallback();
+  assert.equal(s.flushIdle(), null);
+  assert.equal(s.flushIdle(true), 3);
+});
+
 test("lineFallback: 이미 내보낸 LF 는 쓰지 않는다", () => {
   const s = make({ anchorSeq: 0 });
   s.feed(0, bytes("a\nb"));

@@ -59,6 +59,8 @@ export class TermController {
     sendResize: async ({ cols, rows }) => (this.termId ? await termResize(this.termId, cols, rows) : null),
     applyLocal: ({ cols, rows }) => this.term?.resize(cols, rows),
     write: (bytes, done) => this.safeWrite(bytes, done),
+    // xterm 의 쓰기 대기열은 비동기로 해석된다: 빈 쓰기의 콜백은 앞서 쓴 바이트를 다 해석한 뒤에 온다
+    flush: (done) => (this.term ? this.safeWrite(new Uint8Array(0), done) : done()),
     current: () => ({ cols: this.term?.cols ?? 80, rows: this.term?.rows ?? 24 }),
     altScreen: () => this.term?.buffer.active.type === "alternate",
     bound: () => this.termId !== null && this.term !== null,

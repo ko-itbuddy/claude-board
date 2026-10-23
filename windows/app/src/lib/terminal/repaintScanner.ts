@@ -80,12 +80,13 @@ export class RepaintScanner {
     return this.result();
   }
 
-  /** 프레임이 한동안 안 온다. 붙잡은 앞부분이 아무것도 못 이루면 풀거나, 지금 끝에서 자를 자리를 돌려준다 */
-  flushIdle(): number | null {
+  /** 프레임이 한동안 안 온다. 붙잡은 앞부분이 아무것도 못 이루면 풀거나, 지금 끝에서 자를 자리를 돌려준다.
+   *  force 면 CR 바로 뒤여도 자른다(스트림이 CR 에서 끝난 경우) */
+  flushIdle(force = false): number | null {
     if (this.mode === "done") return this.cutAt;
     if (this.end < 0) return null;
-    if (this.mode === "line") return this.cutHere();
-    if (this.mode === "b") return this.held > 0 ? this.cutHere() : null;
+    if (this.mode === "line") return this.cutHere(force);
+    if (this.mode === "b") return this.held > 0 ? this.cutHere(force) : null;
     this.held = 0; // A 를 찾는 중: 붙잡은 ESC / ESC[ 는 그냥 데이터로 푼다
     this.released = Math.max(this.released, this.end);
     return null;
@@ -106,9 +107,10 @@ export class RepaintScanner {
     return { safe, cut: this.cutAt };
   }
 
-  private cutHere(): number | null {
-    // CR 과 LF 사이는 자르지 않는다
-    if (this.end > this.base && this.buf[this.end - 1 - this.base] === CR) return null;
+  private cutHere(force: boolean): number | null {
+    // 바이트가 계속 흐르는 동안은 CR 과 LF 사이를 자르지 않는다. force 는 호출자(ResizeBarrier)가
+    // CR 뒤로 오래 아무것도 안 온 뒤에만 준다: 그만큼 조용하면 LF 는 같은 출력 덩어리에 이어지지 않는다
+    if (!force && this.end > this.base && this.buf[this.end - 1 - this.base] === CR) return null;
     this.finish(this.end);
     return this.cutAt;
   }

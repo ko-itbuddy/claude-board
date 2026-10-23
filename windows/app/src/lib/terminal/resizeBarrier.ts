@@ -1,5 +1,5 @@
 // xterm 크기를 ConPTY 의 다시 그리기 머리말(cut)에 맞춰 바꾸는 상태 기계.
-// Idle → Sending(termResize 의 기준 seq 를 기다림) → Scanning(스캐너에 출력을 먹임) → Holding(cut 앞을 쓰고 콜백에서 applyLocal)
+// Idle → Planning(xterm 쓰기 대기열을 비움) → Sending(termResize 의 기준 seq 를 기다림) → Scanning(스캐너에 출력을 먹임) → Holding(cut 앞을 쓰고 콜백에서 applyLocal)
 // → 붙잡은 프레임을 풀고 → 다음 단계 또는 최신 요청으로 다시 계획 → Idle.
 // 한 번에 단계 하나만 진행하고, 요청은 슬롯 하나(desired)에 합친다. 디바운스는 호출자(term.ts)의 몫이다.
 // 붙잡은 프레임은 xterm 에 쓰기 전까지 done 을 부르지 않는다(생산자의 크레딧 창이 막아 준다).
@@ -14,6 +14,8 @@ export interface BarrierPort {
   /** xterm 크기 바꾸기 */
   applyLocal(size: Size): void;
   write(bytes: Uint8Array, done: () => void): void;
+  /** 지금까지 write 한 바이트를 xterm 이 다 해석한 뒤 done 을 부른다. altScreen()·current() 는 그 뒤에만 믿을 수 있다 */
+  flush(done: () => void): void;
   current(): Size;
   altScreen(): boolean;
   bound(): boolean;
@@ -31,8 +33,9 @@ export interface BarrierOptions {
 export const PREAMBLE_DEADLINE_MS = 1000;
 export const TAIL_IDLE_MS = 50;
 export const SCAN_BUDGET_BYTES = 64 * 1024;
+const CR_GRACE_FACTOR = 4;
 
-type Phase = "idle" | "sending" | "scanning" | "holding";
+type Phase = "idle" | "planning" | "sending" | "scanning" | "holding";
 interface Held {
   seq: number;
   bytes: Uint8Array;
@@ -63,6 +66,7 @@ export class ResizeBarrier {
   private queue: Held[] = [];
   private deadlineTimer: unknown = null;
   private idleTimer: unknown = null;
+  private crBlocked = false; // 줄 폴백이 CR 바로 뒤라 못 잘랐다: 새 바이트 없이 더 기다리면 강제로 자른다
 
   private readonly port: BarrierPort;
 
@@ -106,7 +110,7 @@ export class ResizeBarrier {
     if (this.disposed) return;
     if (reason === "exit") this.desired = null;
     // 이미 cut 앞을 쓰는 중이면 콜백이 곧 적용하고 푼다
-    if (this.phase === "idle" || this.phase === "holding") return;
+    if (this.phase === "idle" || this.phase === "planning" || this.phase === "holding") return;
     this.port.log(`resize barrier: ${reason} 로 기다림을 버리고 바로 적용`);
     this.token++;
     this.clearTimers();
@@ -129,16 +133,26 @@ export class ResizeBarrier {
 
   // ---- 계획 ----
 
+  /** 계획 전에 xterm 쓰기 대기열을 비운다: altScreen()·current() 는 해석이 끝난 뒤의 값이어야 한다 */
   private beginPlan(): void {
+    if (this.desired === null) return;
+    const token = ++this.token;
+    this.phase = "planning"; // 이 사이 들어온 프레임은 붙잡는다, 요청은 슬롯에 합친다
+    this.port.flush(() => this.plan(token));
+  }
+
+  private plan(token: number): void {
+    if (token !== this.token || this.disposed) return;
     const want = this.desired;
     this.desired = null;
-    if (want === null) return;
-    if (!this.port.bound()) {
-      this.port.applyLocal(want);
+    const steps = want === null || !this.port.bound() ? [] : planSteps(this.port.current(), want, this.port.altScreen());
+    if (want !== null && !this.port.bound()) this.port.applyLocal(want);
+    if (steps.length === 0) {
+      this.drain(Infinity);
+      this.phase = "idle";
+      if (this.desired !== null) this.beginPlan();
       return;
     }
-    const steps = planSteps(this.port.current(), want, this.port.altScreen());
-    if (steps.length === 0) return;
     this.steps = steps;
     this.stepIndex = 0;
     this.minSeq = undefined;
@@ -158,6 +172,7 @@ export class ResizeBarrier {
     this.lastEnd = null;
     this.scannedBytes = 0;
     this.fallback = false;
+    this.crBlocked = false;
     let pending: Promise<number | null>;
     try {
       pending = this.port.sendResize(step.to);
@@ -216,6 +231,7 @@ export class ResizeBarrier {
   }
 
   private afterFeed(result: { safe: number; cut: number | null }): void {
+    this.crBlocked = false;
     if (result.cut !== null) {
       this.holdAtCut(result.cut);
       return;
@@ -257,19 +273,23 @@ export class ResizeBarrier {
       if (this.fallback) this.holdAtCut(Infinity); // 아무것도 안 왔다: 바로 바꾼다
       return;
     }
-    const cut = scanner.flushIdle();
+    const cut = scanner.flushIdle(this.crBlocked);
     if (cut !== null) {
       this.holdAtCut(cut);
       return;
     }
     this.drain(scanner.safe);
-    if (this.fallback) this.armIdle(); // CR 바로 뒤라 못 잘랐다
+    if (!this.fallback) return;
+    // CR 바로 뒤라 못 잘랐다. 바이트가 계속 오는 동안은 CR-LF 를 가르지 않는다(afterFeed 가 crBlocked 를 푼다).
+    // 새 바이트 없이 4 x tailIdleMs 가 더 지나면 CR 로 끝난 스트림이니 거기서 자르고 적용한다
+    this.crBlocked = true;
+    this.armIdle(this.tailIdleMs * CR_GRACE_FACTOR);
   }
 
-  private armIdle(): void {
+  private armIdle(ms: number = this.tailIdleMs): void {
     this.clearIdle();
     const token = this.token;
-    this.idleTimer = this.port.setTimer(() => this.onTailIdle(token), this.tailIdleMs);
+    this.idleTimer = this.port.setTimer(() => this.onTailIdle(token), ms);
   }
 
   private clearIdle(): void {
