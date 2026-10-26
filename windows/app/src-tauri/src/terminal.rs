@@ -154,7 +154,7 @@ pub fn perform(board: &Arc<Board>, action: &str, carry_on: Option<bool>, s: Sess
     });
 }
 
-fn paused_mark(board: &Board, s: &Session) -> PathBuf {
+pub(crate) fn paused_mark(board: &Board, s: &Session) -> PathBuf {
     board.sessions_dir().join(format!("{}.paused", s.id))
 }
 

@@ -1001,6 +1001,7 @@ pub fn run(argv: Vec<String>, context: tauri::Context<tauri::Wry>) {
             crate::shutdown::save_tabs,
             crate::shutdown::load_tabs,
             crate::shutdown::answer_shutdown,
+            crate::shutdown::shutdown_dialog_shown,
             crate::proc_wait::pids_alive,
             crate::proc_wait::wait_exit,
             crate::mdrender::md_render_dir,

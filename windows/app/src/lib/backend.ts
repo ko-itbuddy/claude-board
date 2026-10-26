@@ -491,6 +491,11 @@ export function answerShutdown(ok: boolean, pause: string[]) {
   fire("answer_shutdown", { ok, pause });
 }
 
+// 끌 때 확인 창을 띄웠다고 알린다 — 이 뒤로 백엔드는 사용자가 고를 때까지 기다린다(안 알리면 10초 뒤 그대로 진행한다)
+export function shutdownDialogShown() {
+  fire("shutdown_dialog_shown");
+}
+
 // 백엔드가 끌 때 확인을 요청했을 때(트레이 종료·업데이트) — 듣기를 끄는 함수를 돌려준다
 export function onConfirmShutdown(fn: (p: ConfirmShutdownPayload) => void): () => void {
   if (!inTauri) return () => {};
