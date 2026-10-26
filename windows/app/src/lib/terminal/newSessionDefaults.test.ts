@@ -19,6 +19,10 @@ const COMMANDS: [string, unknown, string][] = [
   ["설정 없음(undefined) -> 기본 명령", undefined, DEFAULT_SESSION_COMMAND],
   ["문자열이 아니면 -> 기본 명령", { newSessionCommand: 3 }, DEFAULT_SESSION_COMMAND],
   ["값이 있으면 앞뒤 공백을 뺀 그대로", { newSessionCommand: "  claude --model opus " }, "claude --model opus"],
+  // 손으로 고친 설정 파일 — 읽는 길도 검사해 셸에 위험한 글자가 들어가지 않게 한다
+  ["줄바꿈이 든 값 -> 기본 명령", { newSessionCommand: "claude\nrm -rf x" }, DEFAULT_SESSION_COMMAND],
+  ["claude 로 시작하지 않으면 -> 기본 명령", { newSessionCommand: "& claude" }, DEFAULT_SESSION_COMMAND],
+  ["길이 상한을 넘으면 -> 기본 명령", { newSessionCommand: `claude ${"a".repeat(600)}` }, DEFAULT_SESSION_COMMAND],
 ];
 for (const [name, settings, want] of COMMANDS) {
   test(`defaultNewSessionCommand: ${name}`, () => assert.equal(defaultNewSessionCommand(settings), want));

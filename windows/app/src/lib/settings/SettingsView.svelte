@@ -1,6 +1,7 @@
 <script lang="ts">
   // 설정 화면 — 터미널 영역(제목 띠 아래)을 덮는다(mac SettingsScreen 의 화면). 떠 있지 않으면 아무것도 그리지 않는다.
   // 왼쪽(SettingsSidebar)에서 묶음을 고르거나 검색하고, 오른쪽에 고른 묶음(groups/*)이나 검색 결과가 선다. 줄은 묶음 화면이 SettingsCard 로 그린다.
+  // Esc 는 이 화면이 받지 않는다 — 창 전체의 캡처(TerminalAreaView → shortcuts/dispatch.ts)가 settings.escape 로 처리한다.
   // 올라오고 내려가는 움직임은 설정 > 창의 settingsTransition(밀기·서서히·없음)을 따른다 — 규칙은 motion.ts.
   import { tick } from "svelte";
   import { cubicIn, cubicOut } from "svelte/easing";
@@ -8,7 +9,7 @@
   import { TerminalHub, focusActive } from "$lib/terminal/hub.svelte";
   import { SETTINGS_ITEMS, type SettingsItem } from "./items";
   import { motionFor, frameAt } from "./motion";
-  import { SettingsScreen, connectSettings, dismissForCollapse, escapeSettings, goSection } from "./screen.svelte";
+  import { SettingsScreen, connectSettings, dismissForCollapse, goSection } from "./screen.svelte";
   import { search } from "./search";
   import { SECTION_ORDER, SETTINGS_SECTIONS, sectionTitle } from "./sections";
   import SettingsSidebar from "./SettingsSidebar.svelte";
@@ -63,19 +64,16 @@
     if (SettingsScreen.refocus && !SettingsScreen.shown && !TerminalHub.sheet && !TerminalHub.confirm) focusActive();
   }
 
-  function onKeydown(e: KeyboardEvent) {
-    if (e.key !== "Escape" || e.isComposing || e.keyCode === 229) return;
-    e.preventDefault();
-    e.stopPropagation();
-    escapeSettings();
-  }
-
-  // 검색 결과를 눌렀다 — 그 묶음으로 가서 그 줄을 보여 주고 잠깐 밝힌다(줄은 카드 제목으로 찾는다)
+  // 검색 결과를 눌렀다 — 그 묶음으로 가서 그 줄을 보여 주고 잠깐 밝힌다(줄은 카드 제목으로 찾는다).
+  // 맞는 카드가 없으면(예: 카드 제목이 계정 이메일인 "저장한 계정") 묶음을 고른 것으로 끝나며 화면은 묶음 맨 위로 둔다
   async function jumpTo(item: SettingsItem) {
     goSection(item.section);
     await tick();
     const card = Array.from(contentEl?.querySelectorAll<HTMLElement>('[data-testid="settings-card"]') ?? []).find((el) => el.dataset.title === item.title);
-    if (!card) return;
+    if (!card) {
+      contentEl?.scrollTo({ top: 0 });
+      return;
+    }
     const reduced = prefersReducedMotion();
     card.scrollIntoView({ block: "center", behavior: reduced ? "auto" : "smooth" });
     if (!reduced) card.animate([{ outline: "2px solid rgb(115 168 255 / 0.9)" }, { outline: "2px solid rgb(115 168 255 / 0)" }], { duration: 1200, easing: "ease-out" });
@@ -84,12 +82,10 @@
 
 <div class="clip">
   {#if SettingsScreen.shown}
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <section
       class="settings"
       data-testid="settings-view"
       aria-label="설정"
-      onkeydown={onKeydown}
       in:slide={{ out: false }}
       out:slide={{ out: true }}
       onoutroend={onOutroEnd}

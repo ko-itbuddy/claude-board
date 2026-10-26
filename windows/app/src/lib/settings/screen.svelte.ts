@@ -2,9 +2,9 @@
 // 접힌 보드에서 열면 터미널 칸을 펼치는 것이 전환이 되고 닫을 때 다시 접는다. 열린 동안 탭은 뒤에서 그대로 돈다(터미널 칸은 숨겨지지 않고 가려질 뿐이다).
 // 판단은 screenRules.ts(순수, 시험 있음), 여기는 그 결과대로 상태를 바꾸고 백엔드를 부른다.
 //
-// 한계: 접힌 보드에서 잠깐 펼치는 것도 백엔드는 terminalExpanded 로 저장한다(mac 은 곧바로 false 로 되돌려 쓴다). 열린 채 보드가 꺼지면
-// 펼친 채로 남는다 — 닫는 길(닫기·Esc·돌아가기)은 모두 다시 접는다. 끄기 직전에 부를 `restoreSettingsBeforeQuit` 를 둔다.
-import { onSettingsEvent, setTerminalExpanded, showBoard } from "$lib/backend";
+// 한계: 접힌 보드에서 잠깐 펼치는 것도 백엔드는 terminalExpanded 로 저장한다(mac 은 곧바로 false 로 되돌려 쓴다). 닫는 길(닫기·Esc·돌아가기)은
+// 모두 다시 접고, 열린 채 보드가 꺼질 때는 끄기 직전(terminal/lifecycle.svelte.ts 의 끌 때 확인 흐름)이 `restoreSettingsBeforeQuit` 를 기다려 접는다.
+import { onSettingsEvent, setTerminalExpanded, setTerminalExpandedAndWait, showBoard } from "$lib/backend";
 import { board } from "$lib/board/store.svelte";
 import { ShortcutSettings, stopRecording } from "$lib/shortcuts/store.svelte";
 import type { SettingsSectionId } from "$lib/types";
@@ -90,11 +90,16 @@ export function dismissForCollapse(): void {
   SettingsScreen.visible = false;
 }
 
-/** 끄기·업데이트 직전 — 접힌 보드에서 잠깐 펼쳐 둔 것이면 접어 둔다(다시 뜰 때 펼친 채로 뜨지 않게) */
-export function restoreSettingsBeforeQuit(): void {
+/** 끄기·업데이트 직전 — 접힌 보드에서 잠깐 펼쳐 둔 것이면 접어 두고 백엔드가 저장할 때까지 기다린다(다시 뜰 때 펼친 채로 뜨지 않게).
+ * 접지 못해도 끄기를 막지 않는다 — 실패는 로그만 남긴다 */
+export async function restoreSettingsBeforeQuit(): Promise<void> {
   if (!SettingsScreen.shown || !collapsedByUs) return;
   collapsedByUs = false;
-  setTerminalExpanded(false);
+  try {
+    await setTerminalExpandedAndWait(false);
+  } catch (e) {
+    console.error("끄기 전에 터미널 칸을 접지 못함", e);
+  }
 }
 
 /** 설정 화면이 마운트될 때 한 번 — 백엔드의 board://settings 를 듣고, 듣기를 끄는 함수를 돌려준다 */

@@ -5,10 +5,12 @@ import { CLAUDE_START, DEFAULT_SESSION_COMMAND } from "./sessionCommand.ts";
 /** 기본 명령 칸에 적을 수 있는 최대 글자 수 */
 export const DEFAULT_COMMAND_MAX = 500;
 
-/** 새 세션의 기본 명령 — 설정 값(앞뒤 공백 뺀 것), 비었거나 설정이 없으면 DEFAULT_SESSION_COMMAND */
+/** 새 세션의 기본 명령 — 설정 값(앞뒤 공백 뺀 것), 비었거나 설정이 없거나 검사(validateDefaultCommand)에 걸리면 DEFAULT_SESSION_COMMAND.
+ * 쓰는 길만 검사하면 손으로 고친 설정 파일의 줄바꿈·`& claude` 가 그대로 셸에 쳐진다 */
 export function defaultNewSessionCommand(settings: { newSessionCommand?: unknown } | null | undefined): string {
-  const typed = typeof settings?.newSessionCommand === "string" ? settings.newSessionCommand.trim() : "";
-  return typed === "" ? DEFAULT_SESSION_COMMAND : typed;
+  const typed = typeof settings?.newSessionCommand === "string" ? settings.newSessionCommand : "";
+  const check = validateDefaultCommand(typed);
+  return check.ok && check.command !== "" ? check.command : DEFAULT_SESSION_COMMAND;
 }
 
 /** 새 세션을 열 때 답변 꾸미기를 켜 두는가 — 설정이 없거나 불리언이 아니면 켬 */
