@@ -19,11 +19,13 @@
   import UsagePanel from "$lib/board/UsagePanel.svelte";
   import PaneDivider from "$lib/terminal/PaneDivider.svelte";
   import TerminalAreaView from "$lib/terminal/TerminalAreaView.svelte";
+  import ShutdownList from "$lib/terminal/ShutdownList.svelte";
   import TerminalNotice from "$lib/terminal/TerminalNotice.svelte";
   import { setDragging, startHub } from "$lib/terminal/hub.svelte";
   import { clampBoardWidth, boardMinWidth, maxBoardWidth } from "$lib/terminal/paneLayout";
   import { stateName, stateRgb } from "$lib/board/format";
   import { hint } from "$lib/board/hint.svelte";
+  import { boardOpaque } from "$lib/board/opacity";
   import { pointer, trackWindow, win } from "$lib/board/pointer.svelte";
   import { board, connect, ui, type Tier } from "$lib/board/store.svelte";
 
@@ -71,7 +73,8 @@
   $effect(() => {
     if (!snap) return;
     const level = win.dragging ? win.dragLevel : snap.settings.opacity;
-    const solid = expanded || (!win.previewing && (pointer.inside || win.focused));
+    // 규칙은 board/opacity.ts — 지금은 펼친 창을 "덮는 창"으로 보고, 보드가 활성이면 마우스가 안에 있는 것으로 본다
+    const solid = boardOpaque({ covering: expanded, previewing: win.previewing, pointerInside: pointer.inside || win.focused });
     const root = document.documentElement;
     root.style.transition = win.previewing ? "none" : "opacity 0.22s ease";
     root.style.opacity = String(solid ? 1 : level);
@@ -306,6 +309,7 @@
 
 <HintLayer />
 <TerminalNotice />
+<ShutdownList />
 <MenuLayer />
 
 <style>

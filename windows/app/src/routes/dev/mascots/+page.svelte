@@ -30,6 +30,7 @@
   const session = (state: State, ago: number, topic = ""): Session => ({
     id: `${state}-${ago}`,
     cwd: "C:\\Users\\dev\\claude-board",
+    pid: 0,
     state,
     since: now - ago,
     updated: now - ago,

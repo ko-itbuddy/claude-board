@@ -1,7 +1,9 @@
 // 셸이 줄 편집을 시작한 뒤에 명령 한 줄을 쳐 넣는다(ClaudeBoard.swift BoardSurface.type) — hub 를 모르게 상태 접근은 인자로 받는다.
 import { termWrite } from "$lib/backend";
-import type { TermId } from "$lib/types";
+import type { TermId, TermInfo } from "$lib/types";
+import { currentPluginDir, mdRenderCommand } from "./mdRender";
 import type { TermController } from "./term";
+import { applyTestClaude, currentTestClaudePrefix } from "./testClaude";
 
 /** 셸이 첫 출력을 낸 뒤 300ms 조용해지면(5초 상한) 명령을 쳐 넣고 100ms 뒤 Enter(\r) */
 const QUIET_MS = 300;
@@ -14,12 +16,22 @@ export interface TypeHooks {
   alive: () => boolean;
   /** 친다는 표시(화면 typedAt) — 기다리는 동안에도 부른다. 프로세스 스냅샷이 따라오기 전의 찰나를 claude 가 도는 것으로 메운다 */
   touch: () => void;
+  /** 이 화면의 셸 — 시험용 claude 바꿔치기가 셸마다 따옴표를 달리 한다 */
+  shell: TermInfo["shell"];
+  /** 답변 꾸미기를 끈 화면인가(없으면 켠 화면) */
+  mdRenderOff?: boolean;
+}
+
+/** 치기 직전의 명령 — 시험용 claude 로 바꾸고(D5) md-render 플래그를 맞춘다(P1.T·P1.2 가 채우기 전에는 그대로) */
+export function commandToType(command: string, hooks: Pick<TypeHooks, "shell" | "mdRenderOff">): string {
+  const swapped = applyTestClaude(command, currentTestClaudePrefix(), hooks.shell);
+  return mdRenderCommand(swapped, currentPluginDir(), hooks.mdRenderOff ?? false);
 }
 
 /** 이미 셸 프롬프트에 있는 화면에 명령을 바로 친다 */
 export async function typeAtPrompt(termId: TermId, command: string, hooks: TypeHooks) {
   hooks.touch();
-  termWrite(termId, command);
+  termWrite(termId, commandToType(command, hooks));
   await sleep(ENTER_DELAY_MS);
   if (!hooks.alive()) return;
   hooks.touch();
