@@ -149,15 +149,27 @@ fn run_setup(app: &Path) -> Result<(), String> {
         println!("  명령: {}", p.display());
     }
 
-    // 5) 로그인할 때 자동 실행
+    // 5) 로그인할 때 자동 실행 — 설정 > 일반에서 끈 사람(표지 파일 login-launch-off)은 등록하지 않는다(mac user-setup.sh 6)
     #[cfg(windows)]
     {
-        let value = format!("\"{}\" --background", app.display());
-        registry::set_run(RUN_VALUE, &value).map_err(|e| format!("자동 실행을 등록하지 못했습니다: {e}"))?;
-        println!("  자동 실행: HKCU\\{}\\{RUN_VALUE}", registry::RUN_KEY);
+        if login_launch_wanted(&paths::login_launch_off_file()) {
+            let value = format!("\"{}\" --background", app.display());
+            registry::set_run(RUN_VALUE, &value).map_err(|e| format!("자동 실행을 등록하지 못했습니다: {e}"))?;
+            println!("  자동 실행: HKCU\\{}\\{RUN_VALUE}", registry::RUN_KEY);
+        } else {
+            // 이미 있는 값도 지운다 — 끄기가 값을 못 지웠어도 업데이트 뒤에는 꺼진 채로 남는다
+            registry::delete_run(RUN_VALUE).map_err(|e| format!("자동 실행 값을 지우지 못했습니다: {e}"))?;
+            println!("  자동 실행: 건너뜀(설정에서 로그인할 때 열기를 꺼 둠)");
+        }
     }
     println!("설정을 마쳤습니다.");
     Ok(())
+}
+
+/// 로그인할 때 자동 실행을 등록해야 하는가 — 표지 파일 `login-launch-off` 가 없을 때만(처음 설치는 켠 채로 시작한다).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn login_launch_wanted(off_mark: &Path) -> bool {
+    !off_mark.exists()
 }
 
 /// 지난 setup 이 비켜 둔 `claude-board-hook.old-*` 를 지운다(아직 도는 것은 지워지지 않으니 다음에 다시).
@@ -223,7 +235,7 @@ pub fn uninstall() -> ExitCode {
 
     println!("3) hook 사본·세션 기록·저장한 계정·답변 꾸미기 사본 제거");
     let notifier = paths::notifier_dir();
-    let mut files = vec![paths::hook_exe(), paths::app_path_file(), paths::notify_position_file(), notifier.join("accounts.json")];
+    let mut files = fixed_files(&notifier);
     for entry in fs::read_dir(&notifier).into_iter().flatten().flatten() {
         if entry.file_name().to_string_lossy().starts_with(OLD_PREFIX) {
             files.push(entry.path());
@@ -249,6 +261,17 @@ pub fn uninstall() -> ExitCode {
     } else {
         ExitCode::FAILURE
     }
+}
+
+/// notifier 에서 이름이 정해진 우리 파일들 — hook 사본·앱 경로·알림 위치·로그인할 때 열기를 끈 표지(mac `Uninstall.command` 가 `login-launch-off` 를 지운다)·저장 계정 목록.
+fn fixed_files(notifier: &Path) -> Vec<PathBuf> {
+    vec![
+        paths::hook_exe(),
+        paths::app_path_file(),
+        paths::notify_position_file(),
+        paths::login_launch_off_file(),
+        notifier.join("accounts.json"),
+    ]
 }
 
 /// notifier 아래에서 통째로 지우는 폴더들 — 세션 기록, 저장 계정(accounts\ 에는 DPAPI 로 암호화한 토큰(vault)도 있다),
@@ -393,6 +416,34 @@ mod tests {
         }
         fs::remove_dir_all(&notifier).unwrap();
         fs::remove_dir_all(&elsewhere).unwrap();
+    }
+
+    #[test]
+    fn login_launch_is_registered_only_without_the_off_mark() {
+        let dir = scratch("login-mark");
+        let mark = dir.join("login-launch-off");
+        assert!(login_launch_wanted(&mark), "표지가 없으면(처음 설치) 등록한다");
+        touch(&mark);
+        assert!(!login_launch_wanted(&mark), "끈 사람은 업데이트가 다시 등록하지 않는다");
+        fs::remove_file(&mark).unwrap();
+        assert!(login_launch_wanted(&mark));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn uninstall_removes_the_off_mark_with_the_other_fixed_files() {
+        let files = fixed_files(&paths::notifier_dir());
+        for expected in [paths::login_launch_off_file(), paths::notify_position_file(), paths::app_path_file(), paths::hook_exe()] {
+            assert!(files.contains(&expected), "{}", expected.display());
+        }
+        // 지우는 일은 있는 파일만 지우고 없는 파일은 성공으로 본다
+        let dir = scratch("fixed");
+        let mark = dir.join("login-launch-off");
+        touch(&mark);
+        assert!(remove(&mark, fs::remove_file(&mark)));
+        assert!(!mark.exists());
+        assert!(remove(&mark, fs::remove_file(&mark)));
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
