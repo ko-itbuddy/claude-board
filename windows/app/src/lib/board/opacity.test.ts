@@ -10,7 +10,8 @@ import { boardOpaque, coversWorkArea } from "./opacity.ts";
 //   covering previewing inside | 새      | 옛 규칙과 다른 이유
 //   F        F          F      | 투명    | 옛: 보드가 활성이면 불투명. 새: 마우스가 밖이면 활성이어도 투명
 //   F(펼침)  F          F/T    | 투명/불투명 | 옛: 펼치면 늘 불투명. 새: 덮지 않는 펼친 창(60%)은 마우스를 따른다
-//   T        *          *      | 불투명  | 같음 — 단 covering 은 "펼쳤다"가 아니라 "작업 영역을 덮는다"
+//   T        F          *      | 불투명  | 같음 — 단 covering 은 "펼쳤다"가 아니라 "작업 영역을 덮는다"
+//   *        T          *      | 투명    | 미리 보기가 먼저다(mac `!previewing && (inWindow || expandedToFullScreen() || menuOpen)`) — 덮은 창에서도 슬라이더 값이 보인다
 // 나머지 행(F F T 불투명, F T * 투명)은 옛 규칙과 같다.
 const TABLE = [
   [false, false, false, false],
@@ -19,8 +20,8 @@ const TABLE = [
   [false, true, true, false],
   [true, false, false, true],
   [true, false, true, true],
-  [true, true, false, true],
-  [true, true, true, true],
+  [true, true, false, false],
+  [true, true, true, false],
 ];
 
 test("진리표 여덟 행", () => {
@@ -42,10 +43,11 @@ test("바뀐 행 — 60% 로 줄인 펼친 창(덮지 않음)도 마우스가 �
   assert.equal(boardOpaque({ covering, previewing: false, pointerInside: true }), true);
 });
 
-test("작업 영역 전체를 덮은 창은 마우스가 밖이어도, 미리 보는 중에도 불투명", () => {
+test("작업 영역 전체를 덮은 창은 마우스가 밖이어도 불투명, 미리 보는 중에는 고른 투명도(미리 보기가 먼저)", () => {
   const covering = coversWorkArea(1920, 1080, 1920, 1080);
   assert.equal(boardOpaque({ covering, previewing: false, pointerInside: false }), true);
-  assert.equal(boardOpaque({ covering, previewing: true, pointerInside: false }), true);
+  assert.equal(boardOpaque({ covering, previewing: true, pointerInside: false }), false);
+  assert.equal(boardOpaque({ covering, previewing: true, pointerInside: true }), false);
 });
 
 test("coversWorkArea — 허용 오차 2px 안은 덮는다, 3px 모자라면 덮지 않는다", () => {
