@@ -147,6 +147,9 @@ pub fn check(board: &Arc<Board>, manual: bool) {
 
 /// 업데이트 실행 — 성공하면 스크립트가 보드를 끄고 새 보드를 띄우므로 돌아오지 않는다. 돌아오면 실패다.
 pub fn run(board: &Arc<Board>) {
+    if !crate::shutdown::confirm_update(board) {
+        return;
+    }
     let version = {
         let mut u = board.updater.lock().unwrap();
         let Some(v) = u.latest.clone().filter(|_| !u.running) else { return };
