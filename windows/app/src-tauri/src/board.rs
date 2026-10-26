@@ -220,11 +220,11 @@ impl Board {
     /// 트레이는 메인 스레드에서만 고친다 — 다른 스레드에서 고치면 메인 스레드 응답을 기다리는 동안
     /// 메인 스레드(메뉴 처리)가 같은 잠금을 기다려 서로 멈출 수 있다.
     fn refresh_tray_with(&self, counts: &Counts, force: bool) {
-        let (pinned, mascot, terminal_expanded, side) = {
+        let (pinned, terminal_expanded) = {
             let s = self.settings.lock().unwrap();
-            (s.pinned, s.mascot.clone(), s.terminal_expanded, s.board_side.clone())
+            (s.pinned, s.terminal_expanded)
         };
-        let state = tray::TrayState { counts: counts.clone(), pinned, mascot, position: settings::notify_position(), terminal_expanded, side };
+        let state = tray::TrayState { counts: counts.clone(), pinned, terminal_expanded };
         {
             let mut shown = self.tray_shown.lock().unwrap();
             if !force && shown.as_ref() == Some(&state) {
@@ -780,6 +780,10 @@ fn set_new_session_defaults(board: B<'_>, command: String, md_render: bool) {
 fn set_auto_update_check(board: B<'_>, on: bool) {
     board.update_settings(|s| s.auto_update_check = on);
     board.publish();
+    // 켜면 바로 한 번 확인한다(mac) — 끄는 동안 못 본 새 버전이 있을 수 있다
+    if on {
+        updater::check(&board, false);
+    }
 }
 
 #[tauri::command(async)]
