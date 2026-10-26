@@ -3,6 +3,7 @@
   // 넘치면 가로로 밀고(이름은 줄이지 않는다) 지금 경로가 늘 보이게 한다. 경로를 닫는 단추는 없다
   import { tick } from "svelte";
   import WorkspaceButton from "./WorkspaceButton.svelte";
+  import { scrollTargetClamped, wheelStep } from "./stripScroll";
   import { TerminalHub, tabsIn, workspaceHint, workspaceKey, workspaceLabel, workspaceState, workspaces } from "./hub.svelte";
 
   let scroller = $state<HTMLDivElement>();
@@ -15,11 +16,8 @@
     if (!box) return;
     const el = [...box.querySelectorAll<HTMLElement>("[data-ws]")].find((x) => workspaceKey(x.dataset.ws ?? "") === workspaceKey(TerminalHub.workspace));
     if (!el) return;
-    const left = el.offsetLeft - 8;
-    const right = el.offsetLeft + el.offsetWidth + 8;
-    let target = box.scrollLeft;
-    if (left < box.scrollLeft) target = Math.max(0, left);
-    else if (right > box.scrollLeft + box.clientWidth) target = right - box.clientWidth;
+    // 안쪽 좌표 — 줄 양끝 여백(8)까지 보이게, 0..끝 사이로 맞춘다(규칙은 stripScroll.ts)
+    const target = scrollTargetClamped(el.offsetLeft, el.offsetLeft + el.offsetWidth, box.scrollLeft, box.clientWidth, box.scrollWidth, 8);
     if (target !== box.scrollLeft) box.scrollTo({ left: target, behavior: animated ? "smooth" : "auto" });
   }
 
@@ -36,9 +34,12 @@
     void tick().then(() => scrollToCurrent(false));
   });
 
+  // 휠·Shift+휠은 가로로 민다. 트랙패드 가로 밀기는 브라우저가 한다
   function wheel(e: WheelEvent) {
-    if (!scroller || e.deltaX !== 0) return;
-    scroller.scrollLeft += e.deltaY;
+    if (!scroller) return;
+    const step = wheelStep(e.deltaX, e.deltaY, e.shiftKey);
+    if (step.prevent) e.preventDefault();
+    scroller.scrollLeft += step.add;
   }
 </script>
 

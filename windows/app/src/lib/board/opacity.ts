@@ -1,16 +1,23 @@
 // 투명 모드 규칙 — 보드가 불투명해야 하는가. 순수 함수다. node:test 로 바로 시험한다(opacity.test.ts).
-// TODO(P1.4): 지금은 오늘의 규칙 그대로다. 3.1.9 규칙(마우스가 창 밖이면 포커스가 있어도 고른 투명도)은 P1.4 가 `+page.svelte` 호출 인자와 함께 바꾼다.
+// 3.1.9: 마우스가 창 밖이면 보드가 활성이어도 고른 투명도로 보이고, 화면(작업 영역)을 덮은 창만 늘 불투명하다.
 
 export interface OpacityInput {
-  /** 터미널을 펼친 창이 화면을 덮는가 — 지금은 펼쳤는가와 같다 */
+  /** 창이 그 모니터 작업 영역 전체를 덮는가(`coversWorkArea`) — 펼쳤는가가 아니다. 60% 로 줄인 펼친 창은 덮지 않는다 */
   covering: boolean;
   /** 슬라이더를 끄는 중이거나 놓은 뒤 1.2초 — 고른 투명도를 미리 보여 준다 */
   previewing: boolean;
-  /** 마우스가 창 안에 있거나 보드가 활성이다 */
+  /** 마우스 포인터가 창 안에 있다 — 포커스·활성과 무관하다 */
   pointerInside: boolean;
 }
 
-/** 오늘의 규칙: 덮고 있으면 늘 불투명, 아니면 미리 보는 중이 아닐 때 마우스가 안에 있거나 활성일 때 불투명 */
+/** 덮고 있으면 늘 불투명, 아니면 미리 보는 중이 아닐 때 마우스가 안에 있을 때만 불투명 */
 export function boardOpaque({ covering, previewing, pointerInside }: OpacityInput): boolean {
   return covering || (!previewing && pointerInside);
+}
+
+/** 창이 작업 영역 전체를 덮는가 — 폭·높이 모두 작업 영역에서 허용 오차(기본 2px) 이상 모자라지 않다.
+ *  보드 창은 테두리·그림자가 없어 바깥 크기 = 안쪽 크기다. 값을 못 쟀거나 유한하지 않으면 덮는 것으로 본다(펼치면 불투명이던 옛 쪽으로 기운다). */
+export function coversWorkArea(outerW: number, outerH: number, availW: number, availH: number, tolerance = 2): boolean {
+  if (![outerW, outerH, availW, availH].every(Number.isFinite) || availW <= 0 || availH <= 0) return true;
+  return outerW >= availW - tolerance && outerH >= availH - tolerance;
 }
