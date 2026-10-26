@@ -205,8 +205,8 @@ export interface BoardSurface {
   termId: TermId | null;          // 이 화면에 붙은 셸(백엔드 터미널 번호), 아직 안 띄웠으면 null
   sessionId: string | null;       // 이 화면의 claude 세션(보드 상태 묶음의 Session.id), 셸 화면은 null. 끝난 뒤에도 남는다
   command: string | null;         // 셸이 뜬 뒤 한 번 칠 claude 명령, 없으면 null(셸 화면)
-  held: Record<string, string> | null; // 다시 뜰 때 셸만 띄우고 들어갈 때 이어 열 값(resumeHeld, 아직 안 씀)
-  mdRenderOff: boolean;           // 답변 꾸미기를 끄고 띄운 화면(아직 안 씀)
+  held: Record<string, string> | null; // 다시 뜰 때 셸만 띄우고 들어갈 때 이어 열 값(resumeHeld)
+  mdRenderOff: boolean;           // 답변 꾸미기를 끄고 띄운 화면
   title: string;                  // 터미널이 알려 준 제목(xterm onTitleChange)
   typedAt?: number | null;        // 셸에 claude 명령을 친 시각(ms) — 3초 동안은 claude 가 도는 것으로 본다(mac typedAt, W3)
 }
