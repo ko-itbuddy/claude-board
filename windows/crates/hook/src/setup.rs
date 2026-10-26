@@ -232,7 +232,7 @@ pub fn uninstall() -> ExitCode {
     for f in &files {
         ok &= remove(f, fs::remove_file(f));
     }
-    ok &= remove_notifier_dirs(&notifier);
+    ok &= remove_notifier_dirs(&notifier, notifier_redirected());
     let _ = fs::remove_dir(&notifier);
 
     println!("4) 명령 제거");
@@ -254,11 +254,19 @@ pub fn uninstall() -> ExitCode {
 /// notifier 아래에서 통째로 지우는 폴더들 — 세션 기록, 저장 계정(accounts\ 에는 DPAPI 로 암호화한 토큰(vault)도 있다),
 /// 앱이 옮겨 쓴 md-render 사본(plugins\ — Claude Code 가 안에 만든 tsconfig.json·.claude-plugin\types 포함, macOS `Uninstall.command` 가 plugins 를 지우는 것과 같다).
 /// 그 밖 파일은 건드리지 않는다. `plugins\md-render` 가 링크(junction)여도 가리키는 곳은 지우지 않고 링크만 뗀다(`remove_dir_all` 이 링크를 따라가지 않는다).
-fn remove_notifier_dirs(notifier: &Path) -> bool {
-    ["sessions", "accounts", "plugins"].iter().fold(true, |ok, name| {
+/// notifier 폴더를 `CLAUDE_BOARD_NOTIFIER_DIR` 로 옮겨 둔 실행(시험·격리)에서는 `plugins` 를 지우지 않는다 — 그 폴더에는 이 보드가 옮긴 것 밖의 것이 있을 수 있다.
+/// `packaging/uninstall.ps1` 도 같은 조건으로 같은 범위를 지운다.
+fn remove_notifier_dirs(notifier: &Path, redirected: bool) -> bool {
+    let names: &[&str] = if redirected { &["sessions", "accounts"] } else { &["sessions", "accounts", "plugins"] };
+    names.iter().fold(true, |ok, name| {
         let dir = notifier.join(name);
         remove(&dir, fs::remove_dir_all(&dir)) && ok
     })
+}
+
+/// notifier 폴더가 환경변수로 옮겨졌는가.
+fn notifier_redirected() -> bool {
+    env::var_os(paths::NOTIFIER_ENV).is_some_and(|v| !v.is_empty())
 }
 
 /// 지우기 결과 — 없던 것은 성공으로 본다.
@@ -336,7 +344,7 @@ mod tests {
         touch(&notifier.join("sessions").join("a.json"));
         touch(&notifier.join("accounts").join("vault").join("b.bin"));
         touch(&notifier.join("claude-board-hook.exe"));
-        assert!(remove_notifier_dirs(&notifier));
+        assert!(remove_notifier_dirs(&notifier, false));
         for gone in ["plugins", "sessions", "accounts"] {
             assert!(!notifier.join(gone).exists(), "{gone}");
         }
@@ -346,10 +354,25 @@ mod tests {
     }
 
     #[test]
+    fn uninstall_leaves_plugins_alone_when_notifier_is_redirected() {
+        let notifier = scratch("redirected");
+        touch(&notifier.join("plugins").join("md-render").join("LICENSE"));
+        touch(&notifier.join("plugins").join("other").join("keep.txt"));
+        touch(&notifier.join("sessions").join("a.json"));
+        touch(&notifier.join("accounts").join("b.json"));
+        assert!(remove_notifier_dirs(&notifier, true));
+        assert!(notifier.join("plugins").join("md-render").join("LICENSE").exists());
+        assert!(notifier.join("plugins").join("other").join("keep.txt").exists());
+        assert!(!notifier.join("sessions").exists());
+        assert!(!notifier.join("accounts").exists());
+        fs::remove_dir_all(&notifier).unwrap();
+    }
+
+    #[test]
     fn uninstall_dirs_missing_is_success() {
         let notifier = scratch("empty");
-        assert!(remove_notifier_dirs(&notifier));
-        assert!(remove_notifier_dirs(&notifier.join("none")));
+        assert!(remove_notifier_dirs(&notifier, false));
+        assert!(remove_notifier_dirs(&notifier.join("none"), false));
         fs::remove_dir_all(&notifier).unwrap();
     }
 
@@ -364,7 +387,7 @@ mod tests {
         // mklink /J 는 관리자 권한이 필요 없다. 못 만들면(정책) 이 시험은 의미가 없어 건너뛴다
         let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&link).arg(&elsewhere).output().map(|o| o.status.success()).unwrap_or(false);
         if made {
-            assert!(remove_notifier_dirs(&notifier));
+            assert!(remove_notifier_dirs(&notifier, false));
             assert!(!link.exists());
             assert!(elsewhere.join("keep.txt").exists(), "링크가 가리키는 곳은 남아야 한다");
         }
