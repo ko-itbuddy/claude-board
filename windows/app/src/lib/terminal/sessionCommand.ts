@@ -45,6 +45,23 @@ function stripTrailingResume(args: string[]): string[] {
   return n >= 2 && args[n - 2] === "--resume" ? args.slice(0, n - 2) : args;
 }
 
+// 보드가 띄운 세션은 늘 `--plugin-dir <...\plugins\md-render>` 를 달고 있다 — 이어 열 때 mdRenderCommand 가 다시 붙이므로 그 쌍은 떼고 나머지를 검사한다
+// (백슬래시가 든 경로는 허용 목록을 못 넘어 원래 플래그까지 모두 버려지기 때문이다)
+const MD_RENDER_DIR = /[\\/]plugins[\\/]md-render[\\/]?$/i;
+function stripMdRenderPluginDir(args: string[]): string[] {
+  const kept: string[] = [];
+  for (let at = 0; at < args.length; at++) {
+    const arg = args[at];
+    if (arg === "--plugin-dir" && at + 1 < args.length && MD_RENDER_DIR.test(args[at + 1])) {
+      at++;
+      continue;
+    }
+    if (arg.startsWith("--plugin-dir=") && MD_RENDER_DIR.test(arg.slice("--plugin-dir=".length))) continue;
+    kept.push(arg);
+  }
+  return kept;
+}
+
 /**
  * 끝난 세션을 보드 탭에서 이어 여는 명령줄(ClaudeBoard.swift resumeSession 의 Windows 판).
  * 옛 실행 인자(resumeArgs)는 허용 글자만 든 것을 남기고 -p·--print 는 뺀다(대화형으로 연다).
@@ -53,7 +70,7 @@ function stripTrailingResume(args: string[]): string[] {
  */
 export function resumeCommand(resumeArgs: string[], sessionId: string, carryOn: boolean): string {
   if (!SESSION_ID.test(sessionId)) throw new Error("세션 id 모양이 맞지 않는다");
-  const args = stripTrailingResume(resumeArgs);
+  const args = stripMdRenderPluginDir(stripTrailingResume(resumeArgs));
   const trusted = args.every((arg) => SAFE_ARG.test(arg) && !CONFLICTING.test(arg));
   const kept = trusted ? args.filter((arg) => arg !== "-p" && arg !== "--print") : [];
   const line = ["claude", "--resume", sessionId, ...kept].join(" ");

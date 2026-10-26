@@ -189,3 +189,15 @@ test("resumeCommand — 어떤 입력에서도 결과에 개행·셸 메타문�
     }
   }
 });
+
+test("resumeCommand — 보드가 붙인 md-render --plugin-dir 쌍은 떼고 원래 플래그를 살린다", () => {
+  const dir = "C:\\Users\\나\\.claude\\notifier\\plugins\\md-render";
+  assert.equal(resumeCommand(real(["--dangerously-skip-permissions", "--model", "claude-opus-5-5", "--plugin-dir", dir]), ID, false), `claude --resume ${ID} --dangerously-skip-permissions --model claude-opus-5-5`);
+  assert.equal(resumeCommand(real(["--plugin-dir", dir + "\\"]), ID, false), `claude --resume ${ID}`);
+  assert.equal(resumeCommand(real(["--plugin-dir=" + dir, "--model", "m"]), ID, false), `claude --resume ${ID} --model m`);
+  assert.equal(resumeCommand(real(["--plugin-dir", "C:/x/plugins/md-render"]), ID, false), `claude --resume ${ID}`);
+});
+
+test("resumeCommand — md-render 가 아닌 --plugin-dir 는 허용 밖이라 인자를 모두 버린다", () => {
+  assert.equal(resumeCommand(real(["--model", "m", "--plugin-dir", "C:\\other\\plug"]), ID, false), `claude --resume ${ID}`);
+});
