@@ -4,7 +4,7 @@
 import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
-  BoardSide, ConfirmShutdownPayload, DriveStep, MascotKind, NotifyOptions, NotifyPosition, OpenSessionPayload, RenameCheck, SessionAction, Snapshot, State, TabEntry,
+  BoardSide, ConfirmShutdownPayload, DriveStep, MascotKind, NotifyOptions, NotifyPosition, OpenSessionPayload, PidTarget, RenameCheck, SessionAction, Snapshot, State, TabEntry,
   TermFrame, TermId, TermInfo, TermSpec,
 } from "./types";
 
@@ -468,27 +468,43 @@ export function termWriteBin(id: TermId, data: number[]) {
 // ── 수명 주기·md-render·시험 장치(1단계) — 규칙은 terminal/{restore,shutdownList,mdRender,testClaude}.ts ──
 
 // 다시 뜰 때 이어 열 탭 목록을 통째로 바꿔 저장한다 / 읽는다 (mac saveTabs·restoreTabs)
-export function saveTabs(entries: TabEntry[]) {
-  fire("save_tabs", { entries });
+// 저장이 끝나면 풀린다 — 끄기 직전에는 이것을 기다린 뒤 답해야 마지막 저장이 사라지지 않는다
+export function saveTabs(entries: TabEntry[]): Promise<void> {
+  return call<void>("save_tabs", { entries });
 }
 
 export function loadTabs(): Promise<TabEntry[]> {
   return call<TabEntry[]>("load_tabs");
 }
 
-// 주어진 pid 가운데 아직 산 것 — 앞 보드가 남긴 터미널이 끝났는지 볼 때
-export function pidsAlive(pids: number[]): Promise<number[]> {
-  return call<number[]>("pids_alive", { pids });
+// 주어진 프로세스 가운데 아직 산 것의 pid — 앞 보드가 남긴 터미널이 끝났는지 볼 때. 생성 시각(ctime)이 다르면 재사용된 pid 라 산 것으로 치지 않는다
+export function pidsAlive(targets: PidTarget[]): Promise<number[]> {
+  return call<number[]>("pids_alive", { targets });
 }
 
-// 그 pid 가 timeoutMs 안에 끝나기를 기다린다 — 끝났으면 true (보드 밖 터미널의 세션을 /exit 로 끝낸 뒤)
-export function waitExit(pid: number, timeoutMs: number): Promise<boolean> {
-  return call<boolean>("wait_exit", { pid, timeoutMs });
+// 그 프로세스가 timeoutMs 안에 끝나기를 기다린다 — 끝났으면 true (보드 밖 터미널의 세션을 /exit 로 끝낸 뒤). pid 0(모름)은 늘 false
+export function waitExit(pid: number, pidCtime: number | null, timeoutMs: number): Promise<boolean> {
+  return call<boolean>("wait_exit", { pid, pidCtime, timeoutMs });
 }
 
-// 끌 때 확인 창의 답 — pause 는 .paused 를 남길 세션 id
-export function answerShutdown(ok: boolean, pause: string[]) {
-  fire("answer_shutdown", { ok, pause });
+// 끌 때 확인 창의 답 — pause 는 .paused 를 남길 세션 id. 백엔드가 받은 뒤 풀린다
+export function answerShutdown(ok: boolean, pause: string[]): Promise<void> {
+  return call<void>("answer_shutdown", { ok, pause });
+}
+
+// 화면이 (다시) 시작했다 — 그 전에 보낸 끌 때 확인 요청은 화면이 사라졌으므로 백엔드가 기다리던 요청을 취소한다
+export function lifecycleStarted(): Promise<void> {
+  return call<void>("lifecycle_started");
+}
+
+// 주어진 경로 가운데 실제로 있는 폴더 — 탭을 되살릴 때 작업 폴더가 아직 있는지(없는 폴더에서는 셸이 홈 폴더로 뜬다)
+export function existingDirs(paths: string[]): Promise<string[]> {
+  return call<string[]>("existing_dirs", { paths });
+}
+
+// 답변 꾸미기를 끈 세션 id 가운데 세션 파일이 없어진 것을 치운다 — 보드를 켤 때 한 번(mac pruneMdRenderOff)
+export function pruneMdRenderOff(): Promise<void> {
+  return call<void>("prune_md_render_off");
 }
 
 // 끌 때 확인 창을 띄웠다고 알린다 — 이 뒤로 백엔드는 사용자가 고를 때까지 기다린다(안 알리면 10초 뒤 그대로 진행한다)
@@ -496,16 +512,10 @@ export function shutdownDialogShown() {
   fire("shutdown_dialog_shown");
 }
 
-// 백엔드가 끌 때 확인을 요청했을 때(트레이 종료·업데이트) — 듣기를 끄는 함수를 돌려준다
-export function onConfirmShutdown(fn: (p: ConfirmShutdownPayload) => void): () => void {
+// 백엔드가 끌 때 확인을 요청했을 때(트레이 종료·업데이트) — 듣기가 시작된 뒤에 풀리고, 듣기를 끄는 함수를 돌려준다
+export async function onConfirmShutdown(fn: (p: ConfirmShutdownPayload) => void): Promise<() => void> {
   if (!inTauri) return () => {};
-  let off: (() => void) | undefined;
-  let closed = false;
-  listen<ConfirmShutdownPayload>("board://confirm-shutdown", (e) => fn(e.payload)).then((unlisten) => (closed ? unlisten() : (off = unlisten)));
-  return () => {
-    closed = true;
-    off?.();
-  };
+  return listen<ConfirmShutdownPayload>("board://confirm-shutdown", (e) => fn(e.payload));
 }
 
 // 옮겨 둔 md-render 플러그인 폴더, 못 옮겼으면 null(그러면 --plugin-dir 을 붙이지 않는다)
