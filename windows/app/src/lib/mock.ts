@@ -434,6 +434,7 @@ export async function handle(cmd: string, a: Record<string, unknown>): Promise<u
       return true;
     case "set_login_launch":
     case "submit_login_code":
+    case "open_login_url":
       return;
     case "begin_add_account":
       return handle("add_account", a);

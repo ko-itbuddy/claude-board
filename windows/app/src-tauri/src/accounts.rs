@@ -367,6 +367,11 @@ impl Accounts {
         self.saved = load_saved(p);
     }
 
+    /// 지금 기다리는 계정 추가 로그인의 자리 — 로그인 ConPTY(`account_login`)가 자기가 아직 필요한지 본다.
+    pub fn login_slot(&self) -> Option<&Path> {
+        self.login.as_ref().map(|(slot, _)| slot.as_path())
+    }
+
     /// 안내 문구 — 7초 뒤 사라진다.
     pub fn flash(&mut self, text: impl Into<String>, error: bool) {
         self.notice = Some((Notice { text: text.into(), error }, clock::now() + 7.0));
@@ -433,7 +438,8 @@ pub fn switch_to(board: &Arc<Board>, target: Account, note: Option<String>, done
     });
 }
 
-/// 계정 추가: 따로 정한 설정 폴더(CLAUDE_CONFIG_DIR)로 `claude auth login` 을 새 콘솔 창에서 띄운다 — 지금 로그인은 건드리지 않는다.
+/// 계정 추가: 따로 정한 설정 폴더(CLAUDE_CONFIG_DIR)로 `claude auth login` 을 보드가 쥔 가짜 콘솔(ConPTY)에서 띄운다 — 지금 로그인은 건드리지 않는다.
+/// 주소·코드·종료 처리는 `account_login` 이 맡고, 끝났는지는 아래 `tick` 이 이 폴더를 지켜본다.
 /// 셸을 거치지 않고 claude.exe 를 인자 배열로 직접 띄운다(SPEC §5.7).
 pub fn begin_add(board: &Arc<Board>, email: Option<String>) {
     let started = (|| {
@@ -450,13 +456,13 @@ pub fn begin_add(board: &Arc<Board>, email: Option<String>) {
             args.push("--email".into());
             args.push(e.trim().to_string());
         }
-        if let Err(e) = crate::terminal::spawn_console(&claude, &args, &paths::home(), &[("CLAUDE_CONFIG_DIR", slot.as_os_str())]) {
+        if let Err(e) = crate::account_login::start_for_board(board, &claude, args, &slot) {
             let _ = fs::remove_dir_all(&slot);
-            return Err(format!("로그인 창을 띄우지 못했습니다 — {e}"));
+            return Err(format!("로그인 명령을 띄우지 못했습니다 — {e}"));
         }
         acc.login = Some((slot, clock::now()));
         acc.adding = true;
-        acc.flash("터미널과 브라우저에서 추가할 계정으로 로그인해 주세요", false);
+        acc.flash("설정 화면의 로그인 창에서 추가할 계정으로 로그인해 주세요", false);
         Ok(true)
     })();
     if let Err(e) = started {
