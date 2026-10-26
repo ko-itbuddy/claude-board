@@ -36,6 +36,7 @@ export interface Session {
   id: string;
   cwd: string;
   pid: number;          // claude 프로세스 id — 보드 밖 터미널의 세션이 끝나기를 기다릴 때(waitExit) 쓴다
+  pidCtime?: number | null; // 그 프로세스의 생성 시각(유닉스 초) — pid 가 다른 프로세스에 재사용됐는지 가린다. 모르면 null
   state: State;
   since: number;
   updated: number;
@@ -266,7 +267,14 @@ export interface TabEntry {
   root: SavedNode;
 }
 
-export type ShutdownReason = "quit" | "update";
+// 생사를 물을 프로세스 — pid 와 그 생성 시각(세션 기록의 pid_ctime). 생성 시각이 있으면 재사용된 pid 를 산 것으로 보지 않는다
+export interface PidTarget {
+  pid: number;
+  ctime: number | null;
+}
+
+// cancel 은 떠 있는 확인 창을 닫으라는 뜻이다(백엔드가 답을 기다리다 포기했다) — 그때 items 는 비어 있다
+export type ShutdownReason = "quit" | "update" | "cancel";
 
 // 끌 때 확인 창에 보이는 줄 하나. shell 줄은 세션이 없어 sessionId 가 null
 export interface ShutdownItem {

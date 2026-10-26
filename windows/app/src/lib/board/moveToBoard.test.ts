@@ -5,9 +5,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { MOVE_STEPS, EXIT_TIMEOUT_MS, moveToBoard, needsConfirm } from "./moveToBoard.ts";
+import { MOVE_STEPS, EXIT_TIMEOUT_MS, createMoveGuard, moveToBoard, needsConfirm, sessionAtClick } from "./moveToBoard.ts";
 
-const sessionOf = (state: string, over = {}) => ({ id: "sid-1", cwd: "C:\\work\\demo", pid: 4242, state, title: "데모 작업", ...over });
+const sessionOf = (state: string, over = {}) => ({ id: "sid-1", cwd: "C:\\work\\demo", pid: 4242, pidCtime: 1700000000.5, state, title: "데모 작업", ...over });
 
 // 호출 순서를 log 에 쌓는 가짜 deps — 각 단계의 답을 바꿔 끼운다
 function fake(over = {}) {
@@ -15,7 +15,7 @@ function fake(over = {}) {
   const deps = {
     confirm: async (title: string, text: string) => (log.push(["confirm", title, text]), true),
     drive: async (id: string, steps: unknown[]) => (log.push(["drive", id, steps]), true),
-    waitExit: async (pid: number, timeoutMs: number) => (log.push(["waitExit", pid, timeoutMs]), true),
+    waitExit: async (pid: number, pidCtime: number | null, timeoutMs: number) => (log.push(["waitExit", pid, pidCtime, timeoutMs]), true),
     resumeSession: (s: { id: string }) => void log.push(["resumeSession", s.id]),
     toast: (text: string) => void log.push(["toast", text]),
     ...over,
@@ -38,7 +38,7 @@ test("대기 세션은 묻지 않고 끝낸 뒤 이어 연다", async () => {
   await moveToBoard(sessionOf("idle"), deps);
   assert.deepEqual(names(), ["drive", "waitExit", "resumeSession"]);
   assert.deepEqual(log[0], ["drive", "sid-1", MOVE_STEPS]);
-  assert.deepEqual(log[1], ["waitExit", 4242, 8000]);
+  assert.deepEqual(log[1], ["waitExit", 4242, 1700000000.5, 8000]);
   assert.deepEqual(log[2], ["resumeSession", "sid-1"]);
 });
 
@@ -72,9 +72,9 @@ test("세션 터미널을 못 찾으면 폴더 이름과 함께 알리고 더 �
 
 test("8초 안에 끝나지 않으면 알리고 이어 열지 않는다", async () => {
   const calls: unknown[][] = [];
-  const { deps, log } = fake({ waitExit: async (pid: number, ms: number) => (calls.push([pid, ms]), false) });
+  const { deps, log } = fake({ waitExit: async (pid: number, ctime: number | null, ms: number) => (calls.push([pid, ctime, ms]), false) });
   await moveToBoard(sessionOf("idle"), deps);
-  assert.deepEqual(calls, [[4242, 8000]]);
+  assert.deepEqual(calls, [[4242, 1700000000.5, 8000]]);
   assert.deepEqual(log.at(-1), ["toast", "demo: 세션이 끝나지 않아 보드로 옮기지 못했습니다. 그 터미널을 확인해 주세요"]);
   assert.equal(log.filter((entry) => entry[0] === "resumeSession").length, 0);
 });
@@ -92,6 +92,42 @@ test("알림의 폴더 이름은 슬래시·역슬래시·끝 구분자에 상�
     await moveToBoard(sessionOf("idle", { cwd }), deps);
     assert.equal(log[0][1].split(":")[0], name, cwd);
   }
+});
+
+test("pid 를 모르는 세션(0)은 끝났다고 보지 않아 알리고 이어 열지 않는다", async () => {
+  const { deps, log } = fake({ waitExit: async (pid: number) => pid !== 0 });
+  await moveToBoard(sessionOf("idle", { pid: 0, pidCtime: null }), deps);
+  assert.equal(log.filter((entry) => entry[0] === "resumeSession").length, 0);
+  assert.match(log.at(-1)[1], /세션이 끝나지 않아/);
+});
+
+test("누른 순간의 세션: 지금 상태를 쓰고, 사라졌거나 끝났으면 옮길 것이 없다", () => {
+  const stale = sessionOf("idle");
+  const now = sessionOf("working");
+  assert.equal(sessionAtClick(now), now, "메뉴를 연 뒤 일을 시작했으면 지금 상태(working)로 확인을 거른다");
+  assert.equal(needsConfirm(sessionAtClick(now)), true);
+  assert.equal(needsConfirm(stale), false);
+  assert.equal(sessionAtClick(undefined), null);
+  assert.equal(sessionAtClick(sessionOf("ended")), null);
+});
+
+test("옮기는 중에 같은 세션을 또 누르면 두 번째는 거른다(키를 두 번 보내지 않는다)", async () => {
+  const guard = createMoveGuard();
+  let release: () => void = () => {};
+  let runs = 0;
+  const first = guard("sid-1", () => (runs++, new Promise<void>((resolve) => (release = resolve))));
+  assert.equal(await guard("sid-1", async () => void runs++), false, "도는 중이면 시작하지 않는다");
+  assert.equal(await guard("sid-2", async () => void runs++), true, "다른 세션은 따로 센다");
+  release();
+  assert.equal(await first, true);
+  assert.equal(runs, 2);
+  assert.equal(await guard("sid-1", async () => void runs++), true, "끝나면 다시 옮길 수 있다");
+});
+
+test("옮기는 일이 던져도 가드는 풀려 다시 옮길 수 있다", async () => {
+  const guard = createMoveGuard();
+  await assert.rejects(guard("sid-1", async () => { throw new Error("boom"); }), /boom/);
+  assert.equal(await guard("sid-1", async () => {}), true);
 });
 
 test("deps 가 던지면 그대로 던진다(조용히 삼키지 않는다)", async () => {

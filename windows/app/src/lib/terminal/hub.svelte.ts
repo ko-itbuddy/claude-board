@@ -441,14 +441,21 @@ export function retry(leafId: string) {
 
 // ── 닫기 ──────────────────────────────────────────────────────
 
+/** 확인 창을 세운다 — 떠 있던 확인 창이 있으면 그 취소를 불러 준다. 밀려난 창의 답을 기다리던 쪽(보드로 옮기기 등)이 영원히 기다리지 않게 */
+export function showConfirm(next: Confirm) {
+  const previous = TerminalHub.confirm;
+  TerminalHub.confirm = next;
+  previous?.cancel?.();
+}
+
 /** 탭의 ×. 그 탭의 짝 세션이 아직 끝나지 않았을 때만 묻고, 아니면 바로 닫는다 */
 export function requestClose(tab: BoardTab) {
   if (!isBusy(tab)) return remove(tab);
-  TerminalHub.confirm = {
+  showConfirm({
     title: "탭을 닫을까요?",
     text: `${shownName(tab)} 탭에서 도는 프로그램이 함께 끝납니다.`,
     run: () => remove(tab),
-  };
+  });
 }
 
 /** 탭을 닫고 셸을 끝낸다. 고른 탭이었으면 같은 경로의 이웃 탭 → 이웃 경로 → 빈 상태로 */

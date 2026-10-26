@@ -1,5 +1,6 @@
 // 투명 모드 규칙 — 보드가 불투명해야 하는가. 순수 함수다. node:test 로 바로 시험한다(opacity.test.ts).
-// 3.1.9: 마우스가 창 밖이면 보드가 활성이어도 고른 투명도로 보이고, 화면(작업 영역)을 덮은 창만 늘 불투명하다.
+// 3.1.9: 마우스가 창 밖이면 보드가 활성이어도 고른 투명도로 보이고, 화면(작업 영역)을 덮은 창은 마우스가 안에 있는 것과 같이 불투명하다.
+// 슬라이더로 투명도를 미리 보는 동안은 어느 쪽이든 고른 투명도가 보인다(mac `!previewing && (inWindow || expandedToFullScreen() || menuOpen)`).
 
 export interface OpacityInput {
   /** 창이 그 모니터 작업 영역 전체를 덮는가(`coversWorkArea`) — 펼쳤는가가 아니다. 60% 로 줄인 펼친 창은 덮지 않는다 */
@@ -10,9 +11,9 @@ export interface OpacityInput {
   pointerInside: boolean;
 }
 
-/** 덮고 있으면 늘 불투명, 아니면 미리 보는 중이 아닐 때 마우스가 안에 있을 때만 불투명 */
+/** 미리 보는 중이 아닐 때만, 덮고 있거나 마우스가 안에 있으면 불투명. 미리 보는 중에는 덮고 있어도 고른 투명도로 보인다 */
 export function boardOpaque({ covering, previewing, pointerInside }: OpacityInput): boolean {
-  return covering || (!previewing && pointerInside);
+  return !previewing && (covering || pointerInside);
 }
 
 /** 창이 작업 영역 전체를 덮는가 — 폭·높이 모두 작업 영역에서 허용 오차(기본 2px) 이상 모자라지 않다.

@@ -12,12 +12,12 @@ import {
   driveSession,
   waitExit,
 } from "$lib/backend";
-import { moveToBoard } from "$lib/board/moveToBoard";
+import { createMoveGuard, moveToBoard, sessionAtClick } from "$lib/board/moveToBoard";
 import { openSession, type OpenEffect } from "$lib/board/openSession";
 import { createClickGate, type ClickGate } from "$lib/board/clickGate";
 import { board } from "$lib/board/store.svelte";
 import type { BoardSurface, OpenSessionPayload, Session } from "$lib/types";
-import { TerminalHub, folderName, openShell, pair, place, select, surfaceOf, workspaceKey } from "./hub.svelte";
+import { TerminalHub, folderName, openShell, pair, place, select, showConfirm, surfaceOf, workspaceKey } from "./hub.svelte";
 import { uniqueTabName } from "./launch";
 import { isMdRenderOff } from "./mdRender";
 import { applyRenames } from "./renameFlow.svelte";
@@ -125,12 +125,12 @@ function resumeSession(p: OpenSessionPayload) {
 
 // 보드로 옮기기 확인 — 터미널 영역 확인 창(hub confirm)으로 묻는다. 터미널이 접혀 있으면 창이 안 보이므로 펼쳐 보이고, 취소하면 도로 접는다
 function confirmMove(title: string, text: string): Promise<boolean> {
-  TerminalHub.confirm?.cancel?.();
   const expandedByUs = !board.snap?.settings.terminalExpanded;
   if (expandedByUs) setTerminalExpanded(true);
   showBoard();
+  // 다른 확인 창(탭 닫기 등)이 이 창을 밀어내면 showConfirm 이 이 창의 취소를 불러 주므로 약속이 늘 끝난다
   return new Promise((resolve) => {
-    TerminalHub.confirm = {
+    showConfirm({
       title,
       text,
       okLabel: "옮기기",
@@ -139,23 +139,37 @@ function confirmMove(title: string, text: string): Promise<boolean> {
         if (expandedByUs) setTerminalExpanded(false);
         resolve(false);
       },
-    };
+    });
   });
 }
 
-/** 다른 터미널에서 도는 세션을 보드 탭으로 옮긴다(mac moveToBoard). 규칙은 board/moveToBoard.ts, 여기는 효과를 이어 준다 */
-export function moveSessionToBoard(s: Session): Promise<void> {
-  return moveToBoard(s, {
-    confirm: confirmMove,
-    drive: driveSession,
-    waitExit,
-    // 이어 열기 인자(resumeArgs)는 백엔드 세션 기록이 쥐고 있다 — 보통의 "세션 다시 열기"와 같은 길(reopen 요청)로 보낸다
-    resumeSession: (moved) => sessionAction("reopen", moved.id, false),
-    toast,
-  }).catch((e) => {
-    console.error("보드로 옮기지 못했습니다", e);
-    toast("보드로 옮기지 못했습니다");
-  });
+const onceMoving = createMoveGuard();
+
+/**
+ * 다른 터미널에서 도는 세션을 보드 탭으로 옮긴다(mac moveToBoard). 규칙은 board/moveToBoard.ts, 여기는 효과를 이어 준다.
+ * 메뉴를 연 뒤 상태가 바뀌었을 수 있어 누른 순간의 세션으로 확인 여부를 정하고, 옮기는 중에 또 누르면 거른다.
+ */
+export function moveSessionToBoard(opened: Session): Promise<void> {
+  const s = sessionAtClick(findSession(opened.id));
+  if (!s) {
+    toast("세션이 이미 끝났습니다");
+    return Promise.resolve();
+  }
+  return onceMoving(s.id, () =>
+    moveToBoard(s, {
+      confirm: confirmMove,
+      drive: driveSession,
+      waitExit,
+      // 이어 열기 인자(resumeArgs)는 백엔드 세션 기록이 쥐고 있다 — 보통의 "세션 다시 열기"와 같은 길(reopen 요청)로 보낸다
+      resumeSession: (moved) => sessionAction("reopen", moved.id, false),
+      toast,
+    }),
+  )
+    .then(() => {})
+    .catch((e) => {
+      console.error("보드로 옮기지 못했습니다", e);
+      toast("보드로 옮기지 못했습니다");
+    });
 }
 
 // 이어 열기를 마쳤다고 백엔드에 알린다 — 일시중지 표시는 그때 지워진다(실패하면 남아 다시 시도할 수 있다)

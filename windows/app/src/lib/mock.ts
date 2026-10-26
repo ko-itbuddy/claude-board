@@ -432,9 +432,14 @@ export async function handle(cmd: string, a: Record<string, unknown>): Promise<u
     case "save_tabs":
     case "answer_shutdown":
     case "shutdown_dialog_shown":
+    case "lifecycle_started":
       return;
     case "load_tabs":
       return [];
+    case "existing_dirs":
+      return a.paths; // 브라우저 개발 화면에는 폴더 검사가 없다 — 다 있다고 답한다
+    case "prune_md_render_off":
+      return;
     case "pids_alive":
       return [];
     case "wait_exit":

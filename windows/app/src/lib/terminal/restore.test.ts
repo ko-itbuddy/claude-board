@@ -5,6 +5,12 @@ import { test } from "node:test";
 import type { BoardSurface, BoardTab } from "../types.ts";
 import { heldLaunch, parseEntries, restorePlan, savedSessionIds, savedTabs, waitOldPids } from "./restore.ts";
 
+// 폴더가 다 있다고 답하는 집합 — 폴더 존재를 보지 않는 시험에 쓴다
+const ALL = { has: () => true };
+const planOf = (entries, alive = new Set(), dirs = ALL) => restorePlan(entries, alive, dirs);
+const target = (pid, ctime = null) => ({ pid, ctime });
+const launchOf = (held, context) => heldLaunch(held, { workspace: "C:\\work\\a", existingDirs: ALL, ...context });
+
 let serial = 0;
 const surface = (over: Partial<BoardSurface> = {}): BoardSurface => ({
   id: `s${++serial}`,
@@ -85,7 +91,7 @@ test("저장: 나눈 트리는 그대로 저장한다(왕복)", () => {
   const [entry] = savedTabs([t], view([a, b]));
   assert.equal(entry.root.split, "right");
   assert.equal(entry.root.ratio, 0.3);
-  const plan = restorePlan([entry]);
+  const plan = planOf([entry]);
   assert.equal(plan.surfaces.length, 2);
   const root = plan.tabs[0].root;
   assert.equal(root.split, "right");
@@ -122,7 +128,7 @@ test("읽기: 셸 화면의 세션 id·꾸미기 끔은 버린다", () => {
 // ── restorePlan ────────────────────────────────────────────────
 
 test("되살리기: 모든 화면은 셸로 돌아오고 claude 화면은 held 만 쥔다", () => {
-  const plan = restorePlan(parseEntries([{ workspace: "C:\\a", name: null, selected: true, root: claudeLeaf({ mdRenderOff: true }) }]));
+  const plan = planOf(parseEntries([{ workspace: "C:\\a", name: null, selected: true, root: claudeLeaf({ mdRenderOff: true }) }]));
   const [s] = plan.surfaces;
   assert.equal(s.command, null);
   assert.equal(s.termId, null);
@@ -132,7 +138,7 @@ test("되살리기: 모든 화면은 셸로 돌아오고 claude 화면은 held �
 });
 
 test("되살리기: 셸 탭은 held 없이 작업 경로를 지킨다", () => {
-  const plan = restorePlan([{ workspace: "C:\\proj", name: "내 탭", selected: true, root: shellLeaf("C:\\proj") }]);
+  const plan = planOf([{ workspace: "C:\\proj", name: "내 탭", selected: true, root: shellLeaf("C:\\proj") }]);
   assert.equal(plan.tabs[0].workspace, "C:\\proj");
   assert.equal(plan.tabs[0].customName, "내 탭");
   assert.equal(plan.surfaces[0].held, null);
@@ -145,7 +151,7 @@ test("되살리기: 고른 탭의 화면만 바로 이어 열고 나머지는 he
     { workspace: "C:\\b", name: null, selected: true, root: claudeLeaf({ sessionId: "bbbbbbbb-2" }) },
     { workspace: "C:\\c", name: null, selected: false, root: claudeLeaf({ sessionId: "cccccccc-3" }) },
   ];
-  const plan = restorePlan(entries);
+  const plan = planOf(entries);
   assert.equal(plan.tabs.length, 3);
   assert.equal(plan.selectedTab, plan.tabs[1].id);
   assert.equal(plan.resumeNow, plan.tabs[1].focused);
@@ -154,7 +160,7 @@ test("되살리기: 고른 탭의 화면만 바로 이어 열고 나머지는 he
 });
 
 test("되살리기: 표시가 없으면 마지막 탭을 고른다", () => {
-  const plan = restorePlan([
+  const plan = planOf([
     { workspace: "C:\\a", name: null, selected: false, root: shellLeaf() },
     { workspace: "C:\\b", name: null, selected: false, root: shellLeaf() },
   ]);
@@ -162,12 +168,12 @@ test("되살리기: 표시가 없으면 마지막 탭을 고른다", () => {
 });
 
 test("되살리기: 탭이 없으면 고를 것도 없다", () => {
-  assert.deepEqual(restorePlan([]), { tabs: [], surfaces: [], selectedTab: null, resumeNow: null });
+  assert.deepEqual(planOf([]), { tabs: [], surfaces: [], selectedTab: null, resumeNow: null, missingDirs: [] });
 });
 
 test("되살리기: 보드 밖에서 아직 도는 세션의 화면은 버리고 탭에 화면이 없으면 탭도 버린다", () => {
   const entries = [{ workspace: "C:\\a", name: null, selected: true, root: claudeLeaf() }];
-  const plan = restorePlan(entries, new Set([SID]));
+  const plan = planOf(entries, new Set([SID]));
   assert.deepEqual(plan.tabs, []);
   assert.deepEqual(plan.surfaces, []);
   assert.equal(plan.selectedTab, null);
@@ -178,19 +184,19 @@ test("되살리기: 나눈 탭에서 한 화면을 버리면 형제가 그 자�
     workspace: "C:\\a", name: null, selected: true,
     root: { split: "right", ratio: 0.5, first: claudeLeaf({ sessionId: "aaaaaaaa-1" }), second: shellLeaf() },
   }];
-  const plan = restorePlan(entries, new Set(["aaaaaaaa-1"]));
+  const plan = planOf(entries, new Set(["aaaaaaaa-1"]));
   assert.equal(plan.surfaces.length, 1);
   assert.ok("leaf" in plan.tabs[0].root);
   assert.equal(plan.tabs[0].focused, plan.surfaces[0].id);
 });
 
 test("되살리기: 셸 화면은 세션 id 가 살아 있어도 버리지 않는다", () => {
-  const plan = restorePlan([{ workspace: "w", name: null, selected: true, root: shellLeaf() }], new Set([SID]));
+  const plan = planOf([{ workspace: "w", name: null, selected: true, root: shellLeaf() }], new Set([SID]));
   assert.equal(plan.tabs.length, 1);
 });
 
 test("되살리기: 화면·탭 id 는 서로 다르다", () => {
-  const plan = restorePlan([
+  const plan = planOf([
     { workspace: "a", name: null, selected: false, root: shellLeaf() },
     { workspace: "a", name: null, selected: true, root: shellLeaf() },
   ]);
@@ -225,7 +231,7 @@ test("옛 pid 기다리기: 비었으면 묻지 않는다", async () => {
 
 test("옛 pid 기다리기: 바로 끝나 있으면 기다리지 않는다", async () => {
   const { clock, sleeps } = fakeClock();
-  const left = await waitOldPids([10, 20], async () => [], clock);
+  const left = await waitOldPids([target(10), target(20)], async () => [], clock);
   assert.equal(left.size, 0);
   assert.deepEqual(sleeps, []);
 });
@@ -233,14 +239,14 @@ test("옛 pid 기다리기: 바로 끝나 있으면 기다리지 않는다", asy
 test("옛 pid 기다리기: 도중에 끝나면 거기서 멈춘다", async () => {
   const { clock, sleeps } = fakeClock();
   let calls = 0;
-  const left = await waitOldPids([10], async (pids) => (++calls < 3 ? pids : []), clock);
+  const left = await waitOldPids([target(10)], async (list) => (++calls < 3 ? list.map((t) => t.pid) : []), clock);
   assert.equal(left.size, 0);
   assert.deepEqual(sleeps, [200, 200]);
 });
 
 test("옛 pid 기다리기: 5초 뒤에도 살아 있으면 그 pid 를 돌려준다", async () => {
   const { clock, sleeps } = fakeClock();
-  const left = await waitOldPids([10, 20], async (pids) => pids.filter((pid) => pid === 10), clock);
+  const left = await waitOldPids([target(10), target(20)], async (list) => list.map((t) => t.pid).filter((pid) => pid === 10), clock);
   assert.deepEqual([...left], [10]);
   assert.equal(sleeps.reduce((a, b) => a + b, 0), 5000);
 });
@@ -248,7 +254,7 @@ test("옛 pid 기다리기: 5초 뒤에도 살아 있으면 그 pid 를 돌려�
 test("옛 pid 기다리기: pid 0 은 묻지 않는다", async () => {
   const { clock } = fakeClock();
   const asked: number[][] = [];
-  await waitOldPids([0, 7], async (pids) => { asked.push(pids); return []; }, clock);
+  await waitOldPids([target(0), target(7)], async (list) => { asked.push(list.map((t) => t.pid)); return []; }, clock);
   assert.deepEqual(asked, [[7]]);
 });
 
@@ -257,47 +263,47 @@ test("옛 pid 기다리기: pid 0 은 묻지 않는다", async () => {
 const held = (over = {}) => ({ cwd: "C:\\work\\a", command: "claude", session: SID, ...over });
 
 test("이어 열기: 끝난 세션은 --resume 으로, 탭 이름을 --name 으로 붙인다", () => {
-  const launch = heldLaunch(held(), { sessions: [{ id: SID, state: "ended" }], tabName: "내 탭" });
+  const launch = launchOf(held(), { sessions: [{ id: SID, state: "ended" }], tabName: "내 탭" });
   assert.deepEqual(launch, { command: `claude --name 내 탭 --resume ${SID}`.replace("내 탭", '"내 탭"'), sessionId: SID });
 });
 
 test("이어 열기: 세션이 아직 끝나지 않았으면 보드 밖에서 도는 것이라 이어 열지 않는다", () => {
   for (const state of ["idle", "working", "waiting"]) {
-    assert.equal(heldLaunch(held(), { sessions: [{ id: SID, state }], tabName: "a" }), null);
+    assert.equal(launchOf(held(), { sessions: [{ id: SID, state }], tabName: "a" }), null);
   }
 });
 
 test("이어 열기: 세션의 이어 열기 인자가 있으면 --resume <id> 뒤에 붙인다", () => {
-  const launch = heldLaunch(held(), { sessions: [{ id: SID, state: "ended", resumeArgs: ["--dangerously-skip-permissions", "--resume", SID] }], tabName: "a" });
+  const launch = launchOf(held(), { sessions: [{ id: SID, state: "ended", resumeArgs: ["--dangerously-skip-permissions", "--resume", SID] }], tabName: "a" });
   assert.equal(launch.command, `claude --name a --resume ${SID} --dangerously-skip-permissions`);
 });
 
 test("이어 열기: 보드 상태에 없는 세션(대화 없이 끝남)은 처음 명령을 새 세션 id 로", () => {
-  const launch = heldLaunch(held(), { sessions: [], tabName: "a" });
+  const launch = launchOf(held(), { sessions: [], tabName: "a" });
   assert.match(launch.command, /^claude --name a --session-id [0-9a-f-]{36}$/);
   assert.equal(launch.sessionId, launch.command.split(" ").at(-1));
   assert.notEqual(launch.sessionId, SID);
 });
 
 test("이어 열기: 보드 상태를 아직 못 받았으면 이어 연다", () => {
-  const launch = heldLaunch(held(), { sessions: null, tabName: "a" });
+  const launch = launchOf(held(), { sessions: null, tabName: "a" });
   assert.equal(launch.command, `claude --name a --resume ${SID}`);
 });
 
 test("이어 열기: 세션 id 가 없으면 새 세션", () => {
-  const launch = heldLaunch(held({ session: undefined }), { sessions: [], tabName: "a" });
+  const launch = launchOf(held({ session: undefined }), { sessions: [], tabName: "a" });
   assert.match(launch.command, /^claude --name a --session-id /);
 });
 
 test("이어 열기: 모양이 맞지 않는 세션 id 는 명령에 넣지 않는다", () => {
-  assert.equal(heldLaunch(held({ session: "x; rm -rf" }), { sessions: null, tabName: "a" }), null);
+  assert.equal(launchOf(held({ session: "x; rm -rf" }), { sessions: null, tabName: "a" }), null);
 });
 
 test("이어 열기: 명령이 비면 이어 열 것이 없다", () => {
-  assert.equal(heldLaunch(held({ command: "" }), { sessions: [], tabName: "a" }), null);
+  assert.equal(launchOf(held({ command: "" }), { sessions: [], tabName: "a" }), null);
 });
 
 test("이어 열기: claude 가 아닌 명령은 그대로", () => {
-  const launch = heldLaunch({ cwd: "c", command: "npm run dev" }, { sessions: [], tabName: "a" });
+  const launch = launchOf({ cwd: "c", command: "npm run dev" }, { sessions: [], tabName: "a" });
   assert.deepEqual(launch, { command: "npm run dev", sessionId: null });
 });

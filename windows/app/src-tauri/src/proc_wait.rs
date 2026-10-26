@@ -4,13 +4,26 @@
 use std::time::Duration;
 
 use claude_board_core::proc;
+use serde::Deserialize;
 
 /// 기다리는 간격 — 프로세스가 끝나자마자 알아채되 CPU 를 먹지 않을 만큼
 pub const POLL: Duration = Duration::from_millis(100);
 
-/// 주어진 pid 가운데 아직 산 것(입력 순서 그대로). pid 0 은 프로세스가 아니므로 산 것으로 치지 않는다.
-pub fn alive_among(pids: &[u32]) -> Vec<u32> {
-    pids.iter().copied().filter(|&pid| pid != 0 && proc::alive(pid, None)).collect()
+/// 생사를 물을 프로세스 — pid 와 그 프로세스의 생성 시각(세션 기록의 `pid_ctime`). 생성 시각이 있으면 재사용된 pid 를 산 것으로 보지 않는다.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct PidTarget {
+    pub pid: u32,
+    #[serde(default)]
+    pub ctime: Option<f64>,
+}
+
+fn target_alive(target: PidTarget) -> bool {
+    target.pid != 0 && proc::alive(target.pid, target.ctime)
+}
+
+/// 주어진 프로세스 가운데 아직 산 것의 pid(입력 순서 그대로). pid 0 은 프로세스가 아니므로 산 것으로 치지 않는다.
+pub fn alive_among(targets: &[PidTarget]) -> Vec<u32> {
+    targets.iter().copied().filter(|t| target_alive(*t)).map(|t| t.pid).collect()
 }
 
 /// `is_alive` 가 거짓이 될 때까지 `poll` 간격으로 본다. `timeout` 안에 끝났으면 true, 아니면 false.
@@ -30,21 +43,25 @@ pub fn wait_gone(mut is_alive: impl FnMut() -> bool, timeout: Duration, poll: Du
     }
 }
 
-/// 그 pid 가 `timeout_ms` 안에 끝나기를 기다린다. 이미 없거나(pid 0 포함) 끝났으면 true, 시간이 지나도 살아 있으면 false.
-pub fn wait_exit_blocking(pid: u32, timeout_ms: u64) -> bool {
-    wait_gone(|| pid != 0 && proc::alive(pid, None), Duration::from_millis(timeout_ms), POLL, std::thread::sleep)
+/// 그 프로세스가 `timeout_ms` 안에 끝나기를 기다린다. 이미 없거나 끝났으면 true, 시간이 지나도 살아 있으면 false.
+/// pid 0 은 어떤 프로세스인지 모른다는 뜻이라 끝났다고 말할 수 없다 — 기다리지 않고 false.
+pub fn wait_exit_blocking(target: PidTarget, timeout_ms: u64) -> bool {
+    if target.pid == 0 {
+        return false;
+    }
+    wait_gone(|| target_alive(target), Duration::from_millis(timeout_ms), POLL, std::thread::sleep)
 }
 
-/// 산 pid 만 추려 돌려준다. 프론트의 `pidsAlive(pids)`.
+/// 산 프로세스의 pid 만 추려 돌려준다. 프론트의 `pidsAlive(targets)`.
 #[tauri::command(async)]
-pub fn pids_alive(pids: Vec<u32>) -> Vec<u32> {
-    alive_among(&pids)
+pub fn pids_alive(targets: Vec<PidTarget>) -> Vec<u32> {
+    alive_among(&targets)
 }
 
-/// 프론트의 `waitExit(pid, timeoutMs)` — 끝났으면 true. 기다리는 동안 이 명령 스레드가 막힌다(`async` 명령은 별도 스레드에서 돈다).
+/// 프론트의 `waitExit(pid, pidCtime, timeoutMs)` — 끝났으면 true. 기다리는 동안 이 명령 스레드가 막힌다(`async` 명령은 별도 스레드에서 돈다).
 #[tauri::command(async)]
-pub fn wait_exit(pid: u32, timeout_ms: u64) -> bool {
-    wait_exit_blocking(pid, timeout_ms)
+pub fn wait_exit(pid: u32, pid_ctime: Option<f64>, timeout_ms: u64) -> bool {
+    wait_exit_blocking(PidTarget { pid, ctime: pid_ctime }, timeout_ms)
 }
 
 #[cfg(test)]
@@ -63,11 +80,31 @@ mod tests {
             .unwrap()
     }
 
+    fn plain(pid: u32) -> PidTarget {
+        PidTarget { pid, ctime: None }
+    }
+
     #[test]
     fn this_process_is_alive_and_zero_never() {
         let me = std::process::id();
-        assert_eq!(alive_among(&[0, me, 0]), [me]);
+        assert_eq!(alive_among(&[plain(0), plain(me), plain(0)]), [me]);
         assert!(alive_among(&[]).is_empty());
+    }
+
+    #[test]
+    fn a_reused_pid_with_another_creation_time_is_not_alive() {
+        let me = std::process::id();
+        let real = proc::creation_time(me).expect("이 프로세스의 생성 시각");
+        assert_eq!(alive_among(&[PidTarget { pid: me, ctime: Some(real) }]), [me]);
+        assert!(alive_among(&[PidTarget { pid: me, ctime: Some(real - 100.0) }]).is_empty(), "생성 시각이 다르면 재사용된 pid 다");
+        assert!(wait_exit_blocking(PidTarget { pid: me, ctime: Some(real - 100.0) }, 0), "다른 프로세스라면 그 프로세스는 이미 끝났다");
+    }
+
+    #[test]
+    fn pid_zero_never_counts_as_exited() {
+        let started = std::time::Instant::now();
+        assert!(!wait_exit_blocking(plain(0), 10_000), "pid 를 모르는 세션은 끝났다고 말하지 않는다");
+        assert!(started.elapsed() < Duration::from_secs(1), "pid 0 은 기다리지 않고 바로 돌아온다");
     }
 
     #[test]
@@ -75,9 +112,8 @@ mod tests {
         let mut child = short_lived_child();
         let pid = child.id();
         child.wait().unwrap();
-        assert!(alive_among(&[pid]).is_empty());
-        assert!(wait_exit_blocking(pid, 50));
-        assert!(wait_exit_blocking(0, 50));
+        assert!(alive_among(&[plain(pid)]).is_empty());
+        assert!(wait_exit_blocking(plain(pid), 50));
     }
 
     #[test]
@@ -85,7 +121,7 @@ mod tests {
         let mut child = short_lived_child();
         let pid = child.id();
         // 도는 동안 기다리기 시작해도 끝나면 true (수거(`wait`)는 생사 판정과 무관하다)
-        let waiter = std::thread::spawn(move || wait_exit_blocking(pid, 10_000));
+        let waiter = std::thread::spawn(move || wait_exit_blocking(plain(pid), 10_000));
         child.wait().unwrap();
         assert!(waiter.join().unwrap());
     }

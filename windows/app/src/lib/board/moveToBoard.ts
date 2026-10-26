@@ -20,7 +20,7 @@ export function needsConfirm(s: Pick<Session, "state">): boolean {
 export interface MoveDeps {
   confirm(title: string, text: string): Promise<boolean>;
   drive(id: string, steps: DriveStep[]): Promise<boolean>;
-  waitExit(pid: number, timeoutMs: number): Promise<boolean>;
+  waitExit(pid: number, pidCtime: number | null, timeoutMs: number): Promise<boolean>;
   resumeSession(s: Session): void;
   toast(text: string): void;
 }
@@ -28,6 +28,28 @@ export interface MoveDeps {
 // 알림 앞에 붙이는 폴더 이름(mac lastPathComponent) — 끝 구분자는 무시한다
 function lastFolder(cwd: string): string {
   return cwd.split(/[\\/]/).filter(Boolean).at(-1) ?? cwd;
+}
+
+/**
+ * 누른 순간의 세션 — 메뉴를 연 뒤 상태가 바뀌었을 수 있어 확인 여부는 지금 상태로 정한다. 세션이 사라졌거나 이미 끝났으면 null(옮길 것이 없다).
+ */
+export function sessionAtClick<T extends Pick<Session, "state">>(current: T | undefined): T | null {
+  return current && current.state !== "ended" ? current : null;
+}
+
+/** 같은 세션을 옮기는 중에 또 누른 것을 거른다 — 키(Esc·/exit)를 두 번 보내지 않게. 돌려주는 함수는 이미 도는 중이면 false */
+export function createMoveGuard(): (id: string, run: () => Promise<void>) => Promise<boolean> {
+  const moving = new Set<string>();
+  return async (id, run) => {
+    if (moving.has(id)) return false;
+    moving.add(id);
+    try {
+      await run();
+      return true;
+    } finally {
+      moving.delete(id);
+    }
+  };
 }
 
 /**
@@ -40,7 +62,7 @@ export async function moveToBoard(s: Session, deps: MoveDeps): Promise<void> {
   if (!(await deps.drive(s.id, MOVE_STEPS))) {
     return deps.toast(`${name}: 세션 터미널을 찾지 못해 보드로 옮기지 못했습니다`);
   }
-  if (!(await deps.waitExit(s.pid, EXIT_TIMEOUT_MS))) {
+  if (!(await deps.waitExit(s.pid, s.pidCtime ?? null, EXIT_TIMEOUT_MS))) {
     return deps.toast(`${name}: 세션이 끝나지 않아 보드로 옮기지 못했습니다. 그 터미널을 확인해 주세요`);
   }
   deps.resumeSession(s);
