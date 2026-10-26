@@ -1483,6 +1483,7 @@ final class Store: ObservableObject {
             if a != b { return a < b }
             return ($0.sessions.map(\.updated).max() ?? .distantPast) > ($1.sessions.map(\.updated).max() ?? .distantPast)
         }
+        AmbientTicker.shared.busy = sorted.contains { $0.sessions.contains { $0.state == "working" || $0.state == "waiting" } }
         if force || sorted != groups {
             withAnimation(.spring(response: 0.45, dampingFraction: 0.82)) { groups = sorted }
         }
@@ -1529,20 +1530,23 @@ func elapsed(_ from: Date, _ now: Date) -> String {
 
 // MARK: - 상태 표시 (애니메이션)
 
-// 늘 도는 애니메이션의 시계 — SwiftUI 반복 애니메이션은 화면 주사율만큼 창 전체를 다시 그려 클릭이 버벅이므로 초당 30번으로 묶는다
+// 늘 도는 애니메이션의 시계 — SwiftUI 반복 애니메이션은 화면 주사율만큼 창 전체를 다시 그려 클릭이 버벅이므로 초당 20번으로 묶는다.
+// 한 번 돌 때마다 보드 화면 전체 배치를 다시 계산하므로(30번일 때 쉬는 보드 CPU 의 절반 남짓, 2026-10-26 실측) 회전이 끊겨 보이지 않는 만큼만 돈다
 // 늘 도는 애니메이션은 시계 하나를 함께 본다 — 따로 돌면 시계마다 창 전체를 따로 다시 그린다
 final class AmbientTicker: ObservableObject {
     static let shared = AmbientTicker()
     @Published private(set) var now = Date().timeIntervalSinceReferenceDate
     private var timer: Timer?
-    // 창이 다른 창에 다 가려졌거나 숨었으면 멈춘다 — 보이지 않는 감독·회전 표시를 초당 30번 다시 그리지 않게
+    // 창이 다른 창에 다 가려졌거나 숨었으면 멈춘다 — 보이지 않는 감독·회전 표시를 초당 20번 다시 그리지 않게
     var running = true { didSet { if running != oldValue { schedule() } } }
+    // 보이는 세션 가운데 작업 중·승인 대기가 없으면 초당 5번으로 늦춘다 — 회전·파문·반짝임은 그때만 나오고, 쉬는 동안은 캐릭터가 조는 것만 움직인다
+    var busy = true { didSet { if busy != oldValue { schedule() } } }
     private init() { schedule() }
     private func schedule() {
         timer?.invalidate()
         timer = nil
         guard running else { return }
-        let t = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in self?.now = Date().timeIntervalSinceReferenceDate }
+        let t = Timer(timeInterval: busy ? 1.0 / 20 : 1.0 / 5, repeats: true) { [weak self] _ in self?.now = Date().timeIntervalSinceReferenceDate }
         RunLoop.main.add(t, forMode: .common)
         timer = t
     }
@@ -2826,7 +2830,16 @@ struct SubagentRow: View {
             TreeBranch(last: last)
                 .stroke(Color.white.opacity(0.22), style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
                 .frame(width: 16)
-            StateIcon(state: sub.boardState).scaleEffect(0.8)
+            // 도는 서브에이전트는 회전 대신 멈춘 아이콘 — 줄마다 회전 표시를 두면 서브에이전트 수만큼 시계가 돌 때마다 다시 그린다
+            if sub.boardState == "working" {
+                Image(systemName: "ellipsis.circle.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Palette.color("working"))
+                    .frame(width: 18, height: 18)
+                    .scaleEffect(0.8)
+            } else {
+                StateIcon(state: sub.boardState).scaleEffect(0.8)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(sub.desc.isEmpty ? sub.type : sub.desc)
                     .boardFont(12, weight: .medium)
@@ -3219,7 +3232,7 @@ struct BoardFont: ViewModifier {
 
 // MARK: - 힌트
 
-// 시스템 툴팁(.help)은 1초 넘게 기다려야 뜨고, 보드가 초당 30번 다시 그려지면 그 기다림이 자꾸 처음부터 다시 시작돼
+// 시스템 툴팁(.help)은 1초 넘게 기다려야 뜨고, 보드가 초당 20번 다시 그려지면 그 기다림이 자꾸 처음부터 다시 시작돼
 // 몇 초씩 걸리거나 아예 뜨지 않는다. 카드·스크롤 영역에 잘리지 않게 보드 위의 작은 패널 창에 직접 띄운다
 final class HintPanel {
     static let shared = HintPanel()
@@ -4448,7 +4461,7 @@ struct OpacitySlider: View {
     }
 }
 
-// 손가락 커서 — 보드는 초당 30번 다시 그려서 NSCursor.set() 이 곧 화살표로 되돌아간다. macOS 15 부터는 SwiftUI 포인터 모양을 쓴다
+// 손가락 커서 — 보드는 초당 20번 다시 그려서 NSCursor.set() 이 곧 화살표로 되돌아간다. macOS 15 부터는 SwiftUI 포인터 모양을 쓴다
 struct HandPointer: ViewModifier {
     let on: Bool
     func body(content: Content) -> some View {
