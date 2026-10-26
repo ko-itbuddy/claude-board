@@ -1,7 +1,9 @@
 // 무엇을 Jev 에 보여 줄 수 있나. 문자열·헤더 규칙이며 그림 속 내용을 읽지는 않는다.
 //
-// 막는 것: e2e 폴더 밖 파일, PNG 가 아닌 파일, 하네스 한도를 벗어난 크기, 회사 경로.
-// 못 막는 것: 그림에 보드 창만 담겼는지, 계정 칩의 이메일·사용량 패널이 들어갔는지. 호출하는 쪽이 보드 창만 잘라 넘긴다(README).
+// 막는 것: e2e 폴더 밖 파일, PNG 가 아닌 파일, 하네스 한도를 벗어난 크기, 회사 경로, (allowedWindowTitle 을 주면) 다른 창 제목으로 자른 그림.
+// 못 막는 것: 그림 픽셀 속 내용 — 보드 창만 담겼는지, 계정 칩의 이메일·사용량 패널이 들어갔는지. 호출하는 쪽이 보드 창만 잘라 넘긴다(README).
+// 글(진술·메타데이터)의 개인정보는 domain/privacy.mjs 가 막는다.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { IMAGE_LIMITS, SOURCE_MAX_PIXELS } from '../questions.mjs';
@@ -86,4 +88,28 @@ export function guardImage(imagePath, repo, readFile = fs.readFileSync) {
   const target = ensureUnderE2e(imagePath, repo);
   const bytes = readFile(target);
   return { path: target, bytes, header: checkPng(bytes) };
+}
+
+// ── 자른 그림의 manifest ──────────────────────────────────────────────────────
+// `crop` 이 그림 옆에 `<그림>.manifest.json` 을 쓴다: {version, windowTitle, rect, sha256(자른 그림 바이트)}.
+// 호출하는 쪽이 allowedWindowTitle 을 주면 그림은 그 창 제목으로 자른 것이고 바이트가 그대로여야 한다.
+// 못 막는 것: 그 창 안에 그려진 내용(계정 이메일 등) — 픽셀은 읽지 않는다. 창 제목은 호출하는 쪽이 정한다.
+export const MANIFEST_VERSION = 1;
+export const manifestPathOf = (imagePath) => `${imagePath}.manifest.json`;
+export const sha256Hex = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
+
+export function checkCropManifest(imagePath, bytes, allowedWindowTitle, readFile = fs.readFileSync) {
+  const file = manifestPathOf(imagePath);
+  let manifest;
+  try {
+    manifest = JSON.parse(readFile(file, 'utf8'));
+  } catch (error) {
+    throw new GuardError(`자른 그림의 manifest 가 없거나 읽을 수 없다(crop --window-title 로 자른 그림만 보낸다): ${path.basename(file)} (${error.code ?? 'bad json'})`);
+  }
+  if (manifest?.version !== MANIFEST_VERSION) throw new GuardError(`manifest 버전이 다르다: ${manifest?.version}`);
+  if (manifest.sha256 !== sha256Hex(bytes)) throw new GuardError('manifest 의 sha256 이 그림과 다르다 — 자른 뒤에 그림이 바뀌었다');
+  if (typeof manifest.windowTitle !== 'string' || manifest.windowTitle !== allowedWindowTitle) {
+    throw new GuardError('그림을 자른 창 제목이 허용한 제목과 다르다');
+  }
+  return manifest;
 }

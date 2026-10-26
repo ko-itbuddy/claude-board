@@ -3,7 +3,7 @@
 // 입력은 어디에 있어도 되지만(로컬 파일을 읽을 뿐이다) 출력은 <repo>/e2e/{out,artifacts}/ 아래만 쓴다.
 import fs from 'node:fs';
 import path from 'node:path';
-import { GuardError, ensureNotCompany, ensureUnderE2e, ALLOWED_SUBDIRS } from './domain/guard.mjs';
+import { GuardError, MANIFEST_VERSION, ensureNotCompany, ensureUnderE2e, manifestPathOf, sha256Hex, ALLOWED_SUBDIRS } from './domain/guard.mjs';
 import { PngError, crop, readHeader } from './domain/png.mjs';
 import { SOURCE_MAX_PIXELS } from './questions.mjs';
 
@@ -15,7 +15,8 @@ export function parseRect(text) {
 }
 
 // 쓰기 전에 출력 위치를 글자로 먼저 따지고(폴더를 만들기 전에) 만든 뒤 실제 경로로 다시 따진다.
-export function cropFile({ input, rect, output, repo }) {
+// windowTitle: 자르는 창의 제목(호출하는 쪽이 정한다). 그림 옆 manifest 에 남고 check/screen 의 --allowed-window-title 이 대조한다.
+export function cropFile({ input, rect, output, repo, windowTitle }) {
   ensureNotCompany(input, output);
   const e2e = path.join(path.resolve(repo), 'e2e');
   const lexical = path.relative(e2e, path.resolve(output)).split(path.sep);
@@ -40,5 +41,7 @@ export function cropFile({ input, rect, output, repo }) {
   fs.mkdirSync(path.dirname(path.resolve(output)), { recursive: true });
   const target = ensureUnderE2e(output, repo, { mustExist: false }); // 폴더를 만든 뒤 실제 경로(링크 해석 후)로 다시 따진다
   fs.writeFileSync(target, cropped);
+  const manifest = { version: MANIFEST_VERSION, windowTitle: windowTitle ?? null, rect, sha256: sha256Hex(cropped) };
+  fs.writeFileSync(manifestPathOf(target), JSON.stringify(manifest), 'utf8');
   return { path: target, width: rect.width, height: rect.height };
 }

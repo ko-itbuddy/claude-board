@@ -58,7 +58,13 @@ export function defaultSpawn(file, args, { cwd, env, timeoutMs }) {
   });
 }
 
+// 판정 캐시 키에 들어간다. 이 어댑터가 하네스에 보내는 내용·읽는 방식이 달라지면 올린다.
+export const JEVLOOK_VERSION = 1;
+
 export class JevLookJudge {
+  id = 'jevlook';
+  version = JEVLOOK_VERSION;
+
   // command: {file, prefixArgs} (시험은 스텁 스크립트를 꽂는다). repo: 하네스 --repo (이미지는 <repo>/e2e/ 아래).
   constructor({ repo, cacheDir, command = resolveCommand(), budget = BUDGET, record = true, timeoutMs = TIMEOUT_MS, spawn = defaultSpawn, env = process.env } = {}) {
     if (!repo || !cacheDir) throw new TypeError('repo 와 cacheDir 이 필요하다');

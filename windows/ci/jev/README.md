@@ -12,7 +12,8 @@ HTTP·키 조회·캐시 형식은 하네스 `~/.claude/skills/ui-automation/scr
 ```sh
 node windows/ci/jev/jev.mjs check   --image windows/e2e/out/board.png --family chip
 node windows/ci/jev/jev.mjs screen  --image windows/e2e/out/board.png --choices board-expanded,settings --expect settings
-node windows/ci/jev/jev.mjs crop    --in <전체 스크린샷.png> --rect x,y,너비,높이 --out windows/e2e/out/board.png
+node windows/ci/jev/jev.mjs crop    --in <전체 스크린샷.png> --rect x,y,너비,높이 --out windows/e2e/out/board.png --window-title "<창 제목>"
+node windows/ci/jev/jev.mjs check   --image windows/e2e/out/board.png --family chip --allowed-window-title "<창 제목>"
 node windows/ci/jev/jev.mjs report  --rows rows.json
 node windows/ci/jev/jev.mjs measure --dataset windows/e2e/out/calib
 node windows/ci/jev/jev.mjs selftest
@@ -28,10 +29,11 @@ node --test windows/ci/jev/
 | `port.mjs` | `Judge` 포트(`check`·`checkAll`·`screen`)와 판정 모양 `{status, reason}` |
 | `adapters/jevlook.mjs` | 실제 어댑터. `jevvision.cli` 를 하위 프로세스로 부른다 |
 | `adapters/fakeJudge.mjs` | 시험용. 정해 두지 않은 질문은 UNVERIFIED 다 |
-| `adapters/guardedJudge.mjs` | 이미지를 먼저 검사하는 데코레이터 |
+| `adapters/guardedJudge.mjs` | 이미지·글을 먼저 검사하고 검사한 바이트의 임시 사본을 안쪽에 주는 데코레이터 |
 | `cache.mjs` | 판정 해시 캐시 데코레이터 |
 | `domain/verdict.mjs` | 종료코드와 출력 줄에서 판정으로. 순수 함수 |
-| `domain/guard.mjs`, `domain/png.mjs` | 위치·PNG 검사, PNG 읽기·자르기·쓰기 |
+| `domain/guard.mjs`, `domain/png.mjs` | 위치·PNG 검사·자른 그림 manifest 대조, PNG 읽기·자르기·쓰기 |
+| `domain/privacy.mjs` | 보내는 글의 개인정보 검사(사용자 이름·`\Users\` 경로·이메일·긴 토큰). 순수 함수 |
 | `report.mjs`, `measure.mjs`, `domain/stats.mjs` | 종합 표, 보정 측정, Wilson 하한 |
 
 ## 판정 규칙
@@ -53,7 +55,12 @@ node --test windows/ci/jev/
 - 16 MiB 를 넘는 파일, 하네스 한도(`questions.mjs` 의 `IMAGE_LIMITS`, 하네스 `thresholds.py` 의 사본) 안으로 줄이거나 키울 수 없는 비율, 3,600만 픽셀을 넘는 원본
 - 경로에 `aijinet-project` 조각이 있는 것
 
-가드가 막지 못하는 것이 있다. 그림 안에 무엇이 들었는지는 읽지 않으므로 보드 창만 담겼는지, 계정 칩의 이메일이나 사용량 패널이 들었는지는 알 수 없다.
+이미지는 한 번만 읽는다. 그 바이트를 검사하고, 같은 바이트를 `<repo>/e2e/out/jev-in-*/image.png` 임시 사본으로 써서 캐시와 하위 프로세스에 그 사본을 준다. 검사한 뒤에 원본이 바뀌어도 안쪽은 검사한 바이트를 본다. 끝나면 사본을 지운다.
+
+보내는 글은 `domain/privacy.mjs` 가 막는다. 진술·기대값·이름·선택지에 Windows 사용자 이름, `\Users\` 경로, 이메일 주소, 32자 이상 이어진 토큰 같은 글자가 있으면 `GUARD|privacy guard: …` 종료코드 5 이고 안쪽에 닿지 않는다. 까닭 줄에는 걸린 글자를 적지 않는다.
+`crop --window-title` 은 그림 옆에 `<그림>.manifest.json`(창 제목·사각형·자른 그림의 sha256)을 쓴다. `check`·`screen` 에 `--allowed-window-title` 을 주면 manifest 가 있고, sha256 이 그림과 같고, 창 제목이 같을 때만 지나간다. 주지 않으면 manifest 는 보지 않는다.
+
+가드가 막지 못하는 것이 있다. 그림 픽셀 안에 무엇이 들었는지는 읽지 않으므로 보드 창만 담겼는지, 계정 칩의 이메일이나 사용량 패널이 들었는지는 알 수 없다(창 제목과 manifest 는 호출하는 쪽이 정한 값이다). 로컬 이미지 경로는 검사하지 않는다(하네스는 이미지 바이트를 보낸다. unchecked: 하네스 ledger 에 경로가 남는지).
 호출하는 쪽이 이 규율을 지킨다.
 
 - 격리한 보드 프로세스 자신의 창 내용만 넘긴다. CDP `Page.captureScreenshot` 은 보드 콘텐츠만 담는다. 전체 화면 캡처는 먼저 `crop` 으로 보드 창 사각형만 자른다.
@@ -62,7 +69,7 @@ node --test windows/ci/jev/
 
 ## 캐시
 
-판정 캐시는 (진술 + 기대값 + 이미지 sha256)을 키로 `windows/e2e/out/jev-cache/v-<sha256>.json` 에 판정 한 개를 둔다. 같은 화면과 질문은 하네스를 다시 부르지 않는다.
+판정 캐시는 (판정자 id·version + 진술 + 기대값 + 이미지 sha256)을 키로 `windows/e2e/out/jev-cache/v-<sha256>.json` 에 판정 한 개를 둔다. 같은 화면과 질문은 하네스를 다시 부르지 않는다.
 UNVERIFIED 는 저장하지 않는다. 키가 없어서 못 본 것이 키가 생긴 뒤에도 못 본 것으로 남지 않게 하려는 것이다.
 하네스 자신의 응답 캐시(`jev-cache/harness/`)는 별개의 안쪽 층이다. `--replay` 는 그쪽을 읽기 전용으로 돌려 캐시에 없으면 UNVERIFIED 로 끝낸다.
 `checkAll` 은 캐시에 없는 질문만 한 요청으로 묶어 묻는다(`jevlook` 은 실행당 라이브 호출 6 회가 기본 상한이다).
@@ -80,7 +87,7 @@ UNVERIFIED 는 저장하지 않는다. 키가 없어서 못 본 것이 키가 �
 | FAIL | UNSURE | n/a |
 | 아무거나 | UNVERIFIED | n/a (일치로 세지 않는다) |
 
-종료코드는 결정적 판정만으로 정한다(FAIL 이 하나라도 있으면 1). Jev 칸은 종료코드를 바꾸지 못한다.
+종료코드는 결정적 판정만으로 정한다. 전부 PASS 일 때만 0 이고, FAIL 이 있으면 1, 그렇지 않고 UNVERIFIED 가 있거나 행이 없으면 6, 그렇지 않고 UNSURE 가 있으면 3 이다. Jev 칸은 종료코드를 바꾸지 못한다.
 
 ## 보정 절차 (J2)
 
