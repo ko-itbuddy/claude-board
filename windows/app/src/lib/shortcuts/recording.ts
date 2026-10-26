@@ -71,7 +71,7 @@ export function createRecorder(state: RecorderState, deps: RecorderDeps) {
       return true;
     }
     state.refused = null;
-    stop(); // 전역 단축키를 먼저 다시 걸어야 저장이 그 걸음에서 새 키로 등록된다
+    stop(); // 전역 단축키를 다시 걸게 한 뒤 저장한다. 순서는 보장되지 않는다 — 백엔드가 락 안에서 키 표를 읽고 걸기 때문에 어느 쪽이 먼저 닿아도 된다
     apply(id, c);
     return true;
   }
