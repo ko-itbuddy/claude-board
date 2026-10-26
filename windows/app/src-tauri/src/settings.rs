@@ -58,7 +58,7 @@ pub struct Settings {
     pub shortcuts: BTreeMap<String, Vec<serde_json::Value>>,
     /// 설정 화면이 열리고 닫히는 움직임(mac `settingsTransition`) — `slide` · `fade` · `none`
     pub settings_transition: String,
-    /// 새 세션의 기본 명령(mac `newSessionCommand`) — 비면 `claude`
+    /// 새 세션의 기본 명령(mac `newSessionCommand`) — 비면 프런트가 `claude --dangerously-skip-permissions` 로 쓴다
     pub new_session_command: String,
     /// 새 세션을 열 때 답변 꾸미기(md-render) 기본값(mac `newSessionMdRender`)
     pub new_session_md_render: bool,

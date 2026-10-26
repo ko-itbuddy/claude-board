@@ -766,7 +766,7 @@ fn set_settings_transition(board: B<'_>, value: String) {
     board.publish();
 }
 
-/// 새 세션의 기본 명령(비면 `claude`)과 답변 꾸미기 기본값.
+/// 새 세션의 기본 명령(비면 프런트가 `claude --dangerously-skip-permissions` 로 쓴다)과 답변 꾸미기 기본값.
 #[tauri::command(async)]
 fn set_new_session_defaults(board: B<'_>, command: String, md_render: bool) {
     board.update_settings(|s| {
