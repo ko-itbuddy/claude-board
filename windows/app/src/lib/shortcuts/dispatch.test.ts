@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { SETTINGS_ESCAPE, SETTINGS_TOGGLE, SHORTCUT_RECORD } from "./actions.ts";
-import { dispatch } from "./dispatch.ts";
+import { dispatch, ownsEscape } from "./dispatch.ts";
 
 const press = (code, o = {}) => {
   const { altGraph = false, ...mods } = o;
@@ -88,4 +88,20 @@ test("Ctrl+, 는 설정 화면 열고 닫기 — 떠 있든 아니든", () => {
 
 test("설정 키는 바꾼 표로 옮겨도 그대로다", () => {
   assert.equal(dispatch(press("Comma", ctrl), { ...idle, overrides: { newSession: ["Comma", 1] } }), SETTINGS_TOGGLE);
+});
+
+test("Esc 가 눌린 칸이 스스로 Esc 를 처리하면(escapeOwned) settings.escape 로 가져가지 않는다", () => {
+  assert.equal(dispatch(press("Escape"), { ...idle, settingsShown: true, escapeOwned: true }), null);
+  assert.equal(dispatch(press("Escape"), { ...idle, settingsShown: true, escapeOwned: false }), SETTINGS_ESCAPE);
+  assert.equal(dispatch(press("Comma", ctrl), { ...idle, settingsShown: true, escapeOwned: true }), SETTINGS_TOGGLE, "Esc 만 해당한다");
+});
+
+test("ownsEscape — data-own-escape 칸 안에서 눌린 키만 true", () => {
+  const inside = { closest: (selector) => (selector === "[data-own-escape]" ? {} : null) };
+  const outside = { closest: () => null };
+  assert.equal(ownsEscape(inside), true);
+  assert.equal(ownsEscape(outside), false);
+  assert.equal(ownsEscape(null), false);
+  assert.equal(ownsEscape(undefined), false);
+  assert.equal(ownsEscape({}), false, "closest 가 없는 대상(window·document)");
 });

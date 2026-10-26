@@ -4,7 +4,7 @@
   import { onTerminalFocus } from "$lib/backend";
   import { ui } from "$lib/board/store.svelte";
   import { SettingsScreen } from "$lib/settings/screen.svelte";
-  import { dispatch } from "$lib/shortcuts/dispatch";
+  import { dispatch, ownsEscape } from "$lib/shortcuts/dispatch";
   import { actionAllowed } from "$lib/shortcuts/gate";
   import { runShortcutAction } from "$lib/shortcuts/run";
   import { currentOverrides, ShortcutSettings } from "$lib/shortcuts/store.svelte";
@@ -55,7 +55,7 @@
       const modalOpen = !!(TerminalHub.confirm || TerminalHub.sheet);
       // 키 표(바꾼 키 포함)는 shortcuts/dispatch.ts 가 쥔다. 수정키가 든 키는 글자 조합이 아니라 단축키라 조합 중이어도 알아본다 — 입력기가 같은 키를 한 번 더 쏘는 것은 위 refire 가 삼킨다
       const composing = (e.isComposing || e.keyCode === 229) && !(e.ctrlKey || e.altKey || e.metaKey);
-      const action = dispatch(e, { recording: ShortcutSettings.recording, composing, modalOpen, settingsShown: SettingsScreen.shown, overrides: currentOverrides() });
+      const action = dispatch(e, { recording: ShortcutSettings.recording, composing, modalOpen, settingsShown: SettingsScreen.shown, escapeOwned: ownsEscape(e.target), overrides: currentOverrides() });
       if (!action || !actionAllowed(action, expanded)) return;
       e.preventDefault();
       e.stopPropagation();

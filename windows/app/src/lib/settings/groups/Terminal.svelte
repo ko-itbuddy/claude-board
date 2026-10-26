@@ -29,10 +29,11 @@
       e.preventDefault();
       commit();
     } else if (e.key === "Escape" && draft !== null) {
-      // 고치던 글자를 버린다 — 설정 화면 전체가 닫히지 않게 여기서 막는다
+      // 고치던 글자를 버리고 칸에서 나온다. 창 전체의 Esc 처리(TerminalAreaView 캡처)는 이 칸의 `data-own-escape` 를 보고 이 Esc 를 가져가지 않는다 —
+      // 나온 뒤 한 번 더 누른 Esc 가 설정 화면을 닫는다. 값은 이미 되돌렸으므로 포커스를 풀며 나는 blur 의 저장은 저장된 값 그대로다
       e.preventDefault();
-      e.stopPropagation();
       draft = null;
+      e.currentTarget.blur();
     }
   }
 
@@ -58,6 +59,7 @@
         oninput={(e) => (draft = e.currentTarget.value)}
         onblur={commit}
         onkeydown={keydown}
+        data-own-escape={draft !== null ? "" : undefined}
         data-testid="settings-session-command"
       />
       {#if !check.ok}<div class="error" data-testid="settings-session-command-error">{check.reason}</div>{/if}
