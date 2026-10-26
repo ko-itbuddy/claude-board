@@ -120,16 +120,38 @@ function resumeSession(p: OpenSessionPayload) {
   }
 }
 
+// 보드로 옮기기 확인 — 터미널 영역 확인 창(hub confirm)으로 묻는다. 터미널이 접혀 있으면 창이 안 보이므로 펼쳐 보이고, 취소하면 도로 접는다
+function confirmMove(title: string, text: string): Promise<boolean> {
+  TerminalHub.confirm?.cancel?.();
+  const expandedByUs = !board.snap?.settings.terminalExpanded;
+  if (expandedByUs) setTerminalExpanded(true);
+  showBoard();
+  return new Promise((resolve) => {
+    TerminalHub.confirm = {
+      title,
+      text,
+      okLabel: "옮기기",
+      run: () => resolve(true),
+      cancel: () => {
+        if (expandedByUs) setTerminalExpanded(false);
+        resolve(false);
+      },
+    };
+  });
+}
+
 /** 다른 터미널에서 도는 세션을 보드 탭으로 옮긴다(mac moveToBoard). 규칙은 board/moveToBoard.ts, 여기는 효과를 이어 준다 */
 export function moveSessionToBoard(s: Session): Promise<void> {
   return moveToBoard(s, {
-    // TODO(P1.3): TerminalHub.confirm 에 취소 길(cancel)을 달아 실제로 묻는다 — 지금은 늘 확인된 것으로 친다
-    confirm: async () => true,
+    confirm: confirmMove,
     drive: driveSession,
     waitExit,
-    // TODO(P1.3): 세션 줄이 가진 이어 열기 인자(resumeArgs)를 넘긴다 — 없으면 `claude --resume <id>`
-    resumeSession: (moved) => resumeSession({ id: moved.id, action: "reopen", carryOn: false, projectDir: moved.cwd, resumeArgs: [] }),
+    // 이어 열기 인자(resumeArgs)는 백엔드 세션 기록이 쥐고 있다 — 보통의 "세션 다시 열기"와 같은 길(reopen 요청)로 보낸다
+    resumeSession: (moved) => sessionAction("reopen", moved.id, false),
     toast,
+  }).catch((e) => {
+    console.error("보드로 옮기지 못했습니다", e);
+    toast("보드로 옮기지 못했습니다");
   });
 }
 

@@ -6,7 +6,7 @@ import { test } from "node:test";
 
 import { sessionMenuEntries, type SessionMenuEntry } from "./sessionActions.ts";
 
-const ALLOWED = ["activate", "focus", "reopen", "pause", "resume", "stop"];
+const ALLOWED = ["activate", "focus", "reopen", "pause", "resume", "stop", "moveToBoard"];
 const STATES = ["working", "waiting", "idle", "paused", "ended"] as const;
 const TAB = { kind: "tab", surfaceId: "s1", headless: false };
 const TERMINAL = { kind: "terminal" };
@@ -35,8 +35,32 @@ test("끝난 세션은 reopen, 일시중지는 resume·stop, 그 밖은 pause·s
   assert.deepEqual(names(sessionMenuEntries(sessionOf("ended"), ENDED)), ["reopen"]);
   assert.deepEqual(names(sessionMenuEntries(sessionOf("paused"), TAB)), ["resume", "stop"]);
   for (const state of ["working", "waiting", "idle"] as const) {
-    assert.deepEqual(names(sessionMenuEntries(sessionOf(state), TERMINAL)), ["pause", "stop"]);
+    assert.deepEqual(names(sessionMenuEntries(sessionOf(state), TAB)), ["pause", "stop"]);
+    // 다른 터미널에서 키를 넣을 수 있으면 일시중지와 중단 사이에 보드로 옮기기가 낀다
+    assert.deepEqual(names(sessionMenuEntries(sessionOf(state), TERMINAL)), ["pause", "moveToBoard", "stop"]);
   }
+});
+
+test("보드로 옮기기는 place=terminal 이고 canDrive 일 때만, 살아 있고 일시중지가 아닌 세션에만 낸다", () => {
+  const offered = (state, canDrive, place) => names(sessionMenuEntries(sessionOf(state, { canDrive }), place)).includes("moveToBoard");
+  for (const state of STATES) {
+    for (const canDrive of [true, false]) {
+      for (const place of [TAB, TERMINAL, BACKGROUND, ENDED]) {
+        const expected = place.kind === "terminal" && canDrive && ["working", "waiting", "idle"].includes(state);
+        assert.equal(offered(state, canDrive, place), expected, `${state}/${canDrive}/${place.kind}`);
+      }
+    }
+  }
+});
+
+test("보드로 옮기기 항목의 문구는 mac 과 같고 일시중지 다음·구분선 앞에 온다", () => {
+  const entries = sessionMenuEntries(sessionOf("working"), TERMINAL);
+  assert.equal(entries.length, 4);
+  assert.equal(entries[1].label, "보드로 옮기기");
+  assert.equal(entries[1].detail, "그쪽을 끝내고 보드 새 탭에서 이어 엽니다");
+  assert.equal(entries[1].enabled, undefined);
+  assert.deepEqual(entries[2], { separator: true });
+  assert.equal(entries[3].action, "stop");
 });
 
 test("살아 있는 background 세션은 메뉴가 없다", () => {
@@ -134,12 +158,22 @@ test("waiting 이고 키를 못 넣으면 꺼지고 키 설명이다", () => {
   assert.equal(entry.detail, "이 터미널에는 키를 넣을 수 없습니다");
 });
 
-test("terminal 자리에서도 pause 규칙은 tab 과 같다", () => {
+test("terminal 자리에서도 pause 규칙은 tab 과 같다(옮기기 항목만 더 있다)", () => {
   for (const state of ["working", "waiting", "idle"] as const) {
     for (const canDrive of [true, false]) {
-      const inTab = JSON.stringify(sessionMenuEntries(sessionOf(state, { canDrive }), TAB));
-      assert.equal(JSON.stringify(sessionMenuEntries(sessionOf(state, { canDrive }), TERMINAL)), inTab);
+      const inTab = sessionMenuEntries(sessionOf(state, { canDrive }), TAB);
+      const inTerminal = sessionMenuEntries(sessionOf(state, { canDrive }), TERMINAL).filter((e) => e.action !== "moveToBoard");
+      assert.equal(JSON.stringify(inTerminal), JSON.stringify(inTab));
     }
+  }
+});
+
+test("terminal 자리에서 키를 못 넣으면 tab 과 메뉴가 같다", () => {
+  for (const state of ["working", "waiting", "idle"] as const) {
+    assert.equal(
+      JSON.stringify(sessionMenuEntries(sessionOf(state, { canDrive: false }), TERMINAL)),
+      JSON.stringify(sessionMenuEntries(sessionOf(state, { canDrive: false }), TAB)),
+    );
   }
 });
 
@@ -158,6 +192,12 @@ test("살아 있는 메뉴는 항목-구분선-중단 모양이고 중단이 마
     assert.deepEqual(entries[1], { separator: true });
     assert.equal(entries[2].action, "stop");
   }
+});
+
+test("보드로 옮기기 항목도 호출마다 복사본이라 한쪽을 고쳐도 다음 메뉴가 변하지 않는다", () => {
+  const a = sessionMenuEntries(sessionOf("working"), TERMINAL);
+  a[1].label = "오염";
+  assert.equal(sessionMenuEntries(sessionOf("working"), TERMINAL)[1].label, "보드로 옮기기");
 });
 
 // 건너뜀: sessionActions.ts:19 의 STOP_ENTRY 상수 하나를 모든 메뉴가 같은 객체로 돌려준다(복사하지 않음).
