@@ -33,7 +33,7 @@
       // 나온 뒤 한 번 더 누른 Esc 가 설정 화면을 닫는다. 값은 이미 되돌렸으므로 포커스를 풀며 나는 blur 의 저장은 저장된 값 그대로다
       e.preventDefault();
       draft = null;
-      e.currentTarget.blur();
+      (e.currentTarget as HTMLInputElement).blur();
     }
   }
 
