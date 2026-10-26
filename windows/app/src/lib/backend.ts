@@ -351,6 +351,14 @@ export function setTerminalExpanded(on: boolean) {
   fire("set_terminal_expanded", { on });
 }
 
+/** setTerminalExpanded 와 같되 백엔드가 저장을 마칠 때까지 기다린다 — 끄기 직전처럼 곧 프로세스가 끝나는 자리용. 실패하면 던진다 */
+export async function setTerminalExpandedAndWait(on: boolean): Promise<void> {
+  optimistic((s) => {
+    s.settings.terminalExpanded = on;
+  });
+  await call("set_terminal_expanded", { on });
+}
+
 export function setBoardSide(side: BoardSide) {
   optimistic((s) => {
     s.settings.boardSide = side;
