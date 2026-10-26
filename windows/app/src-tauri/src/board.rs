@@ -192,8 +192,11 @@ impl Board {
             let s = self.settings.lock().unwrap();
             (s.pinned, s.terminal_expanded)
         };
+        // 덮는지 모르는 창(최소화·화면 밖)은 지금 상태를 그대로 둔다 — 되살린 뒤 크기가 멈추면 다시 정한다
         if let Some(w) = window::main_window(&self.app) {
-            let _ = w.set_always_on_top(window::on_top(pinned, expanded, window::covering_now(&w)));
+            if let Some(covering) = window::covering_now(&w) {
+                let _ = w.set_always_on_top(window::on_top(pinned, expanded, covering));
+            }
         }
     }
 
@@ -741,6 +744,19 @@ fn set_opacity(board: B<'_>, v: f64) {
     board.publish();
 }
 
+/// 꾸미기를 끈 세션 id 가운데 세션 파일이 아직 있는 것만(입력 순서 그대로).
+fn kept_md_render_off(list: &[String], exists: impl Fn(&str) -> bool) -> Vec<String> {
+    list.iter().filter(|id| exists(id)).cloned().collect()
+}
+
+/// 프론트의 `pruneMdRenderOff()` — 보드를 켤 때 세션 파일이 없어진 세션의 id 를 끈 세션 목록에서 치운다(mac `pruneMdRenderOff`).
+/// 상태 묶음의 세션이 아니라 세션 파일로 본다 — 지운 경로로 숨겨진 세션도 파일이 있는 한 이어 열 수 있다.
+#[tauri::command(async)]
+fn prune_md_render_off(board: B<'_>) {
+    let dir = board.sessions_dir();
+    board.update_settings(|s| s.md_render_off = kept_md_render_off(&s.md_render_off, |id| dir.join(format!("{id}.json")).exists()));
+}
+
 #[tauri::command(async)]
 fn set_notify_position(board: B<'_>, pos: String) {
     if let Err(e) = settings::set_notify_position(&pos) {
@@ -830,9 +846,21 @@ pub fn action_arg(argv: &[String]) -> Option<(String, String)> {
 fn second_instance(app: &AppHandle, argv: Vec<String>) {
     let Some(board) = app.try_state::<Arc<Board>>().map(|s| s.inner().clone()) else { return };
     match action_arg(&argv) {
-        Some((action, id)) => queue_action(&board, action, id),
+        Some((action, id)) => {
+            // 알림을 눌러 온 focus 는 그 세션이 보드 밖(다른 터미널·백그라운드)이거나 못 찾아도 보드가 보이게 한다 — 포커스는 가져가지 않는다
+            if shows_board_for(&action) {
+                window::show(app, false);
+            }
+            queue_action(&board, action, id)
+        }
         None => window::show(app, !argv.iter().any(|a| a == "--background")),
     }
+}
+
+/// `--action` 이 보드 창을 보이게 하는가 — 알림 클릭이 거는 `focus` 만. 세션을 찾지 못하거나 백그라운드 세션이면 그 동작이 아무 화면도 열지 않아,
+/// 예전 `--show` 처럼 보드가 안 보이는 일이 없게 한다. 일시중지·재개·중단은 이미 보이는 보드에서 누른 것이라 창을 건드리지 않는다.
+fn shows_board_for(action: &str) -> bool {
+    action == "focus"
 }
 
 fn queue_action(board: &Arc<Board>, action: String, id: String) {
@@ -895,7 +923,7 @@ fn create_window(app: &AppHandle, board: &Arc<Board>, background: bool) -> tauri
             let s = board.settings.lock().unwrap();
             (s.terminal_expanded, s.pinned)
         };
-        let _ = win.set_always_on_top(window::on_top(pinned, expanded, window::covering_now(&win)));
+        let _ = win.set_always_on_top(window::on_top(pinned, expanded, window::covering_now(&win).unwrap_or(true)));
     }
     window::apply_vibrancy(&win);
     // 셸 설정·로그인 자동 실행에서 --background 로 띄우면 창만 보이고 포커스는 지금 앱에 남긴다
@@ -1012,6 +1040,9 @@ pub fn run(argv: Vec<String>, context: tauri::Context<tauri::Wry>) {
             crate::shutdown::load_tabs,
             crate::shutdown::answer_shutdown,
             crate::shutdown::shutdown_dialog_shown,
+            crate::shutdown::lifecycle_started,
+            crate::shutdown::existing_dirs,
+            prune_md_render_off,
             crate::proc_wait::pids_alive,
             crate::proc_wait::wait_exit,
             crate::mdrender::md_render_dir,
@@ -1080,6 +1111,22 @@ mod tests {
         assert_eq!(action_arg(&v(&["ClaudeBoard.exe", "--action", "activate", "abc"])), None);
         assert_eq!(action_arg(&v(&["ClaudeBoard.exe", "--action", "stop"])), None);
         assert_eq!(action_arg(&v(&["ClaudeBoard.exe", "--show"])), None);
+    }
+
+    #[test]
+    fn md_render_off_keeps_only_sessions_with_a_file() {
+        let list: Vec<String> = ["a", "gone", "b"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(kept_md_render_off(&list, |id| id != "gone"), ["a", "b"]);
+        assert!(kept_md_render_off(&[], |_| true).is_empty());
+        assert!(kept_md_render_off(&list, |_| false).is_empty());
+    }
+
+    #[test]
+    fn only_focus_shows_the_board_for_an_action() {
+        assert!(shows_board_for("focus"));
+        for action in ["pause", "resume", "stop", "reopen"] {
+            assert!(!shows_board_for(action), "{action}");
+        }
     }
 
     /// `snapshot` 안에서 같은 잠금을 두 번 잡으면(구조체 리터럴 속 임시 값이 함수 끝까지 산다) 같은 스레드가 멈춘다 — 필드마다 한 번만 잡는지 본다.

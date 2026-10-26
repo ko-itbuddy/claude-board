@@ -124,12 +124,23 @@ pub fn on_top(pinned: bool, expanded: bool, covering: bool) -> bool {
     pinned && !(expanded && covering)
 }
 
-/// 지금 창이 작업 영역을 덮는가 — 창 프레임과 그 모니터 작업 영역으로 잰다. 못 재면 덮는 것으로 본다(펼치면 고정을 쉬던 옛 쪽).
-pub fn covering_now(win: &WebviewWindow) -> bool {
-    match (frame(win), monitor_of(win)) {
-        (Some(f), Some(m)) => covers_work_area(f, m.work),
-        _ => true,
+/// 창이 작업 영역을 덮는지 판단할 수 있는 상태에서의 답 — 최소화됐거나(Windows 는 프레임을 -32000 으로 옮긴다) 작업 영역과 겹치지
+/// 않는 창은 `None`(덮는지 모른다 = 지금의 항상 위 상태를 그대로 둔다). 최소화를 "덮지 않음"으로 읽으면 펼친 창을 최소화하는 순간
+/// 항상 위가 켜져 되살릴 때 화면을 가린다. 프레임이나 모니터를 못 쟀으면 덮는 것으로 본다(펼치면 고정을 쉬던 옛 쪽).
+pub fn covering_state(frame: Option<Frame>, minimized: bool, work: Option<Frame>) -> Option<bool> {
+    if minimized {
+        return None;
     }
+    match (frame, work) {
+        (Some(f), Some(w)) if !intersects(f, w) => None,
+        (Some(f), Some(w)) => Some(covers_work_area(f, w)),
+        _ => Some(true),
+    }
+}
+
+/// 지금 창이 작업 영역을 덮는가 — 창 프레임과 그 모니터 작업 영역으로 잰다. 덮는지 모르는 상태(`covering_state`)면 None.
+pub fn covering_now(win: &WebviewWindow) -> Option<bool> {
+    covering_state(frame(win), win.is_minimized().unwrap_or(false), monitor_of(win).map(|m| m.work))
 }
 
 /// 실행할 때의 창. 미니로 두고 껐으면 그 크기·위치 그대로(화면 안에 있을 때).
@@ -382,6 +393,22 @@ mod tests {
         assert!(!covers_work_area(fr(0.0, 0.0, 1920.0, 1037.0), work));
         // 작업 영역을 넘쳐도 덮는다
         assert!(covers_work_area(fr(-7.0, -7.0, 1934.0, 1054.0), work));
+    }
+
+    #[test]
+    fn covering_state_leaves_minimized_and_off_screen_windows_unchanged() {
+        let work = fr(0.0, 0.0, 1920.0, 1040.0);
+        // 최소화한 창 — Windows 가 프레임을 화면 밖(-32000)으로 옮겨 덮지 않는 것처럼 보인다
+        assert_eq!(covering_state(Some(fr(-32000.0, -32000.0, 1920.0, 1040.0)), true, Some(work)), None);
+        assert_eq!(covering_state(Some(work), true, Some(work)), None, "프레임이 멀쩡해도 최소화면 모른다");
+        // 최소화 표시가 없어도 어느 모니터와도 겹치지 않으면 모른다
+        assert_eq!(covering_state(Some(fr(-32000.0, -32000.0, 1920.0, 1040.0)), false, Some(work)), None);
+        // 보이는 창은 덮는지 가른다
+        assert_eq!(covering_state(Some(work), false, Some(work)), Some(true));
+        assert_eq!(covering_state(Some(fr(0.0, 0.0, 454.0, 1040.0)), false, Some(work)), Some(false));
+        // 못 쟀으면 덮는 것으로
+        assert_eq!(covering_state(None, false, Some(work)), Some(true));
+        assert_eq!(covering_state(Some(work), false, None), Some(true));
     }
 
     #[test]
