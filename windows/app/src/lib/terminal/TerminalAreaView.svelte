@@ -5,6 +5,7 @@
   import { ui } from "$lib/board/store.svelte";
   import { SettingsScreen } from "$lib/settings/screen.svelte";
   import { dispatch } from "$lib/shortcuts/dispatch";
+  import { actionAllowed } from "$lib/shortcuts/gate";
   import { runShortcutAction } from "$lib/shortcuts/run";
   import { currentOverrides, ShortcutSettings } from "$lib/shortcuts/store.svelte";
   import type { BoardSide } from "$lib/types";
@@ -37,14 +38,14 @@
     };
   });
 
-  // 터미널 단축키 — 펼친 동안만. xterm 이 받기 전에(캡처) 가로채 셸로 가지 않게 한다
+  // 단축키 — 접혀 있어도 늘 걸어 두고, 동작마다 접힘에서 받는지 거른다(gate.ts: 설정 열고 닫기만 접혀도 받는다).
+  // xterm 이 받기 전에(캡처) 가로채 셸로 가지 않게 한다
   $effect(() => {
-    if (!expanded) return;
     const refire = createRefireGuard();
     const handle = (e: KeyboardEvent) => {
       // Ctrl+Alt 단축키는 터미널 칸을 숨기거나 바꾼다. 조합 중에 칸이 숨겨지면 크롬이 조합을 취소하고
       // 입력기가 이후 키를 낱글자로 확정하는 상태에 빠지므로(약 1/5) 단축키가 오기 전에 조합 글자를 확정해 둔다
-      if (e.ctrlKey && e.altKey && !e.getModifierState("AltGraph")) commitComposition();
+      if (expanded && e.ctrlKey && e.altKey && !e.getModifierState("AltGraph")) commitComposition();
       // 조합 중에 누른 단축키는 입력기가 같은 키를 한 번 더 쏜다 — 두 번째는 처리하지 않고 삼킨다(셸로도 보내지 않는다)
       if (refire.isRefire(e)) {
         e.preventDefault();
@@ -55,7 +56,7 @@
       // 키 표(바꾼 키 포함)는 shortcuts/dispatch.ts 가 쥔다. 수정키가 든 키는 글자 조합이 아니라 단축키라 조합 중이어도 알아본다 — 입력기가 같은 키를 한 번 더 쏘는 것은 위 refire 가 삼킨다
       const composing = (e.isComposing || e.keyCode === 229) && !(e.ctrlKey || e.altKey || e.metaKey);
       const action = dispatch(e, { recording: ShortcutSettings.recording, composing, modalOpen, settingsShown: SettingsScreen.shown, overrides: currentOverrides() });
-      if (!action) return;
+      if (!action || !actionAllowed(action, expanded)) return;
       e.preventDefault();
       e.stopPropagation();
       refire.handled(e);
