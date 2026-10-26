@@ -43,6 +43,10 @@ export interface Confirm {
   title: string;
   text: string;
   run: () => void;
+  /** 확인 단추 문구 — 없으면 "닫기" */
+  okLabel?: string;
+  /** 취소(Esc·취소 단추)했을 때 — 없으면 창만 닫는다 */
+  cancel?: () => void;
 }
 
 export const TerminalHub = $state({

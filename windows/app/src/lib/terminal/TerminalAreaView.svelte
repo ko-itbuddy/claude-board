@@ -78,7 +78,9 @@
 
   // 확인 창 취소 — 포커스를 터미널로 돌려준다(안 돌리면 키 입력이 갈 데가 없다)
   function cancelConfirm() {
+    const cancel = TerminalHub.confirm?.cancel;
     TerminalHub.confirm = null;
+    cancel?.();
     focusActive();
   }
 
@@ -133,7 +135,7 @@
         <div class="title">{sheet.title}</div>
         <div class="text">{sheet.text}</div>
         <div class="buttons">
-          <button class="primary" onclick={accept}>닫기</button>
+          <button class="primary" onclick={accept}>{sheet.okLabel ?? "닫기"}</button>
           <button onclick={cancelConfirm}>취소 (Esc)</button>
         </div>
       </div>
