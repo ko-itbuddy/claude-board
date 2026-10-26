@@ -15,6 +15,10 @@
 //   FAKE_CLAUDE_SESSION_ID 세션 id(기본: 인자의 --session-id·--resume 값, 없으면 새로 만든다)
 //   FAKE_CLAUDE_MAX_MS     이만큼 지나면 스스로 끝난다(기본 30분 — 확인이 끝내지 못해도 오래 남지 않게)
 //
+// 환경 파일(D6)
+//   이 스크립트 옆 fake-claude.env.json — {"FAKE_CLAUDE_KEYLOG": "C:\\...", …} 로 빠진 변수를 채운다. 실제 환경변수가 이긴다.
+//   보드 탭의 셸은 보드의 환경을 물려받지 않아 시험 하니스가 이 파일로 기록 위치를 알려 준다. 채운 변수 이름은 start 사건의 envFilled 에 남는다
+//
 // 동작
 //   시작: 기록, 세션 파일, 대화 기록 파일을 만들고 UserPromptSubmit hook(상태 working)을 부른다
 //   조각마다: 16진수와 시각을 기록한다. 조각 하나가 정확히 0x1b 한 바이트면 홀로 온 Esc 로 보고 esc 사건을 남긴다
@@ -28,6 +32,21 @@ const path = require('path');
 const crypto = require('crypto');
 const cp = require('child_process');
 const { StringDecoder } = require('string_decoder');
+
+// 환경 파일(D6) — 보드 탭의 셸은 보드의 환경변수를 물려받지 않으므로, 이 스크립트 옆 fake-claude.env.json({"이름": "값"})으로 빠진 변수를 채운다.
+// 이미 있는 실제 환경변수는 이기고(덮어쓰지 않는다), 문자열·숫자·불리언 값만 받는다. 없거나 깨진 파일은 무시한다. 다른 것을 읽기 전에 먼저 한다.
+const envFilled = [];
+try {
+  const filled = JSON.parse(fs.readFileSync(path.join(__dirname, 'fake-claude.env.json'), 'utf8').replace(/^﻿/, ''));
+  for (const [key, value] of Object.entries(filled && typeof filled === 'object' && !Array.isArray(filled) ? filled : {})) {
+    if (process.env[key] === undefined && ['string', 'number', 'boolean'].includes(typeof value)) {
+      process.env[key] = String(value);
+      envFilled.push(key);
+    }
+  }
+} catch (_) {
+  // 환경 파일이 없으면 실제 환경만 쓴다
+}
 
 const argv = process.argv.slice(2);
 const startedAt = Date.now();
@@ -207,7 +226,7 @@ function onChunk(chunk) {
 if (process.env.FAKE_CLAUDE_ARGVLOG) append(process.env.FAKE_CLAUDE_ARGVLOG, JSON.stringify(argv) + '\n');
 ensureFile(transcriptPath, JSON.stringify({ type: 'user', sessionId, message: { role: 'user', content: 'fake' } }) + '\n');
 writeSessionRecord('busy');
-record({ event: 'start', pid: process.pid, argv, sessionId, tty: Boolean(process.stdin.isTTY) });
+record({ event: 'start', pid: process.pid, argv, sessionId, tty: Boolean(process.stdin.isTTY), envFilled });
 
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdin.on('data', onChunk);
