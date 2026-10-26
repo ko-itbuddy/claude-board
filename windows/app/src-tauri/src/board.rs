@@ -1047,6 +1047,7 @@ pub fn run(argv: Vec<String>, context: tauri::Context<tauri::Wry>) {
             set_auto_update_check,
             crate::hotkeys::set_shortcut,
             crate::hotkeys::reset_shortcuts,
+            crate::hotkeys::sync_hotkeys,
             crate::login_item::login_launch,
             crate::login_item::set_login_launch,
             crate::account_login::begin_add_account,

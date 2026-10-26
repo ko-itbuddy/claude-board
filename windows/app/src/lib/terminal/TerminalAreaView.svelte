@@ -4,9 +4,9 @@
   import { onTerminalFocus } from "$lib/backend";
   import { ui } from "$lib/board/store.svelte";
   import { SettingsScreen } from "$lib/settings/screen.svelte";
-  import { runShortcutAction } from "$lib/shortcuts/actions";
   import { dispatch } from "$lib/shortcuts/dispatch";
-  import { ShortcutSettings } from "$lib/shortcuts/store.svelte";
+  import { runShortcutAction } from "$lib/shortcuts/run";
+  import { currentOverrides, ShortcutSettings } from "$lib/shortcuts/store.svelte";
   import type { BoardSide } from "$lib/types";
   import NewSessionSheet from "./NewSessionSheet.svelte";
   import PaneView from "./PaneView.svelte";
@@ -16,7 +16,7 @@
   import TerminalToggleButton from "./TerminalToggleButton.svelte";
   import WinButtons from "./WinButtons.svelte";
   import { TERM_BG } from "./term";
-  import { beginRename, commitComposition, focusActive, TerminalHub, newSessionSheet, selectNumber, stepTab, stepWorkspace } from "./hub.svelte";
+  import { commitComposition, focusActive, TerminalHub } from "./hub.svelte";
   import { confirmKeyAction, createRefireGuard } from "./keyGuards";
 
   let { expanded, side }: { expanded: boolean; side: BoardSide } = $props();
@@ -52,32 +52,14 @@
         return;
       }
       const modalOpen = !!(TerminalHub.confirm || TerminalHub.sheet);
-      // 키 표는 shortcuts/dispatch.ts 가 쥔다 — 어느 동작도 아니면(null) 아래 예전 표가 그대로 처리한다
-      const action = dispatch(e, { recording: ShortcutSettings.recording, composing: e.isComposing || e.keyCode === 229, modalOpen, settingsShown: SettingsScreen.shown });
-      if (action) {
-        e.preventDefault();
-        e.stopPropagation();
-        refire.handled(e);
-        runShortcutAction(action);
-        return;
-      }
-      if (modalOpen) return;
-      // AltGr 은 Windows 가 Ctrl+Alt 로 보고한다 — 글자(@ { [ 등)를 치는 키라 가로채지 않는다
-      if (e.getModifierState("AltGraph")) return;
-      const run = (fn: () => void) => {
-        e.preventDefault();
-        e.stopPropagation();
-        refire.handled(e);
-        fn();
-      };
-      if (e.ctrlKey && e.altKey && !e.shiftKey) {
-        if (/^Digit[1-9]$/.test(e.code)) return run(() => selectNumber(Number(e.code.slice(5))));
-        if (e.code === "ArrowLeft") return run(() => stepTab(-1));
-        if (e.code === "ArrowRight") return run(() => stepTab(1));
-        if (e.code === "ArrowUp") return run(() => stepWorkspace(-1));
-        if (e.code === "ArrowDown") return run(() => stepWorkspace(1));
-      } else if (e.ctrlKey && !e.altKey && e.shiftKey && e.code === "KeyR") run(beginRename);
-      else if (e.ctrlKey && !e.altKey && !e.shiftKey && e.code === "KeyT") run(newSessionSheet);
+      // 키 표(바꾼 키 포함)는 shortcuts/dispatch.ts 가 쥔다. 수정키가 든 키는 글자 조합이 아니라 단축키라 조합 중이어도 알아본다 — 입력기가 같은 키를 한 번 더 쏘는 것은 위 refire 가 삼킨다
+      const composing = (e.isComposing || e.keyCode === 229) && !(e.ctrlKey || e.altKey || e.metaKey);
+      const action = dispatch(e, { recording: ShortcutSettings.recording, composing, modalOpen, settingsShown: SettingsScreen.shown, overrides: currentOverrides() });
+      if (!action) return;
+      e.preventDefault();
+      e.stopPropagation();
+      refire.handled(e);
+      runShortcutAction(action, e);
     };
     window.addEventListener("keydown", handle, true);
     return () => window.removeEventListener("keydown", handle, true);

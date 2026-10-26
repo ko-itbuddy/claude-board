@@ -551,6 +551,16 @@ export function resetShortcuts() {
   fire("reset_shortcuts");
 }
 
+// 전역 단축키(Ctrl+Alt+B/T)를 지금 표대로 다시 건다 — paused 면 모두 풀어 둔다(설정 화면이 새 키를 받는 동안).
+// 돌려주는 것은 등록하지 못한 동작 id. 표를 바꾸는 set_shortcut·reset_shortcuts 도 다시 걸고 board://hotkeys 로 같은 목록을 알린다
+export async function syncHotkeys(paused: boolean): Promise<string[]> {
+  return (await call<string[] | undefined>("sync_hotkeys", { paused })) ?? [];
+}
+
+export function onHotkeysFailed(fn: (ids: string[]) => void): () => void {
+  return listenEvent<string[]>("board://hotkeys", fn);
+}
+
 // 로그인할 때 열기가 켜져 있는가(표지 파일이 없으면 켠 것)
 export function loginLaunch(): Promise<boolean> {
   return call<boolean>("login_launch");
