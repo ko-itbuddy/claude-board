@@ -19,6 +19,7 @@ import { board } from "$lib/board/store.svelte";
 import type { BoardSurface, OpenSessionPayload, Session } from "$lib/types";
 import { TerminalHub, folderName, openShell, pair, place, select, surfaceOf, workspaceKey } from "./hub.svelte";
 import { uniqueTabName } from "./launch";
+import { isMdRenderOff } from "./mdRender";
 import { applyRenames } from "./renameFlow.svelte";
 import { namedCommand, resumeCommand } from "./sessionCommand";
 import { canTakeAsIdle, reopeningActive, type Reopening } from "./reopenGuard";
@@ -96,11 +97,13 @@ function resumeSession(p: OpenSessionPayload) {
     return toast("세션을 이어 열 수 없습니다");
   }
   if (!board.snap?.settings.terminalExpanded) setTerminalExpanded(true);
+  const mdRenderOff = isMdRenderOff(p.id, board.snap?.settings.mdRenderOff ?? []); // 새 세션 창에서 끄고 띄운 세션은 이어 열 때도 끈 채로
   const idle = idleSurface(p.projectDir);
   if (idle?.termId) {
     const termId = idle.termId;
     idle.sessionId = p.id;
     idle.command = command;
+    idle.mdRenderOff = mdRenderOff;
     reopening.set(p.id, { since: Date.now(), surfaceId: idle.id });
     void typeAtPrompt(termId, command, {
       alive: () => surfaceOf(idle.id)?.termId === termId && !!TerminalHub.terms[termId],
@@ -108,11 +111,11 @@ function resumeSession(p: OpenSessionPayload) {
         idle.typedAt = Date.now();
       },
       shell: TerminalHub.terms[termId]?.shell ?? "pwsh", // 터미널 정보가 아직 없으면 보드 기본 셸
-      mdRenderOff: idle.mdRenderOff,
+      mdRenderOff,
     }).then(() => confirmReopened(p));
     return reveal(idle.id);
   }
-  const tab = openShell(p.projectDir || null, { command, sessionId: p.id });
+  const tab = openShell(p.projectDir || null, { command, sessionId: p.id, mdRenderOff });
   if (tab) {
     reopening.set(p.id, { since: Date.now(), surfaceId: tab.focused });
     reveal(tab.focused);

@@ -6,7 +6,7 @@ import { isSessionNameArg } from "./sessionName.ts";
 export const DEFAULT_SESSION_COMMAND = "claude --dangerously-skip-permissions";
 
 // claude 로 시작하는 명령 — 앞의 경로(\ 또는 /)와 .exe 는 있어도 된다
-const CLAUDE_START = /^\s*(\S*[\\/])?claude(\.exe)?(?=\s|$)/i;
+export const CLAUDE_START = /^\s*(\S*[\\/])?claude(\.exe)?(?=\s|$)/i;
 const CONTINUES = /(^|\s)(--resume|-r|--continue|-c)(=|\s|$)/;
 const HAS_NAME = /(^|\s)(-n|--name)(=|\s|$)/;
 const SESSION_ID_FLAG = /\s--session-id(=|\s+)\S+/g;

@@ -22,10 +22,10 @@ export interface TypeHooks {
   mdRenderOff?: boolean;
 }
 
-/** 치기 직전의 명령 — 시험용 claude 로 바꾸고(D5) md-render 플래그를 맞춘다(P1.T·P1.2 가 채우기 전에는 그대로) */
+/** 치기 직전의 명령 — md-render 플래그를 맞추고 시험용 claude 로 바꾼다(D5). 플래그가 먼저인 까닭: 바꾼 뒤에는 맨 앞 낱말이 claude 가 아니다 */
 export function commandToType(command: string, hooks: Pick<TypeHooks, "shell" | "mdRenderOff">): string {
-  const swapped = applyTestClaude(command, currentTestClaudePrefix(), hooks.shell);
-  return mdRenderCommand(swapped, currentPluginDir(), hooks.mdRenderOff ?? false);
+  const decorated = mdRenderCommand(command, currentPluginDir(), hooks.mdRenderOff ?? false);
+  return applyTestClaude(decorated, currentTestClaudePrefix(), hooks.shell);
 }
 
 /** 이미 셸 프롬프트에 있는 화면에 명령을 바로 친다 */
