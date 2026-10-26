@@ -1047,6 +1047,7 @@ pub fn run(argv: Vec<String>, context: tauri::Context<tauri::Wry>) {
             crate::login_item::set_login_launch,
             crate::account_login::begin_add_account,
             crate::account_login::submit_login_code,
+            crate::account_login::open_login_url,
             crate::account_login::delete_account,
             crate::proc_wait::pids_alive,
             crate::proc_wait::wait_exit,
