@@ -378,3 +378,107 @@ test('hook — settings.json 이 없거나 깨져 있어도 조용히 hook 없�
     }
   }
 });
+
+// ── D6: 스크립트 옆 fake-claude.env.json 으로 빠진 환경변수를 채운다 ───────────────────
+
+// 스크립트 사본과 그 옆 환경 파일 — 환경 파일은 원본 스크립트 폴더가 아니라 사본 옆에 둔다(저장소를 더럽히지 않는다)
+function startWithEnvFile({ envFile, env = {}, args = [] }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-claude-tty-d6-'));
+  const script = path.join(dir, 'fake-claude-tty.cjs');
+  fs.copyFileSync(SCRIPT, script);
+  if (envFile !== undefined) fs.writeFileSync(path.join(dir, 'fake-claude.env.json'), typeof envFile === 'string' ? envFile : JSON.stringify(envFile));
+  const base = Object.assign({}, process.env, { CLAUDE_BOARD_HOME: dir, FAKE_CLAUDE_HOOKS: '0', FAKE_CLAUDE_MAX_MS: '20000' });
+  for (const key of ['FAKE_CLAUDE_KEYLOG', 'FAKE_CLAUDE_ARGVLOG', 'FAKE_CLAUDE_SESSION_ID', 'D6_PROBE']) delete base[key];
+  const child = cp.spawn(process.execPath, [script, ...args], { cwd: dir, stdio: ['pipe', 'pipe', 'pipe'], env: Object.assign(base, env) });
+  const exited = new Promise((resolve) => child.on('exit', (code) => resolve(code)));
+  const cleanup = async () => {
+    child.kill();
+    await exited;
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+  };
+  return { dir, child, cleanup, exited };
+}
+
+const readRows = (file) => fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((row) => JSON.parse(row));
+const startEvent = (file) => readRows(file).find((r) => r.event === 'start');
+
+// 시험마다 기록이 갈 바깥 폴더(스크립트 사본 폴더와 따로 — 자식이 사본 폴더를 쥐고 있어도 지울 수 있게)
+async function withOut(body) {
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-claude-tty-d6-out-'));
+  try {
+    await body(out);
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+  }
+}
+
+test('D6 — 환경변수에 없는 이름은 환경 파일 값으로 채우고 start 사건에 이름을 남긴다', () =>
+  withOut(async (out) => {
+    const keylog = path.join(out, 'keys.log');
+    const argvlog = path.join(out, 'argv.log');
+    const t = startWithEnvFile({ envFile: { FAKE_CLAUDE_KEYLOG: keylog, FAKE_CLAUDE_ARGVLOG: argvlog }, args: ['--name', 'd6'] });
+    try {
+      await waitFor(() => fs.existsSync(keylog) && fs.existsSync(argvlog), '환경 파일이 알려 준 기록 파일');
+      assert.deepEqual(startEvent(keylog).envFilled.sort(), ['FAKE_CLAUDE_ARGVLOG', 'FAKE_CLAUDE_KEYLOG']);
+      assert.deepEqual(readRows(argvlog), [['--name', 'd6']]);
+    } finally {
+      await t.cleanup();
+    }
+  }));
+
+test('D6 — 실제 환경변수가 이긴다(환경 파일 값은 쓰지 않는다)', () =>
+  withOut(async (out) => {
+    const real = path.join(out, 'real.log');
+    const fromFile = path.join(out, 'from-file.log');
+    const t = startWithEnvFile({ envFile: { FAKE_CLAUDE_KEYLOG: fromFile }, env: { FAKE_CLAUDE_KEYLOG: real } });
+    try {
+      await waitFor(() => fs.existsSync(real), '실제 환경이 알려 준 기록 파일');
+      assert.deepEqual(startEvent(real).envFilled, []);
+      await sleep(150);
+      assert.equal(fs.existsSync(fromFile), false);
+    } finally {
+      await t.cleanup();
+    }
+  }));
+
+test('D6 — 숫자·불리언은 문자열로 받고, 객체·null·배열 값은 무시한다', () =>
+  withOut(async (out) => {
+    const keylog = path.join(out, 'keys.log');
+    const t = startWithEnvFile({ envFile: { FAKE_CLAUDE_KEYLOG: keylog, FAKE_CLAUDE_SESSION_ID: 12345678, D6_PROBE: { a: 1 }, FAKE_CLAUDE_X: null, FAKE_CLAUDE_Y: [1], FAKE_CLAUDE_Z: true } });
+    try {
+      await waitFor(() => fs.existsSync(keylog), '기록 파일');
+      const start = startEvent(keylog);
+      assert.equal(start.sessionId, '12345678');
+      assert.deepEqual(start.envFilled.sort(), ['FAKE_CLAUDE_KEYLOG', 'FAKE_CLAUDE_SESSION_ID', 'FAKE_CLAUDE_Z']);
+    } finally {
+      await t.cleanup();
+    }
+  }));
+
+test('D6 — 환경 파일이 없거나 깨졌거나 객체가 아니어도 조용히 돈다', async () => {
+  for (const envFile of [undefined, '{ not json', '[1,2]', 'null', '"text"']) {
+    await withOut(async (out) => {
+      const keylog = path.join(out, 'keys.log');
+      const t = startWithEnvFile({ envFile, env: { FAKE_CLAUDE_KEYLOG: keylog } });
+      try {
+        await waitFor(() => fs.existsSync(keylog), `기록 파일(${envFile})`);
+        assert.deepEqual(startEvent(keylog).envFilled, [], String(envFile));
+        assert.equal(t.child.exitCode, null);
+      } finally {
+        await t.cleanup();
+      }
+    });
+  }
+});
+
+test('D6 — BOM 이 붙은 환경 파일도 읽는다', () =>
+  withOut(async (out) => {
+    const keylog = path.join(out, 'keys.log');
+    const t = startWithEnvFile({ envFile: '﻿' + JSON.stringify({ FAKE_CLAUDE_KEYLOG: keylog }) });
+    try {
+      await waitFor(() => fs.existsSync(keylog), '기록 파일');
+      assert.deepEqual(startEvent(keylog).envFilled, ['FAKE_CLAUDE_KEYLOG']);
+    } finally {
+      await t.cleanup();
+    }
+  }));
