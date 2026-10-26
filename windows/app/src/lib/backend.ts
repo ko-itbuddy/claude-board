@@ -592,8 +592,14 @@ export function submitLoginCode(code: string) {
   fire("submit_login_code", { code });
 }
 
+// 지우기 전에 백엔드가 확인 창을 띄운다(취소하면 아무 일도 없다)
 export function deleteAccount(id: string) {
   fire("delete_account", { id });
+}
+
+// 지금 로그인 주소를 기본 브라우저로 연다 — 주소는 백엔드가 로그인 명령의 출력에서 읽은 것만 연다
+export function openLoginUrl() {
+  fire("open_login_url");
 }
 
 // 백엔드가 설정 화면을 열거나 닫으라고 할 때(트레이 "설정…"). 듣기를 끄는 함수를 돌려준다
