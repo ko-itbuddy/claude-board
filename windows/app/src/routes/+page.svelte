@@ -25,7 +25,7 @@
   import { clampBoardWidth, boardMinWidth, maxBoardWidth } from "$lib/terminal/paneLayout";
   import { stateName, stateRgb } from "$lib/board/format";
   import { hint } from "$lib/board/hint.svelte";
-  import { boardOpaque } from "$lib/board/opacity";
+  import { boardOpaque, coversWorkArea } from "$lib/board/opacity";
   import { pointer, trackWindow, win } from "$lib/board/pointer.svelte";
   import { board, connect, ui, type Tier } from "$lib/board/store.svelte";
 
@@ -52,6 +52,19 @@
     return () => window.removeEventListener("resize", sync);
   });
 
+  // 창이 그 모니터 작업 영역을 덮는가(3.1.9) — 펼쳤는가가 아니다. 크기가 바뀔 때, 다른 모니터로 옮겨 마우스가 들어올 때 다시 잰다
+  let covering = $state(true);
+  $effect(() => {
+    const measure = () => (covering = coversWorkArea(window.outerWidth, window.outerHeight, screen.availWidth, screen.availHeight));
+    measure();
+    window.addEventListener("resize", measure);
+    document.documentElement.addEventListener("mouseenter", measure);
+    return () => {
+      window.removeEventListener("resize", measure);
+      document.documentElement.removeEventListener("mouseenter", measure);
+    };
+  });
+
   // 터미널을 처음 펼칠 때 아직 도는 터미널을 이어받는다(탭은 만들지 않는다 — 탭이 생길 때까지 빈 상태)
   $effect(() => {
     if (expanded) void startHub();
@@ -68,13 +81,13 @@
     setDragging(false);
   }
 
-  // 투명 모드 — 보드가 활성이 아니고 마우스가 창 밖이면 고른 투명도, 마우스가 들어오거나 활성이면 불투명.
-  // 슬라이더를 끄는 동안과 놓은 뒤 1.2초는 고른 투명도를 미리 보여 준다. 터미널을 펼친 동안은 늘 불투명이다
+  // 투명 모드 — 마우스가 창 밖이면(보드를 쓰는 중이어도) 고른 투명도, 마우스가 들어오면 불투명.
+  // 슬라이더를 끄는 동안과 놓은 뒤 1.2초는 고른 투명도를 미리 보여 준다. 작업 영역을 덮은 창은 늘 불투명이다
   $effect(() => {
     if (!snap) return;
     const level = win.dragging ? win.dragLevel : snap.settings.opacity;
-    // 규칙은 board/opacity.ts — 지금은 펼친 창을 "덮는 창"으로 보고, 보드가 활성이면 마우스가 안에 있는 것으로 본다
-    const solid = boardOpaque({ covering: expanded, previewing: win.previewing, pointerInside: pointer.inside || win.focused });
+    // 규칙은 board/opacity.ts — 마우스 위치만 본다(포커스는 보지 않는다)
+    const solid = boardOpaque({ covering, previewing: win.previewing, pointerInside: pointer.inside });
     const root = document.documentElement;
     root.style.transition = win.previewing ? "none" : "opacity 0.22s ease";
     root.style.opacity = String(solid ? 1 : level);

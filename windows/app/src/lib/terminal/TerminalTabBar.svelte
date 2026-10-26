@@ -8,6 +8,7 @@
   import { TerminalHub, newSessionSheet, tabsIn } from "./hub.svelte";
   import { badgeNumber } from "./tabLogic";
   import { scrollTargetFor, tabStripLeast, tabStripWidth } from "./paneLayout";
+  import { wheelStep } from "./stripScroll";
 
   let barWidth = $state(0);
   let newWidth = $state(0); // + 단추 폭(앞 여백 포함) — 탭 칸에 줄 폭을 셀 때
@@ -46,8 +47,10 @@
 
   // 마우스 휠로도 가로로 민다
   function wheel(e: WheelEvent) {
-    if (!scroller || e.deltaX !== 0) return;
-    scroller.scrollLeft += e.deltaY;
+    if (!scroller) return;
+    const step = wheelStep(e.deltaX, e.deltaY, e.shiftKey);
+    if (step.prevent) e.preventDefault();
+    scroller.scrollLeft += step.add;
   }
 </script>
 

@@ -885,7 +885,7 @@ fn create_window(app: &AppHandle, board: &Arc<Board>, background: bool) -> tauri
             let s = board.settings.lock().unwrap();
             (s.terminal_expanded, s.pinned)
         };
-        let _ = win.set_always_on_top(window::on_top(pinned, expanded, false));
+        let _ = win.set_always_on_top(window::on_top(pinned, expanded, window::covering_now(&win)));
     }
     window::apply_vibrancy(&win);
     // 셸 설정·로그인 자동 실행에서 --background 로 띄우면 창만 보이고 포커스는 지금 앱에 남긴다
