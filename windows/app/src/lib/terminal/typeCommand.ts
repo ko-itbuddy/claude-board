@@ -1,9 +1,9 @@
 // 셸이 줄 편집을 시작한 뒤에 명령 한 줄을 쳐 넣는다(ClaudeBoard.swift BoardSurface.type) — hub 를 모르게 상태 접근은 인자로 받는다.
-import { termWrite } from "$lib/backend";
+import { log, termWrite } from "$lib/backend";
 import type { TermId, TermInfo } from "$lib/types";
 import { currentPluginDir, mdRenderCommand } from "./mdRender";
 import type { TermController } from "./term";
-import { applyTestClaude, currentTestClaudePrefix } from "./testClaude";
+import { applyTestClaude, currentTestClaudePrefix, typingBlockedReason } from "./testClaude";
 
 /** 셸이 첫 출력을 낸 뒤 300ms 조용해지면(5초 상한) 명령을 쳐 넣고 100ms 뒤 Enter(\r) */
 const QUIET_MS = 300;
@@ -30,6 +30,12 @@ export function commandToType(command: string, hooks: Pick<TypeHooks, "shell" | 
 
 /** 이미 셸 프롬프트에 있는 화면에 명령을 바로 친다 */
 export async function typeAtPrompt(termId: TermId, command: string, hooks: TypeHooks) {
+  // 시험 모드가 어긋났거나 아직 모르면 아무것도 치지 않는다 — 진짜 claude 가 뜨는 것보다 안 뜨는 쪽이 낫다
+  const blocked = typingBlockedReason();
+  if (blocked) {
+    log(`[시험 claude] 명령을 치지 않았다: ${blocked}`);
+    return;
+  }
   hooks.touch();
   termWrite(termId, commandToType(command, hooks));
   await sleep(ENTER_DELAY_MS);

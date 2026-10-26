@@ -441,10 +441,11 @@ pub fn begin_add(board: &Arc<Board>, email: Option<String>) {
         if acc.login.is_some() {
             return Ok(false);
         }
-        let claude = crate::terminal::find_claude().ok_or("claude 명령을 찾지 못했습니다")?;
+        // 시험 모드(CLAUDE_BOARD_CLAUDE)면 가짜로, 설정이 어긋났으면 진짜 claude 를 찾지도 않고 거절한다
+        let (claude, mut args) = crate::test_claude::login_program(crate::test_claude::decision_from_process(), crate::terminal::find_claude)?;
         let slot = board.account_paths.root.join(format!("login-{}", short_id()));
         fs::create_dir_all(&slot).map_err(|e| format!("로그인 자리를 만들지 못했습니다 — {e}"))?;
-        let mut args = vec!["auth".to_string(), "login".into(), "--claudeai".into()];
+        args.extend(["auth".to_string(), "login".into(), "--claudeai".into()]);
         if let Some(e) = email.filter(|e| !e.trim().is_empty()) {
             args.push("--email".into());
             args.push(e.trim().to_string());

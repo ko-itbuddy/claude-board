@@ -4,7 +4,9 @@
 //! 규칙: 두 변수가 모두 있고, `|` 로 가른 조각이 모두 비지 않은 절대 경로이며 실재할 때만 켜진다.
 //! 하나라도 어긋나면 꺼진 채(None)로 두고 board.log 에 한 줄 남긴다 — 값이 없으면(`CLAUDE_BOARD_CLAUDE` 미설정) 아무것도 남기지 않는다.
 //! 홈을 따로 정한 실행에서만 켜지게 해서, 사용자 보드에 남은 환경변수 하나가 실수로 진짜 claude 를 바꿔치지 못하게 한다.
-//! 바꾸는 쪽은 프론트(`terminal/testClaude.ts`)다. 보드가 직접 띄우는 곳(계정 추가 로그인 등)은 `prefix_from_process()` 를 쓴다.
+//! 바꾸는 쪽은 프론트(`terminal/testClaude.ts`)다. 보드가 직접 띄우는 곳(계정 추가 로그인)은 `login_program` 으로 같은 값을 쓴다.
+//!
+//! 닫힌 채로 실패한다 — 꺼짐(Off) / 켜짐(On) / 어긋남(Rejected) 셋으로 가른다. 어긋남이면 진짜 claude 를 찾지도 띄우지도 않는다.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -53,27 +55,67 @@ pub fn decide(env: &dyn Fn(&str) -> Option<OsString>, exists: &dyn Fn(&Path) -> 
     Decision::On(parts)
 }
 
-/// 주어진 환경에서의 바꿔칠 값. 어긋나면 None 과 board.log 한 줄.
+/// 주어진 환경에서의 판정 — 어긋나면 board.log 한 줄을 남긴다.
+pub fn decision(env: &dyn Fn(&str) -> Option<OsString>) -> Decision {
+    let decided = decide(env, &|p| p.exists());
+    if let Decision::Rejected(why) = &decided {
+        board_log(&format!("[시험 claude] {why}"));
+    }
+    decided
+}
+
+/// 주어진 환경에서의 바꿔칠 값. 꺼짐과 어긋남 모두 None 이다 — 둘을 가르려면 `decision` 을 쓴다.
+#[cfg(test)]
 pub fn prefix(env: &dyn Fn(&str) -> Option<OsString>) -> Option<Vec<PathBuf>> {
-    match decide(env, &|p| p.exists()) {
-        Decision::Off => None,
+    match decision(env) {
         Decision::On(parts) => Some(parts),
-        Decision::Rejected(why) => {
-            board_log(&format!("[시험 claude] {why}"));
-            None
+        Decision::Off | Decision::Rejected(_) => None,
+    }
+}
+
+/// 이 프로세스의 환경에서의 판정.
+pub fn decision_from_process() -> Decision {
+    decision(&|key| std::env::var_os(key))
+}
+
+/// 보드가 claude 를 직접 띄우는 곳(계정 추가 로그인)이 쓸 프로그램과 앞쪽 인자.
+/// 꺼짐이면 `find` 로 진짜 claude 를 찾고, 켜짐이면 가짜(프로그램 + 앞쪽 인자), 어긋남이면 진짜를 찾지 않고 거절한다.
+pub fn login_program(decided: Decision, find: impl FnOnce() -> Option<PathBuf>) -> Result<(PathBuf, Vec<String>), String> {
+    match decided {
+        Decision::Off => find().map(|exe| (exe, Vec::new())).ok_or_else(|| "claude 명령을 찾지 못했습니다".to_string()),
+        Decision::On(parts) => {
+            let mut parts = parts.into_iter();
+            let program = parts.next().ok_or_else(|| format!("{CLAUDE_ENV} 가 비었습니다"))?;
+            Ok((program, parts.map(|p| p.to_string_lossy().into_owned()).collect()))
+        }
+        Decision::Rejected(why) => Err(format!("시험 claude 설정이 어긋나 계정 추가를 하지 않습니다 — {why}")),
+    }
+}
+
+/// 프론트로 가는 답 — 꺼짐은 null, 켜짐은 조각 배열, 어긋남은 `{"invalid": 이유}`.
+/// 어긋남을 꺼짐과 가르는 까닭: 프론트가 꺼짐으로 읽으면 진짜 claude 를 치게 된다.
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(untagged)]
+pub enum PrefixAnswer {
+    Off,
+    On(Vec<String>),
+    Invalid { invalid: String },
+}
+
+impl From<Decision> for PrefixAnswer {
+    fn from(decided: Decision) -> Self {
+        match decided {
+            Decision::Off => PrefixAnswer::Off,
+            Decision::On(parts) => PrefixAnswer::On(parts.iter().map(|p| p.to_string_lossy().into_owned()).collect()),
+            Decision::Rejected(why) => PrefixAnswer::Invalid { invalid: why },
         }
     }
 }
 
-/// 이 프로세스의 환경에서의 바꿔칠 값 — 보드가 claude 를 직접 띄우는 곳이 쓴다.
-pub fn prefix_from_process() -> Option<Vec<PathBuf>> {
-    prefix(&|key| std::env::var_os(key))
-}
-
-/// 프론트의 `testClaudePrefix()` — 바꿔칠 프로그램·앞쪽 인자. 시험 모드가 아니면 None.
+/// 프론트의 `testClaudePrefix()` — 바꿔칠 프로그램·앞쪽 인자.
 #[tauri::command(async)]
-pub fn test_claude_prefix() -> Option<Vec<String>> {
-    prefix_from_process().map(|parts| parts.iter().map(|p| p.to_string_lossy().into_owned()).collect())
+pub fn test_claude_prefix() -> PrefixAnswer {
+    decision_from_process().into()
 }
 
 #[cfg(test)]
@@ -181,6 +223,31 @@ mod tests {
     fn does_not_touch_the_process_environment_without_the_vars() {
         // 이 프로세스에는 두 변수가 없어야 한다 — 있으면 다른 시험이 샌 것이다
         assert!(std::env::var_os(CLAUDE_ENV).is_none());
-        assert_eq!(test_claude_prefix(), None);
+        assert_eq!(test_claude_prefix(), PrefixAnswer::Off);
+    }
+
+    #[test]
+    fn answer_tells_off_on_and_invalid_apart() {
+        let (_dir, exe, _) = fixture();
+        let claude = exe.to_str().unwrap();
+        let json = |d: Decision| serde_json::to_string(&PrefixAnswer::from(d)).unwrap();
+        assert_eq!(json(decision(&env_of(&[]))), "null");
+        let on = decision(&env_of(&[(CLAUDE_ENV, claude), (HOME_ENV, "C:\\h")]));
+        assert_eq!(json(on), serde_json::to_string(&[claude]).unwrap());
+        // 홈 변수 없이 claude 변수만 — 꺼짐과 달라야 한다
+        let bad = json(decision(&env_of(&[(CLAUDE_ENV, claude)])));
+        assert!(bad.starts_with("{\"invalid\":"), "{bad}");
+    }
+
+    #[test]
+    fn login_program_never_falls_back_to_real_claude_when_invalid() {
+        let real = || Some(PathBuf::from("C:\\real\\claude.exe"));
+        let never = || -> Option<PathBuf> { panic!("어긋남인데 진짜 claude 를 찾았다") };
+        assert_eq!(login_program(Decision::Off, real), Ok((PathBuf::from("C:\\real\\claude.exe"), vec![])));
+        assert!(login_program(Decision::Off, || None).is_err());
+        let fake = Decision::On(vec![PathBuf::from("C:\\f\\node.exe"), PathBuf::from("C:\\f\\fake.cjs")]);
+        assert_eq!(login_program(fake, never), Ok((PathBuf::from("C:\\f\\node.exe"), vec!["C:\\f\\fake.cjs".to_string()])));
+        let err = login_program(Decision::Rejected("상대 경로".into()), never).unwrap_err();
+        assert!(err.contains("상대 경로"), "{err}");
     }
 }
