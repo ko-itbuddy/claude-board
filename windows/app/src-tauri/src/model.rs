@@ -131,10 +131,9 @@ pub struct Session {
     pub place: PidPlace,
     /// claude 프로세스 id — 보드 밖 터미널에서 세션이 끝나기를 기다릴 때(`wait_exit`) 프론트가 쓴다
     pub pid: u32,
-    // ── 백엔드만 쓰는 값 ──
-    /// pid 재사용을 가려내는 생성 시각(Windows hook 이 기록)
-    #[serde(skip)]
+    /// pid 재사용을 가려내는 생성 시각(Windows hook 이 기록) — 프론트가 생사를 물을 때(`pids_alive`·`wait_exit`) pid 와 함께 보낸다
     pub pid_ctime: Option<f64>,
+    // ── 백엔드만 쓰는 값 ──
     #[serde(skip)]
     pub file: PathBuf,
     /// claude 를 띄운 폴더(hook 의 `project_dir`, 없으면 cwd) — cd·워크트리에도 그대로라 카드는 이것으로 묶는다
