@@ -442,13 +442,13 @@ impl Board {
     }
 
     /// 터미널을 접고 보드 쪽에 붙인다 — 이미 접혀 있어도 다시 붙인다. 앞으로 가져오되 포커스는 가져가지 않는다.
-    fn snap_right(&self) {
+    pub(crate) fn snap_right(&self) {
         self.apply_terminal(false);
         window::show(&self.app, false);
     }
 
     /// Ctrl+Alt+T — 접힘이면 펼치고, 펼침이고 앞이면 접고, 펼침이지만 뒤에 있으면 앞으로 가져온다.
-    fn toggle_terminal(&self) {
+    pub(crate) fn toggle_terminal(&self) {
         let expanded = self.settings.lock().unwrap().terminal_expanded;
         let front = window::main_window(&self.app).is_some_and(|w| window::is_front(&w));
         match window::term_key(expanded, front) {
@@ -757,6 +757,31 @@ fn prune_md_render_off(board: B<'_>) {
     board.update_settings(|s| s.md_render_off = kept_md_render_off(&s.md_render_off, |id| dir.join(format!("{id}.json")).exists()));
 }
 
+/// 설정 화면이 열리고 닫히는 움직임 — `slide` · `fade` · `none`, 모르는 값은 받지 않는다.
+#[tauri::command(async)]
+fn set_settings_transition(board: B<'_>, value: String) {
+    if settings::TRANSITIONS.contains(&value.as_str()) {
+        board.update_settings(|s| s.settings_transition = value);
+    }
+    board.publish();
+}
+
+/// 새 세션의 기본 명령(비면 `claude`)과 답변 꾸미기 기본값.
+#[tauri::command(async)]
+fn set_new_session_defaults(board: B<'_>, command: String, md_render: bool) {
+    board.update_settings(|s| {
+        s.new_session_command = command.trim().to_string();
+        s.new_session_md_render = md_render;
+    });
+    board.publish();
+}
+
+#[tauri::command(async)]
+fn set_auto_update_check(board: B<'_>, on: bool) {
+    board.update_settings(|s| s.auto_update_check = on);
+    board.publish();
+}
+
 #[tauri::command(async)]
 fn set_notify_position(board: B<'_>, pos: String) {
     if let Err(e) = settings::set_notify_position(&pos) {
@@ -868,36 +893,6 @@ fn queue_action(board: &Arc<Board>, action: String, id: String) {
         board.perform_action(&action, &id, false, None);
     } else {
         *board.pending_action.lock().unwrap() = Some((action, id));
-    }
-}
-
-fn register_shortcut(app: &AppHandle) {
-    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
-    let snap = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyB);
-    let terminal = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyT);
-    let plugin = tauri_plugin_global_shortcut::Builder::new()
-        .with_handler(move |app, shortcut, event| {
-            if event.state() != ShortcutState::Pressed {
-                return;
-            }
-            let Some(board) = app.try_state::<Arc<Board>>() else { return };
-            if *shortcut == snap {
-                // 터미널을 접고 보드 쪽에 붙여 앞으로 — 포커스는 지금 앱에 남긴다
-                board.snap_right();
-            } else if *shortcut == terminal {
-                board.toggle_terminal();
-            }
-        })
-        .build();
-    if let Err(e) = app.plugin(plugin) {
-        board_log(&format!("전역 단축키 플러그인을 켜지 못했습니다: {e}"));
-        return;
-    }
-    // 다른 앱이 먼저 잡은 단축키면 등록에 실패한다 — 보드는 그대로 동작하고 로그만 남긴다
-    for (shortcut, name) in [(snap, "Ctrl+Alt+B"), (terminal, "Ctrl+Alt+T")] {
-        if let Err(e) = app.global_shortcut().register(shortcut) {
-            board_log(&format!("전역 단축키 {name} 등록 실패 ({e})"));
-        }
     }
 }
 
@@ -1043,6 +1038,16 @@ pub fn run(argv: Vec<String>, context: tauri::Context<tauri::Wry>) {
             crate::shutdown::lifecycle_started,
             crate::shutdown::existing_dirs,
             prune_md_render_off,
+            set_settings_transition,
+            set_new_session_defaults,
+            set_auto_update_check,
+            crate::hotkeys::set_shortcut,
+            crate::hotkeys::reset_shortcuts,
+            crate::login_item::login_launch,
+            crate::login_item::set_login_launch,
+            crate::account_login::begin_add_account,
+            crate::account_login::submit_login_code,
+            crate::account_login::delete_account,
             crate::proc_wait::pids_alive,
             crate::proc_wait::wait_exit,
             crate::mdrender::md_render_dir,
@@ -1070,7 +1075,7 @@ pub fn run(argv: Vec<String>, context: tauri::Context<tauri::Wry>) {
                 Ok(t) => *board.tray.lock().unwrap() = Some(t),
                 Err(e) => board_log(&format!("트레이 아이콘을 만들지 못했습니다: {e}")),
             }
-            register_shortcut(&handle);
+            crate::hotkeys::register(&handle);
             if let Some((action, id)) = first_action.clone() {
                 *board.pending_action.lock().unwrap() = Some((action, id));
             }

@@ -3,6 +3,10 @@
   // 탭이 없으면 화면 칸에 빈 상태를 보인다. 안 고른 탭도 마운트한 채 숨겨 셸과 출력이 그대로 남는다
   import { onTerminalFocus } from "$lib/backend";
   import { ui } from "$lib/board/store.svelte";
+  import { SettingsScreen } from "$lib/settings/screen.svelte";
+  import { runShortcutAction } from "$lib/shortcuts/actions";
+  import { dispatch } from "$lib/shortcuts/dispatch";
+  import { ShortcutSettings } from "$lib/shortcuts/store.svelte";
   import type { BoardSide } from "$lib/types";
   import NewSessionSheet from "./NewSessionSheet.svelte";
   import PaneView from "./PaneView.svelte";
@@ -47,7 +51,17 @@
         e.stopPropagation();
         return;
       }
-      if (TerminalHub.confirm || TerminalHub.sheet) return;
+      const modalOpen = !!(TerminalHub.confirm || TerminalHub.sheet);
+      // 키 표는 shortcuts/dispatch.ts 가 쥔다 — 어느 동작도 아니면(null) 아래 예전 표가 그대로 처리한다
+      const action = dispatch(e, { recording: ShortcutSettings.recording, composing: e.isComposing || e.keyCode === 229, modalOpen, settingsShown: SettingsScreen.shown });
+      if (action) {
+        e.preventDefault();
+        e.stopPropagation();
+        refire.handled(e);
+        runShortcutAction(action);
+        return;
+      }
+      if (modalOpen) return;
       // AltGr 은 Windows 가 Ctrl+Alt 로 보고한다 — 글자(@ { [ 등)를 치는 키라 가로채지 않는다
       if (e.getModifierState("AltGraph")) return;
       const run = (fn: () => void) => {

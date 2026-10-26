@@ -6,7 +6,7 @@
   import { stateRgb } from "$lib/board/format";
   import type { BoardTab } from "$lib/types";
   import TabNameField from "./TabNameField.svelte";
-  import { doing, TerminalHub, requestClose, select, shownName, tabState } from "./hub.svelte";
+  import { doing, leaveSettings, TerminalHub, requestClose, select, shownName, tabState } from "./hub.svelte";
 
   let { tab, selected, number }: { tab: BoardTab; selected: boolean; number: number | null } = $props();
 </script>
@@ -24,7 +24,11 @@
     // 이름 칸을 누를 때는 입력 칸이 포커스를 가져야 하고, 그 밖은 포커스를 터미널에 둔 채 고른다
     if (!tab.renaming && e.button === 0) e.preventDefault();
   }}
-  onclick={() => !tab.renaming && select(tab.id)}
+  onclick={() => {
+    if (tab.renaming) return;
+    leaveSettings();
+    select(tab.id);
+  }}
 >
   <span class="dot" style:background="rgb({stateRgb(tabState(tab))})"></span>
   {#if tab.renaming}
