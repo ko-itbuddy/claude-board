@@ -687,18 +687,8 @@ fn state_name(state: &str) -> &str {
 }
 
 #[tauri::command(async)]
-fn add_account(board: B<'_>, email: Option<String>) {
-    accounts::begin_add(&board, email);
-}
-
-#[tauri::command(async)]
 fn cancel_add_account(board: B<'_>) {
     accounts::cancel_add(&board);
-}
-
-#[tauri::command(async)]
-fn remove_account(board: B<'_>, id: String) {
-    accounts::remove_account(&board, id);
 }
 
 #[tauri::command(async)]
@@ -1013,9 +1003,7 @@ pub fn run(argv: Vec<String>, context: tauri::Context<tauri::Wry>) {
             crate::open_session::reopen_done,
             crate::win::double_click_time,
             switch_account,
-            add_account,
             cancel_add_account,
-            remove_account,
             set_auto_switch,
             check_update,
             run_update,

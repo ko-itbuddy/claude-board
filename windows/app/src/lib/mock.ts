@@ -351,7 +351,7 @@ export async function handle(cmd: string, a: Record<string, unknown>): Promise<u
       });
       break;
     }
-    case "add_account":
+    case "begin_add_account":
       S.accounts.adding = true;
       accountNotice("터미널과 브라우저에서 추가할 계정으로 로그인해 주세요");
       later("add", 6000, () => {
@@ -366,7 +366,7 @@ export async function handle(cmd: string, a: Record<string, unknown>): Promise<u
       clearTimeout(timers.add);
       S.accounts.adding = false;
       break;
-    case "remove_account": {
+    case "delete_account": {
       const acc = S.accounts.saved.find((x) => x.id === str("id"));
       S.accounts.saved = S.accounts.saved.filter((x) => x.id !== str("id"));
       if (acc) accountNotice(`${acc.email} 계정을 목록에서 지웠습니다`);
@@ -436,10 +436,6 @@ export async function handle(cmd: string, a: Record<string, unknown>): Promise<u
     case "submit_login_code":
     case "open_login_url":
       return;
-    case "begin_add_account":
-      return handle("add_account", a);
-    case "delete_account":
-      return handle("remove_account", a);
     case "set_terminal_expanded":
       st.terminalExpanded = bool("on");
       break;
