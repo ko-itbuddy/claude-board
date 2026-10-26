@@ -90,7 +90,8 @@ fn text(rec: &Record, key: &str) -> String {
     rec.get(key).and_then(Value::as_str).unwrap_or("").to_string()
 }
 
-/// 세션 기록의 서브에이전트 — 끝난 지 10초 넘은 것은 뺀다. done 이 아닌 것 먼저, 시작 순.
+/// 세션 기록의 서브에이전트 — 끝난 지 10초 넘은 것과 시작 hook 을 보지 못한 것(`started_seen` 이 참이 아님)은 뺀다.
+/// done 이 아닌 것 먼저, 시작 순. 세션 상태에 반영되는 것도 이 목록뿐이다.
 fn parse_subs(j: Option<&Record>, alive: bool, now: f64) -> Vec<(Sub, f64)> {
     let Some(j) = j.filter(|_| alive) else { return Vec::new() };
     let mut out: Vec<(Sub, f64)> = j
@@ -99,6 +100,11 @@ fn parse_subs(j: Option<&Record>, alive: bool, now: f64) -> Vec<(Sub, f64)> {
             let v = v.as_object()?;
             let ended = num(v.get("ended"));
             if ended.is_some_and(|e| now - e > 10.0) {
+                return None;
+            }
+            // 시작 hook 없이 생긴 기록(끝 hook 이나 도구 hook 만 옴)은 실제 서브에이전트가 아니다 — 전사 파일도 종류도 없고,
+            // 끝 hook 이 끝내 안 오면 실행 중으로 남아 세션을 계속 작업 중으로 보이게 하므로 목록에서 뺀다
+            if v.get("started_seen").and_then(Value::as_bool) != Some(true) {
                 return None;
             }
             let started = num(v.get("started")).unwrap_or(0.0);
@@ -506,7 +512,7 @@ mod tests {
     #[test]
     fn running_subagent_and_paused_after_interrupt() {
         let f = Fake::new();
-        let run = json!({"r": {"type": "general", "state": "running", "started": LIVE_NOW - 30.0}});
+        let run = json!({"r": {"type": "general", "state": "running", "started": LIVE_NOW - 30.0, "started_seen": true}});
         f.session("sub", json!({"state": "working", "pid": 10, "cwd": "/w", "updated": LIVE_NOW, "since": LIVE_NOW - 100.0, "subagents": run}), true);
         f.session("pz", json!({"state": "working", "pid": 11, "cwd": "/w", "updated": LIVE_NOW, "since": LIVE_NOW - 100.0}), true);
         f.interrupt("sub");
@@ -635,9 +641,9 @@ mod tests {
         f.session(
             "s1",
             json!({"state": "idle", "pid": 10, "cwd": cwd, "updated": NOW, "since": NOW, "subagents": {
-                "old": {"type": "Explore", "state": "done", "started": NOW - 100.0, "ended": NOW - 11.0},
-                "fresh": {"type": "Plan", "state": "done", "started": NOW - 50.0, "ended": NOW - 3.0},
-                "run": {"type": "general", "description": "찾기", "state": "running", "started": NOW - 60.0, "tool": "Grep", "background": true}
+                "old": {"type": "Explore", "state": "done", "started": NOW - 100.0, "ended": NOW - 11.0, "started_seen": true},
+                "fresh": {"type": "Plan", "state": "done", "started": NOW - 50.0, "ended": NOW - 3.0, "started_seen": true},
+                "run": {"type": "general", "description": "찾기", "state": "running", "started": NOW - 60.0, "tool": "Grep", "background": true, "started_seen": true}
             }, "resume_args": ["--model", "claude-opus-5-5", "--resume", "s1"], "limit_hit": {"at": NOW - 30.0, "message": "x"}}),
             true,
         );
@@ -666,6 +672,57 @@ mod tests {
         assert_eq!((s2.state.as_str(), s2.shells, s2.muted, s2.can_drive), ("working", 2, true, false));
         let s3 = by("s3");
         assert_eq!((s3.state.as_str(), s3.shells, s3.paused), ("paused", 0, true));
+    }
+
+    #[test]
+    fn subagents_without_start_record_are_hidden() {
+        let f = Fake::new();
+        // 시작 hook 을 본 기록(started_seen 참)은 끝났든 아니든 보이고, 표지가 없거나 거짓이면 끝났든 아니든 숨긴다
+        let subs = json!({
+            "seen_run": {"type": "Plan", "state": "running", "started": NOW - 40.0, "started_seen": true},
+            "seen_done": {"type": "Plan", "state": "done", "started": NOW - 50.0, "ended": NOW - 3.0, "started_seen": true},
+            "orphan_run": {"type": "", "state": "running", "started": NOW - 5.0, "started_seen": false},
+            "orphan_done": {"type": "", "state": "done", "started": NOW - 2.0, "ended": NOW - 2.0, "started_seen": false},
+            "legacy_run": {"type": "Plan", "state": "running", "started": NOW - 60.0},
+            "legacy_done": {"type": "Plan", "state": "done", "started": NOW - 60.0, "ended": NOW - 3.0},
+            "wrong_type": {"type": "Plan", "state": "running", "started": NOW - 60.0, "started_seen": "yes"}
+        });
+        f.session("a", json!({"state": "idle", "pid": 10, "cwd": "/w", "updated": NOW, "since": NOW, "subagents": subs}), true);
+        let mut st = f.store();
+        let mut s = Settings::default();
+        let r = st.reload(&mut s, &Probe::default(), &|_| true, false, NOW);
+        let a = session_of(&r.groups, "a");
+        assert_eq!(a.subagents.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), ["seen_run", "seen_done"]);
+        assert_eq!(a.state, "working");
+    }
+
+    #[test]
+    fn subagents_without_start_record_do_not_raise_state() {
+        let f = Fake::new();
+        let orphan = |state: &str| json!({"x": {"type": "", "state": state, "started": NOW - 5.0, "started_seen": false}});
+        // 끝 hook 이 끝내 안 오는 시작 없는 기록이 끝나지 않은 채 남아도 응답이 끝난 세션은 쉬는 상태다
+        f.session("run", json!({"state": "idle", "pid": 10, "cwd": "/w", "updated": NOW, "since": NOW, "subagents": orphan("running")}), true);
+        f.session("wait", json!({"state": "idle", "pid": 11, "cwd": "/w", "updated": NOW, "since": NOW, "subagents": orphan("waiting")}), true);
+        // 표지 없는 예전 기록도 같다
+        f.session("old", json!({"state": "idle", "pid": 12, "cwd": "/w", "updated": NOW, "since": NOW,
+                                "subagents": {"x": {"type": "", "state": "running", "started": NOW - 5.0}}}), true);
+        // 시작을 본 서브에이전트는 그대로 작업 중으로 올린다
+        f.session("seen", json!({"state": "idle", "pid": 13, "cwd": "/w", "updated": NOW, "since": NOW,
+                                 "subagents": {"x": {"type": "", "state": "running", "started": NOW - 5.0, "started_seen": true}}}), true);
+        // 시작 없는 기록은 보이는 서브에이전트를 가리지 않는다
+        f.session("mixed", json!({"state": "idle", "pid": 14, "cwd": "/w", "updated": NOW, "since": NOW, "subagents": {
+            "o": {"type": "", "state": "running", "started": NOW - 5.0, "started_seen": false},
+            "s": {"type": "", "state": "done", "started": NOW - 9.0, "ended": NOW - 1.0, "started_seen": true}}}), true);
+        let mut st = f.store();
+        let mut s = Settings::default();
+        let r = st.reload(&mut s, &Probe::default(), &|_| true, false, NOW);
+        for sid in ["run", "wait", "old", "mixed"] {
+            let x = session_of(&r.groups, sid);
+            assert_eq!(x.state, "idle", "{sid}");
+        }
+        assert!(session_of(&r.groups, "run").subagents.is_empty());
+        assert_eq!(session_of(&r.groups, "mixed").subagents.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), ["s"]);
+        assert_eq!(session_of(&r.groups, "seen").state, "working");
     }
 
     #[test]
