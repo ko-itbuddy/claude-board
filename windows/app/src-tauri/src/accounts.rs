@@ -145,7 +145,7 @@ fn write_private(path: &Path, prefix: &str, bytes: &[u8]) -> std::io::Result<()>
 
 fn vault_write(p: &AccountPaths, id: &str, plain: &[u8]) -> Result<(), String> {
     let sealed = crate::win::protect(plain).ok_or("로그인 정보를 암호화하지 못했습니다")?;
-    write_private(&p.vault(id), "vault", &sealed).map_err(|e| format!("로그인 정보를 저장하지 못했습니다 — {e}"))
+    write_private(&p.vault(id), "vault", &sealed).map_err(|e| format!("로그인 정보를 저장하지 못했습니다: {e}"))
 }
 
 fn vault_read(p: &AccountPaths, id: &str) -> Option<Record> {
@@ -234,7 +234,7 @@ pub fn with_file_lock<T>(file: &Path, body: impl FnOnce() -> Result<T, String>) 
                     continue;
                 }
                 if Instant::now() >= deadline {
-                    return Err("Claude Code 가 로그인 정보를 쓰는 중입니다 — 잠시 뒤 다시 시도해 주세요".into());
+                    return Err("Claude Code 가 로그인 정보를 쓰는 중입니다. 잠시 뒤 다시 시도해 주세요".into());
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
@@ -268,7 +268,7 @@ pub fn patch_json(path: &Path, change: impl FnOnce(&mut Record)) -> Result<(), S
 pub fn perform_switch(p: &AccountPaths, target: &Account) -> Result<Option<String>, String> {
     let oauth = vault_read(p, &target.id)
         .and_then(|j| obj(j.get("claudeAiOauth")).cloned())
-        .ok_or("저장된 로그인 정보가 없습니다 — 계정을 다시 추가해 주세요")?;
+        .ok_or("저장된 로그인 정보가 없습니다. 계정을 다시 추가해 주세요")?;
     let previous = oauth_account(&p.claude_json).and_then(|oa| Account::new(&oa, None)).map(|a| a.id);
     // Claude Code 가 토큰을 갱신해 쓸 때 잡는 잠금 — 그 사이에 끼어 앞 계정 토큰으로 덮이지 않게 한다
     with_file_lock(&p.claude_dir.join(".storage-write"), || {
@@ -280,7 +280,7 @@ pub fn perform_switch(p: &AccountPaths, target: &Account) -> Result<Option<Strin
         // 계정 토큰만 바꿔 넣는다 — MCP 서버 로그인(mcpOAuth) 같은 다른 값은 그대로 둔다
         cur.insert("claudeAiOauth".into(), Value::Object(oauth));
         let bytes = serde_json::to_vec(&Value::Object(cur)).map_err(|e| e.to_string())?;
-        write_private(&p.credentials, ".credentials", &bytes).map_err(|e| format!("로그인 정보 파일에 쓰지 못했습니다 — {e}"))
+        write_private(&p.credentials, ".credentials", &bytes).map_err(|e| format!("로그인 정보 파일에 쓰지 못했습니다: {e}"))
     })?;
     // 계정 정보 — /status·보드 계정 표시가 새 계정으로 보이게. 다른 계정이면 앞 계정의 캐시도 비운다
     let changed = previous.as_deref() != Some(target.id.as_str());
@@ -292,7 +292,7 @@ pub fn perform_switch(p: &AccountPaths, target: &Account) -> Result<Option<Strin
             }
         }
     });
-    Ok(result.err().map(|e| format!("토큰은 바꿨지만 계정 정보 파일을 고치지 못했습니다 — {e}")))
+    Ok(result.err().map(|e| format!("토큰은 바꿨지만 계정 정보 파일을 고치지 못했습니다: {e}")))
 }
 
 /// 저장한 계정을 지운다.
@@ -421,11 +421,11 @@ pub fn switch_to(board: &Arc<Board>, target: Account, note: Option<String>, done
                 Ok(warning) => {
                     let error = warning.is_some();
                     let text = warning.or(note).unwrap_or_else(|| {
-                        format!("{} 계정으로 전환했습니다 — 실행 중인 세션도 다음 요청부터 이 계정을 씁니다", target.email())
+                        format!("{} 계정으로 전환했습니다. 실행 중인 세션도 다음 요청부터 이 계정을 씁니다", target.email())
                     });
                     acc.flash(text, error);
                 }
-                Err(e) => acc.flash(format!("전환하지 못했습니다 — {e}"), true),
+                Err(e) => acc.flash(format!("전환하지 못했습니다: {e}"), true),
             }
         }
         if ok {
@@ -448,9 +448,9 @@ pub fn begin_add(board: &Arc<Board>, email: Option<String>) {
             return Ok(false);
         }
         // 시험 모드(CLAUDE_BOARD_CLAUDE)면 가짜로, 설정이 어긋났으면 진짜 claude 를 찾지도 않고 거절한다
-        let (claude, mut args) = crate::test_claude::login_program(crate::test_claude::decision_from_process(), crate::terminal::find_claude)?;
+        let (claude, mut args) = crate::test_claude::login_program(crate::test_claude::decision_from_process(), paths::overridden(), crate::terminal::find_claude)?;
         let slot = board.account_paths.root.join(format!("login-{}", short_id()));
-        fs::create_dir_all(&slot).map_err(|e| format!("로그인 자리를 만들지 못했습니다 — {e}"))?;
+        fs::create_dir_all(&slot).map_err(|e| format!("로그인 자리를 만들지 못했습니다: {e}"))?;
         args.extend(["auth".to_string(), "login".into(), "--claudeai".into()]);
         if let Some(e) = email.filter(|e| !e.trim().is_empty()) {
             args.push("--email".into());
@@ -458,7 +458,7 @@ pub fn begin_add(board: &Arc<Board>, email: Option<String>) {
         }
         if let Err(e) = crate::account_login::start_for_board(board, &claude, args, &slot) {
             let _ = fs::remove_dir_all(&slot);
-            return Err(format!("로그인 명령을 띄우지 못했습니다 — {e}"));
+            return Err(format!("로그인 명령을 띄우지 못했습니다: {e}"));
         }
         acc.login = Some((slot, clock::now()));
         acc.adding = true;
@@ -472,14 +472,16 @@ pub fn begin_add(board: &Arc<Board>, email: Option<String>) {
 }
 
 pub fn cancel_add(board: &Arc<Board>) {
-    let slot = {
+    let (slot, session) = {
         let mut acc = board.accounts.lock().unwrap();
         acc.token_only_since = None;
         acc.adding = false;
-        acc.login.take()
+        // 계정 잠금을 쥔 채 집는다 — begin_add 도 이 잠금 안에서 새 로그인을 올리므로 다른 로그인을 집지 않는다
+        (acc.login.take(), crate::account_login::current_session())
     };
     if let Some((slot, _)) = slot {
-        let _ = fs::remove_dir_all(slot);
+        // 로그인 프로세스를 먼저 죽이고 끝난 것을 확인한 뒤 지운다 — 죽기 전의 claude 가 지운 슬롯에 평문 토큰을 다시 쓰지 못하게
+        crate::account_login::stop_session_and_remove_slot(session, &slot);
     }
     board.publish();
 }
@@ -522,7 +524,7 @@ pub fn tick(board: &Arc<Board>) {
                 if clock::now() - since > 30.0 {
                     drop(acc);
                     cancel_add(&board);
-                    board.accounts.lock().unwrap().flash("로그인은 됐지만 계정 정보를 받지 못했습니다 — 계정 추가를 다시 해 주세요", true);
+                    board.accounts.lock().unwrap().flash("로그인은 됐지만 계정 정보를 받지 못했습니다. 계정 추가를 다시 해 주세요", true);
                     board.publish();
                 }
             }
@@ -531,12 +533,15 @@ pub fn tick(board: &Arc<Board>) {
                 acc.token_only_since = None;
                 acc.adding = false;
                 acc.load_saved(&board.account_paths);
+                let session = crate::account_login::current_session();
                 match r {
-                    Ok(a) => acc.flash(format!("{} 계정을 추가했습니다 — 계정 메뉴에서 골라 바로 전환할 수 있습니다", a.email()), false),
-                    Err(e) => acc.flash(format!("계정을 추가하지 못했습니다 — {e}"), true),
+                    Ok(a) => acc.flash(format!("{} 계정을 추가했습니다. 계정 메뉴에서 골라 바로 전환할 수 있습니다", a.email()), false),
+                    Err(e) => acc.flash(format!("계정을 추가하지 못했습니다: {e}"), true),
                 }
                 drop(acc);
                 board.publish();
+                // 저장을 마친 슬롯은 이미 지웠지만 명령이 아직 돌면 다시 쓸 수 있으니 죽이고 확인한 뒤 한 번 더 지운다
+                crate::account_login::stop_session_and_remove_slot(session, &slot);
             }
             _ => {}
         }
