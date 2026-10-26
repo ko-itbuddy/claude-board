@@ -4,8 +4,8 @@
 import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
-  BoardSide, ConfirmShutdownPayload, DriveStep, MascotKind, NotifyOptions, NotifyPosition, OpenSessionPayload, PidTarget, RenameCheck, SessionAction, Snapshot, State, TabEntry,
-  TermFrame, TermId, TermInfo, TermSpec,
+  AccountLoginPayload, BoardSide, ConfirmShutdownPayload, DriveStep, MascotKind, NotifyOptions, NotifyPosition, OpenSessionPayload, PidTarget, RenameCheck, SessionAction,
+  SettingsEventPayload, SettingsTransition, ShortcutOverride, Snapshot, State, TabEntry, TermFrame, TermId, TermInfo, TermSpec,
 } from "./types";
 
 export const inTauri = isTauri();
@@ -531,6 +531,90 @@ export function rememberMdRenderOff(id: string) {
 // 시험 모드에서 맨 앞 claude 를 바꿔칠 프로그램·앞쪽 인자, 시험 모드가 아니면 null
 export function testClaudePrefix(): Promise<string[] | null> {
   return call<string[] | null>("test_claude_prefix");
+}
+
+// ── 설정 화면·단축키·계정 로그인(2단계) — 규칙은 settings/·shortcuts/ ──────
+
+// 단축키 하나를 바꾼다 — override 는 저장 모양 그대로: null 은 기본값으로(항목 삭제), [] 는 비움, [코드, 수정키] 는 그 키
+export function setShortcut(id: string, override: ShortcutOverride | null) {
+  optimistic((s) => {
+    if (override) s.settings.shortcuts[id] = override;
+    else delete s.settings.shortcuts[id];
+  });
+  fire("set_shortcut", { id, combo: override });
+}
+
+export function resetShortcuts() {
+  optimistic((s) => {
+    s.settings.shortcuts = {};
+  });
+  fire("reset_shortcuts");
+}
+
+// 로그인할 때 열기가 켜져 있는가(표지 파일이 없으면 켠 것)
+export function loginLaunch(): Promise<boolean> {
+  return call<boolean>("login_launch");
+}
+
+export function setLoginLaunch(on: boolean) {
+  fire("set_login_launch", { on });
+}
+
+export function setSettingsTransition(value: SettingsTransition) {
+  optimistic((s) => {
+    s.settings.settingsTransition = value;
+  });
+  fire("set_settings_transition", { value });
+}
+
+// 새 세션 기본 명령(비면 claude)과 답변 꾸미기 기본값
+export function setNewSessionDefaults(command: string, mdRender: boolean) {
+  optimistic((s) => {
+    s.settings.newSessionCommand = command.trim();
+    s.settings.newSessionMdRender = mdRender;
+  });
+  fire("set_new_session_defaults", { command, mdRender });
+}
+
+export function setAutoUpdateCheck(on: boolean) {
+  optimistic((s) => {
+    s.settings.autoUpdateCheck = on;
+  });
+  fire("set_auto_update_check", { on });
+}
+
+// 설정 화면 안 계정 추가 — 로그인 진행은 board://account-login 으로 온다. 취소는 cancelAddAccount
+export function beginAddAccount(email?: string) {
+  fire("begin_add_account", { email: email ?? null });
+}
+
+export function submitLoginCode(code: string) {
+  fire("submit_login_code", { code });
+}
+
+export function deleteAccount(id: string) {
+  fire("delete_account", { id });
+}
+
+// 백엔드가 설정 화면을 열거나 닫으라고 할 때(트레이 "설정…"). 듣기를 끄는 함수를 돌려준다
+export function onSettingsEvent(fn: (p: SettingsEventPayload) => void): () => void {
+  return listenEvent<SettingsEventPayload>("board://settings", fn);
+}
+
+// 계정 추가 로그인의 진행(주소·안내·끝남·사유). 듣기를 끄는 함수를 돌려준다
+export function onAccountLogin(fn: (p: AccountLoginPayload) => void): () => void {
+  return listenEvent<AccountLoginPayload>("board://account-login", fn);
+}
+
+function listenEvent<T>(name: string, fn: (p: T) => void): () => void {
+  if (!inTauri) return () => {};
+  let off: (() => void) | undefined;
+  let closed = false;
+  listen<T>(name, (e) => fn(e.payload)).then((unlisten) => (closed ? unlisten() : (off = unlisten)));
+  return () => {
+    closed = true;
+    off?.();
+  };
 }
 
 // ── 알림 패널(/notify) — §6.3 ──────────────────────────────────

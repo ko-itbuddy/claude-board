@@ -193,6 +193,11 @@ const S: Snapshot = {
     boardSide: q.has("left") ? "left" : "right",
     boardPaneWidth: 454,
     mdRenderOff: [],
+    shortcuts: {},
+    settingsTransition: "slide",
+    newSessionCommand: "",
+    newSessionMdRender: true,
+    autoUpdateCheck: true,
   },
   claudeVersion: "2.1.301",
   terminals: [
@@ -406,6 +411,34 @@ export async function handle(cmd: string, a: Record<string, unknown>): Promise<u
     case "set_board_mini":
       st.boardMini = bool("on");
       break;
+    case "set_shortcut": {
+      const combo = a.combo as Snapshot["settings"]["shortcuts"][string] | null;
+      if (combo) st.shortcuts[str("id")] = combo;
+      else delete st.shortcuts[str("id")];
+      break;
+    }
+    case "reset_shortcuts":
+      st.shortcuts = {};
+      break;
+    case "set_settings_transition":
+      st.settingsTransition = a.value as Snapshot["settings"]["settingsTransition"];
+      break;
+    case "set_new_session_defaults":
+      st.newSessionCommand = str("command").trim();
+      st.newSessionMdRender = bool("mdRender");
+      break;
+    case "set_auto_update_check":
+      st.autoUpdateCheck = bool("on");
+      break;
+    case "login_launch":
+      return true;
+    case "set_login_launch":
+    case "submit_login_code":
+      return;
+    case "begin_add_account":
+      return handle("add_account", a);
+    case "delete_account":
+      return handle("remove_account", a);
     case "set_terminal_expanded":
       st.terminalExpanded = bool("on");
       break;
