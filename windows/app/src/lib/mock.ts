@@ -431,6 +431,7 @@ export async function handle(cmd: string, a: Record<string, unknown>): Promise<u
       return [];
     case "save_tabs":
     case "answer_shutdown":
+    case "shutdown_dialog_shown":
       return;
     case "load_tabs":
       return [];
