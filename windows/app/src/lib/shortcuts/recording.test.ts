@@ -110,6 +110,25 @@ test("안내가 뜬 뒤 고른 키가 받아지면 안내가 사라진다", () =
   assert.equal(state.refused, null);
 });
 
+test("안내가 뜬 뒤 Esc 로 취소하면 안내도 사라진다", () => {
+  const { state, recorder } = setup();
+  recorder.start("rename");
+  recorder.key(press("KeyA"));
+  assert.notEqual(state.refused, null);
+  recorder.key(press("Escape"));
+  assert.equal(state.recording, null);
+  assert.equal(state.refused, null);
+});
+
+test("안내가 뜬 뒤 Backspace 로 비우면 안내도 사라진다", () => {
+  const { state, recorder } = setup();
+  recorder.start("rename");
+  recorder.key(press("KeyA"));
+  recorder.key(press("Backspace"));
+  assert.equal(state.recording, null);
+  assert.equal(state.refused, null);
+});
+
 test("받는 중이 아니면 키를 건드리지 않는다", () => {
   const { recorder, calls } = setup();
   assert.equal(recorder.key(press("KeyN", { ctrlKey: true })), false);

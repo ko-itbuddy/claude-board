@@ -24,6 +24,12 @@
     draft = null;
   }
 
+  // 칸을 벗어날 때: 올바르면 저장하고, 틀린 글자는 저장하지 않았으니 저장된 값으로 되돌려 보인다
+  function leave() {
+    commit();
+    if (!check.ok) draft = null;
+  }
+
   function keydown(e: KeyboardEvent) {
     if (e.key === "Enter" && !e.isComposing) {
       e.preventDefault();
@@ -57,7 +63,7 @@
         placeholder={DEFAULT_SESSION_COMMAND}
         value={shown}
         oninput={(e) => (draft = e.currentTarget.value)}
-        onblur={commit}
+        onblur={leave}
         onkeydown={keydown}
         data-own-escape={draft !== null ? "" : undefined}
         data-testid="settings-session-command"

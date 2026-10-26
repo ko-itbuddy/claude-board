@@ -53,10 +53,12 @@ export function createRecorder(state: RecorderState, deps: RecorderDeps) {
     const c = fromEvent(e);
     const bare = !c.ctrl && !c.alt && !c.shift && !c.win;
     if (bare && c.code === "Escape") {
+      state.refused = null;
       stop();
       return true;
     }
     if (bare && (c.code === "Backspace" || c.code === "Delete")) {
+      state.refused = null;
       stop();
       apply(id, null);
       return true;
