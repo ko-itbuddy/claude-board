@@ -140,8 +140,7 @@ pub struct Session {
     /// claude 를 띄운 폴더(hook 의 `project_dir`, 없으면 cwd) — cd·워크트리에도 그대로라 카드는 이것으로 묶는다
     #[serde(skip)]
     pub project_dir: String,
-    /// `claude` 뒤에 붙일 이어 열기 인자(hook 이 기록한 `resume_args`, 없으면 `--resume <id>`)
-    #[serde(skip)]
+    /// `claude` 뒤에 붙일 이어 열기 인자(hook 이 기록한 `resume_args`, 없으면 `--resume <id>`) — 탭을 되살릴 때 원래 플래그를 살리려고 보드에도 보낸다
     pub resume_args: Vec<String>,
     /// since·updated 의 유닉스 초 — 숨김·자동 접기 비교에 쓴다
     #[serde(skip)]

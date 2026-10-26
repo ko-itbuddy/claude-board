@@ -664,6 +664,8 @@ mod tests {
         assert_eq!(s1.subagents.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), ["run", "fresh"]);
         assert!(s1.subagents[0].background && s1.subagents[0].tool == "Grep" && s1.subagents[0].desc == "찾기");
         assert_eq!(s1.resume_args, ["--model", "claude-opus-5-5", "--resume", "s1"]);
+        // 보드(프런트엔드)에도 간다 — 탭을 되살릴 때 원래 플래그를 살리는 데 쓴다
+        assert_eq!(serde_json::to_value(s1).unwrap()["resumeArgs"], serde_json::json!(["--model", "claude-opus-5-5", "--resume", "s1"]));
         assert_eq!(s1.limit_at, Some(ms(NOW - 30.0)));
         assert!(s1.can_drive);
         assert_eq!(s1.brain.as_ref().map(|b| b.effort.as_str()), Some("high"));

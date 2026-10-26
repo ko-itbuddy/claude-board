@@ -186,6 +186,17 @@ impl Board {
         }
     }
 
+    /// 창이 다른 창 위에 있어야 하는지 다시 정해 적용한다 — 고정을 바꿨을 때와 창 크기·위치가 멈췄을 때 부른다.
+    pub fn refresh_on_top(&self) {
+        let (pinned, expanded) = {
+            let s = self.settings.lock().unwrap();
+            (s.pinned, s.terminal_expanded)
+        };
+        if let Some(w) = window::main_window(&self.app) {
+            let _ = w.set_always_on_top(window::on_top(pinned, expanded, window::covering_now(&w)));
+        }
+    }
+
     /// 다시 읽고 프론트에 보낸다 — 1초마다, 그리고 상태를 바꾼 명령 뒤에 바로.
     pub fn publish(&self) {
         self.reload();
@@ -229,14 +240,11 @@ impl Board {
     }
 
     pub fn set_pinned(&self, on: bool) {
-        let expanded = self.update_settings(|s| {
+        self.update_settings(|s| {
             s.pinned = on;
-            s.terminal_expanded
         });
-        // 터미널을 펼친 동안은 항상 위가 아니다 — 접을 때 고정 여부를 따른다
-        if let Some(w) = window::main_window(&self.app).filter(|_| !expanded) {
-            let _ = w.set_always_on_top(on);
-        }
+        // 접은 창과 60% 로 줄인 펼친 창은 고정을 따르고, 작업 영역을 덮은 펼친 창만 쉰다(mac 3.1.9)
+        self.refresh_on_top();
         self.publish();
     }
 
@@ -340,6 +348,8 @@ impl Board {
         }
         *dirty = None;
         drop(dirty);
+        // 크기·위치가 멈췄으니 펼친 창이 작업 영역을 덮는지 다시 보고 맨 위 고정을 맞춘다
+        self.refresh_on_top();
         if self.settings.lock().unwrap().terminal_expanded {
             return;
         }

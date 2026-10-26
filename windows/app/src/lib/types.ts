@@ -52,6 +52,7 @@ export interface Session {
   muted: boolean;
   limitAt: number | null;
   canDrive: boolean;    // 콘솔에 키를 넣을 수 있는 세션(일시중지 가능)
+  resumeArgs?: string[]; // 이어 열 때 claude 뒤에 붙일 인자(끝은 --resume <id>) — 탭을 되살릴 때 원래 플래그를 살린다
   // ── 세션 짝짓기(SPEC §5.12, W2) — 백엔드가 보내는 값. 자리(tab·terminal·background·ended)를 가르는 조형은
   // terminal/place.ts 가 쥔다: 이 네 값은 순수 짝짓기 module(pairSessions·placeOf)의 입력일 뿐이다 ──
   tty: TermId | null;         // 이 세션의 콘솔이 보드의 어느 터미널(TermId)인지(mac Session.tty 대응), null = 보드 터미널이 아니다
