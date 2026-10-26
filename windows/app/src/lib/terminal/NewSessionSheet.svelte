@@ -6,6 +6,7 @@
   import { mockPickFolder } from "$lib/mock";
   import { focusActive, TerminalHub, workspaceHint, workspaceKey } from "./hub.svelte";
   import { DEFAULT_SESSION_COMMAND, startSession } from "./launch";
+  import { currentPluginDir } from "./mdRender";
 
   // 보드에 있는 경로(전체 경로). 열 때 한 번 정한다
   const paths = (board.snap?.groups ?? []).map((group) => group.id);
@@ -15,8 +16,9 @@
   let dir = $state(initial);
   let others = $state<string[]>(paths.includes(initial) ? [] : [initial]);
   let command = $state(DEFAULT_SESSION_COMMAND);
-  // 답변 마크다운 꾸미기 — Windows 판에는 md-render 가 아직 없어 잠근다(mac 도 md-render 가 없으면 기본값(켬) 그대로 잠긴다)
-  const mdRender = true;
+  // 답변 마크다운 꾸미기 — 기본 켬. 옮겨 둔 md-render 폴더를 모르면 잠근다(mac 도 폴더가 없으면 잠근다)
+  let mdRender = $state(true);
+  const mdRenderAvailable = currentPluginDir() !== null;
 
   const rows = $derived([...paths, ...others]);
   const canStart = $derived(command.trim() !== "");
@@ -31,7 +33,7 @@
   function start() {
     if (!canStart) return;
     TerminalHub.sheet = false;
-    startSession(command, dir);
+    startSession(command, dir, mdRender);
   }
 
   async function pick() {
@@ -123,8 +125,8 @@
     </div>
 
     <div class="group tight">
-      <label class="check" class:disabled={true}>
-        <input type="checkbox" checked={mdRender} disabled />
+      <label class="check" class:disabled={!mdRenderAvailable}>
+        <input type="checkbox" bind:checked={mdRender} disabled={!mdRenderAvailable} />
         <span>답변 마크다운 꾸미기</span>
       </label>
       <div class="caption">답변이 끝나면 제목·굵게·인라인 코드·목록 등을 색으로 다시 그립니다(md-render). claude 면 --plugin-dir 로 붙입니다</div>

@@ -3,7 +3,7 @@
 // 탭 줄은 지금 경로의 탭만 보인다. 셸이 끝나면 그 탭이 닫히고 선택은 같은 경로의 이웃 탭 → 이웃 경로 → 빈 상태로 간다.
 // 터미널 출력은 보드의 1초 상태 묶음에 싣지 않고, 여기서 term_list 와 채널로 채운다(이벤트 기반).
 import { tick } from "svelte";
-import { inTauri, setTerminalExpanded, termKill, termList, termSpawn } from "$lib/backend";
+import { inTauri, rememberMdRenderOff, setTerminalExpanded, termKill, termList, termSpawn } from "$lib/backend";
 import { board } from "$lib/board/store.svelte";
 import { mockTabs } from "$lib/mock";
 import type { BoardSurface, BoardTab, LeafPhase, Session, State, TermId, TermInfo } from "$lib/types";
@@ -26,6 +26,7 @@ import {
 } from "./tabLogic";
 import { pairSessions, placeOf, type SessionPlace, type SurfaceChange } from "./place";
 import { startLifecycle } from "./lifecycle.svelte";
+import { loadPluginDir } from "./mdRenderLoad";
 import { hasLeaf, leaves } from "./split";
 import { startTabRenames } from "./renameFlow.svelte";
 import { startSessionFlow } from "./sessionFlow.svelte";
@@ -241,8 +242,10 @@ const expanded = () => board.snap?.settings.terminalExpanded ?? false;
 function applyChange(change: SurfaceChange) {
   const surface = surfaceOf(change.surfaceId);
   if (!surface) return;
-  if (change.kind === "sessionId") surface.sessionId = change.sessionId;
-  else if (change.kind === "command") surface.command = change.command;
+  if (change.kind === "sessionId") {
+    surface.sessionId = change.sessionId;
+    if (surface.mdRenderOff) rememberMdRenderOff(change.sessionId); // 끈 화면에서 세션 id 가 바뀌어도(/clear 등) 끈 채로 이어 열게
+  } else if (change.kind === "command") surface.command = change.command;
   else {
     // claude 가 끝나 셸 화면으로 돌아간다 — 명령을 비우고 꾸미기 끔을 푼다(place.test 의 surfaceAfter 가 같은 몸을 쓴다)
     surface.command = null;
@@ -269,6 +272,7 @@ export function place(s: Session): SessionPlace {
 export async function startHub() {
   if (started) return;
   started = true;
+  await loadPluginDir(); // 답변 꾸미기 폴더 — 첫 명령을 치기 전에 알아야 한다
   let list: TermInfo[] = [];
   try {
     list = await termList();
@@ -340,12 +344,13 @@ export function stepWorkspace(step: number) {
 // ── 열기 ──────────────────────────────────────────────────────
 
 /** 그 폴더(없으면 홈)의 셸 탭을 같은 경로 탭들의 끝에(새 경로면 맨 끝에) 연다. command 는 셸이 뜬 뒤 한 번 칠 명령 */
-export function openShell(dir: string | null = null, opts: { command?: string; sessionId?: string } = {}): BoardTab | undefined {
+export function openShell(dir: string | null = null, opts: { command?: string; sessionId?: string; mdRenderOff?: boolean } = {}): BoardTab | undefined {
   const tab = newTab(null, dir ?? "~");
   const surface = focusedSurface(tab);
   if (surface) {
     surface.command = opts.command ?? null;
     surface.sessionId = opts.sessionId ?? null;
+    surface.mdRenderOff = opts.mdRenderOff ?? false;
     // 명령을 넣을 화면은 막 claude 가 뜨는 것으로 본다 — 셸이 뜨기 전 스냅샷이 명령을 비우지 않게
     surface.typedAt = opts.command ? Date.now() : null;
   }
