@@ -1204,7 +1204,8 @@ enum Palette {
 
 final class Store: ObservableObject {
     @Published var groups: [Group] = []
-    @Published var now = Date()
+    // 정렬·접기 판단 같은 계산에만 쓴다 — 화면의 경과 시간은 SecondTicker 를 본다(publish 하면 매초 보드 전체를 다시 계산한다)
+    private(set) var now = Date()
     // 접힌 그룹의 경로(Group.id) — 앱을 다시 켜도 유지한다
     @Published var collapsed = Set(UserDefaults.standard.stringArray(forKey: "collapsed") ?? [])
     // 전체 알림 끄기 — ~/.claude/notifier/mute-all 이 있으면 notify.py 가 모든 세션의 알림을 띄우지 않는다
@@ -1355,6 +1356,7 @@ final class Store: ObservableObject {
 
     func reload(force: Bool = false) {
         now = Date()
+        SecondTicker.shared.now = now
         let fm = FileManager.default
         let shells = shellCounts
         refreshShells()
@@ -1526,6 +1528,33 @@ func elapsed(_ from: Date, _ now: Date) -> String {
     if s < 60 { return "\(s)초" }
     if s < 3600 { return "\(s / 60)분 \(s % 60)초" }
     return "\(s / 3600)시간 \(s % 3600 / 60)분"
+}
+
+// 매초 바뀌는 글자(경과 시간·남은 시간·감독 말)만 보는 1초 시계 — 줄·카드에 시각을 넘기면 매초 모든 줄의 입력이 바뀐다.
+// 시계를 따로 돌리지 않고 Store.reload 가 함께 바꾼다(한 번에 다시 그리게)
+final class SecondTicker: ObservableObject {
+    static let shared = SecondTicker()
+    @Published fileprivate(set) var now = Date()
+}
+struct EverySecond<Content: View>: View {
+    @ObservedObject private var ticker = SecondTicker.shared
+    @ViewBuilder let content: (Date) -> Content
+    var body: some View { content(ticker.now) }
+}
+
+// 줄마다 매초 바뀌는 경과 시간 글자 — 자리는 숫자를 모두 0 으로 바꾼 글자가 잡고(숫자 폭이 같아 크기가 같다) 실제 글자는 그 위에 겹쳐 그린다.
+// 글자가 바뀔 때마다 크기를 다시 재면 줄마다 ViewThatFits 가 후보를 모두 다시 재어 서브에이전트 수만큼 CPU 가 늘었다(32개일 때 보드 CPU 30% → 22%, 2026-10-26 실측).
+// 이렇게 두면 자릿수가 바뀔 때만 다시 잰다.
+// monospacedDigit·fixedSize 는 바깥에서 붙인다
+struct TickingText: View {
+    let text: (Date) -> String
+    var body: some View {
+        EverySecond { now in
+            let s = text(now)
+            Text(String(s.map { $0.isWholeNumber ? "0" : $0 })).hidden()
+                .overlay(alignment: .leading) { Text(s).fixedSize().contentTransition(.numericText()) }
+        }
+    }
 }
 
 // MARK: - 상태 표시 (애니메이션)
@@ -1827,7 +1856,6 @@ func resetText(_ d: Date?, _ now: Date) -> String {
 struct UsagePanel: View {
     @ObservedObject var usage: UsageStore
     @ObservedObject var accounts: AccountStore
-    let now: Date
     var forceCompact = false    // 창이 낮아 중간 화면일 때 — 저장한 간략·상세 설정은 두고 한 줄로만 보인다
     let busy: () -> [Session]
     @AppStorage("usageCompact") private var compactSetting = false
@@ -1850,7 +1878,7 @@ struct UsagePanel: View {
         HStack(spacing: 8) {
             ForEach(Array(usage.limits.enumerated()), id: \.element.id) { i, l in
                 if i > 0 { Rectangle().fill(Color.white.opacity(0.14)).frame(width: 0.5, height: 12) }
-                CompactLimit(limit: l, level: level, now: now)
+                CompactLimit(limit: l, level: level)
             }
         }
         .fixedSize()
@@ -1902,10 +1930,12 @@ struct UsagePanel: View {
                 HStack(spacing: 6) {
                     Text(l.label).boardFont(12, weight: .semibold).lineLimit(1).layoutPriority(1)
                     Spacer(minLength: 4)
-                    Text(resetText(l.resets, now)).boardFont(10.5).foregroundStyle(.secondary)
-                        .monospacedDigit()
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
+                    EverySecond { now in
+                        Text(resetText(l.resets, now)).boardFont(10.5).foregroundStyle(.secondary)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    }
                     Text("\(Int(l.pct.rounded()))%")
                         .boardFont(13, weight: .bold).monospacedDigit()
                         .foregroundStyle(c)
@@ -1932,7 +1962,7 @@ struct UsagePanel: View {
 struct CompactLimit: View {
     let limit: Limit
     let level: Int          // 0 이름·막대·비율, 1 이름·비율, 2 짧은 이름·비율
-    let now: Date
+    @ObservedObject private var ticker = SecondTicker.shared   // 힌트의 남은 시간
     var body: some View {
         let c = UsagePanel.color(limit.pct)
         HStack(spacing: 4) {
@@ -1951,7 +1981,7 @@ struct CompactLimit: View {
                 .foregroundStyle(c)
                 .contentTransition(.numericText())
         }
-        .hint("\(limit.label) \(Int(limit.pct.rounded()))% · \(resetText(limit.resets, now))")
+        .hint("\(limit.label) \(Int(limit.pct.rounded()))% · \(resetText(limit.resets, ticker.now))")
     }
 }
 
@@ -2151,7 +2181,6 @@ struct WrapRow: Layout {
 
 struct SessionRow: View {
     let s: Session
-    let now: Date
     @ObservedObject private var hub = TerminalHub.shared
     @State private var hover = false
     // 서브에이전트 트리를 접어 둔 세션 id(쉼표로 이음) — 앱을 다시 켜도 유지한다
@@ -2168,12 +2197,17 @@ struct SessionRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             row
-            if subOpen {
-                ForEach(Array(s.subagents.enumerated()), id: \.element.id) { i, sub in
-                    SubagentRow(sub: sub, now: now, last: i == s.subagents.count - 1)
-                        .transition(foldIn(i))
+            // 서브에이전트 줄은 한 묶음으로 그린다 — 세션 줄의 회전·반짝임이 초당 20번 바뀔 때마다 화면 갱신이 서브에이전트 줄을 하나하나 다시 훑지 않게
+            // (32개일 때 보드 CPU 약 2%p, 2026-10-26 실측). 펼칠 때 줄마다 전환이 돌도록 접기 조건은 묶음 안에 둔다
+            VStack(alignment: .leading, spacing: 0) {
+                if subOpen {
+                    ForEach(Array(s.subagents.enumerated()), id: \.element.id) { i, sub in
+                        SubagentRow(sub: sub, last: i == s.subagents.count - 1)
+                            .transition(foldIn(i))
+                    }
                 }
             }
+            .compositingGroup()
         }
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: s.subagents)
     }
@@ -2181,11 +2215,12 @@ struct SessionRow: View {
     private func meta(level: Int, wrap: Bool = false, name: Bool = true) -> some View {
         let compact = level > 0
         return (wrap ? AnyLayout(WrapRow(spacing: 5)) : AnyLayout(HStackLayout(spacing: 5))) {
-            Text(s.state == "ended" ? "\(clock(s.updated)) 종료"
-                 : s.state == "idle" ? "\(elapsed(s.since, now)) 전" : elapsed(s.since, now))
-                .monospacedDigit()
-                .fixedSize()
-                .contentTransition(.numericText())
+            TickingText { now in
+                s.state == "ended" ? "\(clock(s.updated)) 종료"
+                    : s.state == "idle" ? "\(elapsed(s.since, now)) 전" : elapsed(s.since, now)
+            }
+            .monospacedDigit()
+            .fixedSize()
             PlaceChip(s: s, place: hub.place(s), appName: hub.appNames[s.id], mode: s.state == "ended" ? nil : hub.mode(s))
             // 세션 이름 — 자리가 모자라면 먼저 뺀다(아래 ViewThatFits). 미니 화면은 세션 줄이 없어 보이지 않는다
             if name, let n = s.name { SessionNameLabel(name: n) }
@@ -2821,7 +2856,6 @@ struct AnyLabelStyle: LabelStyle {
 
 struct SubagentRow: View {
     let sub: Sub
-    let now: Date
     let last: Bool
 
     var body: some View {
@@ -2871,11 +2905,12 @@ struct SubagentRow: View {
             KindLabel(subagent: true, compact: level > 0)
             if level < 2, !sub.type.isEmpty { Text(sub.type).fixedSize() }
             if level < 2 { Text("·") }
-            Text(done ? "\(elapsed(sub.started, sub.ended ?? now)) 걸려 완료"
-                 : sub.state == "waiting" ? "승인 대기" : elapsed(sub.started, now))
-                .monospacedDigit()
-                .fixedSize()
-                .contentTransition(.numericText())
+            TickingText { now in
+                done ? "\(elapsed(sub.started, sub.ended ?? now)) 걸려 완료"
+                    : sub.state == "waiting" ? "승인 대기" : elapsed(sub.started, now)
+            }
+            .monospacedDigit()
+            .fixedSize()
             if let b = sub.brain { ModelLabel(brain: b, level: level) }
             if !done, !sub.tool.isEmpty {
                 Text("·")
@@ -2923,7 +2958,6 @@ struct CardBorder: View {
 
 struct GroupCard: View {
     let g: Group
-    let now: Date
     let collapsed: Bool
     let toggle: () -> Void
     let endedOpen: Bool
@@ -3045,7 +3079,7 @@ struct GroupCard: View {
                     }
                     if !kindFolded("term") {
                         ForEach(Array(terminal.enumerated()), id: \.element.id) { i, s in
-                            SessionRow(s: s, now: now)
+                            SessionRow(s: s)
                                 .transition(foldIn(i))
                         }
                     }
@@ -3055,7 +3089,7 @@ struct GroupCard: View {
                     }
                     if !kindFolded("bg") {
                         ForEach(Array(background.enumerated()), id: \.element.id) { i, s in
-                            SessionRow(s: s, now: now)
+                            SessionRow(s: s)
                                 .transition(foldIn(terminal.count + i))
                         }
                     }
@@ -3086,7 +3120,7 @@ struct GroupCard: View {
                         if endedOpen {
                             VStack(alignment: .leading, spacing: 6) {
                                 ForEach(Array(ended.enumerated()), id: \.element.id) { i, s in
-                                    SessionRow(s: s, now: now)
+                                    SessionRow(s: s)
                                         .transition(foldIn(i))
                                 }
                             }
@@ -3494,9 +3528,9 @@ struct SpeechBubble: Shape {
 struct Foreman: View {
     let groups: [Group]
     let limits: [Limit]
-    let now: Date
     var compact = false     // 미니 화면 — 말풍선은 한 줄, 캐릭터는 조금 작게
     @StateObject private var clock = ForemanClock()
+    @ObservedObject private var ticker = SecondTicker.shared   // "N분째 작업 중"·쉰 시간
     @ObservedObject private var fontScale = BoardFontScale.shared
     @AppStorage("mascot") private var mascot: Mascot = .tralalero
 
@@ -3507,7 +3541,7 @@ struct Foreman: View {
     }
 
     var body: some View {
-        let quips = withCatchphrase(foremanQuips(groups: groups, limits: limits, now: now))
+        let quips = withCatchphrase(foremanQuips(groups: groups, limits: limits, now: ticker.now))
         let q = quips[clock.line % max(quips.count, 1)]
         let tint: Color = switch q.mood {
         case .urgent: Palette.color("waiting")
@@ -4709,7 +4743,7 @@ struct BoardView: View {
                 HStack(alignment: .center, spacing: 8) {
                     titleBlock.layoutPriority(1)
                     Spacer(minLength: 0)
-                    Foreman(groups: store.groups, limits: usage.limits, now: store.now)
+                    Foreman(groups: store.groups, limits: usage.limits)
                 }
                 headerControls
             }
@@ -4719,7 +4753,7 @@ struct BoardView: View {
                 UpdateBanner(updater: updater).transition(.move(edge: .top).combined(with: .opacity))
             }
 
-            UsagePanel(usage: usage, accounts: accounts, now: store.now, forceCompact: medium) {
+            UsagePanel(usage: usage, accounts: accounts, forceCompact: medium) {
                 store.groups.flatMap(\.sessions).filter { $0.state == "working" || $0.state == "waiting" }
             }
 
@@ -4752,7 +4786,7 @@ struct BoardView: View {
                 ScrollView(showsIndicators: true) {
                     VStack(spacing: 12) {
                         ForEach(shownGroups) { g in
-                            GroupCard(g: g, now: store.now,
+                            GroupCard(g: g,
                                       collapsed: medium ? !mediumOpen.contains(g.id) : store.collapsed.contains(g.id),
                                       toggle: { if medium { mediumOpen.formSymmetricDifference([g.id]) } else { store.toggle(g.id) } },
                                       endedOpen: store.endedOpen.contains(g.id), toggleEnded: { store.toggleEnded(g.id) },
@@ -7832,7 +7866,7 @@ struct MiniBoard: View {
         HStack(spacing: 6) {
             ForEach(Array(usage.limits.prefix(n).enumerated()), id: \.element.id) { i, l in
                 if i > 0 { Rectangle().fill(Color.white.opacity(0.14)).frame(width: 0.5, height: 10) }
-                CompactLimit(limit: l, level: 2, now: store.now)
+                CompactLimit(limit: l, level: 2)
             }
         }
         .fixedSize()
@@ -7843,7 +7877,7 @@ struct MiniBoard: View {
             // 캐릭터와 말풍선 — 최소 크기에서도 보인다
             HStack(spacing: 0) {
                 Spacer(minLength: 0)
-                Foreman(groups: store.groups, limits: usage.limits, now: store.now, compact: true)
+                Foreman(groups: store.groups, limits: usage.limits, compact: true)
             }
             if store.groups.isEmpty {
                 Text("아직 기록된 세션이 없습니다").boardFont(11).foregroundStyle(.secondary)
@@ -7851,7 +7885,7 @@ struct MiniBoard: View {
             } else {
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 2) {
-                        ForEach(store.groups) { g in MiniRow(g: g, now: store.now) }
+                        ForEach(store.groups) { g in MiniRow(g: g) }
                     }
                 }
             }
@@ -7872,7 +7906,6 @@ struct MiniBoard: View {
 // 미니 화면의 경로 한 줄 — 누르면 대표 세션의 터미널 앱을, 두 번 누르면 그 세션의 터미널 창을 앞으로
 struct MiniRow: View {
     let g: Group
-    let now: Date
     @State private var hover = false
 
     var body: some View {
@@ -7889,9 +7922,11 @@ struct MiniRow: View {
                     Text(doing(top)).lineLimit(1).foregroundStyle(Palette.color(top.state))
                     if g.active.count > 1 { Text("+\(g.active.count - 1)").fixedSize().foregroundStyle(Palette.color(top.state)) }
                 } else if let s = first {
-                    Text("\(Palette.name(s.state)) · " + (s.state == "idle" ? "\(elapsed(s.since, now)) 전"
-                                                          : s.state == "ended" ? clock(s.updated) : s.title))
-                        .lineLimit(1).foregroundStyle(.secondary)
+                    EverySecond { now in
+                        Text("\(Palette.name(s.state)) · " + (s.state == "idle" ? "\(elapsed(s.since, now)) 전"
+                                                              : s.state == "ended" ? clock(s.updated) : s.title))
+                            .lineLimit(1).foregroundStyle(.secondary)
+                    }
                 }
             }
             .boardFont(11)
