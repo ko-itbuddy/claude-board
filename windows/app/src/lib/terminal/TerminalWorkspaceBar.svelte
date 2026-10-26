@@ -10,6 +10,8 @@
   let width = $state(0);
 
   const list = $derived(workspaces());
+  // 경로 개수만 따로 본다 — list 는 상태 묶음마다(약 1초) 새 배열이라 그 자체를 보면 손으로 민 스크롤을 지금 경로로 되돌려 버린다
+  const workspaceCount = $derived(list.length);
 
   function scrollToCurrent(animated: boolean) {
     const box = scroller;
@@ -24,7 +26,7 @@
   let first = true;
   $effect(() => {
     void TerminalHub.workspace;
-    void list.length;
+    void workspaceCount;
     const animated = !first;
     first = false;
     void tick().then(() => requestAnimationFrame(() => scrollToCurrent(animated)));
