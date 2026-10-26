@@ -129,9 +129,9 @@ pub struct Session {
     pub can_drive: bool,
     #[serde(flatten)]
     pub place: PidPlace,
-    // ── 백엔드만 쓰는 값 ──
-    #[serde(skip)]
+    /// claude 프로세스 id — 보드 밖 터미널에서 세션이 끝나기를 기다릴 때(`wait_exit`) 프론트가 쓴다
     pub pid: u32,
+    // ── 백엔드만 쓰는 값 ──
     /// pid 재사용을 가려내는 생성 시각(Windows hook 이 기록)
     #[serde(skip)]
     pub pid_ctime: Option<f64>,
@@ -303,6 +303,8 @@ pub struct SettingsView {
     pub terminal_expanded: bool,
     pub board_side: String,
     pub board_pane_width: f64,
+    /// 답변 꾸미기를 끄고 띄운 세션 id
+    pub md_render_off: Vec<String>,
     pub notify_position: String,
 }
 

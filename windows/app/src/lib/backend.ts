@@ -4,7 +4,8 @@
 import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
-  BoardSide, DriveStep, MascotKind, NotifyOptions, NotifyPosition, OpenSessionPayload, RenameCheck, SessionAction, Snapshot, State, TermFrame, TermId, TermInfo, TermSpec,
+  BoardSide, ConfirmShutdownPayload, DriveStep, MascotKind, NotifyOptions, NotifyPosition, OpenSessionPayload, RenameCheck, SessionAction, Snapshot, State, TabEntry,
+  TermFrame, TermId, TermInfo, TermSpec,
 } from "./types";
 
 export const inTauri = isTauri();
@@ -462,6 +463,59 @@ export function termWrite(id: TermId, data: string) {
 
 export function termWriteBin(id: TermId, data: number[]) {
   enqueueInput(id, { bin: data });
+}
+
+// ── 수명 주기·md-render·시험 장치(1단계) — 규칙은 terminal/{restore,shutdownList,mdRender,testClaude}.ts ──
+
+// 다시 뜰 때 이어 열 탭 목록을 통째로 바꿔 저장한다 / 읽는다 (mac saveTabs·restoreTabs)
+export function saveTabs(entries: TabEntry[]) {
+  fire("save_tabs", { entries });
+}
+
+export function loadTabs(): Promise<TabEntry[]> {
+  return call<TabEntry[]>("load_tabs");
+}
+
+// 주어진 pid 가운데 아직 산 것 — 앞 보드가 남긴 터미널이 끝났는지 볼 때
+export function pidsAlive(pids: number[]): Promise<number[]> {
+  return call<number[]>("pids_alive", { pids });
+}
+
+// 그 pid 가 timeoutMs 안에 끝나기를 기다린다 — 끝났으면 true (보드 밖 터미널의 세션을 /exit 로 끝낸 뒤)
+export function waitExit(pid: number, timeoutMs: number): Promise<boolean> {
+  return call<boolean>("wait_exit", { pid, timeoutMs });
+}
+
+// 끌 때 확인 창의 답 — pause 는 .paused 를 남길 세션 id
+export function answerShutdown(ok: boolean, pause: string[]) {
+  fire("answer_shutdown", { ok, pause });
+}
+
+// 백엔드가 끌 때 확인을 요청했을 때(트레이 종료·업데이트) — 듣기를 끄는 함수를 돌려준다
+export function onConfirmShutdown(fn: (p: ConfirmShutdownPayload) => void): () => void {
+  if (!inTauri) return () => {};
+  let off: (() => void) | undefined;
+  let closed = false;
+  listen<ConfirmShutdownPayload>("board://confirm-shutdown", (e) => fn(e.payload)).then((unlisten) => (closed ? unlisten() : (off = unlisten)));
+  return () => {
+    closed = true;
+    off?.();
+  };
+}
+
+// 옮겨 둔 md-render 플러그인 폴더, 못 옮겼으면 null(그러면 --plugin-dir 을 붙이지 않는다)
+export function mdRenderDir(): Promise<string | null> {
+  return call<string | null>("md_render_dir");
+}
+
+// 답변 꾸미기를 끄고 띄운 세션 id 를 기억한다
+export function rememberMdRenderOff(id: string) {
+  fire("remember_md_render_off", { id });
+}
+
+// 시험 모드에서 맨 앞 claude 를 바꿔칠 프로그램·앞쪽 인자, 시험 모드가 아니면 null
+export function testClaudePrefix(): Promise<string[] | null> {
+  return call<string[] | null>("test_claude_prefix");
 }
 
 // ── 알림 패널(/notify) — §6.3 ──────────────────────────────────

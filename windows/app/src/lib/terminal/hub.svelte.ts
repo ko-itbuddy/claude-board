@@ -25,6 +25,7 @@ import {
   wrapStep,
 } from "./tabLogic";
 import { pairSessions, placeOf, type SessionPlace, type SurfaceChange } from "./place";
+import { startLifecycle } from "./lifecycle.svelte";
 import { hasLeaf, leaves } from "./split";
 import { startTabRenames } from "./renameFlow.svelte";
 import { startSessionFlow } from "./sessionFlow.svelte";
@@ -283,6 +284,7 @@ export async function startHub() {
       if (tab && t.name) tab.customName = t.name;
     }
   }
+  startLifecycle(); // 탭 저장·되살리기·끌 때 확인(P1.1)
   startSessionFlow(); // 상태 묶음마다 짝짓기(pair)를 다시 쥐고, 세션 열기 요청·이름 바꾸기를 받는다
 }
 
@@ -400,6 +402,8 @@ export async function startLeaf(leafId: string) {
         touch: () => {
           leaf.typedAt = Date.now();
         },
+        shell: info.shell,
+        mdRenderOff: leaf.mdRenderOff,
       });
     }
   } catch (e) {

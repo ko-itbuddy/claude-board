@@ -34,6 +34,7 @@ function session(cwd: string, p: Partial<Session> & { id: string; state: State }
   const message = p.message ?? "";
   return {
     cwd,
+    pid: 0, // 브라우저 개발 화면에는 프로세스가 없다
     since: t0,
     updated: t0,
     headless: false,
@@ -191,6 +192,7 @@ const S: Snapshot = {
     terminalExpanded: !q.has("collapsed"),
     boardSide: q.has("left") ? "left" : "right",
     boardPaneWidth: 454,
+    mdRenderOff: [],
   },
   claudeVersion: "2.1.301",
   terminals: [
@@ -427,6 +429,21 @@ export async function handle(cmd: string, a: Record<string, unknown>): Promise<u
       return;
     case "take_open_session":
       return [];
+    case "save_tabs":
+    case "answer_shutdown":
+      return;
+    case "load_tabs":
+      return [];
+    case "pids_alive":
+      return [];
+    case "wait_exit":
+      return true;
+    case "md_render_dir":
+    case "test_claude_prefix":
+      return null;
+    case "remember_md_render_off":
+      toggle(st.mdRenderOff, str("id"));
+      break;
     case "reopen_done":
       return;
     case "drive_session":

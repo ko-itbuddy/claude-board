@@ -9,7 +9,10 @@ import {
   setTerminalExpanded,
   showBoard,
   takeOpenSession,
+  driveSession,
+  waitExit,
 } from "$lib/backend";
+import { moveToBoard } from "$lib/board/moveToBoard";
 import { openSession, type OpenEffect } from "$lib/board/openSession";
 import { createClickGate, type ClickGate } from "$lib/board/clickGate";
 import { board } from "$lib/board/store.svelte";
@@ -104,6 +107,8 @@ function resumeSession(p: OpenSessionPayload) {
       touch: () => {
         idle.typedAt = Date.now();
       },
+      shell: TerminalHub.terms[termId]?.shell ?? "pwsh", // 터미널 정보가 아직 없으면 보드 기본 셸
+      mdRenderOff: idle.mdRenderOff,
     }).then(() => confirmReopened(p));
     return reveal(idle.id);
   }
@@ -113,6 +118,19 @@ function resumeSession(p: OpenSessionPayload) {
     reveal(tab.focused);
     confirmReopened(p);
   }
+}
+
+/** 다른 터미널에서 도는 세션을 보드 탭으로 옮긴다(mac moveToBoard). 규칙은 board/moveToBoard.ts, 여기는 효과를 이어 준다 */
+export function moveSessionToBoard(s: Session): Promise<void> {
+  return moveToBoard(s, {
+    // TODO(P1.3): TerminalHub.confirm 에 취소 길(cancel)을 달아 실제로 묻는다 — 지금은 늘 확인된 것으로 친다
+    confirm: async () => true,
+    drive: driveSession,
+    waitExit,
+    // TODO(P1.3): 세션 줄이 가진 이어 열기 인자(resumeArgs)를 넘긴다 — 없으면 `claude --resume <id>`
+    resumeSession: (moved) => resumeSession({ id: moved.id, action: "reopen", carryOn: false, projectDir: moved.cwd, resumeArgs: [] }),
+    toast,
+  });
 }
 
 // 이어 열기를 마쳤다고 백엔드에 알린다 — 일시중지 표시는 그때 지워진다(실패하면 남아 다시 시도할 수 있다)

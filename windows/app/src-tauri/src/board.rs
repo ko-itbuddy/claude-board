@@ -885,7 +885,7 @@ fn create_window(app: &AppHandle, board: &Arc<Board>, background: bool) -> tauri
             let s = board.settings.lock().unwrap();
             (s.terminal_expanded, s.pinned)
         };
-        let _ = win.set_always_on_top(pinned && !expanded);
+        let _ = win.set_always_on_top(window::on_top(pinned, expanded, false));
     }
     window::apply_vibrancy(&win);
     // 셸 설정·로그인 자동 실행에서 --background 로 띄우면 창만 보이고 포커스는 지금 앱에 남긴다
@@ -998,6 +998,14 @@ pub fn run(argv: Vec<String>, context: tauri::Context<tauri::Wry>) {
             set_terminal_expanded,
             set_board_side,
             set_board_width,
+            crate::shutdown::save_tabs,
+            crate::shutdown::load_tabs,
+            crate::shutdown::answer_shutdown,
+            crate::proc_wait::pids_alive,
+            crate::proc_wait::wait_exit,
+            crate::mdrender::md_render_dir,
+            crate::mdrender::remember_md_render_off,
+            crate::test_claude::test_claude_prefix,
             crate::terms::term_spawn,
             crate::terms::term_list,
             crate::terms::term_attach,

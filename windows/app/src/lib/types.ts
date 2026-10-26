@@ -35,6 +35,7 @@ export interface Sub {
 export interface Session {
   id: string;
   cwd: string;
+  pid: number;          // claude 프로세스 id — 보드 밖 터미널의 세션이 끝나기를 기다릴 때(waitExit) 쓴다
   state: State;
   since: number;
   updated: number;
@@ -104,6 +105,7 @@ export interface BoardSettings {
   terminalExpanded: boolean; // 내장 터미널을 펼쳤는지(보드 옆에 터미널 칸이 붙는다)
   boardSide: BoardSide;      // 접었을 때 보드가 붙는 화면 쪽, 펼쳤을 때 터미널 반대쪽
   boardPaneWidth: number;    // 보드 칸 폭(논리 px)
+  mdRenderOff: string[];     // 답변 꾸미기(md-render)를 끄고 띄운 세션 id
 }
 
 export interface TerminalApp {
@@ -238,4 +240,42 @@ export type DriveStep = { key: "escape" | "enter" } | { text: string } | { wait:
 export interface RenameCheck {
   safe: boolean;
   transcript: boolean;
+}
+
+// ── 탭 저장·끌 때 확인(P1.1) — 규칙은 terminal/restore.ts · terminal/shutdownList.ts ─────────
+
+// 저장하는 화면 하나(mac `savedSurface`)
+export interface SavedSurface {
+  cwd: string;
+  command: string | null;
+  sessionId: string | null;
+  mdRenderOff: boolean;
+}
+
+// 저장하는 화면 나누기 트리(mac `savedNode`) — 잎은 화면 하나, 가지는 둘로 나눈 것
+export type SavedNode =
+  | { leaf: SavedSurface }
+  | { split: SplitDirection; ratio: number; first: SavedNode; second: SavedNode };
+
+// 저장하는 탭 하나(mac `entry`) — 백엔드 설정 terminalTabs 의 항목이다
+export interface TabEntry {
+  workspace: string;
+  name: string | null;
+  selected: boolean;
+  root: SavedNode;
+}
+
+export type ShutdownReason = "quit" | "update";
+
+// 끌 때 확인 창에 보이는 줄 하나. shell 줄은 세션이 없어 sessionId 가 null
+export interface ShutdownItem {
+  sessionId: string | null;
+  title: string;
+  kind: "working" | "waiting" | "subagents" | "shell" | "headlessInTab";
+}
+
+// 이벤트 board://confirm-shutdown — 목록(items)은 프론트가 shutdownList() 로 만든다
+export interface ConfirmShutdownPayload {
+  reason: ShutdownReason;
+  items: ShutdownItem[];
 }

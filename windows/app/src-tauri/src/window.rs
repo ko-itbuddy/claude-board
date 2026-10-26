@@ -107,6 +107,13 @@ pub fn shape(m: &Mon, expanded: bool, side: Side, pane_width: f64, pinned: bool)
     }
 }
 
+/// 보드 창을 다른 창 위에 두는가 — 지금 규칙: 고정했고 터미널을 접었을 때만(펼친 동안은 늘 아니다).
+/// `covering`(펼친 창이 화면을 덮는가)은 아직 쓰지 않는다.
+/// TODO(P1.4): 3.1.9 규칙 — 펼친 창이 작업 영역을 덮을 때만 고정을 푼다(`covers_work_area` 가 `covering` 을 만든다).
+pub fn on_top(pinned: bool, expanded: bool, _covering: bool) -> bool {
+    pinned && !expanded
+}
+
 /// 실행할 때의 창. 미니로 두고 껐으면 그 크기·위치 그대로(화면 안에 있을 때).
 /// 아니면 터미널을 펼쳤을 때는 작업 영역 전체, 접었을 때는 보드 쪽(`board_side`)에 `board_pane_width` 폭으로 붙인다.
 /// 어느 모니터인지는 저장한 위치로 고르고, 없으면 주 모니터다.
@@ -310,6 +317,25 @@ mod tests {
     fn pane_constants_match_mac_and_frontend() {
         assert_eq!((BOARD_MIN_WIDTH, BOARD_LAUNCH_WIDTH, TERMINAL_MIN_WIDTH, PANE_DIVIDER_WIDTH), (360.0, 454.0, 480.0, 8.0));
         assert_eq!(EXPANDED_MIN_WIDTH, 848.0);
+    }
+
+    // board.rs 의 옛 식 `pinned && !expanded` 와 입력 여덟 가지 모두 같다(covering 은 아직 결과를 바꾸지 않는다)
+    #[test]
+    fn on_top_keeps_todays_rule() {
+        for pinned in [false, true] {
+            for expanded in [false, true] {
+                for covering in [false, true] {
+                    assert_eq!(on_top(pinned, expanded, covering), pinned && !expanded, "{pinned} {expanded} {covering}");
+                }
+            }
+        }
+        // 접은 창(shape)이 쓰는 값과도 같다
+        let m = mon(0.0, 0.0, 1920.0, 1040.0, 1.0);
+        for pinned in [false, true] {
+            for expanded in [false, true] {
+                assert_eq!(shape(&m, expanded, Side::Right, 454.0, pinned).always_on_top, on_top(pinned, expanded, false));
+            }
+        }
     }
 
     fn mon(x: f64, y: f64, w: f64, h: f64, scale: f64) -> Mon {
