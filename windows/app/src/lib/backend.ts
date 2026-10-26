@@ -574,8 +574,9 @@ export function loginLaunch(): Promise<boolean> {
   return call<boolean>("login_launch");
 }
 
-export function setLoginLaunch(on: boolean) {
-  fire("set_login_launch", { on });
+/** 로그인할 때 열기를 바꾼다 — 끝날 때까지 기다리고 실패하면 던진다(바꾼 뒤 실제 값은 loginLaunch 로 다시 읽는다) */
+export function setLoginLaunch(on: boolean): Promise<void> {
+  return call("set_login_launch", { on });
 }
 
 export function setSettingsTransition(value: SettingsTransition) {

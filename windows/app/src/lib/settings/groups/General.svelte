@@ -7,6 +7,7 @@
   import MascotGrid from "../MascotGrid.svelte";
   import SettingsCard from "../SettingsCard.svelte";
   import { GENERAL_ITEMS } from "./generalItems";
+  import { changeLoginLaunch } from "./loginLaunch";
 
   const title = (id: string) => GENERAL_ITEMS.find((item) => item.id === id)?.title ?? id;
   const settings = $derived(board.snap?.settings);
@@ -21,9 +22,18 @@
     return () => (alive = false);
   });
 
-  function switchLogin(on: boolean) {
+  // 누르면 바로 보이고, 백엔드가 끝난 뒤 실제 값으로 맞춘다(실패하면 되돌리고 한 줄 안내). 처리 중에는 다시 누르지 못한다
+  let loginNote = $state<string | null>(null);
+  let loginBusy = $state(false);
+  async function switchLogin(on: boolean) {
+    const previous = login;
     login = on;
-    setLoginLaunch(on);
+    loginNote = null;
+    loginBusy = true;
+    const result = await changeLoginLaunch(on, previous, { set: setLoginLaunch, read: loginLaunch });
+    login = result.value;
+    loginNote = result.note;
+    loginBusy = false;
   }
 </script>
 
@@ -37,8 +47,9 @@
       </div>
       <div data-settings-item="login">
         <SettingsCard title={title("login")} detail="Windows 에 로그인하면 보드를 띄웁니다. 바꾸면 다음 로그인부터 적용됩니다">
-          <SwitchControl on={login} label={title("login")} onchange={switchLogin} />
+          <SwitchControl on={login} label={title("login")} onchange={switchLogin} disabled={loginBusy} />
         </SettingsCard>
+        {#if loginNote}<div class="note" role="status" data-testid="settings-login-note">{loginNote}</div>{/if}
       </div>
     </CardSection>
     <CardSection title="캐릭터">
@@ -53,6 +64,12 @@
 <style>
   .group {
     padding-block: 20px;
+  }
+  .note {
+    margin-top: 4px;
+    padding-inline: 14px;
+    font-size: 11px;
+    color: rgb(255 120 120);
   }
   .block {
     display: flex;
