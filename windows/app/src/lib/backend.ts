@@ -274,16 +274,8 @@ export function switchAccount(id: string) {
   fire("switch_account", { id });
 }
 
-export function addAccount(email?: string) {
-  fire("add_account", { email: email ?? null });
-}
-
 export function cancelAddAccount() {
   fire("cancel_add_account");
-}
-
-export function removeAccount(id: string) {
-  fire("remove_account", { id });
 }
 
 export function setAutoSwitch(on: boolean) {

@@ -62,7 +62,7 @@ pub struct Settings {
     pub new_session_command: String,
     /// 새 세션을 열 때 답변 꾸미기(md-render) 기본값(mac `newSessionMdRender`)
     pub new_session_md_render: bool,
-    /// 시작할 때와 하루마다 새 버전을 확인하는가(mac `autoUpdateCheck`)
+    /// 시작할 때와 한 시간마다 새 버전을 확인하는가(mac `autoUpdateCheck`)
     pub auto_update_check: bool,
 }
 
@@ -109,7 +109,11 @@ pub const POSITIONS: [&str; 5] = ["center", "top-left", "top-right", "bottom-lef
 impl Settings {
     /// 읽는다. 없거나 깨졌으면 기본값.
     pub fn load(path: &Path) -> Self {
-        let mut s: Settings = fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        let mut value: Option<serde_json::Value> = fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok());
+        if let Some(serde_json::Value::Object(map)) = value.as_mut() {
+            sanitize_shortcuts(map);
+        }
+        let mut s: Settings = value.and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
         s.opacity = clamp_opacity(s.opacity);
         s.board_pane_width = clamp_pane_width(s.board_pane_width);
         if !SIDES.contains(&s.board_side.as_str()) {
@@ -180,6 +184,18 @@ impl Settings {
         set_in(&mut self.collapsed, cwd, false);
         let prefix = format!("{cwd}|");
         self.kind_collapsed.retain(|k| !k.starts_with(&prefix));
+    }
+}
+
+/// 파일의 `shortcuts` 에서 배열이 아닌 항목(`"snap":"KeyB"`·null·숫자)을 버린다. 항목 하나가 틀렸다고 파일 전체가 안 읽혀 설정이 모두 초기화되지 않게 한다.
+/// `shortcuts` 자체가 객체가 아니면 그 키를 지운다(기본값으로 읽는다)
+fn sanitize_shortcuts(map: &mut serde_json::Map<String, serde_json::Value>) {
+    match map.get_mut("shortcuts") {
+        Some(serde_json::Value::Object(entries)) => entries.retain(|_, v| v.is_array()),
+        Some(_) => {
+            map.remove("shortcuts");
+        }
+        None => {}
     }
 }
 
@@ -430,6 +446,30 @@ mod tests {
         let loaded = Settings::load(&path);
         assert_eq!(loaded.shortcuts.keys().map(String::as_str).collect::<Vec<_>>(), ["cleared", "ok"]);
         assert_eq!(loaded.settings_transition, "slide");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `shortcuts` 항목 하나가 배열이 아니어도 파일 전체를 버리지 않는다 — 나머지 설정과 모양이 맞는 항목은 남는다
+    #[test]
+    fn non_array_shortcut_entries_do_not_reset_the_whole_file() {
+        let dir = std::env::temp_dir().join(format!("cb-settings-sc2-{}", crate::util::short_id()));
+        let path = dir.join("board-settings.json");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            &path,
+            br#"{"pinned": false, "mascot": "foreman", "shortcuts": {"snap": "KeyB", "a": null, "b": 5, "ok": ["KeyA", 1], "cleared": []}}"#,
+        )
+        .unwrap();
+        let loaded = Settings::load(&path);
+        assert_eq!((loaded.pinned, loaded.mascot.as_str()), (false, "foreman"));
+        assert_eq!(loaded.shortcuts.keys().map(String::as_str).collect::<Vec<_>>(), ["cleared", "ok"]);
+        // shortcuts 자체가 객체가 아니어도 나머지는 남는다
+        for bad in ["\"KeyB\"", "null", "7", "[1]"] {
+            fs::write(&path, format!(r#"{{"pinned": false, "mascot": "foreman", "shortcuts": {bad}}}"#)).unwrap();
+            let loaded = Settings::load(&path);
+            assert_eq!((loaded.pinned, loaded.mascot.as_str()), (false, "foreman"), "{bad}");
+            assert!(loaded.shortcuts.is_empty(), "{bad}");
+        }
         fs::remove_dir_all(&dir).unwrap();
     }
 }

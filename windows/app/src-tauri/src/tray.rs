@@ -33,9 +33,18 @@ pub fn tooltip(counts: &Counts) -> String {
     format!("Claude Board — 승인 대기 {} · 작업 중 {}", counts.waiting, counts.working)
 }
 
+/// 터미널 항목 글자 — 지금 단축키를 괄호로 붙인다(비운 동작이면 키 없이)
+pub fn terminal_label(combo: Option<&str>) -> String {
+    match combo {
+        Some(c) => format!("터미널 펼치기 ({c})"),
+        None => "터미널 펼치기".to_string(),
+    }
+}
+
 pub fn build(app: &AppHandle) -> tauri::Result<Tray> {
     let pin = CheckMenuItem::with_id(app, "pin", "항상 위에 고정", true, true, None::<&str>)?;
-    let terminal = CheckMenuItem::with_id(app, "terminal", "터미널 펼치기 (Ctrl+Alt+T)", true, false, None::<&str>)?;
+    // 처음 글자는 기본 키 — 저장한 키는 첫 `refresh_tray` 가 맞춘다
+    let terminal = CheckMenuItem::with_id(app, "terminal", terminal_label(Some("Ctrl+Alt+T")), true, false, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
@@ -102,6 +111,8 @@ pub struct TrayState {
     pub counts: Counts,
     pub pinned: bool,
     pub terminal_expanded: bool,
+    /// 터미널 펼치기 항목 글자(지금 단축키가 들어 있다)
+    pub terminal_label: String,
 }
 
 impl Tray {
@@ -111,5 +122,18 @@ impl Tray {
         let _ = self.icon.set_tooltip(Some(tooltip(&s.counts)));
         let _ = self.pin.set_checked(s.pinned);
         let _ = self.terminal.set_checked(s.terminal_expanded);
+        let _ = self.terminal.set_text(&s.terminal_label);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_label_carries_the_current_key() {
+        assert_eq!(terminal_label(Some("Ctrl+Alt+T")), "터미널 펼치기 (Ctrl+Alt+T)");
+        assert_eq!(terminal_label(Some("Ctrl+Shift+1")), "터미널 펼치기 (Ctrl+Shift+1)");
+        assert_eq!(terminal_label(None), "터미널 펼치기");
     }
 }

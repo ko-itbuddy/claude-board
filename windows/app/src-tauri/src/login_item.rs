@@ -20,6 +20,8 @@ pub trait RunKey {
     fn set(&self, name: &str, value: &str) -> io::Result<()>;
     /// 값을 지운다. 없으면 성공.
     fn delete(&self, name: &str) -> io::Result<()>;
+    /// 값이 있는가 — 켜 있는지 실제 상태로 다시 읽는 데 쓴다. 읽지 못하면 Err
+    fn exists(&self, name: &str) -> io::Result<bool>;
 }
 
 /// 표지 파일이 없으면 켠 것(처음 설치는 켠 채로 시작한다).
@@ -56,6 +58,29 @@ pub fn apply(on: bool, run: Option<&dyn RunKey>, app: &Path, off_mark: &Path) ->
             None => Ok(()),
         }
     }
+}
+
+/// 지금 켜 있는가 — Run 값이 있으면 켠 것(표지 파일이 아니라 실제로 로그인 때 열리는지). 레지스트리가 없거나(개발 식별자·Windows 가 아닌 기기)
+/// 읽지 못하면 표지 파일을 따른다. 끄는 쪽이 값을 못 지웠으면 켜 있는 그대로 보여 준다.
+fn read_state(run: Option<&dyn RunKey>, off_mark: &Path) -> bool {
+    let from_mark = enabled_at(off_mark);
+    let Some(run) = run else { return from_mark };
+    match run.exists(RUN_VALUE) {
+        Ok(present) => present,
+        Err(e) => {
+            crate::util::board_log(&format!("로그인할 때 열기: 시작 프로그램 값을 읽지 못했습니다(표지 파일을 따릅니다): {e}"));
+            from_mark
+        }
+    }
+}
+
+/// `apply` 의 결과를 프론트에 보일 글로 — 켜기·끄기 어느 쪽이 안 됐는지 말한다.
+fn set_state(on: bool, run: Option<&dyn RunKey>, app: &Path, off_mark: &Path) -> Result<(), String> {
+    apply(on, run, app, off_mark).map_err(|e| {
+        let msg = format!("로그인할 때 열기를 {}지 못했습니다: {e}", if on { "켜" } else { "끄" });
+        crate::util::board_log(&msg);
+        msg
+    })
 }
 
 /// 진짜 HKCU\…\Run — 개발 식별자에서는 쓰지 않는다.
@@ -104,34 +129,56 @@ impl RunKey for Registry {
             Err(io::Error::from_raw_os_error(r as i32))
         }
     }
+
+    fn exists(&self, name: &str) -> io::Result<bool> {
+        use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, ERROR_SUCCESS};
+        use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
+        let (key, name) = (Self::wide(self.subkey), Self::wide(name));
+        let mut len = 0u32;
+        // SAFETY: 버퍼 없이 길이만 묻는다. NUL 로 끝나는 문자열
+        let r = unsafe { RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), std::ptr::null_mut(), &mut len) };
+        match r {
+            ERROR_SUCCESS => Ok(true),
+            ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND => Ok(false),
+            other => Err(io::Error::from_raw_os_error(other as i32)),
+        }
+    }
 }
 
-/// 프론트의 `loginLaunch()` — 지금 로그인할 때 열기가 켜져 있는가.
+/// 지금 시작 프로그램에 쓸 Run 자리 — 개발 식별자에서는 없다(레지스트리를 건드리지 않는다)
+#[cfg(windows)]
+fn real_run() -> Option<Registry> {
+    (!paths::overridden()).then(Registry::real)
+}
+
+/// 프론트의 `loginLaunch()` — 지금 로그인할 때 열기가 켜져 있는가. Run 값을 실제로 읽어 답한다.
 #[tauri::command(async)]
 pub fn login_launch() -> bool {
-    enabled_at(&paths::login_launch_off_file())
+    #[cfg(windows)]
+    let real = real_run();
+    #[cfg(windows)]
+    let run: Option<&dyn RunKey> = real.as_ref().map(|r| r as &dyn RunKey);
+    #[cfg(not(windows))]
+    let run: Option<&dyn RunKey> = None;
+    read_state(run, &paths::login_launch_off_file())
 }
 
-/// 프론트의 `setLoginLaunch(on)`.
+/// 프론트의 `setLoginLaunch(on)` — 레지스트리나 표지 파일을 쓰지 못하면 사유를 돌려준다(프론트가 실제 상태를 다시 읽는다).
 #[tauri::command(async)]
-pub fn set_login_launch(on: bool) {
-    let app = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            crate::util::board_log(&format!("로그인할 때 열기: 실행 파일 경로를 알 수 없습니다: {e}"));
-            return;
-        }
-    };
+pub fn set_login_launch(on: bool) -> Result<(), String> {
+    let app = std::env::current_exe().map_err(|e| {
+        let msg = format!("로그인할 때 열기: 실행 파일 경로를 알 수 없습니다: {e}");
+        crate::util::board_log(&msg);
+        msg
+    })?;
     #[cfg(windows)]
-    let real = Registry::real();
+    let real = real_run();
     #[cfg(windows)]
-    let run: Option<&dyn RunKey> = (!paths::overridden()).then_some(&real as &dyn RunKey);
+    let run: Option<&dyn RunKey> = real.as_ref().map(|r| r as &dyn RunKey);
     // Windows 가 아닌 개발 기기에서는 레지스트리가 없다
     #[cfg(not(windows))]
     let run: Option<&dyn RunKey> = None;
-    if let Err(e) = apply(on, run, &app, &paths::login_launch_off_file()) {
-        crate::util::board_log(&format!("로그인할 때 열기를 {}지 못했습니다: {e}", if on { "켜" } else { "끄" }));
-    }
+    set_state(on, run, &app, &paths::login_launch_off_file())
 }
 
 #[cfg(test)]
@@ -146,6 +193,7 @@ mod tests {
         values: RefCell<Vec<(String, String)>>,
         fail_set: bool,
         fail_delete: bool,
+        fail_read: bool,
     }
 
     impl RunKey for Fake {
@@ -164,6 +212,12 @@ mod tests {
             }
             self.values.borrow_mut().retain(|(n, _)| n != name);
             Ok(())
+        }
+        fn exists(&self, name: &str) -> io::Result<bool> {
+            if self.fail_read {
+                return Err(io::Error::other("read"));
+            }
+            Ok(self.values.borrow().iter().any(|(n, _)| n == name))
         }
     }
 
@@ -254,6 +308,55 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[test]
+    fn a_failed_write_comes_back_as_an_error_message() {
+        let dir = scratch();
+        let mark = dir.join("login-launch-off");
+        let run = Fake { fail_set: true, ..Fake::default() };
+        let err = set_state(true, Some(&run), Path::new(APP), &mark).unwrap_err();
+        assert!(err.starts_with("로그인할 때 열기를 켜지 못했습니다") && err.contains("set"), "{err}");
+        let run = Fake { fail_delete: true, ..Fake::default() };
+        let err = set_state(false, Some(&run), Path::new(APP), &mark).unwrap_err();
+        assert!(err.starts_with("로그인할 때 열기를 끄지 못했습니다") && err.contains("delete"), "{err}");
+        assert!(set_state(true, Some(&Fake::default()), Path::new(APP), &mark).is_ok());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn state_is_read_back_from_the_run_value_not_the_mark() {
+        let dir = scratch();
+        let mark = dir.join("login-launch-off");
+        let run = Fake::default();
+        // 값이 없으면 표지가 없어도 꺼진 것
+        assert!(!read_state(Some(&run), &mark));
+        set_state(true, Some(&run), Path::new(APP), &mark).unwrap();
+        assert!(read_state(Some(&run), &mark));
+        // 끄다가 값을 못 지웠다: 표지는 있지만 실제로는 로그인 때 열리므로 켜 있다고 답한다
+        let stuck = Fake { fail_delete: true, ..Fake::default() };
+        stuck.set(RUN_VALUE, "x").unwrap();
+        assert!(set_state(false, Some(&stuck), Path::new(APP), &mark).is_err());
+        assert!(mark.is_file());
+        assert!(read_state(Some(&stuck), &mark));
+        // 지워지면 꺼짐
+        assert!(set_state(false, Some(&run), Path::new(APP), &mark).is_ok());
+        assert!(!read_state(Some(&run), &mark));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn state_follows_the_mark_without_a_run_key_or_when_it_cannot_be_read() {
+        let dir = scratch();
+        let mark = dir.join("login-launch-off");
+        assert!(read_state(None, &mark));
+        std::fs::write(&mark, b"").unwrap();
+        assert!(!read_state(None, &mark));
+        let unreadable = Fake { fail_read: true, ..Fake::default() };
+        assert!(!read_state(Some(&unreadable), &mark));
+        std::fs::remove_file(&mark).unwrap();
+        assert!(read_state(Some(&unreadable), &mark));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// 진짜 Registry 어댑터를 임시 키(HKCU\Software\ClaudeBoardTest-…)에서만 시험한다 — 진짜 Run 키는 쓰지 않는다.
     #[cfg(windows)]
     #[test]
@@ -271,9 +374,12 @@ mod tests {
             (r == 0).then(|| String::from_utf16_lossy(&buf[..(len as usize / 2).saturating_sub(1)]))
         };
         assert_eq!(read(), None);
+        assert!(!reg.exists(RUN_VALUE).unwrap(), "키가 아직 없어도 오류가 아니라 없음");
         reg.set(RUN_VALUE, &run_command(Path::new(APP))).unwrap();
+        assert!(reg.exists(RUN_VALUE).unwrap());
         assert_eq!(read().as_deref(), Some(run_command(Path::new(APP)).as_str()));
         reg.delete(RUN_VALUE).unwrap();
+        assert!(!reg.exists(RUN_VALUE).unwrap());
         assert_eq!(read(), None);
         reg.delete(RUN_VALUE).unwrap(); // 없어도 성공
         let root = Registry::wide(sub.split('\\').take(2).collect::<Vec<_>>().join("\\").as_str());

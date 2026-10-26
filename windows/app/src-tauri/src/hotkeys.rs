@@ -60,6 +60,27 @@ impl Combo {
     }
 }
 
+impl Combo {
+    /// 메뉴에 보일 글자 — "Ctrl+Alt+T" (KeyT → T, Digit1 → 1)
+    pub fn display(&self) -> String {
+        let code = self.code.strip_prefix("Key").or_else(|| self.code.strip_prefix("Digit")).unwrap_or(&self.code);
+        let mut parts: Vec<&str> = Vec::new();
+        for (bit, name) in [(CTRL, "Ctrl"), (ALT, "Alt"), (SHIFT, "Shift"), (WIN, "Win")] {
+            if self.mods & bit != 0 {
+                parts.push(name);
+            }
+        }
+        parts.push(code);
+        parts.join("+")
+    }
+}
+
+/// 트레이 메뉴의 터미널 항목에 붙일 키 — 터미널 펼치기 동작의 지금 키(비웠으면 None)
+pub fn terminal_combo_display(overrides: &BTreeMap<String, Vec<Value>>) -> Option<String> {
+    let action = ACTIONS.iter().find(|a| a.id == "terminal")?;
+    combo_for(action, overrides).map(|c| c.display())
+}
+
 /// 그 동작의 지금 키 — 바꾼 것이 있으면 그것(비움이거나 모양이 틀리면 None), 없으면 기본 키
 fn combo_for(action: &HotkeyAction, overrides: &BTreeMap<String, Vec<Value>>) -> Option<Combo> {
     match overrides.get(action.id) {
@@ -167,17 +188,21 @@ impl Registrar for AppRegistrar<'_> {
 #[derive(Default)]
 pub struct HotkeyState(Mutex<Hotkeys>);
 
+/// 단축키 잠금을 잡은 뒤에 표를 읽어 다시 건다. 키를 받는 화면이 `sync_hotkeys(false)` 와 `set_shortcut` 을 따로 보내므로 두 명령이 겹쳐 돈다 —
+/// 표를 잠금 밖에서 읽으면 먼저 읽은 낡은 표가 나중에 저장된 새 표 위에 걸린다. 잠금 안에서 읽으면 마지막으로 걸리는 것은 늘 그 시점의 최신 표다.
+fn resync_locked(state: &Mutex<Hotkeys>, registrar: &dyn Registrar, read_overrides: impl FnOnce() -> BTreeMap<String, Vec<Value>>, paused: Option<bool>) -> Vec<Failure> {
+    let mut hotkeys = state.lock().unwrap();
+    let overrides = read_overrides();
+    if let Some(paused) = paused {
+        hotkeys.set_paused(paused);
+    }
+    hotkeys.sync(registrar, &overrides)
+}
+
 /// 지금 키 표대로 다시 걸고, 걸지 못한 동작 id 를 로그에 남기고 프론트에 알린다
 fn resync(app: &AppHandle, board: &Board, paused: Option<bool>) -> Vec<String> {
-    let overrides = board.settings.lock().unwrap().shortcuts.clone();
     let Some(state) = app.try_state::<HotkeyState>() else { return Vec::new() };
-    let failures = {
-        let mut hotkeys = state.0.lock().unwrap();
-        if let Some(paused) = paused {
-            hotkeys.set_paused(paused);
-        }
-        hotkeys.sync(&AppRegistrar(app), &overrides)
-    };
+    let failures = resync_locked(&state.0, &AppRegistrar(app), || board.settings.lock().unwrap().shortcuts.clone(), paused);
     // 다른 앱이 먼저 잡은 단축키면 등록에 실패한다 — 보드는 그대로 동작하고 로그를 남기고 설정 화면에 알린다
     for f in &failures {
         board_log(&format!("전역 단축키 {} ({}) 등록 실패 ({})", f.action, f.combo.label(), f.reason));
@@ -424,6 +449,70 @@ mod tests {
     fn unknown_key_code_is_refused() {
         assert!(to_shortcut(&combo("Nope", CTRL)).is_err());
         assert!(to_shortcut(&combo("", CTRL)).is_err());
+    }
+
+    /// 스레드에 넘길 수 있는 가짜 등록기(`Fake` 는 RefCell 이라 못 넘긴다)
+    #[derive(Default)]
+    struct SyncFake(Mutex<Vec<Combo>>);
+
+    impl Registrar for SyncFake {
+        fn register(&self, combo: &Combo) -> Result<u32, String> {
+            self.0.lock().unwrap().push(combo.clone());
+            Ok(fake_id(&combo.code, combo.mods))
+        }
+        fn unregister(&self, combo: &Combo) {
+            let mut active = self.0.lock().unwrap();
+            let at = active.iter().position(|c| c == combo).expect("등록하지 않은 키를 풀려 했다");
+            active.remove(at);
+        }
+    }
+
+    /// 먼저 잠금을 기다리던 호출이, 그 사이 저장된 새 표를 읽는다 — 표를 잠금 밖에서 읽던 때는 낡은 표가 걸렸다
+    #[test]
+    fn resync_reads_the_table_after_taking_the_lock() {
+        let state = Mutex::new(Hotkeys::default());
+        let settings: Mutex<BTreeMap<String, Vec<Value>>> = Mutex::new(BTreeMap::new());
+        let fake = SyncFake::default();
+        let held = state.lock().unwrap();
+        std::thread::scope(|scope| {
+            let waiting = scope.spawn(|| resync_locked(&state, &fake, || settings.lock().unwrap().clone(), Some(false)));
+            // 기다리는 호출이 잠금 앞에 서 있는 동안 새 표가 저장된다
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            settings.lock().unwrap().insert("snap".to_string(), key("KeyN", 3));
+            drop(held);
+            assert!(waiting.join().unwrap().is_empty());
+        });
+        let labels: Vec<String> = fake.0.lock().unwrap().iter().map(Combo::label).collect();
+        assert_eq!(labels, ["Ctrl+Alt+KeyN", "Ctrl+Alt+KeyT"]);
+    }
+
+    /// 어느 순서로 끝나든 마지막으로 걸린 것은 최신 표다(받는 중 풀기 → 새 키 저장 → 다시 걸기)
+    #[test]
+    fn final_registered_set_matches_latest_settings_in_any_order() {
+        for order in [[0, 1], [1, 0]] {
+            let state = Mutex::new(Hotkeys::default());
+            let settings: Mutex<BTreeMap<String, Vec<Value>>> = Mutex::new(BTreeMap::new());
+            let fake = SyncFake::default();
+            resync_locked(&state, &fake, || settings.lock().unwrap().clone(), None);
+            settings.lock().unwrap().insert("snap".to_string(), key("KeyN", 3));
+            for step in order {
+                let paused = if step == 0 { Some(false) } else { None };
+                resync_locked(&state, &fake, || settings.lock().unwrap().clone(), paused);
+            }
+            let mut labels: Vec<String> = fake.0.lock().unwrap().iter().map(Combo::label).collect();
+            labels.sort();
+            assert_eq!(labels, ["Ctrl+Alt+KeyN", "Ctrl+Alt+KeyT"], "order {order:?}");
+        }
+    }
+
+    #[test]
+    fn terminal_menu_key_follows_the_table() {
+        assert_eq!(terminal_combo_display(&BTreeMap::new()).as_deref(), Some("Ctrl+Alt+T"));
+        assert_eq!(terminal_combo_display(&overrides(&[("terminal", key("Digit1", 5))])).as_deref(), Some("Ctrl+Shift+1"));
+        assert_eq!(terminal_combo_display(&overrides(&[("terminal", key("F5", 0))])).as_deref(), Some("F5"));
+        assert_eq!(terminal_combo_display(&overrides(&[("terminal", vec![])])), None);
+        // 다른 동작의 키는 상관없다
+        assert_eq!(terminal_combo_display(&overrides(&[("snap", key("KeyN", 3))])).as_deref(), Some("Ctrl+Alt+T"));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! `claude auth login --claudeai` 출력 읽기 — 순수 함수만 둔다(mac `ClaudeBoard.swift` 의 `loginOutput`·`loginEnded` 와 같은 규칙).
 //!
-//! - `strip_ansi` — 색·커서 이동·창 제목 제어열을 걷어 낸다. 끝이 잘린 제어열은 버린다(다음 읽기에서 온전해지면 그때 걷힌다).
+//! - `strip_ansi` — 색·창 제목 제어열을 걷어 내고, 커서를 칸 사이로 옮기는 제어열(`C`·`G`·`H`·`f`)은 공백 하나로 바꾼다
+//!   (화면 글은 커서 이동으로 띄어 쓰이므로 지워 버리면 주소 뒤 글이 주소에 붙는다). 끝이 잘린 제어열은 버린다(다음 읽기에서 온전해지면 그때 걷힌다).
 //! - `find_login_url` — `oauth/authorize` 가 든 https 주소를, 뒤에 공백이 올 때만(= 끝까지 읽혔을 때만) 돌려준다.
 //! - `failure_reason` — 마지막 비어 있지 않은 줄에서 `prompted >` 뒤의 글.
 //! - `LoginOutput` — 읽기 조각(바이트)을 모아 위 둘을 묻는 자리. 글자·제어열·주소가 읽기 경계에서 잘려도 모았다가 읽는다.
@@ -12,12 +13,17 @@ const KEEP_MAX_BYTES: usize = 20_000;
 const KEEP_AFTER_TRIM_BYTES: usize = 10_000;
 
 /// 제어열을 걷어 낸 글. CSI(`ESC [ … 끝글자`)·OSC(`ESC ] … BEL` 또는 `… ESC \`)·`ESC (` 같은 짧은 열을 지운다.
+/// 커서 이동 CSI(끝글자 `C`·`G`·`H`·`f`)는 지우지 않고 공백 하나로 바꾼다.
 pub fn strip_ansi(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
-            '\u{1B}' => skip_escape(&mut chars),
+            '\u{1B}' => {
+                if skip_escape(&mut chars) {
+                    out.push(' ');
+                }
+            }
             '\u{07}' => {}
             other => out.push(other),
         }
@@ -26,16 +32,18 @@ pub fn strip_ansi(text: &str) -> String {
 }
 
 /// `ESC` 바로 뒤에서 호출 — 제어열 한 개를 끝까지 먹는다. 끝이 없으면 남은 글을 모두 먹는다.
-fn skip_escape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+/// 커서를 칸 사이로 옮기는 CSI(`C`·`G`·`H`·`f`)를 먹었으면 true — 호출한 쪽이 그 자리에 공백을 둔다.
+fn skip_escape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> bool {
     match chars.peek().copied() {
         Some('[') => {
             chars.next();
             // 매개변수·중간 글자 뒤 끝글자(0x40-0x7E) 하나
             for c in chars.by_ref() {
                 if ('\u{40}'..='\u{7E}').contains(&c) {
-                    break;
+                    return matches!(c, 'C' | 'G' | 'H' | 'f');
                 }
             }
+            false
         }
         Some(']') => {
             chars.next();
@@ -51,6 +59,7 @@ fn skip_escape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
                     break;
                 }
             }
+            false
         }
         Some(_) => {
             // `ESC ( B`·`ESC =`·`ESC 7` — 중간 글자(0x20-0x2F)들 뒤 끝글자 하나
@@ -60,8 +69,9 @@ fn skip_escape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
                     break;
                 }
             }
+            false
         }
-        None => {}
+        None => false,
     }
 }
 
@@ -183,12 +193,44 @@ mod tests {
     #[test]
     fn strip_ansi_removes_colors_cursor_moves_and_titles() {
         assert_eq!(strip_ansi("\u{1B}[1;32mOK\u{1B}[0m done"), "OK done");
-        assert_eq!(strip_ansi("a\u{1B}[2K\u{1B}[1;1Hb\u{1B}[?25lc\u{1B}[?25h"), "abc");
+        assert_eq!(strip_ansi("a\u{1B}[2K\u{1B}[1;1Hb\u{1B}[?25lc\u{1B}[?25h"), "a bc");
         assert_eq!(strip_ansi("\u{1B}]0;claude\u{07}text"), "text");
         assert_eq!(strip_ansi("\u{1B}]0;claude\u{1B}\\text"), "text");
         assert_eq!(strip_ansi("\u{1B}(Bplain\u{1B}=\u{1B}7"), "plain");
         assert_eq!(strip_ansi("bell\u{07}"), "bell");
         assert_eq!(strip_ansi("줄\r\n바꿈"), "줄\r\n바꿈");
+    }
+
+    #[test]
+    fn strip_ansi_turns_cursor_moves_into_one_space() {
+        assert_eq!(strip_ansi("a\u{1B}[3Cb"), "a b", "커서 앞으로");
+        assert_eq!(strip_ansi("a\u{1B}[Cb"), "a b", "매개변수 없는 앞으로");
+        assert_eq!(strip_ansi("a\u{1B}[40Gb"), "a b", "열 지정");
+        assert_eq!(strip_ansi("a\u{1B}[2;5Hb"), "a b", "위치 지정");
+        assert_eq!(strip_ansi("a\u{1B}[Hb"), "a b");
+        assert_eq!(strip_ansi("a\u{1B}[2;5fb"), "a b");
+        // 색·지우기·커서 숨김·위로 이동은 공백이 되지 않는다
+        assert_eq!(strip_ansi("a\u{1B}[0mb\u{1B}[2Kc\u{1B}[?25ld\u{1B}[2Ae"), "abcde");
+        // 이동은 하나마다 공백 하나
+        assert_eq!(strip_ansi("a\u{1B}[2C\u{1B}[3Cb"), "a  b");
+    }
+
+    #[test]
+    fn a_url_followed_by_a_cursor_move_and_text_ends_at_the_move() {
+        let text = format!("visit: {URL}\u{1B}[3CPaste code here");
+        assert_eq!(find_login_url(&text).as_deref(), Some(URL));
+        let text = format!("visit: \u{1B}[4m{URL}\u{1B}[0m\u{1B}[1;60Hnext");
+        assert_eq!(find_login_url(&text).as_deref(), Some(URL));
+        // 이동 뒤에 글이 아직 없어도 이동이 주소를 끝낸다
+        assert_eq!(find_login_url(&format!("visit: {URL}\u{1B}[3C")).as_deref(), Some(URL));
+        // 어디서 잘려 읽혀도 같은 주소
+        let bytes = format!("visit: {URL}\u{1B}[3Ctext").into_bytes();
+        for cut in 1..bytes.len() {
+            let mut out = LoginOutput::default();
+            out.push(&bytes[..cut]);
+            out.push(&bytes[cut..]);
+            assert_eq!(out.url().as_deref(), Some(URL), "cut {cut}");
+        }
     }
 
     #[test]

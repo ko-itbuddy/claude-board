@@ -50,6 +50,22 @@ impl Machine {
         }
     }
 
+    /// `BROWSER` 도우미가 주소 파일(`url.txt`)에 적어 둔 글 — 출력에서 주소를 못 찾았을 때의 두 번째 길.
+    /// 주소는 처음 온전해지는 때 한 번만 알린다(출력에서 먼저 찾았으면 파일은 보지 않는다).
+    pub fn on_url_file(&mut self, text: &str) -> Vec<Effect> {
+        if self.ended || self.url_sent {
+            return Vec::new();
+        }
+        // 파일 끝에 줄바꿈이 없어도 주소를 끝까지 쓴 것으로 읽는다(도우미가 한 번에 한 줄을 쓴다)
+        match crate::login_output::find_login_url(&format!("{text}\n")) {
+            Some(url) => {
+                self.url_sent = true;
+                vec![emit(AccountLoginEvent { url: Some(url), ..Default::default() })]
+            }
+            None => Vec::new(),
+        }
+    }
+
     /// 브라우저가 보여 준 코드를 명령에 써 넣는다. 제어 문자는 버린다(붙여 넣기에 섞인 Ctrl+C 가 로그인을 끊지 못하게).
     /// 비었거나 명령이 이미 끝났으면 아무것도 하지 않는다.
     pub fn on_submit(&mut self, code: &str) -> Vec<Effect> {
@@ -120,6 +136,26 @@ mod tests {
         assert_eq!(m.on_output(tail), [url_event(URL)]);
         // 같은 줄이 다시 나와도 다시 알리지 않는다
         assert_eq!(m.on_output(banner().as_bytes()), []);
+    }
+
+    #[test]
+    fn the_url_file_is_a_second_source_and_the_url_is_still_announced_once() {
+        let mut from_file = Machine::default();
+        assert_eq!(from_file.on_url_file(""), []);
+        assert_eq!(from_file.on_url_file("not a url\r\n"), []);
+        assert_eq!(from_file.on_url_file(&format!("{URL}\r\n")), [url_event(URL)]);
+        assert_eq!(from_file.on_url_file(&format!("{URL}\r\n")), [], "두 번째는 알리지 않는다");
+        assert_eq!(from_file.on_output(banner().as_bytes()), [], "파일에서 알린 뒤 출력의 주소는 다시 알리지 않는다");
+        // 줄바꿈 없이 끝나는 파일도 온전한 주소로 읽는다
+        assert_eq!(Machine::default().on_url_file(URL), [url_event(URL)]);
+        // 출력에서 먼저 찾았으면 파일은 보지 않는다
+        let mut from_output = Machine::default();
+        assert_eq!(from_output.on_output(banner().as_bytes()), [url_event(URL)]);
+        assert_eq!(from_output.on_url_file(&format!("{URL}\n")), []);
+        // 끝난 로그인은 파일도 버린다
+        let mut ended = Machine::default();
+        ended.on_ended();
+        assert_eq!(ended.on_url_file(URL), []);
     }
 
     #[test]

@@ -220,11 +220,11 @@ impl Board {
     /// 트레이는 메인 스레드에서만 고친다 — 다른 스레드에서 고치면 메인 스레드 응답을 기다리는 동안
     /// 메인 스레드(메뉴 처리)가 같은 잠금을 기다려 서로 멈출 수 있다.
     fn refresh_tray_with(&self, counts: &Counts, force: bool) {
-        let (pinned, terminal_expanded) = {
+        let (pinned, terminal_expanded, terminal_label) = {
             let s = self.settings.lock().unwrap();
-            (s.pinned, s.terminal_expanded)
+            (s.pinned, s.terminal_expanded, tray::terminal_label(crate::hotkeys::terminal_combo_display(&s.shortcuts).as_deref()))
         };
-        let state = tray::TrayState { counts: counts.clone(), pinned, terminal_expanded };
+        let state = tray::TrayState { counts: counts.clone(), pinned, terminal_expanded, terminal_label };
         {
             let mut shown = self.tray_shown.lock().unwrap();
             if !force && shown.as_ref() == Some(&state) {
@@ -687,18 +687,8 @@ fn state_name(state: &str) -> &str {
 }
 
 #[tauri::command(async)]
-fn add_account(board: B<'_>, email: Option<String>) {
-    accounts::begin_add(&board, email);
-}
-
-#[tauri::command(async)]
 fn cancel_add_account(board: B<'_>) {
     accounts::cancel_add(&board);
-}
-
-#[tauri::command(async)]
-fn remove_account(board: B<'_>, id: String) {
-    accounts::remove_account(&board, id);
 }
 
 #[tauri::command(async)]
@@ -1013,9 +1003,7 @@ pub fn run(argv: Vec<String>, context: tauri::Context<tauri::Wry>) {
             crate::open_session::reopen_done,
             crate::win::double_click_time,
             switch_account,
-            add_account,
             cancel_add_account,
-            remove_account,
             set_auto_switch,
             check_update,
             run_update,

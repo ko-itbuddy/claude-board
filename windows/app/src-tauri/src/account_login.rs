@@ -12,8 +12,14 @@
 //! 어느 프로그램을 띄울지는 `test_claude::login_program` 이 가른다 — 시험 모드면 가짜(`windows/ci/fake-claude-login.cjs`), 설정이 어긋나면 거절,
 //! 꺼져 있을 때만 진짜 claude. 시험은 가짜만 쓴다.
 //!
-//! unchecked: 진짜 Windows `claude auth login` 의 ConPTY 출력 모양, 진짜 claude 가 `BROWSER` 를 따르는지(이 모듈은 설정하지 않는다 —
-//! 진짜 claude 가 기본 브라우저를 함께 열 수 있다), 로그인 창 자체(GUI).
+//! `BROWSER` 는 슬롯의 `open-browser.cmd` 로 정한다 — 받은 주소를 슬롯의 `url.txt` 에만 적고 브라우저를 열지 않는 도우미다. 진짜 claude 가
+//! 지금 로그인된 계정이 이미 들어 있는 기본 브라우저를 열어 거기서 로그인을 마쳐 버리면 "다른 계정 추가"가 안 되기 때문이다(mac 도 같은 방식).
+//! 주소는 출력에서 찾는 것이 먼저이고, `url.txt` 는 보드가 같은 감시 반복(`watch`)에서 읽는 두 번째 길이다.
+//! 계정 추가를 접을 때는 로그인 프로세스를 먼저 죽이고 끝난 것을 확인한 뒤에 슬롯을 지운다(`stop_then_remove_slot`) —
+//! 안 그러면 죽기 전의 claude 가 지운 슬롯에 평문 토큰 파일을 다시 만들 수 있다.
+//!
+//! unchecked: 진짜 Windows `claude auth login` 의 ConPTY 출력 모양, 진짜 Windows Claude Code 가 `BROWSER` 를 따르는지(따르지 않으면 기본 브라우저가
+//! 열리고 주소는 출력에서만 얻는다), 로그인 창 자체(GUI).
 
 mod machine;
 mod login_window;
@@ -23,7 +29,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use claude_board_core::paths;
 use serde::Serialize;
@@ -45,6 +51,12 @@ const ROWS: u16 = 50;
 
 /// 보드가 이 로그인을 아직 기다리는지 보는 간격
 const WATCH_INTERVAL: Duration = Duration::from_millis(300);
+/// 로그인 프로세스를 죽이고 끝난 것을 기다리는 한도 — 넘으면 로그에 남기고 슬롯을 지운다
+const STOP_WAIT: Duration = Duration::from_secs(3);
+/// `BROWSER` 도우미 파일 이름 — 슬롯 안에 쓴다
+const BROWSER_HELPER: &str = "open-browser.cmd";
+/// 도우미가 받은 주소를 적는 파일 이름 — 슬롯 안
+const URL_FILE: &str = "url.txt";
 /// 프로세스가 끝난 뒤 남은 출력을 기다리는 한도 — 콘솔을 닫아도 파이프가 안 끊기는 경우에도 종료 처리는 한다
 const OUTPUT_DRAIN_LIMIT: Duration = Duration::from_secs(3);
 
@@ -79,12 +91,36 @@ pub struct Launch {
     pub cwd: PathBuf,
     /// 이 프로세스에만 더하는 환경변수
     pub vars: Vec<(String, String)>,
+    /// `BROWSER` 도우미가 주소를 적는 파일 — 있으면 출력 말고 이 파일에서도 주소를 찾는다
+    pub url_file: Option<PathBuf>,
 }
 
-/// 로그인 프로세스에 더할 환경 — `CLAUDE_CONFIG_DIR`(슬롯)는 늘, 시험 모드(가짜 claude)에서만 보드 환경의 `FAKE_LOGIN_*` 을 그대로 넘긴다
+/// `BROWSER` 도우미(`open-browser.cmd`) 내용 — 첫 인자(주소)를 같은 폴더의 `url.txt` 에 덧붙이기만 한다. 브라우저·네트워크·`start` 를 쓰지 않는다.
+/// 주소는 `set "…"` 의 큰따옴표 안에 받고 지연 확장(`!address!`)으로 쓴다 — 주소의 `&`·`>`·`%` 가 명령으로 읽히지 않게.
+/// 셸이 한글 코드 페이지로 읽어도 깨지지 않게 ASCII 만 쓴다.
+pub fn browser_helper_script() -> &'static str {
+    "@echo off\r\n\
+rem Claude Board: write the login address next to this file. Never opens a browser.\r\n\
+setlocal EnableDelayedExpansion\r\n\
+set \"address=%~1\"\r\n\
+>>\"%~dp0url.txt\" echo(!address!\r\n\
+exit /b 0\r\n"
+}
+
+/// 슬롯에 도우미를 쓴다. 경로(`BROWSER` 값)와 주소 파일 경로를 돌려준다.
+pub fn write_browser_helper(slot: &Path) -> io::Result<(PathBuf, PathBuf)> {
+    let helper = slot.join(BROWSER_HELPER);
+    std::fs::write(&helper, browser_helper_script())?;
+    Ok((helper, slot.join(URL_FILE)))
+}
+
+/// 로그인 프로세스에 더할 환경 — `CLAUDE_CONFIG_DIR`(슬롯)·`BROWSER`(슬롯의 도우미)는 늘, 시험 모드(가짜 claude)에서만 보드 환경의 `FAKE_LOGIN_*` 을 그대로 넘긴다
 /// (탭 셸처럼 이 프로세스의 환경도 보드 환경을 물려받지 않으므로 가짜의 시험 손잡이는 이름으로 골라 넘겨야 닿는다).
 pub fn launch_vars(slot: &Path, test_mode: bool, env: impl Iterator<Item = (OsString, OsString)>) -> Vec<(String, String)> {
-    let mut vars = vec![("CLAUDE_CONFIG_DIR".to_string(), slot.to_string_lossy().into_owned())];
+    let mut vars = vec![
+        ("CLAUDE_CONFIG_DIR".to_string(), slot.to_string_lossy().into_owned()),
+        ("BROWSER".to_string(), slot.join(BROWSER_HELPER).to_string_lossy().into_owned()),
+    ];
     if test_mode {
         for (name, value) in env {
             if let (Some(name), Some(value)) = (name.to_str(), value.to_str()) {
@@ -116,8 +152,12 @@ pub struct Session {
     host: Arc<dyn Host>,
     /// 알려 준 로그인 주소 — "다른 브라우저에서 열기"가 읽는다
     url: Mutex<Option<String>>,
+    /// 프로세스가 끝났다(출력을 다 읽기 전일 수 있다) — 슬롯을 지워도 되는 때
+    exited: AtomicBool,
     /// 프로세스가 끝나고 출력도 읽었다
     finished: AtomicBool,
+    /// `BROWSER` 도우미가 주소를 적는 파일
+    url_file: Option<PathBuf>,
 }
 
 impl Session {
@@ -129,6 +169,36 @@ impl Session {
 
     pub fn url(&self) -> Option<String> {
         self.url.lock().unwrap().clone()
+    }
+
+    /// 프로세스를 죽이고 끝난 것을 `limit` 까지 기다린다. 끝났으면 true — 이미 끝났어도 true
+    pub fn stop_and_wait(&self, limit: Duration) -> bool {
+        self.pty.kill();
+        let deadline = Instant::now() + limit;
+        while !self.exited.load(Ordering::SeqCst) {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        true
+    }
+
+    /// 프로세스가 끝났다
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn exited(&self) -> bool {
+        self.exited.load(Ordering::SeqCst)
+    }
+
+    /// 아직 주소를 모르면 `BROWSER` 도우미의 주소 파일을 읽어 본다. 파일이 없거나 아직 온전한 주소가 없으면 아무 일도 없다.
+    fn poll_url_file(&self) {
+        let Some(path) = &self.url_file else { return };
+        if self.url.lock().unwrap().is_some() {
+            return;
+        }
+        let Ok(bytes) = std::fs::read(path) else { return };
+        let effects = self.machine.lock().unwrap().on_url_file(&String::from_utf8_lossy(&bytes));
+        self.apply(effects);
     }
 
     /// 프로세스가 끝나고 종료 처리까지 마쳤다(시험이 기다린다)
@@ -168,7 +238,9 @@ pub fn start(host: Arc<dyn Host>, launch: &Launch, watch_interval: Duration) -> 
         machine: Mutex::new(Machine::default()),
         host,
         url: Mutex::new(None),
+        exited: AtomicBool::new(false),
         finished: AtomicBool::new(false),
+        url_file: launch.url_file.clone(),
     });
     let supervised = Arc::clone(&session);
     std::thread::Builder::new().name("account-login".into()).spawn(move || supervise(&supervised))?;
@@ -191,6 +263,7 @@ fn supervise(session: &Arc<Session>) {
         let _ = drained_tx.send(());
     });
     let code = session.pty.wait_exit();
+    session.exited.store(true, Ordering::SeqCst);
     // 콘솔을 닫아야 출력 파이프가 끊긴다. 닫기가 오래 걸려도 읽기는 계속된다
     let closer = Arc::clone(&session.pty);
     std::thread::spawn(move || closer.close_console());
@@ -205,6 +278,7 @@ fn supervise(session: &Arc<Session>) {
 /// 보드가 이 로그인을 접을 때까지 지켜보다가, 접으면 프로세스를 거두고 끝났다고 알린다.
 fn watch(session: &Arc<Session>, interval: Duration) {
     while session.host.pending() {
+        session.poll_url_file();
         std::thread::sleep(interval);
     }
     session.pty.kill();
@@ -219,6 +293,27 @@ static CURRENT: Mutex<Option<Arc<Session>>> = Mutex::new(None);
 
 fn current() -> Option<Arc<Session>> {
     CURRENT.lock().unwrap().clone()
+}
+
+/// 로그인 프로세스를 먼저 죽이고 끝난 것을 확인한 뒤에 슬롯을 지운다. 프로세스가 `limit` 안에 안 끝나도 슬롯은 지우되 로그에 남긴다.
+pub fn stop_then_remove_slot(session: Option<&Session>, slot: &Path, limit: Duration) {
+    if let Some(session) = session {
+        if !session.stop_and_wait(limit) {
+            board_log("로그인 명령이 제때 끝나지 않았는데 슬롯을 지웠습니다(다음 시작 때 남은 것을 치웁니다)");
+        }
+    }
+    let _ = std::fs::remove_dir_all(slot);
+}
+
+/// 지금 도는 로그인 — 계정 추가를 접는 곳(`accounts`)이 계정 잠금을 쥔 채 집어 둔다. 그 뒤 새 로그인이 시작돼도 새 것을 죽이지 않게
+/// 접는 쪽은 자기가 집은 것만 `stop_session_and_remove_slot` 으로 거둔다.
+pub fn current_session() -> Option<Arc<Session>> {
+    current()
+}
+
+/// 집어 둔 로그인(있으면)을 죽이고 끝난 것을 확인한 뒤 그 슬롯을 지운다.
+pub fn stop_session_and_remove_slot(session: Option<Arc<Session>>, slot: &Path) {
+    stop_then_remove_slot(session.as_deref(), slot, STOP_WAIT);
 }
 
 struct BoardHost {
@@ -267,7 +362,14 @@ impl Host for BoardHost {
 /// `accounts::begin_add` 가 부른다 — 슬롯에서 로그인 명령을 띄우고 현재 로그인으로 등록한다.
 pub fn start_for_board(board: &Arc<Board>, program: &Path, args: Vec<String>, slot: &Path) -> io::Result<()> {
     let test_mode = matches!(test_claude::decision_from_process(), Decision::On(_));
-    let launch = Launch { program: program.to_path_buf(), args, cwd: paths::home(), vars: launch_vars(slot, test_mode, std::env::vars_os()) };
+    let (_, url_file) = write_browser_helper(slot)?;
+    let launch = Launch {
+        program: program.to_path_buf(),
+        args,
+        cwd: paths::home(),
+        vars: launch_vars(slot, test_mode, std::env::vars_os()),
+        url_file: Some(url_file),
+    };
     let host = Arc::new(BoardHost { board: board.clone(), slot: slot.to_path_buf(), test_mode, window: login_window::LoginWindow::new(board.app.clone()) });
     let session = start(host, &launch, WATCH_INTERVAL)?;
     *CURRENT.lock().unwrap() = Some(session);
@@ -349,295 +451,4 @@ pub fn delete_account(board: State<'_, Arc<Board>>, id: String) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use claude_board_core::Record;
-    use serde_json::json;
-    use std::sync::atomic::AtomicUsize;
-
-    #[test]
-    fn event_sends_only_the_fields_that_are_set() {
-        let url = AccountLoginEvent { url: Some("https://claude.ai/oauth/authorize?x=1".into()), ..Default::default() };
-        assert_eq!(serde_json::to_value(&url).unwrap(), serde_json::json!({"url": "https://claude.ai/oauth/authorize?x=1"}));
-        let done = AccountLoginEvent { done: Some(true), error: Some("취소".into()), ..Default::default() };
-        assert_eq!(serde_json::to_value(&done).unwrap(), serde_json::json!({"done": true, "error": "취소"}));
-        assert_eq!(serde_json::to_value(AccountLoginEvent::default()).unwrap(), serde_json::json!({}));
-    }
-
-    fn pairs(list: &[(&str, &str)]) -> impl Iterator<Item = (OsString, OsString)> {
-        list.iter().map(|(k, v)| (OsString::from(k), OsString::from(v))).collect::<Vec<_>>().into_iter()
-    }
-
-    #[test]
-    fn launch_vars_always_point_at_the_slot_and_forward_only_fake_login_knobs_in_test_mode() {
-        let slot = Path::new("C:\\n\\accounts\\login-ab12cd34");
-        let env = [("FAKE_LOGIN_LOG", "C:\\t\\log.jsonl"), ("FAKE_LOGIN_CODE", "c1"), ("PATH", "C:\\bin"), ("CLAUDE_CONFIG_DIR", "C:\\Users\\me\\.claude"), ("TOKEN", "secret")];
-        let real = launch_vars(slot, false, pairs(&env));
-        assert_eq!(real, [("CLAUDE_CONFIG_DIR".to_string(), slot.to_string_lossy().into_owned())], "진짜 모드는 보드 환경을 하나도 넘기지 않는다");
-        let fake = launch_vars(slot, true, pairs(&env));
-        assert_eq!(
-            fake,
-            [
-                ("CLAUDE_CONFIG_DIR".to_string(), slot.to_string_lossy().into_owned()),
-                ("FAKE_LOGIN_LOG".to_string(), "C:\\t\\log.jsonl".to_string()),
-                ("FAKE_LOGIN_CODE".to_string(), "c1".to_string()),
-            ],
-            "보드 환경의 CLAUDE_CONFIG_DIR 는 슬롯을 덮지 못한다"
-        );
-    }
-
-    fn saved_account(uuid: &str, email: &str) -> Account {
-        let oauth: Record = json!({"accountUuid": uuid, "organizationUuid": "org", "emailAddress": email}).as_object().unwrap().clone();
-        Account::new(&oauth, None).unwrap()
-    }
-
-    #[test]
-    fn delete_asks_with_the_email_and_refuses_unknown_or_current_accounts() {
-        let saved = [saved_account("a", "a@x.com"), saved_account("b", "b@x.com")];
-        let ask = delete_ask(Some("a|org"), &saved, "b|org").unwrap();
-        assert_eq!(ask.title, "b@x.com 계정을 지울까요?");
-        assert!(ask.text.contains("다시 쓰려면 계정을 다시 추가"));
-        assert_eq!(delete_ask(Some("a|org"), &saved, "a|org"), None, "지금 계정은 지우지 않는다");
-        assert_eq!(delete_ask(Some("a|org"), &saved, "ghost|org"), None);
-        assert!(delete_ask(None, &saved, "a|org").is_some());
-    }
-
-    #[test]
-    fn delete_removes_only_after_a_yes() {
-        let ask = DeleteAsk { title: "t".into(), text: "x".into() };
-        let removed = AtomicUsize::new(0);
-        assert!(!delete_after_confirm(&ask, |_| false, || {
-            removed.fetch_add(1, Ordering::SeqCst);
-        }));
-        assert_eq!(removed.load(Ordering::SeqCst), 0, "취소하면 지우지 않는다");
-        assert!(delete_after_confirm(&ask, |a| a.title == "t", || {
-            removed.fetch_add(1, Ordering::SeqCst);
-        }));
-        assert_eq!(removed.load(Ordering::SeqCst), 1);
-    }
-
-    // ── 가짜 로그인 스크립트로 ConPTY 끝까지(진짜 claude 는 어디에도 없다). ConPTY 는 Windows 에만 있다 ──
-
-    #[cfg(windows)]
-    mod through_conpty {
-    use super::*;
-    use crate::accounts::{AccountPaths, LoginPoll};
-    use crate::util::short_id;
-    use std::time::Instant;
-
-    #[derive(Default)]
-    struct TestHost {
-        events: Mutex<Vec<AccountLoginEvent>>,
-        failures: Mutex<Vec<String>>,
-        stopped: AtomicBool,
-    }
-
-    impl TestHost {
-        fn waiting() -> Arc<Self> {
-            Arc::new(TestHost::default())
-        }
-
-        /// 보드가 로그인을 접었다(취소·저장·시간 초과)
-        fn stop_waiting(&self) {
-            self.stopped.store(true, Ordering::SeqCst);
-        }
-
-        fn events(&self) -> Vec<AccountLoginEvent> {
-            self.events.lock().unwrap().clone()
-        }
-
-        fn has(&self, wanted: impl Fn(&AccountLoginEvent) -> bool) -> bool {
-            self.events().iter().any(wanted)
-        }
-    }
-
-    impl Host for TestHost {
-        fn emit(&self, event: AccountLoginEvent) {
-            self.events.lock().unwrap().push(event);
-        }
-
-        fn pending(&self) -> bool {
-            !self.stopped.load(Ordering::SeqCst)
-        }
-
-        fn fail(&self, message: &str) {
-            self.failures.lock().unwrap().push(message.to_string());
-            self.stop_waiting();
-        }
-    }
-
-    fn wait_until(what: &str, limit: Duration, condition: impl Fn() -> bool) {
-        let started = Instant::now();
-        while !condition() {
-            assert!(started.elapsed() < limit, "기다리다 시간이 지났다: {what}");
-            std::thread::sleep(Duration::from_millis(25));
-        }
-    }
-
-    fn find_on_path(name: &str) -> PathBuf {
-        std::env::var_os("PATH")
-            .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
-            .unwrap_or_default()
-            .into_iter()
-            .map(|d| d.join(name))
-            .find(|p| p.is_file())
-            .unwrap_or_else(|| panic!("{name} 이 PATH 에 없다 — 가짜 로그인 시험에는 node 가 필요하다"))
-    }
-
-    /// 가짜 로그인 스크립트 — 저장소의 windows/ci
-    fn fake_script() -> PathBuf {
-        // canonicalize 는 `\\?\` 접두 경로를 만들어 node 가 못 읽을 수 있어 `..` 를 그대로 둔다
-        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("ci").join("fake-claude-login.cjs");
-        assert!(script.is_file(), "가짜 로그인 스크립트가 없다: {}", script.display());
-        script
-    }
-
-    struct Scratch {
-        root: PathBuf,
-        slot: PathBuf,
-        log: PathBuf,
-    }
-
-    impl Scratch {
-        fn new() -> Self {
-            let root = std::env::temp_dir().join(format!("cb-account-login-{}", short_id()));
-            let slot = root.join("accounts").join("login-test0001");
-            std::fs::create_dir_all(&slot).unwrap();
-            Scratch { log: root.join("fake-login.jsonl"), root, slot }
-        }
-
-        /// 시험 모드 결정(`Decision::On`)으로 고른 가짜를 slot 에 띄운다 — 진짜 claude 를 찾는 길은 아예 넘기지 않는다
-        fn launch(&self, extra_vars: &[(&str, &str)]) -> Launch {
-            let decided = Decision::On(vec![find_on_path("node.exe"), fake_script()]);
-            let never_real = || -> Option<PathBuf> { panic!("시험이 진짜 claude 를 찾았다") };
-            let (program, mut args) = test_claude::login_program(decided, never_real).unwrap();
-            args.extend(["auth".to_string(), "login".into(), "--claudeai".into()]);
-            let mut vars = launch_vars(&self.slot, false, std::iter::empty());
-            vars.push(("FAKE_LOGIN_LOG".into(), self.log.to_string_lossy().into_owned()));
-            vars.extend(extra_vars.iter().map(|(k, v)| (k.to_string(), v.to_string())));
-            Launch { program, args, cwd: std::env::temp_dir(), vars }
-        }
-
-        fn log_events(&self) -> Vec<serde_json::Value> {
-            std::fs::read_to_string(&self.log).unwrap_or_default().lines().filter_map(|l| serde_json::from_str(l).ok()).collect()
-        }
-
-        fn account_paths(&self) -> AccountPaths {
-            let claude_dir = self.root.join("claude-home");
-            std::fs::create_dir_all(&claude_dir).unwrap();
-            AccountPaths {
-                credentials: claude_dir.join(".credentials.json"),
-                claude_json: self.root.join(".claude.json"),
-                meta: self.root.join("notifier").join("accounts.json"),
-                root: self.root.join("accounts"),
-                claude_dir,
-            }
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.root);
-        }
-    }
-
-    const LIMIT: Duration = Duration::from_secs(20);
-
-    #[test]
-    fn right_code_runs_the_whole_flow_through_a_real_conpty() {
-        let scratch = Scratch::new();
-        let host = TestHost::waiting();
-        let session = start(host.clone(), &scratch.launch(&[]), Duration::from_millis(50)).unwrap();
-
-        // 주소 — 한 번만, 가짜의 예약 도메인
-        wait_until("로그인 주소", LIMIT, || host.has(|e| e.url.is_some()));
-        let url = session.url().expect("알려 준 주소");
-        assert!(url.starts_with("https://login.fake.test/oauth/authorize?"), "{url}");
-        assert!(login_window::login_url(&url).is_some());
-
-        // 코드를 쓰면 가짜가 슬롯에 계정을 쓰고 0 으로 끝난다
-        session.submit_code("  fake-code-1234 ");
-        wait_until("명령 종료", LIMIT, || session.finished());
-        let events = host.events();
-        assert_eq!(events.iter().filter(|e| e.url.is_some()).count(), 1);
-        assert!(events.iter().any(|e| e.note.as_deref() == Some("코드를 보냈습니다. 확인하는 중…")));
-        assert!(events.iter().any(|e| e.note.as_deref() == Some("로그인을 마쳤습니다. 계정 정보를 확인하는 중…")), "{events:?}");
-        assert!(host.failures.lock().unwrap().is_empty());
-
-        // 보드의 슬롯 지켜보기(poll_login)가 그 슬롯에서 계정을 찾는다 — 사용자 폴더가 아니라 임시 폴더만 쓴다
-        let paths = scratch.account_paths();
-        let LoginPoll::Done(Ok(account)) = accounts::poll_login(&paths, &scratch.slot) else { panic!("슬롯에서 계정을 찾지 못했다") };
-        assert_eq!(account.email(), "fake-login@example.test");
-
-        // 보드가 로그인을 끝내면 끝났다고 한 번 알린다
-        host.stop_waiting();
-        wait_until("끝남 알림", LIMIT, || host.has(|e| e.done == Some(true)));
-        assert_eq!(host.events().iter().filter(|e| e.done == Some(true)).count(), 1);
-        assert!(host.events().iter().all(|e| e.error.is_none()));
-
-        // 가짜가 받은 것 — 인자와 슬롯, 코드는 앞뒤 공백 없이 한 번
-        let log = scratch.log_events();
-        let start = log.iter().find(|e| e["event"] == "start").expect("start 기록");
-        assert_eq!(start["argv"], json!(["auth", "login", "--claudeai"]));
-        assert_eq!(start["slot"], json!(scratch.slot.to_string_lossy()));
-        assert_eq!(log.iter().filter(|e| e["event"] == "code").count(), 1);
-        assert_eq!(log.iter().find(|e| e["event"] == "code").unwrap()["code"], "fake-code-1234");
-    }
-
-    #[test]
-    fn wrong_code_fails_with_the_reason_and_leaves_the_slot_empty() {
-        let scratch = Scratch::new();
-        let host = TestHost::waiting();
-        let session = start(host.clone(), &scratch.launch(&[]), Duration::from_millis(50)).unwrap();
-        wait_until("로그인 주소", LIMIT, || host.has(|e| e.url.is_some()));
-        session.submit_code("wrong-code");
-        wait_until("끝남 알림", LIMIT, || host.has(|e| e.done == Some(true)));
-        let message = "계정을 추가하지 못했습니다: Login failed: Invalid authorization code";
-        assert_eq!(*host.failures.lock().unwrap(), [message]);
-        let done = host.events().into_iter().find(|e| e.done == Some(true)).unwrap();
-        assert_eq!(done.error.as_deref(), Some(message));
-        assert!(!scratch.slot.join(".credentials.json").exists());
-        assert!(matches!(accounts::poll_login(&scratch.account_paths(), &scratch.slot), LoginPoll::Waiting));
-    }
-
-    #[test]
-    fn the_board_giving_up_kills_the_command_and_reports_done_without_an_error() {
-        let scratch = Scratch::new();
-        let host = TestHost::waiting();
-        let session = start(host.clone(), &scratch.launch(&[]), Duration::from_millis(50)).unwrap();
-        wait_until("로그인 주소", LIMIT, || host.has(|e| e.url.is_some()));
-        // 취소·15분 한도·로그인 창 닫기 — 보드가 접는다
-        host.stop_waiting();
-        wait_until("끝남 알림", LIMIT, || host.has(|e| e.done == Some(true)));
-        wait_until("명령 종료", LIMIT, || session.finished());
-        assert!(host.failures.lock().unwrap().is_empty(), "접은 로그인의 종료는 실패로 치지 않는다");
-        assert!(host.events().iter().all(|e| e.error.is_none()));
-        assert!(scratch.log_events().iter().all(|e| e["event"] != "code"));
-        // 접은 뒤 온 코드는 아무 데도 쓰이지 않는다
-        session.submit_code("fake-code-1234");
-        std::thread::sleep(Duration::from_millis(200));
-        assert!(scratch.log_events().iter().all(|e| e["event"] != "code"));
-    }
-
-    #[test]
-    fn a_command_that_finishes_by_itself_waits_for_the_board_to_pick_up_the_slot() {
-        // 브라우저 콜백으로 저절로 끝나는 길 — 코드를 쓰지 않는다
-        let scratch = Scratch::new();
-        let host = TestHost::waiting();
-        let session = start(host.clone(), &scratch.launch(&[("FAKE_LOGIN_AUTO_MS", "300")]), Duration::from_millis(50)).unwrap();
-        wait_until("명령 종료", LIMIT, || session.finished());
-        assert!(host.has(|e| e.note.as_deref() == Some("로그인을 마쳤습니다. 계정 정보를 확인하는 중…")));
-        assert!(!host.has(|e| e.done == Some(true)), "보드가 접기 전에는 끝났다고 알리지 않는다");
-        assert!(matches!(accounts::poll_login(&scratch.account_paths(), &scratch.slot), LoginPoll::Done(Ok(_))));
-        host.stop_waiting();
-        wait_until("끝남 알림", LIMIT, || host.has(|e| e.done == Some(true)));
-    }
-
-    #[test]
-    fn spawn_failure_is_an_error_not_a_hang() {
-        let host = TestHost::waiting();
-        let launch = Launch { program: PathBuf::from("C:\\no-such-dir\\no-such.exe"), args: vec![], cwd: std::env::temp_dir(), vars: vec![] };
-        assert!(start(host, &launch, Duration::from_millis(50)).is_err());
-    }
-    }
-}
+mod tests;
