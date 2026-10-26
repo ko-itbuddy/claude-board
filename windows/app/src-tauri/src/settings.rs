@@ -204,7 +204,6 @@ pub struct SettingsEvent {
 }
 
 /// 프론트에 설정 화면 열기·닫기를 알린다.
-#[allow(dead_code)] // TODO(P2.2): 트레이 "설정…" 이 부른다
 pub fn emit_settings(app: &tauri::AppHandle, open: bool, section: Option<&str>) {
     use tauri::Emitter;
     let event = SettingsEvent { open, section: section.map(str::to_string) };
