@@ -24,29 +24,57 @@ export function applyTestClaude(command: string, prefix: string[] | null, shell:
   return `${start[1]}${replacement}${command.slice(start[0].length)}`;
 }
 
-let cached: string[] | null = null;
+/** 시험 모드 — 꺼짐 / 켜짐 / 어긋남(켜려 했으나 거절됐거나 물어보지 못함) / 아직 안 받음. 어긋남·안 받음에서는 아무 명령도 치지 않는다 */
+export type TestClaudeMode =
+  | { kind: "unloaded" }
+  | { kind: "off" }
+  | { kind: "on"; prefix: string[] }
+  | { kind: "invalid"; reason: string };
 
-/** 백엔드가 알려 준 바꿔칠 값 — 시작 때 한 번 받아 둔다. 시험 모드가 아니면 null */
+let mode: TestClaudeMode = { kind: "unloaded" };
+
+export function currentTestClaudeMode(): TestClaudeMode {
+  return mode;
+}
+
+/** 바꿔칠 값 — 켜짐일 때만 있다 */
 export function currentTestClaudePrefix(): string[] | null {
-  return cached;
+  return mode.kind === "on" ? mode.prefix : null;
 }
 
-/** 값을 받아 둔다. 문자열 조각이 아닌 것·빈 값은 시험 모드가 아닌 것으로 본다 */
+/** 명령을 쳐 넣으면 안 되는 까닭 — 쳐도 되면 null. 시험 모드인지 모르거나 어긋난 채로 치면 진짜 claude 가 뜰 수 있다 */
+export function typingBlockedReason(): string | null {
+  if (mode.kind === "unloaded") return "시험 claude 여부를 아직 받지 못했다";
+  if (mode.kind === "invalid") return mode.reason;
+  return null;
+}
+
+/** 시험용 — 받기 전 상태로 되돌린다 */
+export function resetTestClaude(): void {
+  mode = { kind: "unloaded" };
+}
+
+/**
+ * 백엔드의 답을 받아 둔다. null·없음 = 꺼짐, 문자열 조각 배열 = 켜짐, `{invalid: 이유}` 와 그 밖의 모든 모양 = 어긋남(닫힌 채로 실패한다).
+ */
 export function setTestClaudePrefix(value: unknown): void {
-  const ok = Array.isArray(value) && value.length > 0 && value.every((part) => typeof part === "string" && part !== "");
-  cached = ok ? (value as string[]) : null;
-}
-
-/** 백엔드에 한 번 묻는다 — 실패하면 시험 모드가 아닌 것으로 둔다. 시험 하니스는 첫 키 전에 `testClaudePrefix()` 값을 직접 확인한다 */
-export async function loadTestClaudePrefix(fetchPrefix: () => Promise<string[] | null>): Promise<void> {
-  try {
-    setTestClaudePrefix(await fetchPrefix());
-  } catch {
-    setTestClaudePrefix(null);
+  if (value === null || value === undefined) {
+    mode = { kind: "off" };
+  } else if (Array.isArray(value) && value.length > 0 && value.every((part) => typeof part === "string" && part !== "")) {
+    mode = { kind: "on", prefix: value as string[] };
+  } else if (typeof value === "object" && !Array.isArray(value) && typeof (value as { invalid?: unknown }).invalid === "string") {
+    const why = (value as { invalid: string }).invalid;
+    mode = { kind: "invalid", reason: why || "시험 claude 설정이 어긋났다" };
+  } else {
+    mode = { kind: "invalid", reason: "시험 claude 답의 모양이 맞지 않는다" };
   }
 }
 
-// 브라우저(보드 창)에서만 이 모듈이 올라오는 즉시 한 번 묻는다. node:test 에는 window 가 없어 아무 일도 없다. 첫 명령은 셸이 300ms 조용해진 뒤에 쳐지므로 그 전에 도착한다
-if (typeof window !== "undefined") {
-  void import("../backend").then((backend) => loadTestClaudePrefix(backend.testClaudePrefix));
+/** 백엔드에 한 번 묻는다(startHub 가 첫 명령 전에 기다린다) — 실패하면 어긋남으로 둔다. 시험 하니스는 첫 키 전에 `testClaudePrefix()` 값을 직접 확인한다 */
+export async function loadTestClaudePrefix(fetchPrefix: () => Promise<unknown>): Promise<void> {
+  try {
+    setTestClaudePrefix(await fetchPrefix());
+  } catch (e) {
+    mode = { kind: "invalid", reason: `시험 claude 여부를 묻지 못했다: ${e instanceof Error ? e.message : String(e)}` };
+  }
 }

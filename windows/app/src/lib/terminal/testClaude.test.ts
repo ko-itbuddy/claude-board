@@ -2,7 +2,15 @@
 // 시험용 claude 바꿔치기(D5) 표 — 실행: cd windows/app && node --test src/lib/terminal/testClaude.test.ts
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { applyTestClaude, currentTestClaudePrefix, loadTestClaudePrefix, setTestClaudePrefix } from "./testClaude.ts";
+import {
+  applyTestClaude,
+  currentTestClaudeMode,
+  currentTestClaudePrefix,
+  loadTestClaudePrefix,
+  resetTestClaude,
+  setTestClaudePrefix,
+  typingBlockedReason,
+} from "./testClaude.ts";
 
 const FAKE = ["C:\\cbtest\\fake-bin\\claude.exe", "C:\\repo\\windows\\ci\\fake-claude-tty.cjs"];
 
@@ -59,20 +67,51 @@ test("작은따옴표(곡선 포함)가 든 경로 — PowerShell 은 두 번 �
   assert.equal(applyTestClaude("claude", ["C:\\it\u2019s\\a.exe"], "pwsh"), "& 'C:\\it\u2019\u2019s\\a.exe'");
 });
 
-test("받아 두는 값 — 문자열 조각이 아니거나 비면 시험 모드가 아니다", async () => {
+test("받아 두는 값 — null 은 꺼짐, 조각 배열은 켜짐, 그 밖(빈 배열·문자열·모르는 모양)은 어긋남", () => {
   setTestClaudePrefix(FAKE);
   assert.deepEqual(currentTestClaudePrefix(), FAKE);
-  for (const bad of [null, undefined, [], [""], [1], "C:\\a.exe", { a: 1 }]) {
+  assert.equal(currentTestClaudeMode().kind, "on");
+  assert.equal(typingBlockedReason(), null);
+  for (const off of [null, undefined]) {
+    setTestClaudePrefix(FAKE);
+    setTestClaudePrefix(off);
+    assert.equal(currentTestClaudeMode().kind, "off");
+    assert.equal(currentTestClaudePrefix(), null);
+    assert.equal(typingBlockedReason(), null);
+  }
+  for (const bad of [[], [""], [1], "C:\\a.exe", { a: 1 }, 7]) {
     setTestClaudePrefix(FAKE);
     setTestClaudePrefix(bad);
-    assert.equal(currentTestClaudePrefix(), null, JSON.stringify(bad));
+    assert.equal(currentTestClaudeMode().kind, "invalid", JSON.stringify(bad));
+    assert.equal(currentTestClaudePrefix(), null);
+    assert.ok(typingBlockedReason(), JSON.stringify(bad));
   }
+});
+
+test("백엔드가 어긋남({invalid})을 알리면 쳐 넣기를 막는다 — 이유가 따라온다", () => {
+  setTestClaudePrefix({ invalid: "CLAUDE_BOARD_CLAUDE 조각이 절대 경로가 아니다" });
+  assert.equal(currentTestClaudeMode().kind, "invalid");
+  assert.match(typingBlockedReason() ?? "", /절대 경로/);
+  assert.equal(currentTestClaudePrefix(), null);
+  setTestClaudePrefix({ invalid: "" });
+  assert.ok(typingBlockedReason());
+});
+
+test("IPC 가 실패하면 닫힌 채로 — 진짜 claude 를 치지 않는다", async () => {
   await loadTestClaudePrefix(async () => FAKE);
   assert.deepEqual(currentTestClaudePrefix(), FAKE);
   await loadTestClaudePrefix(async () => {
     throw new Error("백엔드 없음");
   });
-  assert.equal(currentTestClaudePrefix(), null);
+  assert.equal(currentTestClaudeMode().kind, "invalid");
+  assert.match(typingBlockedReason() ?? "", /백엔드 없음/);
   await loadTestClaudePrefix(async () => null);
-  assert.equal(currentTestClaudePrefix(), null);
+  assert.equal(currentTestClaudeMode().kind, "off");
+  assert.equal(typingBlockedReason(), null);
+});
+
+test("아직 받기 전에는 친다고 보지 않는다 — 시험 모드인지 모르는 채로 치지 않는다", () => {
+  resetTestClaude();
+  assert.equal(currentTestClaudeMode().kind, "unloaded");
+  assert.ok(typingBlockedReason());
 });

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { VerdictCache, cachedJudge, sha256 } from './cache.mjs';
+import { VerdictCache, cachedJudge, judgeIdentity, sha256 } from './cache.mjs';
 import { FakeJudge } from './adapters/fakeJudge.mjs';
 import { tempRepo, writePng } from './testkit/helpers.mjs';
 
@@ -39,6 +39,44 @@ test('진술·기대값·이미지가 다르면 따로 묻는다', async () => {
   } finally {
     t.cleanup();
   }
+});
+
+test('판정자 id 나 version 이 다르면 같은 질문도 캐시를 물려받지 않는다', async () => {
+  const t = tempRepo();
+  try {
+    const image = writePng(t.out, 'a.png');
+    const cache = new VerdictCache(path.join(t.out, 'jev-cache'));
+    const first = new FakeJudge({ check: PASS });
+    await cachedJudge(first, cache).check(image, 's');
+    assert.equal(first.calls.length, 1);
+
+    const sameAgain = new FakeJudge({ check: PASS });
+    assert.equal((await cachedJudge(sameAgain, cache).check(image, 's')).cached, true, '같은 id·version 은 적중');
+    assert.equal(sameAgain.calls.length, 0);
+
+    const otherId = Object.assign(new FakeJudge({ check: PASS }), { id: 'real-jev' });
+    await cachedJudge(otherId, cache).check(image, 's');
+    assert.equal(otherId.calls.length, 1, '다른 id 는 다시 묻는다');
+
+    const newVersion = Object.assign(new FakeJudge({ check: PASS }), { version: 2 });
+    await cachedJudge(newVersion, cache).check(image, 's');
+    assert.equal(newVersion.calls.length, 1, '다른 version 은 다시 묻는다');
+    await cachedJudge(newVersion, cache).checkAll(image, [{ name: 'a', statement: 's' }]);
+    assert.equal(newVersion.calls.filter((c) => c.verb === 'checkAll').length, 0, 'checkAll 도 같은 키를 쓴다');
+    const screens = new FakeJudge({ screen: { status: 'PASS', reason: 'screen=x', choice: 'x' } });
+    await cachedJudge(screens, cache).screen(image, ['x'], 'x');
+    const otherScreens = Object.assign(new FakeJudge({ screen: { status: 'PASS', reason: 'screen=x', choice: 'x' } }), { id: 'other' });
+    await cachedJudge(otherScreens, cache).screen(image, ['x'], 'x');
+    assert.deepEqual([screens.calls.length, otherScreens.calls.length], [1, 1], 'screen 도 판정자별로 따로 묻는다');
+  } finally {
+    t.cleanup();
+  }
+});
+
+test('id 를 밝히지 않은 판정자는 클래스 이름과 version 0 으로 가른다', () => {
+  assert.deepEqual(judgeIdentity({ id: 'a', version: 3 }), ['a', 3]);
+  class Mystery {}
+  assert.deepEqual(judgeIdentity(new Mystery()), ['Mystery', 0]);
 });
 
 test('UNVERIFIED 는 저장하지 않아 키가 생기면 다시 묻는다', async () => {
@@ -111,7 +149,7 @@ test('깨진 캐시 파일은 삼키지 않고 던진다', async () => {
     const image = writePng(t.out, 'a.png');
     const dir = path.join(t.out, 'jev-cache');
     const cache = new VerdictCache(dir);
-    const key = VerdictCache.key(['check', 's', 'yes', sha256(fs.readFileSync(image))]);
+    const key = VerdictCache.key([...judgeIdentity(new FakeJudge()), 'check', 's', 'yes', sha256(fs.readFileSync(image))]);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, `v-${key}.json`), '{not json');
     const judge = cachedJudge(new FakeJudge({ check: PASS }), cache);

@@ -1,9 +1,9 @@
 // jev.mjs 의 본체. main(argv, deps) 는 종료코드를 돌려주고 출력은 deps.out/err 로 낸다(시험이 가짜를 꽂는 자리).
 //
 // 종료코드: 0 PASS · 1 FAIL · 2 사용법 · 3 UNSURE · 5 GUARD · 6 UNVERIFIED. 출력 첫 줄이 상태 낱말이라 UNVERIFIED 를 통과로 읽을 수 없다.
-//   check    --image <png> --family <이름> [--require-calibrated] [--replay] [--verbose]
-//   screen   --image <png> --choices a,b,c [--expect a]
-//   crop     --in <png> --rect x,y,w,h --out <png>
+//   check    --image <png> --family <이름> [--require-calibrated] [--replay] [--verbose] [--allowed-window-title <창 제목>]
+//   screen   --image <png> --choices a,b,c [--expect a] [--allowed-window-title <창 제목>]
+//   crop     --in <png> --rect x,y,w,h --out <png> [--window-title <창 제목>]   (옆에 <png>.manifest.json 을 쓴다)
 //   report   --rows <json>
 //   measure  --dataset <폴더>
 //   selftest
@@ -35,6 +35,8 @@ const OPTIONS = {
   in: { type: 'string' },
   out: { type: 'string' },
   rect: { type: 'string' },
+  'window-title': { type: 'string' },
+  'allowed-window-title': { type: 'string' },
   rows: { type: 'string' },
   dataset: { type: 'string' },
   budget: { type: 'string' },
@@ -61,7 +63,8 @@ function buildJudge(options, deps, repo) {
       ...(options.budget ? { budget: Number(options.budget) } : {}),
       ...(deps.env ? { env: deps.env } : {}),
     });
-  return guardedJudge(cachedJudge(inner, new VerdictCache(cacheDir)), { repo });
+  const allowedWindowTitle = options['allowed-window-title'];
+  return guardedJudge(cachedJudge(inner, new VerdictCache(cacheDir)), { repo, ...(allowedWindowTitle !== undefined ? { allowedWindowTitle } : {}), ...(deps.userName !== undefined ? { userName: deps.userName } : {}) });
 }
 
 async function runCheck(options, deps, repo) {
@@ -114,7 +117,7 @@ async function runSelftest(options, deps, repo) {
 
 function runCrop(options, deps, repo) {
   if (!options.in || !options.out || !options.rect) throw new UsageError('crop 은 --in, --rect, --out 이 필요하다');
-  const done = cropFile({ input: options.in, rect: parseRect(options.rect), output: options.out, repo });
+  const done = cropFile({ input: options.in, rect: parseRect(options.rect), output: options.out, repo, windowTitle: options['window-title'] });
   deps.out(`CROP|${done.path}|${done.width}x${done.height}`);
   return EXIT.PASS;
 }

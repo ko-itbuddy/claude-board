@@ -159,6 +159,41 @@ test('crop: 사각형으로 잘라 e2e/out 에 쓴다. 밖에는 쓰지 않는�
   }
 });
 
+test('crop --window-title 과 check --allowed-window-title: 제목이 같을 때만 판정자에게 간다(다르면 GUARD 5)', async () => {
+  const t = tempRepo();
+  try {
+    const source = writePng(t.root, 'fullscreen.png', 400, 300);
+    const out = path.join(t.out, 'board.png');
+    assert.equal((await run(['crop', '--in', source, '--rect', '20,10,300,280', '--out', out, '--window-title', 'Claude Board', '--repo', t.repo])).code, 0);
+    assert.equal(JSON.parse(fs.readFileSync(`${out}.manifest.json`, 'utf8')).windowTitle, 'Claude Board');
+    const fake = new FakeJudge({ check: { status: 'PASS', reason: 'jev pass' } });
+    const good = await run(['check', '--image', out, '--family', 'chip', '--allowed-window-title', 'Claude Board', '--repo', t.repo], { judge: fake });
+    assert.deepEqual([good.code, fake.calls.length], [0, 1]);
+    const bad = await run(['check', '--image', out, '--family', 'chip', '--allowed-window-title', 'Notepad', '--repo', t.repo], { judge: fake });
+    assert.equal(bad.code, 5);
+    assert.match(bad.out[0], /^GUARD\|/);
+    assert.equal(fake.calls.length, 1);
+  } finally {
+    t.cleanup();
+  }
+});
+
+test('개인정보 가드: 창 제목에 사용자 이름이 있으면 GUARD 5, 판정자는 불리지 않는다', async () => {
+  const t = tempRepo();
+  try {
+    const source = writePng(t.root, 'fullscreen.png', 400, 300);
+    const out = path.join(t.out, 'board.png');
+    await run(['crop', '--in', source, '--rect', '20,10,300,280', '--out', out, '--window-title', 'Board of Someone', '--repo', t.repo]);
+    const fake = new FakeJudge({ check: { status: 'PASS', reason: 'x' } });
+    const r = await run(['check', '--image', out, '--family', 'chip', '--allowed-window-title', 'Board of Someone', '--repo', t.repo], { judge: fake, userName: 'someone' });
+    assert.equal(r.code, 5);
+    assert.match(r.out[0], /^GUARD\|privacy guard: user name/);
+    assert.equal(fake.calls.length, 0);
+  } finally {
+    t.cleanup();
+  }
+});
+
 test('report: rows JSON 을 표로 낸다', async () => {
   const t = tempRepo();
   try {

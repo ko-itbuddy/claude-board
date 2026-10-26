@@ -38,6 +38,19 @@ test('종료코드는 결정적 판정만 본다: Jev PASS 는 결정적 FAIL �
   assert.equal(aggregate([{ name: 'a', deterministic: 'PASS', jev: v('UNVERIFIED', 'no Jev key') }]).exitCode, 0);
 });
 
+test('종료코드: 결정적 칸이 전부 PASS 일 때만 0 — FAIL 1, UNVERIFIED 6, UNSURE 3, 빈 표 6', () => {
+  const code = (...determinism) => aggregate(determinism.map((deterministic, i) => ({ name: `c${i}`, deterministic, jev: v('PASS') }))).exitCode;
+  assert.equal(code('PASS', 'PASS'), 0);
+  assert.equal(code('PASS', 'FAIL'), 1);
+  assert.equal(code('UNVERIFIED'), 6, '결정적 칸이 UNVERIFIED 뿐이면 통과가 아니다');
+  assert.equal(code('PASS', 'UNVERIFIED'), 6);
+  assert.equal(code('UNSURE'), 3);
+  assert.equal(code('PASS', 'UNSURE'), 3);
+  assert.equal(code('UNVERIFIED', 'UNSURE'), 6, 'UNVERIFIED 가 UNSURE 보다 앞선다');
+  assert.equal(code('FAIL', 'UNVERIFIED', 'UNSURE'), 1, 'FAIL 이 가장 앞선다');
+  assert.equal(aggregate([]).exitCode, 6, '행이 없으면 아무것도 확인하지 못한 것이다');
+});
+
 test('Jev 칸이 없으면 UNVERIFIED(not asked)', () => {
   const { lines, counts } = aggregate([{ name: 'a', deterministic: 'PASS' }]);
   assert.ok(lines.some((l) => l.includes('UNVERIFIED: not asked')));

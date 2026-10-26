@@ -4,11 +4,12 @@
 //! 설치 폴더(`ClaudeBoard.exe` 옆) 사본을 그대로 넘기지 않고 옮겨 쓰는 까닭은 대화형 claude 가 플러그인 폴더에
 //! `tsconfig.json`·`.claude-plugin\types\` 를 쓰기 때문이다. 업데이트가 설치 폴더를 바꿔 끼워도 경로가 유지된다.
 //! 옮기는 것은 `PLUGIN_FILES` 다섯 개뿐이고, 내용(sha256)이 다른 것만 덮으며 claude 가 만든 파일은 건드리지 않는다.
+//! 옮길 폴더·하위 폴더·파일이 심볼릭 링크나 정션이면 따라 쓰지 않고 거절한다(링크 너머의 다른 폴더를 덮지 않으려는 것이다).
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use claude_board_core::paths;
 use sha2::{Digest, Sha256};
@@ -49,16 +50,48 @@ pub fn copy_plan(source: &[(String, String)], destination: &[(String, String)]) 
         .collect()
 }
 
+/// 심볼릭 링크나 정션(재해석 지점)인가 — 없는 경로는 아니다.
+fn is_link(path: &Path) -> bool {
+    let Ok(meta) = fs::symlink_metadata(path) else { return false };
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return true;
+        }
+    }
+    meta.file_type().is_symlink()
+}
+
+/// destination 과 그 안에서 쓸 하위 폴더·파일 가운데 링크가 하나라도 있으면 그 경로. 없으면 None.
+fn first_link(destination: &Path, relatives: &[String]) -> Option<PathBuf> {
+    let mut candidates = vec![destination.to_path_buf()];
+    for relative in relatives {
+        let file = file_in(destination, relative);
+        let mut folders: Vec<PathBuf> = file.ancestors().skip(1).take_while(|folder| folder.starts_with(destination) && *folder != destination).map(Path::to_path_buf).collect();
+        folders.reverse();
+        candidates.extend(folders);
+        candidates.push(file);
+    }
+    candidates.into_iter().find(|path| is_link(path))
+}
+
 /// source 의 다섯 파일 가운데 내용이 다른 것만 destination 으로 옮기고 옮긴 경로를 돌려준다.
 /// source 에 다섯 중 하나라도 없으면(깨진 설치) 아무것도 옮기지 않고 NotFound 로 실패한다. destination 의 그 밖 파일은 건드리지 않는다.
+/// destination·하위 폴더·옮길 파일이 링크(심볼릭 링크·정션)이면 아무것도 쓰지 않고 PermissionDenied 로 실패한다.
 pub fn sync(source: &Path, destination: &Path) -> io::Result<Vec<PathBuf>> {
     let wanted = listing(source);
     if let Some(missing) = PLUGIN_FILES.iter().find(|relative| !wanted.iter().any(|(there, _)| there == **relative)) {
         let at = file_in(source, missing);
         return Err(io::Error::new(io::ErrorKind::NotFound, format!("{} 이 없습니다", at.display())));
     }
+    let plan = copy_plan(&wanted, &listing(destination));
+    if let Some(link) = first_link(destination, &plan) {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, format!("{} 는 링크라 따라 쓰지 않습니다", link.display())));
+    }
     let mut copied = Vec::new();
-    for relative in copy_plan(&wanted, &listing(destination)) {
+    for relative in plan {
         let to = file_in(destination, &relative);
         let bytes = fs::read(file_in(source, &relative))?;
         if let Some(parent) = to.parent() {
@@ -88,21 +121,34 @@ fn user_copy() -> PathBuf {
     paths::notifier_dir().join("plugins").join("md-render")
 }
 
-/// 처음 부를 때 한 번 옮기고 그 결과를 쥔다(mac `mdRenderDir` 의 `let`). 옮기지 못하면 None 이고 이유는 board.log 에 남긴다.
-fn moved_once() -> Option<PathBuf> {
-    static MOVED: OnceLock<Option<PathBuf>> = OnceLock::new();
-    MOVED
-        .get_or_init(|| {
-            let destination = user_copy();
-            match installed_source().and_then(|source| sync(&source, &destination)) {
-                Ok(_) => Some(destination),
-                Err(e) => {
-                    board_log(&format!("답변 꾸미기 플러그인을 옮기지 못했습니다: {e}"));
-                    None
-                }
+/// 옮긴 결과를 쥔다 — 성공만 쥐고 실패는 쥐지 않아서, 파일이 잠겼던 것처럼 한때의 실패는 다음 호출이 다시 옮겨 본다.
+struct MovedCache(Mutex<Option<PathBuf>>);
+
+impl MovedCache {
+    const fn new() -> Self {
+        MovedCache(Mutex::new(None))
+    }
+
+    /// 쥔 값이 있으면 그것, 없으면 `attempt` 를 한 번 해 보고 성공하면 쥔다. 실패는 board.log 에 남기고 None.
+    fn get_or_try(&self, attempt: impl FnOnce() -> io::Result<PathBuf>) -> Option<PathBuf> {
+        let mut held = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if held.is_none() {
+            match attempt() {
+                Ok(destination) => *held = Some(destination),
+                Err(e) => board_log(&format!("답변 꾸미기 플러그인을 옮기지 못했습니다: {e}")),
             }
-        })
-        .clone()
+        }
+        held.clone()
+    }
+}
+
+/// 처음 부를 때 옮기고 성공하면 그 결과를 쥔다(mac `mdRenderDir` 의 `let`). 옮기지 못하면 None 이고 이유는 board.log 에 남기며, 다음 호출이 다시 시도한다.
+fn moved_once() -> Option<PathBuf> {
+    static MOVED: MovedCache = MovedCache::new();
+    MOVED.get_or_try(|| {
+        let destination = user_copy();
+        installed_source().and_then(|source| sync(&source, &destination)).map(|_| destination)
+    })
 }
 
 /// 프론트의 `mdRenderDir()` — 옮겨 둔 md-render 폴더. 옮기지 못했으면 None(그러면 `--plugin-dir` 을 붙이지 않는다).
@@ -269,6 +315,84 @@ mod tests {
         // 옮길 자리에 같은 이름의 폴더가 있으면 옮기지 못하고 실패한다(그러면 md_render_dir 는 None)
         fs::create_dir_all(file_in(&scratch.path("dst"), "LICENSE")).unwrap();
         assert!(sync(&scratch.path("src"), &scratch.path("dst")).is_err());
+    }
+
+    // ── 링크·정션 ──
+
+    // 정션은 권한 없이 만들 수 있다(`mklink /J`). Windows 가 아니면 만들 수 없어 시험을 건너뛴다.
+    #[cfg(windows)]
+    fn make_junction(link: &Path, target: &Path) {
+        let done = std::process::Command::new("cmd").arg("/C").arg("mklink").arg("/J").arg(link).arg(target).output().unwrap();
+        assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stdout));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn junction_destination_is_refused_and_target_is_untouched() {
+        let scratch = Scratch::new();
+        fill_source(&scratch.path("src"));
+        write(&scratch.path("elsewhere"), "LICENSE", "다른 폴더의 파일");
+        let destination = scratch.path("plugins").join("md-render");
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        make_junction(&destination, &scratch.path("elsewhere"));
+        let error = sync(&scratch.path("src"), &destination).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+        assert_eq!(fs::read_to_string(scratch.path("elsewhere").join("LICENSE")).unwrap(), "다른 폴더의 파일");
+        assert!(!scratch.path("elsewhere").join("hooks").exists(), "링크 너머에 아무것도 쓰지 않는다");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn junction_subfolder_is_refused() {
+        let scratch = Scratch::new();
+        fill_source(&scratch.path("src"));
+        fs::create_dir_all(scratch.path("elsewhere")).unwrap();
+        let destination = scratch.path("dst");
+        fs::create_dir_all(&destination).unwrap();
+        make_junction(&destination.join("hooks"), &scratch.path("elsewhere"));
+        let error = sync(&scratch.path("src"), &destination).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+        assert_eq!(fs::read_dir(scratch.path("elsewhere")).unwrap().count(), 0, "링크 너머에 쓰지 않는다");
+        assert!(!destination.join("LICENSE").exists(), "링크를 만나면 일부도 옮기지 않는다");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn symlinked_file_is_refused_when_symlinks_can_be_made() {
+        let scratch = Scratch::new();
+        fill_source(&scratch.path("src"));
+        write(&scratch.path("elsewhere"), "LICENSE", "다른 폴더의 파일");
+        fs::create_dir_all(scratch.path("dst")).unwrap();
+        if std::os::windows::fs::symlink_file(scratch.path("elsewhere").join("LICENSE"), scratch.path("dst").join("LICENSE")).is_err() {
+            eprintln!("이 계정은 심볼릭 링크를 만들 수 없어 건너뛴다(정션 시험이 같은 길을 본다)");
+            return;
+        }
+        let error = sync(&scratch.path("src"), &scratch.path("dst")).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+        assert_eq!(fs::read_to_string(scratch.path("elsewhere").join("LICENSE")).unwrap(), "다른 폴더의 파일");
+    }
+
+    #[test]
+    fn plain_folders_are_not_links() {
+        let scratch = Scratch::new();
+        fill_source(&scratch.path("src"));
+        sync(&scratch.path("src"), &scratch.path("dst")).unwrap();
+        assert!(!is_link(&scratch.path("dst")));
+        assert!(!is_link(&scratch.path("none")));
+        assert!(first_link(&scratch.path("dst"), &PLUGIN_FILES.map(String::from)).is_none());
+    }
+
+    // ── 실패는 쥐지 않는다 ──
+
+    #[test]
+    fn failure_is_not_cached_so_the_next_call_retries() {
+        let cache = MovedCache::new();
+        let mut calls = 0;
+        assert_eq!(cache.get_or_try(|| { calls += 1; Err(io::Error::other("잠김")) }), None);
+        let held = PathBuf::from("md-render");
+        assert_eq!(cache.get_or_try(|| { calls += 1; Ok(held.clone()) }), Some(held.clone()));
+        assert_eq!(cache.get_or_try(|| { calls += 1; Err(io::Error::other("다시 안 부른다")) }), Some(held));
+        assert_eq!(calls, 2, "성공을 쥔 뒤에는 시도하지 않는다");
     }
 
     #[test]

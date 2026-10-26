@@ -4,6 +4,9 @@ import { normalizeItem, unverified } from '../port.mjs';
 // script.check: 판정 | 판정 배열(호출 순서) | (imagePath, item) => 판정
 // script.screen: 같은 모양. script.selftest: 판정
 export class FakeJudge {
+  id = 'fake';
+  version = 1;
+
   constructor(script = {}) {
     this.script = script;
     this.calls = [];
