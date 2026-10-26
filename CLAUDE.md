@@ -121,6 +121,7 @@ Windows 판은 `windows/` 아래에만 있다(최상위 macOS 파일은 고치�
 - `app/` 은 프론트엔드(`package.json`·`src/`), `app/src-tauri/` 는 Tauri 백엔드(`ClaudeBoard.exe` — 인자 없음 = 보드, `--notify …` = 알림 패널 한 개)다. 백엔드는 워크스페이스 밖이라 **Cargo.lock 이 두 개**(`windows/Cargo.lock`, `windows/app/src-tauri/Cargo.lock`)다.
 - `packaging/` — `install.ps1`(설치·업데이트, 보드의 업데이트 단추도 이것을 `-Version <v> -Update` 로 실행), `uninstall.ps1`, `nsis-hooks.nsh`(setup.exe 설치 후 `setup`, 제거 전 `uninstall`), `release.sh`(배포 준비 도우미).
 - `ci/` — CI smoke 작업이 Windows 러너에서 돌리는 설치·화면 확인 스크립트(setup.exe·install.ps1 무인 설치·제거, 보드·알림 패널 스크린샷). Windows 실기 시험은 `crates/*/tests/windows_*.rs` 와 src-tauri 의 `#[cfg(windows)]` 시험이다.
+  GUI 시험 도구도 여기 있다: `ci/gui`(격리 보드 실행기·철선·CDP 도구)와 `ci/jev`(Jev 시험 협업 도구)와 가짜 claude(`ci/fake-claude-tty.cjs`·`ci/fake-claude-login.cjs`). 시험은 `CLAUDE_BOARD_CLAUDE` 로 보드가 치는 `claude` 를 가짜로 바꿔 진짜 claude 를 띄우지 않는다(`CLAUDE_BOARD_HOME` 이 함께 있을 때만 켜지고, 어긋나면 명령을 치지 않고 실패한다). 명령과 규칙은 `windows/docs/SPEC.md` §5.13 이 소유한다.
 - 파일 약속(`~/.claude/notifier/` 의 파일 이름·JSON 필드)은 macOS 와 같다. 한쪽에서 바꾸면 다른 쪽도 고친다.
 - 실행 파일 이름 `ClaudeBoard.exe`·`claude-board-hook.exe`, 릴리스 자산 이름(`ClaudeBoard-windows-x64.zip`(+`.sha256`)·`install.ps1`·`VERSION`)을 바꾸면 이미 설치된 hook·업데이트가 깨진다.
 - hook exe 는 Tauri sidecar(`externalBin`)로 setup.exe 에 묶인다 — 빌드 전에 `app/src-tauri/binaries/claude-board-hook-x86_64-pc-windows-msvc.exe` 로 복사해 두어야 한다(CI 가 한다).
