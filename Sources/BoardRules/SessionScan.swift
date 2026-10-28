@@ -33,18 +33,26 @@ public func scanSessions(records: SessionRecords, processes: ProcessProbe, live:
     var brainPaths = Set<String>()        // 모델·중단 캐시에 남길 대화 기록
     var transcriptPaths = Set<String>()   // 넘김 캐시에 남길 대화 기록
     var handedTo: [String: String] = [:]  // 대화를 백그라운드로 넘긴 세션 → 이어 받은 세션 id
+    var livePids = Set<Int32>()           // Claude Code 상태 캐시에 남길 pid — 목록에 남은 세션의 판정 pid
     for record in records.load() {
         let j = record.json
         var state = j["state"] as? String ?? "idle"
         let updated = Date(timeIntervalSince1970: j["updated"] as? Double ?? 0)
-        // pid 가 확실히 없을 때만 끝난 것으로 본다(권한이 없어 못 보는 pid 는 그대로)
-        if state != "ended", let pid = (j["pid"] as? NSNumber)?.int32Value, processes.isGone(pid) {
+        let sid = sessionID(j, fileName: record.name)
+        // 판정에 쓸 pid — 기록의 pid. state.py 가 claude 를 못 찾아 기록에 pid 가 없으면 Claude Code 의 세션 파일
+        // (~/.claude/sessions/<pid>.json) 가운데 sessionId 가 이 세션인 것의 pid. 끝난 세션은 찾지 않는다(1초마다 도는 길이다).
+        // 찾은 pid 는 이 판정(생사·Claude Code status·이름·셸 수)에만 쓰고 Session.pid 는 기록 그대로 둔다 — Session.pid 는
+        // 중단의 SIGTERM·끝나기 기다리기·탭 짝짓기·재개의 대상이라, 그 동작을 바꾸는 일은 이 판정 밖이다
+        let recordPid = (j["pid"] as? NSNumber)?.int32Value
+        let livePid = recordPid ?? (state != "ended" ? live.pid(forSession: sid) : nil)
+        // pid 가 확실히 없을 때만 끝난 것으로 본다(권한이 없어 못 보는 pid 는 그대로). 기록에 pid 가 없고 Claude Code 세션 파일에서도
+        // 못 찾으면 끝났다고 단정하지 않는다(claude -p 처럼 그 파일을 쓰지 않는 세션이 있을 수 있다)
+        if state != "ended", let livePid, processes.isGone(livePid) {
             state = "ended"
         }
         // 질문 없이 끝난 세션은 대화 기록 파일이 없어 이어 열 수 없으므로 목록에서 뺀다.
         // 지우는 것은 끝난 세션 중 (이틀 넘었거나 대화 기록이 없는) 것뿐이다 — 쉼표가 && 라 끝나지 않은 세션은 대화 기록이 없어도 남는다
         // (첫 요청 전에는 대화 기록이 아직 없다). 대화 기록은 끝난 지 이틀 안 된 세션만 확인한다
-        let sid = sessionID(j, fileName: record.name)
         let cwdPath = j["cwd"] as? String ?? "?"
         let transcript = transcripts.locate(given: j["transcript_path"] as? String, cwd: cwdPath, session: sid)
         if state == "ended", now.timeIntervalSince(updated) > 2 * 86400
@@ -54,7 +62,8 @@ public func scanSessions(records: SessionRecords, processes: ProcessProbe, live:
         }
         // Esc 로 끊긴 세션은 입력을 기다리는 중이다 — 그 뒤에도 도는 서브에이전트·셸이 있으면 아래에서 다시 작업 중이 된다.
         // 첫 응답이 오기 전에 끊으면 대화 기록에 중단 표시가 남지 않으므로 Claude Code 의 status 가 이번 상태 뒤에 idle 이 된 것도 본다
-        let pid = (j["pid"] as? NSNumber)?.int32Value ?? 0
+        let pid = livePid ?? 0
+        livePids.insert(pid)
         var since = Date(timeIntervalSince1970: j["since"] as? Double ?? 0)
         let status = live.statusChange(pid, session: sid).flatMap { $0.at > since ? $0 : nil }
         if state == "working" || state == "waiting",
@@ -109,7 +118,7 @@ public func scanSessions(records: SessionRecords, processes: ProcessProbe, live:
                                 file: record.file,
                                 ctx: contexts.read(sid, transcript: transcript, model: j["model"] as? String ?? "", now: now),
                                 brain: brain,
-                                pid: pid,
+                                pid: recordPid ?? 0,
                                 subagents: subs,
                                 shells: shellCount,
                                 paused: paused,
@@ -117,7 +126,9 @@ public func scanSessions(records: SessionRecords, processes: ProcessProbe, live:
                                 limitAt: ((j["limit_hit"] as? [String: Any])?["at"] as? Double).map { Date(timeIntervalSince1970: $0) },
                                 name: state == "ended" ? nil : live.name(pid)))
     }
-    live.prune(keep: Set(sessions.map(\.pid)))
+    live.prune(keep: livePids)
     transcripts.prune(keep: brainPaths, keepHandoffs: transcriptPaths)
+    // 컨텍스트는 끝난 세션 카드에도 보이므로 목록에 남은 모든 세션 몫을 남긴다(지운 기록은 뺀다)
+    contexts.prune(keep: Set(sessions.map(\.id)), keepTranscripts: transcriptPaths)
     return SessionScan(sessions: sessions, handedTo: handedTo, now: now)
 }

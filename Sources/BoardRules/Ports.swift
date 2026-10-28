@@ -45,7 +45,10 @@ public protocol ClaudeLive: Sendable {
     func statusChange(_ pid: Int32, session: String) -> (status: String, at: Date)?
     /// 세션 이름(자동 이름·--name·/rename). 없으면 nil
     func name(_ pid: Int32) -> String?
-    /// 목록에 남은 세션의 pid 만 캐시에 남긴다
+    /// sessionId 가 이 세션인 파일의 pid — 세션 기록에 pid 가 없을 때(state.py 가 claude 를 못 찾음) 생사를 보려고 찾는다.
+    /// 그런 파일이 없으면 nil(claude -p 처럼 이 파일을 쓰지 않는 세션이 있을 수 있다)
+    func pid(forSession session: String) -> Int32?
+    /// 목록에 남은 세션의 pid(기록의 pid, 없으면 위에서 찾은 pid)만 캐시에 남긴다
     func prune(keep: Set<Int32>)
 }
 
@@ -70,6 +73,8 @@ public protocol ContextUsage: Sendable {
     func read(_ sid: String, transcript: String, model: String, now: Date) -> Ctx?
     /// /effort 로 바꾼 지금 effort — 상태줄 기록이 대화 기록만큼 신선할 때만
     func liveEffort(_ sid: String, transcript: String) -> String?
+    /// 목록에 남은 세션 몫만 캐시에 남긴다 — keep: 세션 id(상태줄 기록), keepTranscripts: 그 세션들의 대화 기록 자리(대화 기록에서 센 컨텍스트)
+    func prune(keep: Set<String>, keepTranscripts: Set<String>)
 }
 
 // 시계 — scanSessions 는 한 번만 읽고 그 시각을 결과(SessionScan.now)로 돌려준다

@@ -35,12 +35,15 @@ private final class FakeProcesses: ProcessProbe, @unchecked Sendable {
 private final class FakeLive: ClaudeLive, @unchecked Sendable {
     var status: [Int32: (session: String, status: String, at: Date)] = [:]
     var names: [Int32: String] = [:]
+    var sessionPids: [String: Int32] = [:]            // ~/.claude/sessions/<pid>.json 의 sessionId → pid
     private(set) var pruned: [Set<Int32>] = []
+    private(set) var pidAsked: [String] = []          // sessionId 로 pid 를 찾은 세션
     func statusChange(_ pid: Int32, session: String) -> (status: String, at: Date)? {
         guard let s = status[pid], s.session == session else { return nil }   // /clear 뒤 같은 pid 의 다른 세션은 모른다
         return (s.status, s.at)
     }
     func name(_ pid: Int32) -> String? { names[pid] }
+    func pid(forSession session: String) -> Int32? { pidAsked.append(session); return sessionPids[session] }
     func prune(keep: Set<Int32>) { pruned.append(keep) }
 }
 
@@ -67,8 +70,10 @@ private final class FakeContexts: ContextUsage, @unchecked Sendable {
     var ctx: [String: Ctx] = [:]
     var efforts: [String: String] = [:]
     private(set) var effortAsked: [String] = []
+    private(set) var pruned: [(keep: Set<String>, keepTranscripts: Set<String>)] = []
     func read(_ sid: String, transcript: String, model: String, now: Date) -> Ctx? { ctx[sid] }
     func liveEffort(_ sid: String, transcript: String) -> String? { effortAsked.append(sid); return efforts[sid] }
+    func prune(keep: Set<String>, keepTranscripts: Set<String>) { pruned.append((keep, keepTranscripts)) }
 }
 
 private struct FakeClock: Clock { let now: Date }
@@ -197,6 +202,88 @@ private let pidRows: [PidRow] = [
         let s = try #require(w.scan().sessions.first)
         #expect((s.state, s.name, s.subagents.count, s.brain) == ("ended", nil, 0, nil))
         #expect(w.transcripts.called("brain").isEmpty)
+    }
+}
+
+// MARK: - pid 없는 세션
+
+// state.py 가 claude 를 못 찾으면 세션 기록의 pid 가 null 이다. 그런 세션은 Claude Code 의 ~/.claude/sessions/<pid>.json 가운데
+// sessionId 가 같은 것의 pid 로 생사를 본다. 못 찾으면 끝났다고 단정하지 않는다(claude -p 처럼 그 파일을 쓰지 않는 세션)
+enum Found: Sendable { case none, alive, gone, denied }
+
+struct NoPidRow: Row {
+    let note: String
+    let state: String
+    var recordPid = false          // 세션 기록에 pid 가 있나(있으면 그 pid 7 이 살아 있다)
+    let found: Found               // Claude Code 파일에서 찾은 pid 21 의 처지
+    let expected: String
+    let looked: Bool               // sessionId 로 pid 를 찾았나
+    let goneAsked: [Int32]
+}
+
+private let noPidRows: [NoPidRow] = [
+    .init(note: "작업 중 + pid 없음 + 찾은 pid 확실히 없음 → 끝남", state: "working", found: .gone, expected: "ended", looked: true, goneAsked: [21]),
+    .init(note: "승인 대기 + pid 없음 + 찾은 pid 확실히 없음 → 끝남", state: "waiting", found: .gone, expected: "ended", looked: true, goneAsked: [21]),
+    .init(note: "대기 + pid 없음 + 찾은 pid 확실히 없음 → 끝남", state: "idle", found: .gone, expected: "ended", looked: true, goneAsked: [21]),
+    .init(note: "작업 중 + pid 없음 + 찾은 pid 살아 있음 → 그대로", state: "working", found: .alive, expected: "working", looked: true, goneAsked: [21]),
+    .init(note: "작업 중 + pid 없음 + 찾은 pid 를 볼 권한 없음 → 그대로", state: "working", found: .denied, expected: "working", looked: true, goneAsked: [21]),
+    .init(note: "작업 중 + pid 없음 + Claude Code 파일 없음 → 그대로(끝났다고 단정하지 않는다)", state: "working", found: .none, expected: "working", looked: true, goneAsked: []),
+    .init(note: "pid 없음 + 이미 끝남 → 찾지 않는다", state: "ended", found: .gone, expected: "ended", looked: false, goneAsked: []),
+    .init(note: "기록에 pid 있음 → 찾지 않고 기록의 pid 로", state: "working", recordPid: true, found: .gone, expected: "working", looked: false, goneAsked: [7]),
+]
+
+@Suite("세션 상태 판정: pid 없는 세션") struct ScanNoPidTests {
+    @Test("기록에 pid 가 없으면 Claude Code 세션 파일의 sessionId 로 pid 를 찾아 생사를 본다", arguments: noPidRows)
+    func 표(row: NoPidRow) throws {
+        let w = World()
+        let found: Int32 = 21
+        if row.found != .none { w.live.sessionPids["a"] = found }
+        if row.found == .gone || row.found == .denied { w.processes.gone.insert(found) }
+        if row.found == .denied { w.processes.denied.insert(found) }
+        w.add("a", state: row.state, pid: row.recordPid ? 7 : nil)
+        let s = try #require(w.scan().sessions.first)
+        #expect(s.state == row.expected)
+        #expect(w.live.pidAsked == (row.looked ? ["a"] : []))
+        #expect(w.processes.goneAsked == row.goneAsked)
+    }
+
+    @Test("찾은 pid 가 확실히 없고 대화 기록도 없으면 끝난 세션처럼 지운다") func 지우기() {
+        let w = World()
+        w.live.sessionPids["a"] = 21
+        w.processes.gone.insert(21)
+        w.add("a", state: "working", transcript: false)
+        #expect(w.scan().sessions.isEmpty)
+        #expect(w.records.removed == ["a.json"])
+    }
+
+    @Test("찾은 pid 로 Claude Code status·세션 이름을 보고 캐시에도 남긴다(Session.pid 는 기록 그대로 0)") func status_이름() throws {
+        let w = World()
+        w.live.sessionPids["a"] = 21
+        w.live.status[21] = ("a", "busy", at(-70))
+        w.live.names[21] = "보드-2b"
+        w.add("a", state: "waiting", since: -100)
+        let s = try #require(w.scan().sessions.first)
+        #expect((s.state, s.since, s.name) == ("working", at(-70), "보드-2b"))   // 승인 창이 닫혀 busy → 작업 중
+        #expect(s.pid == 0)
+        #expect(w.live.pruned == [[21]])
+    }
+
+    @Test("찾은 pid 의 백그라운드 셸도 센다") func 셸() throws {
+        let w = World()
+        w.live.sessionPids["a"] = 21
+        w.processes.shells[21] = 2
+        w.add("a", state: "idle")
+        let s = try #require(w.scan().sessions.first)
+        #expect((s.state, s.shells, s.pid) == ("working", 2, 0))
+    }
+
+    @Test("이미 끝난 pid 없는 세션은 찾지 않으므로 캐시 목록의 pid 는 0") func 끝난_세션() {
+        let w = World()
+        w.live.sessionPids["a"] = 21
+        w.add("a", state: "ended")
+        _ = w.scan()
+        #expect(w.live.pidAsked.isEmpty)
+        #expect(w.live.pruned == [[0]])
     }
 }
 
@@ -426,6 +513,23 @@ private let handoffRows: [HandoffRow] = [
         #expect(w.contexts.effortAsked == [])                         // 모델을 모르면 effort 도 묻지 않는다
         #expect(w.processes.goneAsked == [11, 15])                   // 끝난 세션은 pid 를 묻지 않는다
         #expect(w.processes.shellsAsked == [15])                     // 셸 수는 대기 세션만
+        #expect(w.live.pidAsked == [])                               // 기록에 pid 가 있으면 Claude Code 파일에서 찾지 않는다
+        // 컨텍스트 캐시: 목록에 남은 모든 세션(끝난 것도 — 컨텍스트는 끝난 세션 카드에도 보인다). 지운 기록은 뺀다
+        let ctx = try #require(w.contexts.pruned.first)
+        #expect(w.contexts.pruned.count == 1)
+        #expect(ctx.keep == ["live", "recent", "idle"])
+        #expect(ctx.keepTranscripts == ["/t/live.jsonl", "/t/recent.jsonl", "/t/idle.jsonl"])
+    }
+
+    @Test("사라진 세션은 다음 판정의 컨텍스트 캐시 목록에서 빠진다") func 컨텍스트_다음_판정() {
+        let w = World()
+        w.add("a", state: "working", pid: 1)
+        w.add("b", state: "idle", pid: 2)
+        _ = w.scan()
+        w.records.items.removeAll { $0.name == "b.json" }   // state.py prune 이나 보드가 기록을 지웠다
+        _ = w.scan()
+        #expect(w.contexts.pruned.map(\.keep) == [["a", "b"], ["a"]])
+        #expect(w.contexts.pruned.map(\.keepTranscripts) == [["/t/a.jsonl", "/t/b.jsonl"], ["/t/a.jsonl"]])
     }
 
     @Test("시계는 한 번 읽은 것을 돌려준다") func 시계() {

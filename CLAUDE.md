@@ -70,7 +70,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
 | `sessions/<sid>.paused` | 보드 (일시중지 때, 업데이트·종료로 끊기는 보드 탭 세션에도) | state.py (새 요청이 오면 지움), 보드 (일시중지 카드·재개) |
 | `plugins/md-render/` | 보드 (시작할 때 앱 안 사본에서 바뀐 파일만 옮김. Claude Code 가 안에 `tsconfig.json`·`.claude-plugin/types/` 를 더 씀, `Uninstall.command` 가 지움) | 보드 탭 claude (`--plugin-dir`) |
 | `context/<sid>.json` | 사용자의 상태줄 스크립트 (이 저장소에 없음) | 보드 (컨텍스트 사용량·effort) |
-| `~/.claude/sessions/<pid>.json` (이 폴더 밖, `name`·`status` …) | Claude Code (도는 세션마다, 끝나면 지움) | 보드 (카드 세션 이름 라벨·탭 줄 이름, 이름 바꾸기 전 승인 창 확인 `status`) |
+| `~/.claude/sessions/<pid>.json` (이 폴더 밖, `name`·`status` …) | Claude Code (도는 세션마다, 끝나면 지움) | 보드 (카드 세션 이름 라벨·탭 줄 이름, 이름 바꾸기 전 승인 창 확인 `status`, pid 없는 세션의 생사(sessionId 로 찾음)) |
 | `/tmp/.claude-usage-cache.json` | 보드·상태줄 스크립트가 함께 씀 | 보드 |
 
 ### 실행 파일
