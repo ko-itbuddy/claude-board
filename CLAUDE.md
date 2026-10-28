@@ -80,7 +80,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
 ### 실행 파일
 
 - `ClaudeBoard.swift` (약 10,400줄) — 보드 앱 전체. AppKit 창 위에 SwiftUI 화면을 얹었고 `// MARK:` 로 나뉜다.
-  주요 부분: `Store`(1초마다 `scanSessions` 로 세션 상태를 정해 경로별 `Group` 으로 묶음), `UsageStore`(키체인의 OAuth 토큰으로 `api.anthropic.com/api/oauth/usage` 조회),
+  주요 부분: `Store`(1초마다 `scanSessions` 로 세션 상태를 정해 경로별 `Group` 으로 묶음), `UsageStore`(30초마다 사용량 조회·계정 전환 세대 확인·화면 갱신, 사용량 규칙은 BoardRules),
   `AccountStore`·`AutoSwitcher`(키체인 `Claude Code-credentials` 와 `~/.claude.json` 의 `oauthAccount` 를 `/usr/bin/security` 로 바꿔 끼워 계정 전환, 저장 계정은 키체인 서비스 `Claude Board-account`),
   `Updater`(최신 릴리스의 `VERSION` 비교 후 `install.sh` 실행), 다른 터미널 포커스·조작(Ghostty·iTerm2·Terminal 에 AppleScript, `focusGhostty`·`ghosttySend` 등).
   창 크기에 따라 `BoardTier`(full·medium·mini)로 그린다. `$TMPDIR/claude-board.lock` 을 `flock` 해 한 번만 뜨고, 두 번째 실행은 `claude-board.show` 분산 알림만 보내고 끝난다.
@@ -95,9 +95,10 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
   설계·결정·실측은 `docs/내장 터미널/설계.md`(11장 단계별 메모) — 이 기능을 바꿀 때 먼저 본다.
   `// MARK: - 설정 화면` — 앱 메뉴 > 설정…(⌘,)이 터미널 영역을 덮는 `SettingsView`(`SettingsHostingView` 에 얹음, 열고 닫기는 `SettingsScreen`). 항목은 `SettingsItem` 표 하나에서 그리고 검색도 이 표로 한다.
   `// MARK: - 단축키` — `Shortcuts.actions` 가 바꿀 수 있는 보드 단축키 표(메뉴·안내 글자도 여기서 읽음). 로그인할 때 열기는 `LoginItem`(LaunchAgent plist 를 쓰고 지우고, 끄면 `login-launch-off` 표지).
-- `Sources/BoardRules/` — 보드의 순수 규칙 라이브러리(Foundation 만): 세션·서브에이전트·카드 모델(`Session`·`Sub`·`Group`·`Ctx`·`Brain`), 세션 기록 해석(`Sub.parse`·`sessionID`), 카드에 보일 세션·묶음·정렬(`visibleSessions`·`groupSessions`·`sortGroups`), 화면 경로의 홈 줄이기(`displayPath`).
+- `Sources/BoardRules/` — 보드의 순수 규칙 라이브러리(Foundation 만): 세션·서브에이전트·카드 모델(`Session`·`Sub`·`Group`·`Ctx`·`Brain`), 세션 기록 해석(`Sub.parse`·`sessionID`), 카드에 보일 세션·묶음·정렬(`visibleSessions`·`groupSessions`·`sortGroups`), 화면 경로의 홈 줄이기(`displayPath`), 요금제 사용량(`Usage.swift`: `Limit`·응답 해석 `parseUsage`·토큰 상태 `loginToken`·캐시를 믿을지·받을지 `checkUsageCache`·받기 `fetchUsage`·받은 결과 처리 `settleUsage`, 앱도 쓰는 `isoDate`).
   보드가 `import BoardRules` 로 쓰고, SwiftUI 와 겹치는 `Group` 은 `ClaudeBoard.swift` 의 별칭이 이것을 가리킨다. 규칙을 바꾸면 `Tests/BoardRulesTests/` 의 입력·기대값 표도 함께 고친다(이슈 #9).
   포트·어댑터: 세션 상태 판정 `scanSessions`(`SessionScan.swift`)는 바깥을 포트(`Ports.swift`: `SessionRecords`·`ProcessProbe`·`ClaudeLive`·`Transcripts`·`ContextUsage`·`Clock`)로만 부른다 — 포트는 BoardRules, 진짜 어댑터는 `ClaudeBoard.swift`(`SessionFiles`·`SystemProcesses`·`TranscriptFiles`·`ClaudeNames`·`ContextReader`·`SystemClock`, mtime 캐시도 어댑터에), 가짜 어댑터는 `Tests/` 에만 둔다.
+  사용량 규칙도 같은 방식으로 `UsageCache`(`/tmp/.claude-usage-cache.json`, 상태줄과 함께 쓰는 약속)·`LoginCredentials`(키체인 로그인 정보)·`UsageAPI`·`Clock` 포트로만 부른다 — 진짜 어댑터는 `UsageCacheFile`·`KeychainCredentials`·`OAuthUsageAPI`(상태 없는 struct).
   규칙에 새 OS 호출(파일·프로세스·시각·홈 폴더)을 넣을 때는 포트를 거친다 — BoardRules 에서 FileManager·kill·`Date()` 를 직접 부르지 않는다(남은 예외: `Group.path` 의 `NSHomeDirectory()`).
 - `ClaudeNotifier.swift` — 알림 패널. 인자는 파일 머리 주석 참고. 여러 패널이 동시에 뜨면 슬롯 파일로 자리를 나눈다. `--session` 을 받으면 누를 때 보드에 `focus` 동작을 알린다.
 - `board-tui.py` — 터미널판 보드(`claude-board-tui`).
