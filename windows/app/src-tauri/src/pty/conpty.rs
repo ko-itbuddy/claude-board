@@ -202,14 +202,15 @@ impl ConPty {
         Ok(())
     }
 
-    /// 가짜 콘솔이 이미 닫혔으면 아무 일도 하지 않고 Ok 를 돌려준다(닫힌 핸들은 해제된 메모리다).
-    pub fn resize(&self, cols: u16, rows: u16) -> io::Result<()> {
+    /// 크기를 바꿨으면 `Ok(true)`. 가짜 콘솔이 이미 닫혔으면 아무 일도 하지 않고 `Ok(false)` 를 돌려준다(닫힌 핸들은 해제된 메모리다).
+    pub fn resize(&self, cols: u16, rows: u16) -> io::Result<bool> {
         let open = lock(&self.console_open);
         if !*open {
-            return Ok(());
+            return Ok(false);
         }
         // SAFETY: 뮤텍스를 쥔 동안은 close_console 이 핸들을 해제하지 못한다
-        hresult(unsafe { (self.api.resize)(self.hpc, coord(cols, rows)) })
+        hresult(unsafe { (self.api.resize)(self.hpc, coord(cols, rows)) })?;
+        Ok(true)
     }
 
     /// 가짜 콘솔을 닫는다(한 번만). 붙어 있던 프로세스에는 콘솔이 닫혔다고 알려진다. 오래 걸릴 수 있어
@@ -444,7 +445,7 @@ mod tests {
             }
             assert_eq!(USED_AFTER_CLOSE.load(Ordering::SeqCst), 0);
             assert_eq!(CLOSES.load(Ordering::SeqCst), 1);
-            assert!(pty.resize(100, 30).is_ok());
+            assert!(!pty.resize(100, 30).unwrap(), "닫힌 뒤에는 적용하지 않았다고 알린다");
         }
     }
 }

@@ -1,10 +1,11 @@
 // 터미널 한 칸의 컨트롤러 — xterm 한 개와 백엔드 터미널(TermId) 한 개를 이어 준다.
 // 자기 host div 를 가지고 있어 칸을 다른 부모로 appendChild 로 옮겨도 화면과 출력이 그대로다(나중에 칸을 나눌 때 쓴다).
 // xterm 은 이 칸이 처음 보일 때 동적 import 로 읽는다(알림 패널 번들에 들어가지 않게).
-import { termAck, termAttach, termList, termResize, termWrite, termWriteBin } from "$lib/backend";
+import { log, termAck, termAttach, termList, termResize, termWrite, termWriteBin } from "$lib/backend";
 import type { TermFrame, TermId, TermInfo } from "$lib/types";
 import { createImeKeys, type ImeKeys } from "./ime";
 import { ReplayGate } from "./replayGate";
+import { ResizeBarrier } from "./resizeBarrier";
 import { disposeWebgl } from "./webglBlink";
 // 형식만 가져오므로 번들에 들어가지 않는다
 import type { Terminal } from "@xterm/xterm";
@@ -14,12 +15,12 @@ import type { WebglAddon } from "@xterm/addon-webgl";
 /** 백엔드가 보내는 ack 간격(계약: 16ms 또는 64KiB 마다 최대 한 번) */
 const ACK_INTERVAL_MS = 16;
 const ACK_BYTES = 64 * 1024;
-/** term_resize 앞 디바운스 */
-const RESIZE_DEBOUNCE_MS = 100;
+/** 장벽에 크기를 요청하기 전 뒤쪽 디바운스 */
+const RESIZE_DEBOUNCE_MS = 200;
 /** ConPTY 가 줄 바꿈을 직접 다시 계산하는 첫 빌드(xterm windowsPty 규칙) */
 const CONPTY_REFLOW_BUILD = 21376;
 
-/** 터미널 테마 배경 — 고른 탭·현재 경로 항목·칸 바탕이 같은 색을 쓰도록 이 한 곳에서 정하고 TerminalArea 가 --term-bg 로 내보낸다 */
+/** 터미널 테마 배경 — 고른 탭·현재 경로 항목·칸 바탕이 같은 색을 쓰도록 이 한 곳에서 정하고 TerminalAreaView 가 --term-bg 로 내보낸다 */
 export const TERM_BG = "#212121";
 
 const THEME = {
@@ -52,7 +53,21 @@ export class TermController {
   private visible = false;
   private dragging = false;
   private fitFrame = 0;
-  private resizeTimer: ReturnType<typeof setTimeout> | undefined;
+  private fitDebounceTimer: ReturnType<typeof setTimeout> | undefined;
+  // xterm 크기는 장벽이 ConPTY 의 다시 그리기 머리말에서만 바꾼다(fitNow 는 요청만 한다)
+  private readonly barrier = new ResizeBarrier({
+    sendResize: async ({ cols, rows }) => (this.termId ? await termResize(this.termId, cols, rows) : null),
+    applyLocal: ({ cols, rows }) => this.term?.resize(cols, rows),
+    write: (bytes, done) => this.safeWrite(bytes, done),
+    // xterm 의 쓰기 대기열은 비동기로 해석된다: 빈 쓰기의 콜백은 앞서 쓴 바이트를 다 해석한 뒤에 온다
+    flush: (done) => (this.term ? this.safeWrite(new Uint8Array(0), done) : done()),
+    current: () => ({ cols: this.term?.cols ?? 80, rows: this.term?.rows ?? 24 }),
+    altScreen: () => this.term?.buffer.active.type === "alternate",
+    bound: () => this.termId !== null && this.term !== null,
+    setTimer: (fn, ms) => setTimeout(fn, ms),
+    clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+    log: (message) => log(message),
+  });
   private disposed = false;
   private focusWhenOpen = false;
 
@@ -165,7 +180,6 @@ export class TermController {
     term.onBinary((data) => {
       if (this.termId && this.gate.allows(Date.now())) termWriteBin(this.termId, Array.from(data, (ch) => ch.charCodeAt(0)));
     });
-    term.onResize(({ cols, rows }) => this.scheduleResize(cols, rows));
     term.onTitleChange((title) => this.hooks.onTitle(title));
     this.ime = createImeKeys(
       term.textarea!,
@@ -236,13 +250,14 @@ export class TermController {
     this.replayEnd = Number.POSITIVE_INFINITY;
     const attached = await termAttach(info.id, this.expectedSeq, (frame) => this.onFrame(frame));
     this.replayEnd = attached.nextSeq;
+    // 이어 붙은(이미 도는) 터미널의 ConPTY 는 이 칸의 크기를 모른다: 같은 크기여도 한 번 알린다(백엔드가 같으면 null 을 돌려 장벽이 바로 끝낸다)
+    this.barrier.request({ cols: term.cols, rows: term.rows }, { force: true });
     this.requestFit();
-    // 마지막으로 알린 크기와 다르면 한 번 알린다(같으면 백엔드가 무시한다)
-    this.scheduleResize(term.cols, term.rows);
   }
 
   /** 새 셸로 바꿀 때 — 화면을 비우고 출력 오프셋을 처음으로 돌린다 */
   reset() {
+    this.barrier.reset(); // 붙잡은 프레임을 먼저 풀어 낡은 단계가 새 셸에 크기를 적용하지 못하게 한다
     this.termId = null;
     this.term?.reset();
     this.expectedSeq = 0;
@@ -258,7 +273,8 @@ export class TermController {
     const term = this.term;
     if (!term || this.disposed) return;
     if (frame.kind === "gap") {
-      // 링이 덮여 처음부터 다시 온다 — 앞서 쓴 출력 다음 순서로 화면을 비우고(RIS) 다시 받은 것으로 센다
+      // 링이 덮여 처음부터 다시 온다 — 장벽이 붙잡은 프레임을 먼저 쓴 다음 순서로 화면을 비우고(RIS) 다시 받은 것으로 센다
+      this.barrier.interrupt("gap");
       this.safeWrite("\x1bc", () => {});
       this.expectedSeq = frame.seq;
       this.ackedSeq = frame.seq;
@@ -268,7 +284,8 @@ export class TermController {
       return;
     }
     if (frame.kind === "exit") {
-      // 앞서 쓴 출력이 모두 그려진 뒤에 알린다
+      // 붙잡은 프레임을 먼저 쓰고(interrupt), 앞서 쓴 출력이 모두 그려진 뒤에 알린다
+      this.barrier.interrupt("exit");
       this.safeWrite("", () => this.hooks.onExit(frame.code));
       return;
     }
@@ -282,7 +299,8 @@ export class TermController {
     this.expectedSeq = end;
     const replay = start < this.replayEnd;
     if (replay) this.gate.replayWriteStarted();
-    this.safeWrite(bytes, () => {
+    // 크기를 바꾸는 중이면 장벽이 붙잡고, 쓴 뒤에야 done 이 불려 ack 도 그때 나간다
+    this.barrier.output(start, bytes, () => {
       if (replay) this.gate.replayWriteFinished();
       this.acknowledge(end);
     });
@@ -339,20 +357,22 @@ export class TermController {
   private fitNow() {
     const dims = this.fitAddon?.proposeDimensions();
     if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return;
-    if (dims.cols !== this.term?.cols || dims.rows !== this.term?.rows) this.term?.resize(dims.cols, dims.rows);
-  }
-
-  private scheduleResize(cols: number, rows: number) {
-    clearTimeout(this.resizeTimer);
-    this.resizeTimer = setTimeout(() => {
-      if (this.termId) termResize(this.termId, cols, rows);
-    }, RESIZE_DEBOUNCE_MS);
+    const term = this.term;
+    if (!term) return;
+    // 붙기 전(첫 출력 전)에는 디바운스 없이 바로 맞춘다 — 장벽이 xterm 만 바꾼다
+    if (!this.termId) {
+      this.barrier.request({ cols: dims.cols, rows: dims.rows });
+      return;
+    }
+    clearTimeout(this.fitDebounceTimer);
+    this.fitDebounceTimer = setTimeout(() => this.barrier.request({ cols: dims.cols, rows: dims.rows }), RESIZE_DEBOUNCE_MS);
   }
 
   dispose() {
     this.disposed = true;
     cancelAnimationFrame(this.fitFrame);
-    clearTimeout(this.resizeTimer);
+    clearTimeout(this.fitDebounceTimer);
+    this.barrier.dispose();
     clearTimeout(this.ackTimer);
     this.waitingForSize?.();
     this.inputListeners?.abort();

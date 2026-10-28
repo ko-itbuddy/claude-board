@@ -1,35 +1,14 @@
 <script lang="ts">
-  // 세션 위치 칩(ClaudeBoard.swift PlaceChip) — 어디서 도는지: 보드 탭 CB(탭 안 claude -p 는 CB -p), 다른 터미널은 앱 이름,
-  // 백그라운드는 실제 실행 방식($ claude -p·--bg), 끝난 세션은 누르면 보드에서 이어 연다는 표시.
-  // Session.place 는 이후 단계(세션·탭 짝짓기)가 채운다 — 없으면 이 칩을 그리지 않는다
-  import type { SessionPlace } from "$lib/types";
+  // 세션 위치 칩(ClaudeBoard.swift PlaceChip): 어디서 도는지 보여 준다. 칩의 자리(kind)는 terminal/place.ts 의
+  // pure pairing module(pairSessions·placeOf)이 정하고, 글자·색·힌트는 placeChip.ts 표가 정한다.
+  // 이 컴포넌트는 그 화면을 그리는 일만 한다: 세션 줄(SessionRow)은 hub 의 place(s) 로 자리를 받아 항상 그린다
+  import type { SessionPlace } from "$lib/terminal/place";
+  import { chipView, type ChipMode } from "./placeChip";
   import { hint } from "./hint.svelte";
 
-  let { place, headless = false }: { place: SessionPlace; headless?: boolean } = $props();
+  let { place, headless = false, appName = null, mode = null }: { place: SessionPlace; headless?: boolean; appName?: string | null; mode?: ChipMode | null } = $props();
 
-  const view = $derived.by(() => {
-    const mode = place.mode;
-    switch (place.kind) {
-      case "tab":
-        return {
-          text: mode ? `CB ${mode}` : "CB",
-          bg: "46 59 87",
-          fg: "168 194 255",
-          mono: false,
-          tip: headless || mode ? `보드 탭 안에서 시작된 claude ${mode ?? "-p"} (탭이 닫히면 함께 끝납니다)` : "보드 탭에서 도는 세션 — 누르면 그 탭으로",
-        };
-      case "terminal":
-        return place.appName
-          ? { text: place.appName, bg: "36 64 74", fg: "143 217 232", mono: false, tip: `${place.appName} 에서 도는 세션` }
-          : null;
-      case "background":
-        return { text: `$ claude ${mode ?? "-p"}`, bg: "59 51 69", fg: "212 184 255", mono: true, tip: "터미널 없이 도는 세션입니다. 보드는 상태만 보여 줍니다" };
-      case "ended":
-        return headless
-          ? { text: "$ claude -p", bg: "", fg: "", mono: true, tip: "끝난 백그라운드 세션입니다. 메뉴의 세션 다시 열기로 보드 탭에서 엽니다" }
-          : { text: "보드에서 이어 열기", bg: "", fg: "", mono: false, tip: "누르면 보드 새 탭에서 이 대화를 이어 엽니다" };
-    }
-  });
+  const view = $derived(chipView(place, headless, appName, mode));
 </script>
 
 {#if view}

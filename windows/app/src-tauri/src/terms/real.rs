@@ -152,10 +152,10 @@ fn resize_is_seen_by_the_child() {
     let info = hub.spawn_program("pwsh", &shell.path, &args, &paths::home(), 80, 24).unwrap();
     let v = view(&hub, &info.id);
     v.wait_text("SIZE=80x24", 30);
-    hub.resize(&info.id, 100, 40).unwrap();
+    assert!(hub.resize(&info.id, 100, 40).unwrap().is_some(), "적용된 크기라면 Some 이다");
     v.wait_text("SIZE=100x40", 10);
     for (c, r) in [(1, 40), (100, 0), (100, 40)] {
-        hub.resize(&info.id, c, r).unwrap();
+        assert!(hub.resize(&info.id, c, r).unwrap().is_none(), "무시해야 하는 크기다: {c}x{r}");
     }
     assert_eq!((hub.list()[0].cols, hub.list()[0].rows), (100, 40));
 }

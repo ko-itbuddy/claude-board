@@ -2,7 +2,7 @@
 // 단추·줄마다 hover 를 따로 보면 경계를 지날 때 끊기므로 문서 전체에서 한 번만 추적한다
 import { inTauri } from "$lib/backend";
 
-// 터미널 독 크기(ClaudeBoard.swift:3503-3511) — 보드 칸 바깥쪽 끝에서 이 폭 안, 아래에서 독 높이 조금 위까지 마우스가 오면 연다
+// 터미널 독 크기(ClaudeBoard.swift EdgeDock.size·trigger) — 보드 칸 바깥쪽 끝에서 이 폭 안, 아래에서 독 높이 조금 위까지 마우스가 오면 연다
 export const DOCK = { size: 36, gap: 8, pad: 8, trigger: 16, bottomInset: 34 };
 export const dockHeight = (n: number) => n * (DOCK.size + DOCK.gap) - DOCK.gap + DOCK.pad * 2;
 

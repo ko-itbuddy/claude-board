@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 보드 화면(SPEC §7, ClaudeBoard.swift:3772-4095·4246-4460) — 창 크기에 따라 전체·중간·미니 세 단계로 그린다.
+  // 보드 화면(SPEC §7, ClaudeBoard.swift BoardView·BoardTier·MiniBoard) — 창 크기에 따라 전체·중간·미니 세 단계로 그린다.
   // 창은 [터미널 칸 │ 경계 │ 보드 칸]으로 나뉜다(보드가 왼쪽이면 뒤집는다). 터미널을 접으면 보드 칸이 창 전체다
   import { tick } from "svelte";
   import { flip } from "svelte/animate";
@@ -17,12 +17,15 @@
   import TitleBar from "$lib/board/TitleBar.svelte";
   import UpdateBanner from "$lib/board/UpdateBanner.svelte";
   import UsagePanel from "$lib/board/UsagePanel.svelte";
-  import Divider from "$lib/terminal/Divider.svelte";
-  import TerminalArea from "$lib/terminal/TerminalArea.svelte";
+  import PaneDivider from "$lib/terminal/PaneDivider.svelte";
+  import TerminalAreaView from "$lib/terminal/TerminalAreaView.svelte";
+  import ShutdownList from "$lib/terminal/ShutdownList.svelte";
+  import TerminalNotice from "$lib/terminal/TerminalNotice.svelte";
   import { setDragging, startHub } from "$lib/terminal/hub.svelte";
-  import { clampBoardWidth, MIN_BOARD, maxBoardWidth } from "$lib/terminal/paneLayout";
+  import { clampBoardWidth, boardMinWidth, maxBoardWidth } from "$lib/terminal/paneLayout";
   import { stateName, stateRgb } from "$lib/board/format";
   import { hint } from "$lib/board/hint.svelte";
+  import { boardOpaque, coversWorkArea } from "$lib/board/opacity";
   import { pointer, trackWindow, win } from "$lib/board/pointer.svelte";
   import { board, connect, ui, type Tier } from "$lib/board/store.svelte";
 
@@ -49,6 +52,19 @@
     return () => window.removeEventListener("resize", sync);
   });
 
+  // 창이 그 모니터 작업 영역을 덮는가(3.1.9) — 펼쳤는가가 아니다. 크기가 바뀔 때, 다른 모니터로 옮겨 마우스가 들어올 때 다시 잰다
+  let covering = $state(true);
+  $effect(() => {
+    const measure = () => (covering = coversWorkArea(window.outerWidth, window.outerHeight, screen.availWidth, screen.availHeight));
+    measure();
+    window.addEventListener("resize", measure);
+    document.documentElement.addEventListener("mouseenter", measure);
+    return () => {
+      window.removeEventListener("resize", measure);
+      document.documentElement.removeEventListener("mouseenter", measure);
+    };
+  });
+
   // 터미널을 처음 펼칠 때 아직 도는 터미널을 이어받는다(탭은 만들지 않는다 — 탭이 생길 때까지 빈 상태)
   $effect(() => {
     if (expanded) void startHub();
@@ -65,12 +81,13 @@
     setDragging(false);
   }
 
-  // 투명 모드 — 보드가 활성이 아니고 마우스가 창 밖이면 고른 투명도, 마우스가 들어오거나 활성이면 불투명.
-  // 슬라이더를 끄는 동안과 놓은 뒤 1.2초는 고른 투명도를 미리 보여 준다. 터미널을 펼친 동안은 늘 불투명이다
+  // 투명 모드 — 마우스가 창 밖이면(보드를 쓰는 중이어도) 고른 투명도, 마우스가 들어오면 불투명.
+  // 슬라이더를 끄는 동안과 놓은 뒤 1.2초는 고른 투명도를 미리 보여 준다. 작업 영역을 덮은 창은 늘 불투명이다
   $effect(() => {
     if (!snap) return;
     const level = win.dragging ? win.dragLevel : snap.settings.opacity;
-    const solid = expanded || (!win.previewing && (pointer.inside || win.focused));
+    // 규칙은 board/opacity.ts — 마우스 위치만 본다(포커스는 보지 않는다)
+    const solid = boardOpaque({ covering, previewing: win.previewing, pointerInside: pointer.inside });
     const root = document.documentElement;
     root.style.transition = win.previewing ? "none" : "opacity 0.22s ease";
     root.style.opacity = String(solid ? 1 : level);
@@ -214,10 +231,10 @@
   {#if snap}
     <!-- 접어도 언마운트하지 않고 숨긴다 — 셸과 출력이 그대로 남는다 -->
     <div class="termPane" class:hidden={!expanded}>
-      <TerminalArea {expanded} {side} />
+      <TerminalAreaView {expanded} {side} />
     </div>
     {#if expanded}
-      <Divider root={rootEl} {side} min={MIN_BOARD} max={maxBoard} onresize={resizeBoard} oncommit={commitBoard} />
+      <PaneDivider root={rootEl} {side} min={boardMinWidth} max={maxBoard} onresize={resizeBoard} oncommit={commitBoard} />
     {/if}
   {/if}
   <div class="board" style:width={expanded ? `${boardWidth}px` : undefined} bind:this={boardEl}>
@@ -304,10 +321,12 @@
 </div>
 
 <HintLayer />
+<TerminalNotice />
+<ShutdownList />
 <MenuLayer />
 
 <style>
-  /* 창 바탕(Backdrop, ClaudeBoard.swift:2608-2622): 짙은 남색 그라데이션 위에 왼쪽 위에서 강조색 빛, 오른쪽 아래에서 푸른 빛.
+  /* 창 바탕(ClaudeBoard.swift Backdrop): 짙은 남색 그라데이션 위에 왼쪽 위에서 강조색 빛, 오른쪽 아래에서 푸른 빛.
      Tauri 창이 투명·테두리 없음이라 둥근 모서리와 바탕을 여기서 직접 그린다(뒤의 Mica 가 살짝 비치게 조금 투명) */
   .root {
     position: fixed;

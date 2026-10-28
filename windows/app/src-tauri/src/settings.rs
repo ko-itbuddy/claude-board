@@ -8,6 +8,7 @@ use claude_board_core::{fileio, paths};
 use serde::{Deserialize, Serialize};
 
 use crate::model::SettingsView;
+use crate::window::{BOARD_LAUNCH_WIDTH, BOARD_MIN_WIDTH};
 
 /// 창 위치·크기(물리 픽셀).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -48,6 +49,10 @@ pub struct Settings {
     pub board_side: String,
     /// 펼친 채 최대축소로 들어갔는지의 표지 — 원래 크기로 돌아올 때 다시 펼친다
     pub mini_from_expanded: bool,
+    /// 다시 뜰 때 이어 열 보드 탭 목록(mac `terminalTabs`) — 항목 모양은 프론트(`restore.ts TabEntry`)가 쥐고 백엔드는 그대로 둔다
+    pub terminal_tabs: Vec<serde_json::Value>,
+    /// 답변 꾸미기(md-render)를 끄고 띄운 세션 id(mac `mdRenderOff`) — 다시 열 때 같은 모양으로 연다
+    pub md_render_off: Vec<String>,
 }
 
 impl Default for Settings {
@@ -71,19 +76,17 @@ impl Default for Settings {
             board_restore_frame: None,
             window_frame: None,
             terminal_expanded: true,
-            board_pane_width: DEFAULT_PANE_WIDTH,
+            board_pane_width: BOARD_LAUNCH_WIDTH,
             board_side: "right".into(),
             mini_from_expanded: false,
+            terminal_tabs: Vec::new(),
+            md_render_off: Vec::new(),
         }
     }
 }
 
 pub const MASCOTS: [&str; 8] = ["tralalero", "bombardiro", "tungtung", "lirili", "patapim", "boneca", "cappuccino", "foreman"];
 pub const SIDES: [&str; 2] = ["right", "left"];
-/// 보드 칸 폭의 기본값(논리 픽셀)
-pub const DEFAULT_PANE_WIDTH: f64 = 454.0;
-/// 보드 칸이 이보다 좁으면 전체·중간 화면이 무너진다(논리 픽셀)
-pub const MIN_PANE_WIDTH: f64 = 360.0;
 pub const POSITIONS: [&str; 5] = ["center", "top-left", "top-right", "bottom-left", "bottom-right"];
 
 impl Settings {
@@ -126,6 +129,7 @@ impl Settings {
             terminal_expanded: self.terminal_expanded,
             board_side: self.board_side.clone(),
             board_pane_width: self.board_pane_width,
+            md_render_off: self.md_render_off.clone(),
             notify_position,
         }
     }
@@ -167,9 +171,9 @@ pub fn clamp_opacity(v: f64) -> f64 {
 /// 보드 칸 폭 — 숫자가 아니면 기본값, 너무 좁으면 최소값.
 pub fn clamp_pane_width(v: f64) -> f64 {
     if v.is_finite() {
-        v.max(MIN_PANE_WIDTH)
+        v.max(BOARD_MIN_WIDTH)
     } else {
-        DEFAULT_PANE_WIDTH
+        BOARD_LAUNCH_WIDTH
     }
 }
 
@@ -236,10 +240,15 @@ mod tests {
         s.board_pane_width = 520.5;
         s.board_side = "left".into();
         s.mini_from_expanded = true;
+        s.terminal_tabs = vec![serde_json::json!({"workspace": "/w", "name": null, "selected": true, "root": {"leaf": {"cwd": "/w", "command": null, "sessionId": "s1", "mdRenderOff": false}}})];
+        s.md_render_off = vec!["s1".into(), "s2".into()];
         s.save(&path).unwrap();
         let back = Settings::load(&path);
         assert_eq!(back, s);
         assert_eq!(back.collapsed, ["/b"]);
+        assert_eq!(back.terminal_tabs.len(), 1);
+        assert_eq!(back.terminal_tabs[0]["root"]["leaf"]["sessionId"], "s1");
+        assert_eq!(back.md_render_off, ["s1", "s2"]);
 
         // 프론트에 보내는 키 이름
         let v = serde_json::to_value(back.view("top-left".into())).unwrap();
@@ -249,6 +258,8 @@ mod tests {
         assert_eq!(v["terminalExpanded"], false);
         assert_eq!(v["boardSide"], "left");
         assert_eq!(v["boardPaneWidth"], 520.5);
+        assert_eq!(v["mdRenderOff"], serde_json::json!(["s1", "s2"]));
+        assert!(v.get("terminalTabs").is_none(), "탭 목록은 상태 묶음에 싣지 않고 load_tabs 로 읽는다");
         assert!(v.get("hiddenGroups").is_none());
         assert!(v.get("miniFromExpanded").is_none());
 
@@ -265,6 +276,8 @@ mod tests {
             "boardPaneWidth",
             "boardSide",
             "miniFromExpanded",
+            "terminalTabs",
+            "mdRenderOff",
         ];
         for k in stored {
             assert!(raw.get(k).is_some(), "{k}");
@@ -282,6 +295,8 @@ mod tests {
         let odd = Settings::load(&path);
         assert_eq!((odd.opacity, odd.mascot.as_str(), odd.pinned), (1.0, "tralalero", false));
         assert_eq!((odd.board_side.as_str(), odd.board_pane_width), ("right", 360.0));
+        // 새 필드가 없는 예전 파일도 기본값(빈 목록)으로 읽는다
+        assert!(odd.terminal_tabs.is_empty() && odd.md_render_off.is_empty());
         fs::write(&path, b"{broken").unwrap();
         assert_eq!(Settings::load(&path), Settings::default());
         fs::remove_dir_all(&dir).unwrap();

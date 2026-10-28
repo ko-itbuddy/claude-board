@@ -1,9 +1,10 @@
 <script lang="ts">
-  // 경로 카드(ClaudeBoard.swift:2203-2395): 머리(접기 화살표·폴더 또는 대표 상태·이름·경로·별·X·상태별 개수, 오른쪽 클릭 메뉴),
+  // 경로 카드(ClaudeBoard.swift GroupCard): 머리(접기 화살표·폴더 또는 대표 상태·이름·경로·별·X·상태별 개수, 오른쪽 클릭 메뉴),
   // 안에 터미널/백그라운드 구역과 세션 줄, "종료된 세션 n개"(접기, 마우스를 올리면 휴지통)
   import { cubicOut } from "svelte/easing";
   import { fade, fly, slide } from "svelte/transition";
   import type { BoardSettings, Group } from "$lib/types";
+  import { place } from "$lib/terminal/hub.svelte";
   import { DEFAULT_SESSION_COMMAND, startSession } from "$lib/terminal/launch";
   import { hideGroup, removeEnded, toggleEndedOpen, toggleKindCollapsed, togglePinGroup } from "$lib/backend";
   import HeaderButton from "./HeaderButton.svelte";
@@ -31,8 +32,9 @@
   const pinned = $derived(settings.pinnedGroups.includes(g.id));
   const endedOpen = $derived(settings.endedOpen.includes(g.id));
   const live = $derived(g.sessions.filter((s) => s.state !== "ended"));
-  const terminal = $derived(live.filter((s) => !s.headless));
-  const background = $derived(live.filter((s) => s.headless));
+  // 구역은 세션이 도는 자리로 나눈다(mac 구역 머리글) — 보드 탭 안에서 시작한 claude -p 는 터미널 구역이다
+  const terminal = $derived(live.filter((s) => place(s).kind !== "background"));
+  const background = $derived(live.filter((s) => place(s).kind === "background"));
   const ended = $derived(g.sessions.filter((s) => s.state === "ended"));
   const termFolded = $derived(settings.kindCollapsed.includes(`${g.id}|term`));
   const bgFolded = $derived(settings.kindCollapsed.includes(`${g.id}|bg`));

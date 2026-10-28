@@ -113,7 +113,7 @@ fn on_menu(app: &AppHandle, e: MenuEvent) {
     let id = e.id().as_ref().to_string();
     match id.as_str() {
         "show" => crate::window::show(app, true),
-        "quit" => app.exit(0),
+        "quit" => crate::shutdown::quit(app),
         "update" => {
             // 결과는 보드의 알림 줄에 뜨므로 보드를 먼저 연다
             crate::window::show(app, true);

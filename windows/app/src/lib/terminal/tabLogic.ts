@@ -2,7 +2,7 @@
 // 허브(hub.svelte.ts)는 svelte 와 Tauri 를 import 해 node:test 로 못 읽으므로, 계산만 여기로 뺐다. 이 파일은 외부를 import 하지 않는다.
 // 홈 폴더는 보드 상태 묶음에서 알아내므로 인자(home)로 받는다 — 허브가 homeDir() 을 넘긴다.
 
-/** 탭에서 이 규칙이 보는 것 — 허브의 TerminalTab 이 그대로 맞는다 */
+/** 탭에서 이 규칙이 보는 것 — 허브의 BoardTab 이 그대로 맞는다 */
 export interface TabLike {
   id: string;
   workspace: string;

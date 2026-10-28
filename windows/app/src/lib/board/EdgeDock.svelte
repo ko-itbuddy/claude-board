@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 아래쪽 터미널 독(ClaudeBoard.swift:3501-3627, SPEC §5.11) — 평소엔 보드 칸 바깥쪽 끝(보드가 오른쪽이면 오른쪽, 왼쪽이면 왼쪽) 아래의 탭만 보이다가
+  // 아래쪽 터미널 독(ClaudeBoard.swift EdgeDock, SPEC §5.11) — 평소엔 보드 칸 바깥쪽 끝(보드가 오른쪽이면 오른쪽, 왼쪽이면 왼쪽) 아래의 탭만 보이다가
   // 그 탭에 마우스를 대면 보드 위로 미끄러져 나오고, 독에서 벗어나면 조금 뒤 다시 숨는다. 왼쪽일 때는 좌우를 뒤집어 그린다
   import { fly } from "svelte/transition";
   import type { BoardSide, TerminalApp } from "$lib/types";

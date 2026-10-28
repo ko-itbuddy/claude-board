@@ -34,6 +34,7 @@ function session(cwd: string, p: Partial<Session> & { id: string; state: State }
   const message = p.message ?? "";
   return {
     cwd,
+    pid: 0, // 브라우저 개발 화면에는 프로세스가 없다
     since: t0,
     updated: t0,
     headless: false,
@@ -49,6 +50,12 @@ function session(cwd: string, p: Partial<Session> & { id: string; state: State }
     muted: false,
     limitAt: null,
     canDrive: !p.headless,
+    // 세션 짝짓기 입력(SPEC §5.12, W2) — 브라우저 개발 화면은 파일 pid·콘솔이 없어 전부 null 로 둔다.
+    // 탭 화면의 sessionId(mockTabs)로 이어진 세션이 place 의 held 길로 탭 소속(CB 칩)이 된다
+    tty: null,
+    tabAncestor: null,
+    mode: null,
+    appName: null,
     ...p,
   };
 }
@@ -145,6 +152,7 @@ const old: Account = { id: "acc-old|org-old", email: "old@example.com", org: "",
 
 const S: Snapshot = {
   now: t0,
+  runsClaude: [], // 지금 claude 가 도는 보드 터미널 — 가짜 화면에서 실제로 도는 claude 는 없다
   groups: initialGroups(),
   allMuted: false,
   counts: { waiting: 0, working: 0, idle: 0, paused: 0, ended: 0 },
@@ -184,6 +192,7 @@ const S: Snapshot = {
     terminalExpanded: !q.has("collapsed"),
     boardSide: q.has("left") ? "left" : "right",
     boardPaneWidth: 454,
+    mdRenderOff: [],
   },
   claudeVersion: "2.1.301",
   terminals: [
@@ -320,9 +329,9 @@ export async function handle(cmd: string, a: Record<string, unknown>): Promise<u
       console.info(`[mock] session_action ${action} ${str("id")}`);
       if (!s) break;
       const now = Date.now();
-      if (action === "resume" && s.state === "ended") Object.assign(s, { state: "working", since: now, updated: now, paused: false });
+      if (action === "reopen" && s.state === "ended") Object.assign(s, { state: "working", since: now, updated: now, paused: false });
       if (action === "pause") Object.assign(s, { state: "paused", paused: true, updated: now });
-      if (action === "resume_paused") Object.assign(s, { state: "working", paused: false, since: now, updated: now });
+      if (action === "resume") Object.assign(s, { state: "working", paused: false, since: now, updated: now });
       if (action === "stop") Object.assign(s, { state: "ended", paused: false, subagents: [], updated: now });
       break;
     }
@@ -418,9 +427,40 @@ export async function handle(cmd: string, a: Record<string, unknown>): Promise<u
     case "term_write_bin":
       fakeTerms.get(str("id"))?.input(String.fromCharCode(...(a.data as number[])));
       return;
+    case "take_open_session":
+      return [];
+    case "save_tabs":
+    case "answer_shutdown":
+    case "shutdown_dialog_shown":
+    case "lifecycle_started":
+      return;
+    case "load_tabs":
+      return [];
+    case "existing_dirs":
+      return a.paths; // 브라우저 개발 화면에는 폴더 검사가 없다 — 다 있다고 답한다
+    case "prune_md_render_off":
+      return;
+    case "pids_alive":
+      return [];
+    case "wait_exit":
+      return true;
+    case "md_render_dir":
+    case "test_claude_prefix":
+      return null;
+    case "remember_md_render_off":
+      toggle(st.mdRenderOff, str("id"));
+      break;
+    case "reopen_done":
+      return;
+    case "drive_session":
+      return false;
+    case "rename_check":
+      return { safe: false, transcript: false };
+    case "show_board":
+      return;
     case "term_resize":
       fakeTerms.get(str("id"))?.resize(Number(a.cols), Number(a.rows));
-      return;
+      return null; // 기준 seq 없음 — 장벽이 바로 적용한다
     case "term_kill":
       fakeTerms.get(str("id"))?.exit(1);
       return;

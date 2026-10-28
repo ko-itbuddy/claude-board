@@ -202,18 +202,24 @@ pub fn prepare(kind: &str, data: &Record, notifier: &Path, cwd_fallback: &str) -
         proc::record_alive,
         |rec| claude_live::live_override(rec, &claude_dir),
     );
-    Some(Panel { app, args: panel_args(title, project, &first_sentence(&body), &summary, accent, &position) })
+    let session = non_empty_str(data.get("session_id")).unwrap_or("");
+    Some(Panel { app, args: panel_args(title, project, &first_sentence(&body), &summary, accent, &position, session) })
 }
 
-/// 알림 패널 인자 — `--notify --title … --subtitle … --body … --summary … --sound … --kind … --duration 10 --position …`.
-pub fn panel_args(title: &str, subtitle: &str, body: &str, summary: &str, kind: &str, position: &str) -> Vec<String> {
-    [
+/// 알림 패널 인자 — `--notify --title … --subtitle … --body … --summary … --sound … --kind … --duration 10 --position … [--session <sid>]`.
+/// `session` 이 비어 있지 않을 때만 `--session` 을 붙인다 — 패널을 누르면 보드가 그 세션으로 이동한다(`--action focus <sid>`).
+pub fn panel_args(title: &str, subtitle: &str, body: &str, summary: &str, kind: &str, position: &str, session: &str) -> Vec<String> {
+    let mut args: Vec<String> = [
         "--notify", "--title", title, "--subtitle", subtitle, "--body", body, "--summary", summary, "--sound", kind,
         "--kind", kind, "--duration", "10", "--position", position,
     ]
     .iter()
     .map(|s| s.to_string())
-    .collect()
+    .collect();
+    if !session.is_empty() {
+        args.extend(["--session".to_string(), session.to_string()]);
+    }
+    args
 }
 
 #[cfg(test)]
@@ -281,6 +287,16 @@ mod tests {
     }
 
     #[test]
+    fn panel_args_appends_session_last_only_when_given() {
+        let with = panel_args("t", "s", "b", "waiting=1", "wait", "center", "sid-1");
+        assert_eq!(&with[with.len() - 2..], ["--session", "sid-1"]);
+        let without = panel_args("t", "s", "b", "waiting=1", "wait", "center", "");
+        assert_eq!(without.len(), with.len() - 2);
+        assert_eq!(without[..], with[..without.len()]);
+        assert!(!without.iter().any(|a| a == "--session"));
+    }
+
+    #[test]
     fn prepare_filters_and_builds_args() {
         let dir = temp("prepare");
         let data = json!({"session_id": "s1", "cwd": "/w/proj", "message": "Claude needs your permission to use Bash"});
@@ -294,12 +310,19 @@ mod tests {
         assert_eq!(p.app, app);
         assert_eq!(
             p.args,
-            panel_args("승인 대기", "proj", "Claude needs your permission to use Bash", "waiting=1,working=0,idle=0", "wait", "center")
+            panel_args("승인 대기", "proj", "Claude needs your permission to use Bash", "waiting=1,working=0,idle=0", "wait", "center", "s1")
         );
         fs::write(dir.join("notify-position"), "top-right\n").unwrap();
         let stop = json!({"session_id": "s1", "last_assistant_message": "끝났습니다. 다음은 시험입니다."});
         let p = prepare("stop", stop.as_object().unwrap(), &dir, "/fallback/here").unwrap();
-        assert_eq!(p.args, panel_args("작업 완료", "here", "끝났습니다.", "waiting=0,working=0,idle=1", "done", "top-right"));
+        assert_eq!(p.args, panel_args("작업 완료", "here", "끝났습니다.", "waiting=0,working=0,idle=1", "done", "top-right", "s1"));
+        // 세션 id 가 없는 알림은 --session 을 붙이지 않는다
+        let anonymous = json!({"cwd": "/w/proj", "message": "m"});
+        let p = prepare("notification", anonymous.as_object().unwrap(), &dir, "/x").unwrap();
+        assert!(!p.args.iter().any(|a| a == "--session"), "{:?}", p.args);
+        let empty_id = json!({"session_id": "", "cwd": "/w/proj", "message": "m"});
+        let p = prepare("notification", empty_id.as_object().unwrap(), &dir, "/x").unwrap();
+        assert!(!p.args.iter().any(|a| a == "--session"), "{:?}", p.args);
         // idle_prompt·세션 음소거·전체 음소거
         let idle = json!({"session_id": "s1", "notification_type": "idle_prompt"});
         assert_eq!(prepare("notification", idle.as_object().unwrap(), &dir, "/x"), None);

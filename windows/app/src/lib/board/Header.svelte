@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 보드 윗줄(ClaudeBoard.swift:3842-3944) — 앱 아이콘·이름·버전, "활성 세션 n개 · Claude Code v", 오른쪽 캐릭터.
+  // 보드 윗줄(ClaudeBoard.swift BoardView 윗줄) — 앱 아이콘·이름·버전, "활성 세션 n개 · Claude Code v", 오른쪽 캐릭터.
   // 둘째 줄은 늘 상태 칩(왼쪽)과 단추(오른쪽) — 폭에 따라 한 줄·두 줄을 바꾸면 "알림 꺼짐" 이 생길 때마다 단추 줄이 오간다
   import { scale } from "svelte/transition";
   import type { Snapshot, State } from "$lib/types";

@@ -185,9 +185,15 @@ fn track_subagent(rec: &mut Record, data: &Record, state: &str, now: f64, env: &
         set(&mut fresh, "type", kind);
         set(&mut fresh, "started", now);
         set(&mut fresh, "state", "running");
+        set(&mut fresh, "started_seen", false);
         subs.insert(aid.clone(), Value::Object(fresh));
     }
     let Some(Value::Object(sub)) = subs.get_mut(&aid) else { return };
+    // 시작 hook 을 본 서브에이전트만 시작 시각을 믿는다 — 시작 없이 끝 hook 만 왔으면 시작 시각은 끝 시각을 흉내 낸 값이다
+    if event == Some("SubagentStart") && !truthy(sub.get("started_seen")) {
+        set(sub, "started", now);
+        set(sub, "started_seen", true);
+    }
     if !truthy(sub.get("description")) {
         let transcript = data.get("transcript_path").and_then(Value::as_str).unwrap_or("");
         let meta = if transcript.is_empty() { Map::new() } else { env.subagent_meta(transcript, &aid) };
@@ -718,6 +724,40 @@ mod tests {
         assert_eq!(out.record["state"], "working");
         assert!(!out.record.contains_key("model"));
         assert_eq!(out.title, None);
+    }
+
+    #[test]
+    fn subagent_started_seen_only_on_start_hook() {
+        let env = fake();
+        let ev = |name: &str, aid: &str| obj(json!({"session_id": "s", "hook_event_name": name, "agent_id": aid, "agent_type": "Explore", "tool_name": "Bash"}));
+        let mut rec = obj(json!({"pid": 42, "args": [], "state": "working"}));
+        // 시작 hook 을 본 서브에이전트: 시작 시각을 믿는다
+        rec = apply(rec, "subagent", &ev("SubagentStart", "seen"), 100.0, &env).record;
+        assert_eq!(rec["subagents"]["seen"]["started_seen"], true);
+        assert_eq!(rec["subagents"]["seen"]["started"], 100.0);
+        // 시작 뒤 도구·종료 hook 은 시작 시각과 표지를 그대로 둔다
+        rec = apply(rec, "subagent", &ev("PreToolUse", "seen"), 110.0, &env).record;
+        rec = apply(rec, "subagent", &ev("SubagentStop", "seen"), 120.0, &env).record;
+        assert_eq!(rec["subagents"]["seen"]["started_seen"], true);
+        assert_eq!(rec["subagents"]["seen"]["started"], 100.0);
+        assert_eq!(rec["subagents"]["seen"]["ended"], 120.0);
+        // 시작 없이 끝·도구 hook 만 온 기록: 표지는 거짓이다
+        rec = apply(rec, "subagent", &ev("SubagentStop", "orphan_stop"), 130.0, &env).record;
+        rec = apply(rec, "subagent", &ev("PreToolUse", "orphan_tool"), 131.0, &env).record;
+        assert_eq!(rec["subagents"]["orphan_stop"]["started_seen"], false);
+        assert_eq!(rec["subagents"]["orphan_tool"]["started_seen"], false);
+        assert_eq!(rec["subagents"]["orphan_tool"]["started"], 131.0);
+        // 시작 없이 만들어진 기록에 시작 hook 이 뒤늦게 오면 그때부터 믿는다
+        rec = apply(rec, "subagent", &ev("SubagentStart", "orphan_tool"), 140.0, &env).record;
+        assert_eq!(rec["subagents"]["orphan_tool"]["started_seen"], true);
+        assert_eq!(rec["subagents"]["orphan_tool"]["started"], 140.0);
+        // 표지 이전에 쓰인 기록(started_seen 키 없음)에 도구 hook 이 와도 키를 만들지 않는다
+        let old = obj(json!({"pid": 42, "args": [], "state": "working", "subagents": {"x": {"type": "", "started": 1.0, "state": "running"}}}));
+        let out = apply(old, "subagent", &ev("PreToolUse", "x"), 5.0, &env).record;
+        assert!(!out["subagents"]["x"].as_object().unwrap().contains_key("started_seen"));
+        // 키 순서는 state.py 와 같다: type, started, state, started_seen
+        let keys: Vec<&String> = rec["subagents"]["seen"].as_object().unwrap().keys().collect();
+        assert_eq!(&keys[..4], ["type", "started", "state", "started_seen"]);
     }
 
     #[test]

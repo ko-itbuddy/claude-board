@@ -1,18 +1,23 @@
-//! 보드 창 — 터미널 펼침·접힘 모양, 보드 쪽에 붙이기, 최대축소, 항상 위, 보이기 (SPEC §5.10, §7, `ClaudeBoard.swift:4246-4475, 4934-5014`).
+//! 보드 창 — 터미널 펼침·접힘 모양, 보드 쪽에 붙이기, 최대축소, 항상 위, 보이기 (SPEC §5.10, §7, `ClaudeBoard.swift BoardTier`·`toggleTerminal`·`toggleWindowSize`·`snapToSide`).
 //! 위치·크기는 모두 물리 픽셀로 다룬다(모니터마다 배율이 다를 수 있어 그 모니터의 배율을 곱한다).
 
 use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
 
-use crate::settings::{Frame, Settings, MIN_PANE_WIDTH};
+use crate::settings::{Frame, Settings};
 
-/// 보드 칸이 무너지지 않는 최소 폭 — 더 좁으면 미니로 그린다
-pub const BOARD_MIN_WIDTH: f64 = MIN_PANE_WIDTH;
+// 칸 폭 상수의 정본 — mac `ClaudeBoard.swift` 의 boardMinWidth·boardLaunchWidth·terminalMinWidth·paneDividerWidth 와 같은 값이다.
+// settings.rs 는 여기를 가리키고, 프론트의 paneLayout.ts(boardMinWidth·boardLaunchWidth·terminalMinWidth·paneDividerWidth)는 값을 맞춰 둔 사본이다.
+
+/// 보드 칸이 무너지지 않는 최소 폭(논리 픽셀) — 더 좁으면 미니로 그린다
+pub const BOARD_MIN_WIDTH: f64 = 360.0;
+/// 보드 칸 폭의 기본값(논리 픽셀) — 저장된 폭이 없을 때의 처음 폭
+pub const BOARD_LAUNCH_WIDTH: f64 = 454.0;
 /// 펼쳤을 때 터미널 칸과 보드 칸 사이 경계 폭
-pub const DIVIDER_WIDTH: f64 = 8.0;
+pub const PANE_DIVIDER_WIDTH: f64 = 8.0;
 /// 펼쳤을 때 터미널 칸의 최소 폭
 pub const TERMINAL_MIN_WIDTH: f64 = 480.0;
 /// 펼친 창의 최소 크기 — 보드 칸 360 + 경계 8 + 터미널 칸 480
-pub const EXPANDED_MIN_WIDTH: f64 = BOARD_MIN_WIDTH + DIVIDER_WIDTH + TERMINAL_MIN_WIDTH;
+pub const EXPANDED_MIN_WIDTH: f64 = BOARD_MIN_WIDTH + PANE_DIVIDER_WIDTH + TERMINAL_MIN_WIDTH;
 pub const EXPANDED_MIN_HEIGHT: f64 = 300.0;
 pub const MINI_WIDTH: f64 = 300.0;
 pub const MINI_MIN_HEIGHT: f64 = 144.0;
@@ -96,10 +101,46 @@ pub fn dock_frame(m: &Mon, side: Side, pane_width: f64) -> Frame {
 /// 터미널을 펼친 창은 그 모니터 작업 영역 전체, 접은 창은 보드 쪽에 붙인다.
 pub fn shape(m: &Mon, expanded: bool, side: Side, pane_width: f64, pinned: bool) -> Shape {
     if expanded {
-        Shape { frame: m.work, min: (EXPANDED_MIN_WIDTH, EXPANDED_MIN_HEIGHT), always_on_top: false }
+        Shape { frame: m.work, min: (EXPANDED_MIN_WIDTH, EXPANDED_MIN_HEIGHT), always_on_top: on_top(pinned, true, true) }
     } else {
-        Shape { frame: dock_frame(m, side, pane_width), min: (MINI_WIDTH, MINI_MIN_HEIGHT), always_on_top: pinned }
+        Shape { frame: dock_frame(m, side, pane_width), min: (MINI_WIDTH, MINI_MIN_HEIGHT), always_on_top: on_top(pinned, false, false) }
     }
+}
+
+/// `frame`(물리 픽셀)이 모니터 작업 영역 `work` 전체를 덮는가 — 네 변 모두 허용 오차 2px 안으로 같거나 넘는다.
+/// 보드 창은 테두리·그림자가 없어(`shadow: false`) 바깥 프레임이 곧 보이는 크기다. 2px 는 판단이다(배율 반올림 흡수, 실측 아님).
+pub fn covers_work_area(frame: Frame, work: Frame) -> bool {
+    const TOLERANCE: f64 = 2.0;
+    frame.x <= work.x + TOLERANCE
+        && frame.y <= work.y + TOLERANCE
+        && frame.x + frame.w >= work.x + work.w - TOLERANCE
+        && frame.y + frame.h >= work.y + work.h - TOLERANCE
+}
+
+/// 보드 창을 다른 창 위에 두는가(3.1.9) — 고정했고, 펼친 창이 작업 영역을 덮고 있지 않을 때.
+/// 접힌 창과 60% 로 줄인 펼친 창은 `pinned` 를 따르고, 화면을 덮은 펼친 창만 고정을 쉰다.
+/// `covering` 은 펼친 창에서만 뜻이 있다 — 접힌 창은 덮는다고 나와도 영향이 없다.
+pub fn on_top(pinned: bool, expanded: bool, covering: bool) -> bool {
+    pinned && !(expanded && covering)
+}
+
+/// 창이 작업 영역을 덮는지 판단할 수 있는 상태에서의 답 — 최소화됐거나(Windows 는 프레임을 -32000 으로 옮긴다) 작업 영역과 겹치지
+/// 않는 창은 `None`(덮는지 모른다 = 지금의 항상 위 상태를 그대로 둔다). 최소화를 "덮지 않음"으로 읽으면 펼친 창을 최소화하는 순간
+/// 항상 위가 켜져 되살릴 때 화면을 가린다. 프레임이나 모니터를 못 쟀으면 덮는 것으로 본다(펼치면 고정을 쉬던 옛 쪽).
+pub fn covering_state(frame: Option<Frame>, minimized: bool, work: Option<Frame>) -> Option<bool> {
+    if minimized {
+        return None;
+    }
+    match (frame, work) {
+        (Some(f), Some(w)) if !intersects(f, w) => None,
+        (Some(f), Some(w)) => Some(covers_work_area(f, w)),
+        _ => Some(true),
+    }
+}
+
+/// 지금 창이 작업 영역을 덮는가 — 창 프레임과 그 모니터 작업 영역으로 잰다. 덮는지 모르는 상태(`covering_state`)면 None.
+pub fn covering_now(win: &WebviewWindow) -> Option<bool> {
+    covering_state(frame(win), win.is_minimized().unwrap_or(false), monitor_of(win).map(|m| m.work))
 }
 
 /// 실행할 때의 창. 미니로 두고 껐으면 그 크기·위치 그대로(화면 안에 있을 때).
@@ -299,6 +340,87 @@ pub fn apply_vibrancy(win: &WebviewWindow) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 값은 mac 과 프론트 paneLayout.ts 가 같은 숫자를 쓴다 — 바꾸면 그쪽도 함께 고친다
+    #[test]
+    fn pane_constants_match_mac_and_frontend() {
+        assert_eq!((BOARD_MIN_WIDTH, BOARD_LAUNCH_WIDTH, TERMINAL_MIN_WIDTH, PANE_DIVIDER_WIDTH), (360.0, 454.0, 480.0, 8.0));
+        assert_eq!(EXPANDED_MIN_WIDTH, 848.0);
+    }
+
+    // 3.1.9 진리표 — 고정했고 (펼친 창이 작업 영역을 덮는 것)이 아닐 때만 위에 둔다.
+    // 옛 규칙(`pinned && !expanded`)과 다른 행: 펼쳤고 덮지 않고 고정한 경우(60% 창) — 옛 false, 새 true.
+    #[test]
+    fn on_top_table() {
+        // (pinned, expanded, covering, 기대)
+        let table = [
+            (false, false, false, false),
+            (false, false, true, false),
+            (false, true, false, false),
+            (false, true, true, false),
+            (true, false, false, true),  // 접힌 창은 고정을 따른다
+            (true, false, true, true),   // 접힌 창에는 covering 이 영향이 없다
+            (true, true, false, true),   // 바뀐 행: 60% 로 줄인 펼친 창은 위에 둔다
+            (true, true, true, false),   // 화면을 덮은 펼친 창은 고정을 쉰다
+        ];
+        for (pinned, expanded, covering, want) in table {
+            assert_eq!(on_top(pinned, expanded, covering), want, "{pinned} {expanded} {covering}");
+        }
+    }
+
+    // 접은 창·펼친(작업 영역 전체) 창의 shape 는 on_top 과 같은 값을 쓴다
+    #[test]
+    fn shape_uses_on_top() {
+        let m = mon(0.0, 0.0, 1920.0, 1040.0, 1.0);
+        for pinned in [false, true] {
+            for expanded in [false, true] {
+                // 펼친 shape 의 프레임은 작업 영역 전체라 덮는다
+                assert_eq!(shape(&m, expanded, Side::Right, 454.0, pinned).always_on_top, on_top(pinned, expanded, expanded));
+            }
+        }
+    }
+
+    #[test]
+    fn covers_work_area_tolerance_two_px() {
+        let work = fr(0.0, 0.0, 1920.0, 1040.0);
+        assert!(covers_work_area(work, work));
+        // 안쪽으로 2px 모자라도(네 변 각각) 덮는다
+        assert!(covers_work_area(fr(2.0, 2.0, 1916.0, 1036.0), work));
+        // 3px 모자라면 덮지 않는다 — 왼쪽, 위, 오른쪽, 아래 각각
+        assert!(!covers_work_area(fr(3.0, 0.0, 1917.0, 1040.0), work));
+        assert!(!covers_work_area(fr(0.0, 3.0, 1920.0, 1037.0), work));
+        assert!(!covers_work_area(fr(0.0, 0.0, 1917.0, 1040.0), work));
+        assert!(!covers_work_area(fr(0.0, 0.0, 1920.0, 1037.0), work));
+        // 작업 영역을 넘쳐도 덮는다
+        assert!(covers_work_area(fr(-7.0, -7.0, 1934.0, 1054.0), work));
+    }
+
+    #[test]
+    fn covering_state_leaves_minimized_and_off_screen_windows_unchanged() {
+        let work = fr(0.0, 0.0, 1920.0, 1040.0);
+        // 최소화한 창 — Windows 가 프레임을 화면 밖(-32000)으로 옮겨 덮지 않는 것처럼 보인다
+        assert_eq!(covering_state(Some(fr(-32000.0, -32000.0, 1920.0, 1040.0)), true, Some(work)), None);
+        assert_eq!(covering_state(Some(work), true, Some(work)), None, "프레임이 멀쩡해도 최소화면 모른다");
+        // 최소화 표시가 없어도 어느 모니터와도 겹치지 않으면 모른다
+        assert_eq!(covering_state(Some(fr(-32000.0, -32000.0, 1920.0, 1040.0)), false, Some(work)), None);
+        // 보이는 창은 덮는지 가른다
+        assert_eq!(covering_state(Some(work), false, Some(work)), Some(true));
+        assert_eq!(covering_state(Some(fr(0.0, 0.0, 454.0, 1040.0)), false, Some(work)), Some(false));
+        // 못 쟀으면 덮는 것으로
+        assert_eq!(covering_state(None, false, Some(work)), Some(true));
+        assert_eq!(covering_state(Some(work), false, None), Some(true));
+    }
+
+    #[test]
+    fn covers_work_area_judges_sized_windows() {
+        let work = fr(1920.0, 0.0, 2560.0, 1400.0); // 둘째 모니터(원점이 0 이 아니다)
+        assert!(covers_work_area(work, work));
+        // 60% 로 줄인 펼친 창과 접힌 보드 칸은 덮지 않는다
+        assert!(!covers_work_area(fr(1920.0 + 512.0, 280.0, 1536.0, 840.0), work));
+        assert!(!covers_work_area(fr(1920.0 + 2560.0 - 567.0, 0.0, 567.0, 1400.0), work));
+        // 다른 모니터에 있는 프레임은 이 작업 영역을 덮지 않는다
+        assert!(!covers_work_area(fr(0.0, 0.0, 1920.0, 1400.0), work));
+    }
 
     fn mon(x: f64, y: f64, w: f64, h: f64, scale: f64) -> Mon {
         Mon { work: Frame { x, y, w, h }, scale }

@@ -44,7 +44,7 @@
 </script>
 
 <script lang="ts">
-  // 새 버전 알림 줄(ClaudeBoard.swift:4186-4224) — 전체·중간 화면의 윗줄 아래에 뜬다.
+  // 새 버전 알림 줄(ClaudeBoard.swift UpdateBanner) — 전체·중간 화면의 윗줄 아래에 뜬다.
   // 새 버전이 없으면 손으로 확인한 결과(최신·확인 실패·개발용 빌드)만 단추 없이 잠깐 보인다
   import type { Snapshot } from "$lib/types";
   import { openChangelog, runUpdate } from "$lib/backend";

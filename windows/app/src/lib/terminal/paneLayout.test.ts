@@ -3,10 +3,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  DEFAULT_BOARD_WIDTH,
-  DIVIDER,
-  MIN_BOARD,
-  MIN_TERMINAL,
+  boardLaunchWidth,
+  paneDividerWidth,
+  boardMinWidth,
+  terminalMinWidth,
   clampBoardWidth,
   maxBoardWidth,
   scrollTargetFor,
@@ -15,37 +15,37 @@ import {
 } from "./paneLayout.ts";
 
 test("보드 칸 최대 폭 — 창 폭에서 경계와 터미널 최소 폭을 뺀다", () => {
-  assert.equal(maxBoardWidth(1400), 1400 - DIVIDER - MIN_TERMINAL);
-  assert.equal(maxBoardWidth(MIN_BOARD + DIVIDER + MIN_TERMINAL), MIN_BOARD);
+  assert.equal(maxBoardWidth(1400), 1400 - paneDividerWidth - terminalMinWidth);
+  assert.equal(maxBoardWidth(boardMinWidth + paneDividerWidth + terminalMinWidth), boardMinWidth);
 });
 
 test("창이 아주 좁아도 보드 칸 최대 폭은 최소 폭 아래로 내려가지 않는다", () => {
-  assert.equal(maxBoardWidth(700), MIN_BOARD);
-  assert.equal(maxBoardWidth(0), MIN_BOARD);
+  assert.equal(maxBoardWidth(700), boardMinWidth);
+  assert.equal(maxBoardWidth(0), boardMinWidth);
 });
 
 test("보드 칸 폭 — 끄는 값 > 저장값 > 기본값", () => {
   assert.equal(clampBoardWidth(500, 400, 1600), 500);
   assert.equal(clampBoardWidth(null, 400, 1600), 400);
-  assert.equal(clampBoardWidth(null, null, 1600), DEFAULT_BOARD_WIDTH);
-  assert.equal(clampBoardWidth(null, undefined, 1600), DEFAULT_BOARD_WIDTH);
-  assert.equal(clampBoardWidth(0, 400, 1600), MIN_BOARD); // 0 도 끄는 값이다(?? 로 고르므로 저장값으로 넘어가지 않는다)
+  assert.equal(clampBoardWidth(null, null, 1600), boardLaunchWidth);
+  assert.equal(clampBoardWidth(null, undefined, 1600), boardLaunchWidth);
+  assert.equal(clampBoardWidth(0, 400, 1600), boardMinWidth); // 0 도 끄는 값이다(?? 로 고르므로 저장값으로 넘어가지 않는다)
 });
 
 test("보드 칸 폭 — 최소 360 아래·최대 위는 잘린다", () => {
-  assert.equal(clampBoardWidth(100, null, 1600), MIN_BOARD);
-  assert.equal(clampBoardWidth(null, -5, 1600), MIN_BOARD);
-  assert.equal(clampBoardWidth(5000, null, 1600), 1600 - DIVIDER - MIN_TERMINAL);
-  assert.equal(clampBoardWidth(null, 5000, 1000), 1000 - DIVIDER - MIN_TERMINAL);
+  assert.equal(clampBoardWidth(100, null, 1600), boardMinWidth);
+  assert.equal(clampBoardWidth(null, -5, 1600), boardMinWidth);
+  assert.equal(clampBoardWidth(5000, null, 1600), 1600 - paneDividerWidth - terminalMinWidth);
+  assert.equal(clampBoardWidth(null, 5000, 1000), 1000 - paneDividerWidth - terminalMinWidth);
 });
 
 test("보드 칸 폭 — 좁은 창에서는 저장값이 얼마든 최소 폭", () => {
-  assert.equal(clampBoardWidth(null, 454, 700), MIN_BOARD);
-  assert.equal(clampBoardWidth(900, 454, 600), MIN_BOARD);
+  assert.equal(clampBoardWidth(null, 454, 700), boardMinWidth);
+  assert.equal(clampBoardWidth(900, 454, 600), boardMinWidth);
 });
 
 test("보드 칸 폭 — 창을 넓히면 저장된 폭이 다시 살아난다(저장값은 건드리지 않고 보이는 값만 자른다)", () => {
-  assert.equal(clampBoardWidth(null, 700, 1000), 1000 - DIVIDER - MIN_TERMINAL); // 512
+  assert.equal(clampBoardWidth(null, 700, 1000), 1000 - paneDividerWidth - terminalMinWidth); // 512
   assert.equal(clampBoardWidth(null, 700, 1600), 700);
 });
 

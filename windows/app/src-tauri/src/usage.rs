@@ -1,4 +1,4 @@
-//! 요금제 사용 한도 — `UsageStore` (`ClaudeBoard.swift:262-354`, SPEC §5.4).
+//! 요금제 사용 한도 — `UsageStore` (`ClaudeBoard.swift UsageStore`, SPEC §5.4).
 //! 30초마다 본다. 상태줄 스크립트와 같은 캐시 파일을 함께 써서 API 호출을 줄인다. 토큰은 메모리에만 두고 기록하지 않는다.
 
 use std::fs;

@@ -3,13 +3,13 @@
   // 접혀도 언마운트하지 않고 숨기기만 한다(출력은 계속 쌓인다). 셸이 끝나면 허브가 그 탭을 닫으므로 안내는 없고,
   // 시작하지 못했을 때만(Windows 에만 있는 경우) 안내와 [다시 시도] [탭 닫기] 를 얹는다
   import { onMount } from "svelte";
-  import { controllerOf, hub, remove, retry, startLeaf } from "./hub.svelte";
+  import { controllerOf, TerminalHub, remove, retry, startLeaf } from "./hub.svelte";
 
   let { leafId, tabId, visible }: { leafId: string; tabId: string; visible: boolean } = $props();
 
   const ctl = $derived(controllerOf(leafId));
-  const leaf = $derived(hub.leaves[leafId]);
-  const tab = $derived(hub.tabs.find((t) => t.id === tabId));
+  const leaf = $derived(TerminalHub.leaves[leafId]);
+  const tab = $derived(TerminalHub.tabs.find((t) => t.id === tabId));
   let box = $state<HTMLDivElement>();
 
   onMount(() => {
@@ -56,6 +56,12 @@
     inset: 0;
     user-select: text;
     -webkit-user-select: text;
+    /* :root 의 자간(0.025em)이 xterm 글자 폭 재는 요소로 상속되면 칸 폭과 행 간격이 어긋나 오른쪽 칸이 밀린다 */
+    letter-spacing: normal;
+  }
+  /* DOM 렌더러는 행에 자간을 인라인으로 넣는다 — 상속을 끊어도 남는 보정값(-0.33px)을 !important 로 눌러 0 으로 둔다 */
+  .pane :global(.term-host .xterm-rows) {
+    letter-spacing: 0 !important;
   }
   .pane :global(.term-host .xterm) {
     padding: 6px 0 4px 10px;

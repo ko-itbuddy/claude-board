@@ -7,6 +7,8 @@ use std::path::PathBuf;
 
 #[cfg(windows)]
 mod conpty;
+#[cfg(all(test, windows))]
+mod capture;
 #[cfg(windows)]
 pub use conpty::{windows_build, ConPty as Pty};
 
@@ -69,7 +71,7 @@ mod stub {
             unsupported()
         }
 
-        pub fn resize(&self, _cols: u16, _rows: u16) -> io::Result<()> {
+        pub fn resize(&self, _cols: u16, _rows: u16) -> io::Result<bool> {
             unsupported()
         }
 
