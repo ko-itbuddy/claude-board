@@ -260,6 +260,14 @@ final class ClaudeNames {
         return (status, Date(timeIntervalSince1970: ms / 1000))
     }
 
+    // 대화를 백그라운드 작업으로 넘기고 그 작업을 붙여 보여 주는 중인 claude 의 작업 id(이어 받은 세션 id 앞 8글자) — Claude Code 는
+    // 넘길 때 parkedJobId 를 쓰고 풀 때 지운다(2.1.312 실측). 그 파일의 sessionId 가 이 세션일 때만(/clear 하면 같은 pid 가 새 id 를 쓴다)
+    func parkedJob(_ pid: Int32, session: String) -> String? {
+        guard let j = record(pid), j["sessionId"] as? String == session,
+              let job = j["parkedJobId"] as? String, job.count >= 8 else { return nil }
+        return job
+    }
+
     // 지금 status — 이름 바꾸기를 치기 직전에 보므로 캐시 없이 읽는다. 파일·값이 없으면 nil
     func status(_ pid: Int32) -> String? {
         guard pid > 0, let data = FileManager.default.contents(atPath: path(pid)) else { return nil }
@@ -1511,11 +1519,15 @@ final class Store: ObservableObject {
         records = records.filter { seen.contains($0.key) }
         // 탭 짝짓기는 넘긴 세션까지 모두 본다 — 보드 탭에서 넘긴 원래 claude 가 그 탭에 남아 있을 수 있고(탭 줄 이름·쥔 목록),
         // 카드 목록에서만 뺀다
-        MainActor.assumeIsolated { TerminalHub.shared.pair(sessions) }   // 1초 타이머·알림 관찰자 모두 메인 스레드
+        // 1초 타이머·알림 관찰자 모두 메인 스레드. 탭 claude 가 넘긴 작업을 붙여 보는 중이면 탭은 그 작업 세션을 따라간다(parkedFrom = 넘긴 쪽)
+        let parkedFrom = MainActor.assumeIsolated { TerminalHub.shared.pair(sessions); return TerminalHub.shared.parkedFrom }
         // 넘긴 세션은 이어 받은 세션의 카드가 있을 때만 뺀다 — 그 세션 파일이 없으면(아직 hook 이 안 왔거나 지워짐) 지금처럼 보인다.
+        // 탭이 이어 받은 작업을 따라가는 동안의 탭 claude 세션도 뺀다(그 탭의 카드는 작업 쪽 하나).
         // groups 가 이 목록으로 만들어지므로 상태별 개수·메뉴 막대·감독 말·종료 확인도 함께 빠진다
         let ids = Set(sessions.map(\.id))
-        let shown = handedTo.isEmpty ? sessions : sessions.filter { s in handedTo[s.id].map { !ids.contains($0) } ?? true }
+        let shown = handedTo.isEmpty && parkedFrom.isEmpty ? sessions : sessions.filter { s in
+            !parkedFrom.contains(s.id) && (handedTo[s.id].map { !ids.contains($0) } ?? true)
+        }
         expandNewlyWaiting(shown)
         let muted = fm.fileExists(atPath: muteAllPath)
         if muted != allMuted { allMuted = muted }
@@ -2277,7 +2289,8 @@ struct SessionRow: View {
             }
             .monospacedDigit()
             .fixedSize()
-            PlaceChip(s: s, place: hub.place(s), appName: hub.appNames[s.id], mode: s.state == "ended" ? nil : hub.mode(s))
+            // 탭 claude 가 넘긴 대화를 이어 받은 작업은 그 탭의 CB 칩(shownPlace)
+            PlaceChip(s: s, place: hub.shownPlace(s), appName: hub.appNames[s.id], mode: s.state == "ended" || hub.parkedTab(s) != nil ? nil : hub.mode(s))
             // 세션 이름 — 자리가 모자라면 먼저 뺀다(아래 ViewThatFits). 미니 화면은 세션 줄이 없어 보이지 않는다
             if name, let n = s.name { SessionNameLabel(name: n) }
             // 터미널·백그라운드 구분은 작업경로 카드 안 구역 머리글이 맡는다
@@ -3126,9 +3139,9 @@ struct GroupCard: View {
                     // 터미널 세션과 백그라운드 세션을 구역으로 나눈다 — 백그라운드는 더블 클릭으로 이동할 터미널이 없다.
                     // 세션이 있는 종류마다 머리글을 붙인다 — 한 종류만 있어도 터미널인지 백그라운드인지 보인다
                     let live = g.sessions.filter { $0.state != "ended" }
-                    // 보드 탭 안에서 시작된 claude -p 는 탭과 함께 끝나므로 터미널 구역(탭 쪽)에 둔다
-                    let terminal = live.filter { hub.place($0) != .background }
-                    let background = live.filter { hub.place($0) == .background }
+                    // 보드 탭 안에서 시작된 claude -p 는 탭과 함께 끝나므로 터미널 구역(탭 쪽)에 둔다. 탭 claude 가 넘긴 대화를 이어 받은 작업도 그 탭 쪽
+                    let terminal = live.filter { hub.shownPlace($0) != .background }
+                    let background = live.filter { hub.shownPlace($0) == .background }
                     if !terminal.isEmpty {
                         KindSection(headless: false, sessions: terminal,
                                     collapsed: kindFolded("term"), toggle: { toggleKind("term") })
@@ -5342,6 +5355,9 @@ final class BoardSurface: NSObject, ObservableObject, Identifiable, TerminalSurf
     @Published var title = ""
     @Published var cwd: String
     @Published var session: Session?   // 이 화면에서 도는 세션(세션 파일의 tty 로 짝짓는다) — 탭의 상태 점·제목
+    // 이 화면의 claude 가 대화를 백그라운드 작업으로 넘겨 그 작업을 붙여 보여 주는 중이면 이어 받은 세션(TerminalHub.pair, parkedJobId).
+    // 탭의 상태 점·지금 하는 일만 이것을 따른다 — 키 넣기·이름 바꾸기·탭 이름·쥔 목록은 session(화면의 claude) 그대로
+    @Published var parked: Session?
     @Published var renameTo: String?   // ⇧⌘R 로 바꿀 세션 이름 — /rename 으로 Claude Code 이름이 그렇게 될 때까지(TerminalHub.applyRenames)
     private var shellReady = false     // 셸이 첫 프롬프트를 띄웠다(셸 통합이 경로·제목을 알림)
     private var pending: (() -> String)?   // 셸이 뜨면 넣을 명령 — 넣을 때 만든다(세션 이름은 그때 쓰는 이름을 보고 고른다)
@@ -5582,8 +5598,8 @@ final class SplitNode {
         guard surfaces.count > 1 else { return focused.folderName }
         return workspace == NSHomeDirectory() ? "~" : (workspace as NSString).lastPathComponent
     }
-    // 탭 줄의 상태 점 — 화면들의 세션 가운데 가장 급한 상태(세션이 없으면 대기)
-    var state: String { surfaces.compactMap(\.session).min { $0.rank < $1.rank }?.state ?? "idle" }
+    // 탭 줄의 상태 점 — 화면들의 세션(넘긴 작업을 붙여 보는 화면은 그 작업) 가운데 가장 급한 상태(세션이 없으면 대기)
+    var state: String { surfaces.compactMap { $0.parked ?? $0.session }.min { $0.rank < $1.rank }?.state ?? "idle" }
 }
 
 @MainActor final class TerminalHub: ObservableObject {
@@ -5613,6 +5629,10 @@ final class SplitNode {
     // 세션 id → 그 세션이 도는 보드 탭(tty 로 짝지은 세션, 탭 안에서 시작된 claude -p) — 세션 목록을 다시 읽을 때마다 고친다
     @Published private(set) var paired: [String: UUID] = [:]
     @Published private(set) var tabOwnedHeadless: Set<String> = []
+    // 탭 claude 가 넘긴 대화를 이어 받은 백그라운드 작업의 세션 id → 그 화면(BoardSurface.parked), 넘긴 쪽(탭 claude)의 세션 id.
+    // paired 에 넣지 않는다 — place 를 쓰는 동작(일시중지·중단·키 넣기·종료 확인)은 그 작업을 지금처럼 백그라운드 세션으로 다룬다
+    @Published private(set) var parkedTabs: [String: UUID] = [:]
+    private(set) var parkedFrom: Set<String> = []
     // 다른 터미널 세션의 앱 이름(칩) — 세션마다 한 번 조상 프로세스로 찾는다(AppleScript 없이)
     @Published private(set) var appNames: [String: String] = [:]
     private var modes: [Int32: String] = [:]   // 백그라운드 세션 pid → 실행 방식(-p, --bg …)
@@ -5841,11 +5861,12 @@ final class SplitNode {
             case .typed: typed = true
             case nil: break
             }
-            guard renameSafe(ss), hasTranscript(ss) else { continue }
+            // 대화를 백그라운드 작업으로 넘겨 그 작업을 붙여 보여 주는 화면은 친 글이 작업 쪽으로 갈 수 있어 풀릴 때까지 미룬다
+            guard s.parked == nil, renameSafe(ss), hasTranscript(ss) else { continue }
             renameSteps[s.id] = .typing
             s.drive(typed ? [] : [("text", "/rename " + target), ("wait", "0.2")]) { [weak self] _ in
                 guard let self, s.renameTo == target else { return }   // 그 사이 다시 바꿨거나 화면이 닫혔다
-                guard let now = s.session, self.renameSafe(now) else { self.renameSteps[s.id] = .typed; return }
+                guard let now = s.session, s.parked == nil, self.renameSafe(now) else { self.renameSteps[s.id] = .typed; return }
                 s.drive([("key", "enter")]) { _ in }
                 self.renameSteps[s.id] = .sent(Date())
             }
@@ -6084,6 +6105,11 @@ final class SplitNode {
         return s.headless ? .background : .terminal
     }
 
+    // 보드 탭 claude 가 넘긴 대화를 이어 받은 백그라운드 작업이면 그 화면. 카드가 보이는 자리(터미널 구역·CB 칩)와 누르면 갈 곳만
+    // 이것을 따른다(shownPlace) — 탭에 쳐 넣는 동작은 place 그대로라 그 작업 때문에 탭에 아무것도 넣지 않는다
+    func parkedTab(_ s: Session) -> UUID? { s.state == "ended" ? nil : parkedTabs[s.id] }
+    func shownPlace(_ s: Session) -> SessionPlace { parkedTab(s).map { .tab($0, headless: false) } ?? place(s) }
+
     // 세션 목록을 다시 읽을 때마다 탭의 화면들과 짝짓는다. tty 가 같으면 그 화면의 세션, headless 세션은 조상에 화면의 claude 가 있으면
     // 그 화면 소속(화면이 닫히면 함께 끝난다 — Claude 가 Bash 도구로 띄운 claude -p 등). 끝난 세션은 같은 세션 id 로 연 화면만
     func pair(_ sessions: [Session]) {
@@ -6106,6 +6132,7 @@ final class SplitNode {
         for s in sessions where s.state != "ended" && s.headless && s.pid > 0 {
             if let t = tabAncestor(s.pid, tabPids) { map[s.id] = t.id; owned.insert(s.id) }
         }
+        var parked: [String: UUID] = [:], from: Set<String> = []
         for t in all {
             let running = main[t.id] != nil || t.runsClaude
             // 셸 프롬프트에서 사람이 친 대화형 claude 도 claude 화면으로 — 쥔 목록에 세션이 남아 다시 뜰 때 이어 연다(-p·--bg 는 빼고)
@@ -6115,12 +6142,22 @@ final class SplitNode {
             let s = main[t.id] ?? (running ? t.sessionId.flatMap { id in sessions.first { $0.id == id } } : nil)
             if t.session != s { t.session = s }
             if t.mdRenderOff { rememberMdRenderOff(s?.id) }   // 끈 화면에서 세션 id 가 바뀌어도(/clear 등) 끈 채로 이어 열게
+            // 화면의 claude 가 대화를 백그라운드 작업으로 넘겨 그 작업을 붙여 보여 주는 중이면(parkedJobId — 이어 받은 세션 id 앞 8글자)
+            // 그 작업 세션을 따라 보인다. 끝난 작업이나 작업을 풀면(parkedJobId 지움) 화면의 claude 로 돌아간다
+            var p: Session? = nil
+            if let s, s.state != "ended", let job = ClaudeNames.shared.parkedJob(s.pid, session: s.id) {
+                p = sessions.first { $0.id != s.id && $0.id.hasPrefix(job) && $0.state != "ended" }
+                if let p { parked[p.id] = t.id; from.insert(s.id) }
+            }
+            if t.parked != p { t.parked = p }
         }
         if map != paired { paired = map }
         if owned != tabOwnedHeadless { tabOwnedHeadless = owned }
-        // 경로 줄의 상태 점 — 그 경로 탭들의 모든 화면에서 승인 대기 > 작업 중 > 그 밖(세션이 없으면 대기)
+        if parked != parkedTabs { parkedTabs = parked }
+        parkedFrom = from
+        // 경로 줄의 상태 점 — 그 경로 탭들의 모든 화면에서 승인 대기 > 작업 중 > 그 밖(세션이 없으면 대기). 넘긴 작업을 붙여 보는 화면은 그 작업
         var states: [String: String] = [:]
-        for ws in workspaces { states[ws] = tabs(in: ws).flatMap(\.surfaces).compactMap(\.session).min { $0.rank < $1.rank }?.state ?? "idle" }
+        for ws in workspaces { states[ws] = tabs(in: ws).flatMap(\.surfaces).compactMap { $0.parked ?? $0.session }.min { $0.rank < $1.rank }?.state ?? "idle" }
         if states != workspaceStates { workspaceStates = states }
         saveTabs()   // 세션 id·resume_cmd·셸 경로·고른 탭이 바뀌었으면 남긴다
         // 다른 터미널 세션의 앱 이름 — 조상 프로세스로만(AppleScript 를 쓰는 ownerApp 은 부르지 않는다)
@@ -7314,7 +7351,7 @@ struct TerminalTabButton: View {
             if commandHeld && selected, let key = keys.label("rename") {
                 Text("\(key) 이름 바꾸기").boardFont(11).foregroundStyle(.secondary).lineLimit(1)
             } else {
-                Text(tab.focused.session.map(doing) ?? tab.focused.title).boardFont(12).foregroundStyle(.secondary).lineLimit(1)
+                Text((tab.focused.parked ?? tab.focused.session).map(doing) ?? tab.focused.title).boardFont(12).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
             if let n = shortcut, let key = keys.label("tab\(n)") {
@@ -7973,7 +8010,7 @@ struct MiniRow: View {
             Text(g.name).boardFont(12, weight: .semibold).lineLimit(1).layoutPriority(1)
             HStack(spacing: 4) {
                 // 줄에 보이는 세션이 터미널에서 도는지 백그라운드로 도는지 — 아이콘만
-                if let s = top ?? first { KindLabel(headless: s.headless, compact: true) }
+                if let s = top ?? first { KindLabel(headless: s.headless && TerminalHub.shared.parkedTab(s) == nil, compact: true) }
                 if let top {
                     Text(doing(top)).lineLimit(1).foregroundStyle(Palette.color(top.state))
                     if g.active.count > 1 { Text("+\(g.active.count - 1)").fixedSize().foregroundStyle(Palette.color(top.state)) }
@@ -8000,7 +8037,7 @@ struct MiniRow: View {
             openSession(s, double: (NSApp.currentEvent?.clickCount ?? 1) >= 2)
         }
         .hint(live.map { s in
-            switch TerminalHub.shared.place(s) {
+            switch TerminalHub.shared.shownPlace(s) {
             case .tab: return "\(g.path)\n눌러서 터미널을 펼치고 그 탭으로 이동"
             case .terminal: return "\(g.path)\n눌러서 터미널 앱, 두 번 눌러서 그 세션으로 이동"
             case .background, .ended: return g.path
@@ -9991,6 +10028,8 @@ func transcriptPath(_ given: String?, _ cwd: String, _ id: String) -> String {
 // 백그라운드 세션은 안내만, 다른 터미널 세션은 지금처럼 그 터미널로(두 번 누르면 그 세션의 터미널 창까지)
 @MainActor func openSession(_ s: Session, double: Bool = false) {
     let hub = TerminalHub.shared
+    // 탭 claude 가 넘긴 대화를 이어 받은 작업 — 그 작업을 붙여 보여 주는 탭으로 간다(탭에 아무것도 넣지 않는다)
+    if let id = hub.parkedTab(s) { return hub.reveal(id) }
     switch hub.place(s) {
     case .tab(let id, _):
         hub.reveal(id)
