@@ -137,6 +137,8 @@ hook 이 기록하는 `pid`(`proc::find_claude`, §3.4)는 이 파일 이름의 
 
 ## 3. hook — `claude-board-hook.exe`
 
+hook 규칙(§3.1·§3.2·§3.3·§3.5·§3.6)의 기준 시험은 저장소 맨 위 `hook-table/` 이다. macOS hook 을 끝까지 돌려 만든 표를 `crates/core/tests/hook_table.rs` 가 `state::run`·`notify::prepare`·`hooks::add` 로 견준다(표시·뺀 것·유지 규칙은 그 README).
+
 ### 3.1 등록 형식 (exec form — 셸을 거치지 않는다)
 
 Claude Code 문서(hooks): `args` 가 있으면 `command` 를 실행 파일로 보고 셸 없이 `args` 를 인자로 넘긴다. Windows 에서는 `command` 가 실제 `.exe` 여야 한다.
