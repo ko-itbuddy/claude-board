@@ -191,6 +191,45 @@ final class InterruptReader {
     func prune(keep: Set<String>) { parsed = parsed.filter { keep.contains($0.key) } }
 }
 
+// 대화를 백그라운드로 보낸 세션 — Claude Code 는 대화를 새 세션 id 로 넘기고 원래 대화 기록 끝에
+// {"type":"continued-in","continuedInSessionId":"<새 id>",…} 줄을 남긴다(2.1.312 실측). 그 뒤 hook 은 모두 새 id 로 와서
+// 원래 세션 파일은 대기로 멈춘다. 꼬리에서 그 줄 뒤에 대화 줄(사이드체인 아닌 user·assistant)이 없으면 (새 id, 넘긴 시각)을 돌려준다 —
+// 대화 줄이 있으면 사람이 원래 세션을 다시 이어 쓴 것이다. InterruptReader 와 같이 파일이 바뀔 때만, 그 표시가 있을 때만 JSON 을 푼다.
+// InterruptReader 에 합치지 않은 것은 그쪽의 건너뛰는 줄(isMeta·< 로 시작하는 사용자 줄) 규칙이 달라서다 — 작업 중 세션은 꼬리를 두 번 읽는다
+final class HandoffReader {
+    private var parsed: [String: (mtime: Date, to: (id: String, at: Date)?)] = [:]
+
+    func read(_ path: String) -> (id: String, at: Date)? {
+        guard let changed = mtime(path) else { return nil }
+        if let c = parsed[path], c.mtime == changed { return c.to }
+        var to: (id: String, at: Date)? = nil
+        if let h = FileHandle(forReadingAtPath: path) {
+            let end = (try? h.seekToEnd()) ?? 0
+            try? h.seek(toOffset: end > 256_000 ? end - 256_000 : 0)
+            let data = (try? h.readToEnd()) ?? Data()
+            try? h.close()
+            // 따옴표까지 넣어 찾는다 — 대화 글 속의 continued-in 은 \" 로 감싸여 걸리지 않는다
+            if data.range(of: Data("\"continued-in\"".utf8)) != nil {
+                for line in data.split(separator: UInt8(ascii: "\n")).reversed() {
+                    guard let j = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
+                          let type = j["type"] as? String else { continue }
+                    if type == "continued-in" {
+                        if let id = j["continuedInSessionId"] as? String, !id.isEmpty {
+                            to = (id, isoDate(j["timestamp"] as? String) ?? changed)
+                        }
+                        break
+                    }
+                    if (type == "user" || type == "assistant"), (j["isSidechain"] as? Bool) != true { break }   // 넘긴 뒤 다시 이어 썼다
+                }
+            }
+        }
+        parsed[path] = (changed, to)
+        return to
+    }
+
+    func prune(keep: Set<String>) { parsed = parsed.filter { keep.contains($0.key) } }
+}
+
 // Claude Code 의 세션 이름 — Claude Code 는 도는 세션마다 ~/.claude/sessions/<pid>.json 에 name(자동 이름은 "<작업 폴더 이름>-<16진수 두 글자>",
 // --name·/rename 으로 바꾼 이름)과 status(idle·busy, 승인 창·질문 창이 떠 있으면 waiting)를 쓰고, 끝나면(/exit·탭 닫기의 SIGHUP) 지운다
 // (2.1.304 실측). hook 입력에는 이름이 없어 이 파일로만 안다. 세션 파일의 pid 로 찾는다 — /clear 해도 pid·이름은 그대로다
@@ -1215,6 +1254,7 @@ final class Store: ObservableObject {
     private let contexts = ContextReader()
     private let models = ModelReader()
     private let interrupts = InterruptReader()
+    private let handoffs = HandoffReader()
     // 백그라운드 셸 수 — ps 를 메인 스레드에서 돌리면 클릭 처리가 밀리므로 뒤에서 세고 다음 reload 가 쓴다
     private var shellCounts: [Int32: Int] = [:]
     private var shellsBusy = false
@@ -1362,6 +1402,8 @@ final class Store: ObservableObject {
         refreshShells()
         var sessions: [Session] = []
         var brainPaths = Set<String>()
+        var transcripts = Set<String>()
+        var handedTo: [String: String] = [:]   // 대화를 백그라운드로 넘긴 세션 → 이어 받은 세션 id
         var seen = Set<String>()
         for name in (try? fm.contentsOfDirectory(atPath: dir)) ?? [] where name.hasSuffix(".json") {
             let path = (dir as NSString).appendingPathComponent(name)
@@ -1433,6 +1475,13 @@ final class Store: ObservableObject {
                 s.replacingOccurrences(of: "[#*`]+", with: "", options: .regularExpression)
                     .trimmingCharacters(in: .whitespaces)
             }
+            // 대화를 백그라운드로 넘긴 세션(끝난 것도) — 넘긴 뒤에 이 세션이 다시 열렸으면(--resume 의 SessionStart 로 started 가 새로 잡힘)
+            // 아직 대화 줄이 없어도 넘긴 세션으로 보지 않는다
+            transcripts.insert(transcript)
+            if let to = handoffs.read(transcript), to.id != sid,
+               (j["started"] as? Double ?? 0) <= to.at.timeIntervalSince1970 {
+                handedTo[j["session_id"] as? String ?? name] = to.id
+            }
             sessions.append(Session(id: j["session_id"] as? String ?? name,
                                     cwd: j["cwd"] as? String ?? "?",
                                     projectDir: j["project_dir"] as? String ?? j["cwd"] as? String ?? "?",
@@ -1458,12 +1507,19 @@ final class Store: ObservableObject {
         ClaudeNames.shared.prune(keep: Set(sessions.map(\.pid)))
         models.prune(keep: brainPaths)
         interrupts.prune(keep: brainPaths)
+        handoffs.prune(keep: transcripts)
         records = records.filter { seen.contains($0.key) }
+        // 탭 짝짓기는 넘긴 세션까지 모두 본다 — 보드 탭에서 넘긴 원래 claude 가 그 탭에 남아 있을 수 있고(탭 줄 이름·쥔 목록),
+        // 카드 목록에서만 뺀다
         MainActor.assumeIsolated { TerminalHub.shared.pair(sessions) }   // 1초 타이머·알림 관찰자 모두 메인 스레드
-        expandNewlyWaiting(sessions)
+        // 넘긴 세션은 이어 받은 세션의 카드가 있을 때만 뺀다 — 그 세션 파일이 없으면(아직 hook 이 안 왔거나 지워짐) 지금처럼 보인다.
+        // groups 가 이 목록으로 만들어지므로 상태별 개수·메뉴 막대·감독 말·종료 확인도 함께 빠진다
+        let ids = Set(sessions.map(\.id))
+        let shown = handedTo.isEmpty ? sessions : sessions.filter { s in handedTo[s.id].map { !ids.contains($0) } ?? true }
+        expandNewlyWaiting(shown)
         let muted = fm.fileExists(atPath: muteAllPath)
         if muted != allMuted { allMuted = muted }
-        let grouped = Dictionary(grouping: sessions, by: \.projectDir).map { dir, list in
+        let grouped = Dictionary(grouping: shown, by: \.projectDir).map { dir, list in
             Group(id: dir, sessions: list.sorted { $0.rank != $1.rank ? $0.rank < $1.rank : $0.since > $1.since })
         }
         // 지운 뒤 새 활동이 없는 작업경로는 빼고, 새 활동이 생긴 작업경로는 지운 목록에서 꺼낸다
