@@ -130,7 +130,7 @@ hook 사본을 바꿀 때는 실행 중인 exe 를 덮어쓸 수 없으므로 `c
 | `status` | `idle`·`busy`·`waiting` | §3.9 의 상태 덮기 |
 | `statusUpdatedAt` | `status` 가 바뀐 시각(유닉스 밀리초, 숫자) | §3.9. 읽을 때 1000 으로 나눠 초로 쓴다 |
 | `name` | 세션 이름(`/rename`·`--name`). 비어 있을 수 있다 | 보드의 세션 이름 라벨(§7) |
-| `pid` | Claude Code 프로세스 | |
+| `pid` | Claude Code 프로세스 | macOS 보드: 세션 파일에 `pid` 가 없는 세션의 생사(`sessionId` 로 파일을 찾음, §5.1). **Windows 는 아직 쓰지 않는다** |
 
 파일이 없거나, JSON 객체가 아니거나, pid 가 0 이면 "정보 없음"으로 본다. 읽기 실패는 오류로 올리지 않는다. 이 파일을 쓰거나 지우지 않는다.
 hook 이 기록하는 `pid`(`proc::find_claude`, §3.4)는 이 파일 이름의 pid 와 같고, 기록의 `pid_ctime`(유닉스 초)은 `procStart`(FILETIME 100ns 틱, 1601년 기준)를 `(procStart − 116444736000000000) / 1e7` 로 바꾼 값과 같다. 실제 Claude Code 2.1.296 세션 안에서 확인했다(§11.1).
@@ -280,6 +280,8 @@ Claude Code 는 사용자가 Esc 로 응답을 끊으면 `Stop` hook 을 부르�
 1초마다(그리고 표지 파일을 바꾼 직후 바로) `sessions/*.json` 을 읽는다. 파일 수정 시각이 같으면 이전에 푼 값을 쓴다.
 
 - 상태 보정: ended 가 아닌데 pid 가 죽었으면 `ended`.
+  macOS(다음 버전부터): 세션 파일에 `pid` 가 없으면(hook 이 Claude 프로세스를 못 찾음) `~/.claude/sessions/*.json`(§2.3) 가운데 `sessionId` 가 세션 id 와 같은 것(둘이면 가장 최근에 고쳐 쓴 것)의 pid 로 같은 판정을 한다. 그런 파일이 없으면 그대로 둔다(끝났다고 단정하지 않는다 — `claude -p` 처럼 그 파일을 쓰지 않는 세션). 끝난 세션은 찾지 않는다.
+  찾은 pid 는 이 판정의 상태 덮기(§3.9)·세션 이름·백그라운드 셸 수에도 쓰지만, 세션의 `pid` 값(구동·중단·끝나기 기다리기·탭 짝짓기 대상)은 세션 파일 그대로 둔다(`BoardRules.scanSessions`). **Windows 는 아직 옛 동작**이다: `pid` 가 없으면 생사를 보지 않아 SessionEnd 없이 죽은 세션이 2일 prune 까지 마지막 상태로 남는다.
 - `transcript = transcript_path` 또는 `~/.claude/projects/<cwd 의 영숫자 밖 문자를 - 로>/<sid>.jsonl`. ended 이고 (`updated` 가 2일 넘었거나 transcript 파일이 없으면) 세션 파일을 지우고 뺀다.
 - Claude Code 실시간 상태 덮기(§3.9): 위 종료 판정과 prune 뒤, 아래 셸·서브에이전트로 working 을 올리는 단계와 paused 판정 앞에서 적용한다(`Store.reload` 의 순서).
   기록 상태가 working·waiting 일 때만 `live_state` 를 부르고, 덮이면 `state` 와 `since` 가 바뀐다. 세션 id 는 파일 이름으로 대신해도 된다.

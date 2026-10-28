@@ -184,7 +184,42 @@ final class ClaudeNames {
         return out
     }
 
-    func prune(keep: Set<Int32>) { cache = cache.filter { keep.contains($0.key) } }
+    // sessionId → pid 색인 — 세션 기록에 pid 가 없는 세션(state.py 가 claude 를 못 찾음)의 생사를 보려고 이 폴더를 sessionId 로 찾는다.
+    // 파일(<pid>.json)마다 mtime 과 sessionId 만 들고 파일이 바뀔 때만 다시 푼다. Claude Code 는 이 파일을 제자리에 고쳐 써
+    // 폴더 mtime 이 바뀌지 않으므로 파일마다 mtime 을 본다. 위 cache 와 따로 두는 것은 prune 이 세션의 pid 만 남겨, 거기 넣으면 매초 모두 다시 읽기 때문이다.
+    // 훑기는 판정마다 한 번이다 — scanSessions 가 판정 끝에 prune 을 부를 때 낡음으로 표시한다. pid 없는 끝나지 않은 세션이 없으면 훑지 않는다
+    private var ids: [Int32: (mtime: Date, session: String?)] = [:]
+    private var bySession: [String: Int32] = [:]
+    private var idsFresh = false
+
+    func pid(forSession session: String) -> Int32? {
+        if !idsFresh {
+            idsFresh = true
+            var seen = Set<Int32>()
+            for f in (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? [] where f.hasSuffix(".json") {
+                guard let pid = Int32(f.dropLast(5)), pid > 0, let m = mtime(path(pid)) else { continue }
+                seen.insert(pid)
+                if ids[pid]?.mtime == m { continue }
+                let j = FileManager.default.contents(atPath: path(pid)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                ids[pid] = (m, j?["sessionId"] as? String)
+            }
+            ids = ids.filter { seen.contains($0.key) }
+            // 같은 sessionId 가 둘이면(강제로 죽은 claude 의 파일이 남은 채 같은 세션을 다시 연 경우) 가장 최근에 고쳐 쓴 것 — 남은 옛 파일의 pid 로
+            // 살아 있는 세션을 끝났다고 보지 않게
+            bySession = [:]
+            for (pid, v) in ids {
+                guard let sid = v.session, !sid.isEmpty else { continue }
+                if let other = bySession[sid], let o = ids[other], o.mtime >= v.mtime { continue }
+                bySession[sid] = pid
+            }
+        }
+        return bySession[session]
+    }
+
+    func prune(keep: Set<Int32>) {
+        cache = cache.filter { keep.contains($0.key) }
+        idsFresh = false
+    }
 }
 
 // 세션별 컨텍스트 사용량을 읽는다.
@@ -283,6 +318,13 @@ final class ContextReader {
         }
         parsed[path] = (mtime, now, ctx)
         return ctx
+    }
+
+    // 목록에 남은 세션 몫만 남긴다 — 상태줄 기록(lines)은 세션 id, 대화 기록에서 센 컨텍스트(parsed)는 대화 기록 자리가 키다.
+    // 배운 모델별 크기(windows)는 세션 몫이 아니라 그대로 둔다
+    func prune(keep: Set<String>, keepTranscripts: Set<String>) {
+        lines = lines.filter { keep.contains($0.key) }
+        parsed = parsed.filter { keepTranscripts.contains($0.key) }
     }
 }
 
