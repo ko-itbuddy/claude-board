@@ -396,34 +396,30 @@ struct SystemClock: Clock {
     var now: Date { Date() }
 }
 
-// 요금제 사용 한도: 5시간·주간(전체)·주간(모델별 — 예: Fable)
-struct Limit: Equatable, Identifiable {
-    let id: String
-    let label: String
-    let pct: Double
-    let resets: Date?
-
-    // 간략 모드 이름 — 5시간 · 주간 · 모델 이름(Fable). 더 좁으면 5h · 7d · 첫 글자
-    var short: String {
-        id == "5h" ? "5시간" : id == "7d" ? "주간" : (label.components(separatedBy: "·").last ?? label).trimmingCharacters(in: .whitespaces)
-    }
-    var tiny: String { id == "5h" ? "5h" : id == "7d" ? "7d" : String(short.prefix(1)) }
-}
-
+// 요금제 사용 한도(Limit)·사용량 해석·토큰 상태·캐시를 믿을지·받은 결과 처리는 BoardRules(Usage.swift)에 있다. isoDate 도 거기서 온다.
+// 여기는 30초 타이머·백그라운드 받기·계정 전환 세대 확인·@Published 와 애니메이션만 쥔다
 final class UsageStore: ObservableObject {
     @Published var limits: [Limit] = []
     @Published var failed = false
     // 로그인 토큰이 만료된 채로 있다(계정을 막 바꿨거나 한동안 세션이 없었다) — 세션이 다음 요청을 보내며 갱신해야 사용량을 받을 수 있다
     @Published var tokenExpired = false
     // 상태줄 스크립트와 같은 캐시 파일을 함께 쓴다 — 사용량 API 호출을 줄인다
-    private let cache = "/tmp/.claude-usage-cache.json"
+    private let cache: UsageCache
+    private let credentials: LoginCredentials
+    private let api: UsageAPI
+    private let clock: Clock
     private var fetching = false
     private var generation = 0
     // 계정을 바꾼 직후 이 시각 전에 쓰인 캐시는 믿지 않는다 — 상태줄이 앞 계정 토큰으로 받던 값을 늦게 써 넣을 수 있다
     private var trustCacheAfter = Date.distantPast
     private var timer: Timer?
 
-    init() {
+    init(cache: UsageCache = UsageCacheFile(), credentials: LoginCredentials = KeychainCredentials(),
+         api: UsageAPI = OAuthUsageAPI(), clock: Clock = SystemClock()) {
+        self.cache = cache
+        self.credentials = credentials
+        self.api = api
+        self.clock = clock
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.refresh() }
     }
@@ -431,46 +427,61 @@ final class UsageStore: ObservableObject {
     // 계정을 바꾼 뒤: 앞 계정 값이 든 캐시를 버리고 바로 새로 받는다 — 상태줄도 같은 캐시를 쓰므로 함께 새 계정 값이 된다
     func reset() {
         generation += 1
-        trustCacheAfter = Date().addingTimeInterval(5)
-        try? FileManager.default.removeItem(atPath: cache)
+        trustCacheAfter = clock.now.addingTimeInterval(5)
+        cache.remove()
         failed = false
         withAnimation(.easeOut(duration: 0.2)) { limits = [] }
         refresh()
     }
 
     func refresh() {
-        let written = mtime(cache).flatMap { $0 > trustCacheAfter ? $0 : nil }
-        let age = Date().timeIntervalSince(written ?? .distantPast)
-        if written != nil, let data = FileManager.default.contents(atPath: cache) { apply(data) }
-        guard age > 120, !fetching else { return }
+        let check = checkUsageCache(cache: cache, clock: clock, trustAfter: trustCacheAfter, fetching: fetching)
+        if let cached = check.cached { show(cached) }
+        guard check.fetch else { return }
         fetching = true
         let gen = generation
+        let (credentials, api, clock) = (self.credentials, self.api, self.clock)
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
-            let (data, expired) = Self.fetch()
+            let fetched = fetchUsage(credentials: credentials, api: api, clock: clock)
             DispatchQueue.main.async {
                 self.fetching = false
-                // 받는 사이 계정을 바꿨으면 앞 계정 값이므로 버리고 다시 받는다
+                // 받는 사이 계정을 바꿨으면 앞 계정 값이므로 버리고 다시 받는다(캐시에도 쓰지 않는다)
                 guard gen == self.generation else { self.refresh(); return }
-                self.tokenExpired = expired
-                if let data, self.apply(data) {
-                    try? data.write(to: URL(fileURLWithPath: self.cache), options: .atomic)
-                    self.trustCacheAfter = .distantPast   // 새 계정 토큰으로 직접 받은 값이다
-                    self.failed = false
-                } else if self.limits.isEmpty {
-                    self.failed = true
-                }
+                let settled = settleUsage(fetched, current: self.limits, trustAfter: self.trustCacheAfter, cache: self.cache)
+                self.tokenExpired = settled.tokenExpired
+                if let limits = settled.limits { self.show(limits) }
+                self.trustCacheAfter = settled.trustAfter
+                if let failed = settled.failed { self.failed = failed }
             }
         }
     }
 
-    // 키체인의 Claude Code 로그인 토큰으로 사용량 API 를 부른다 — 토큰은 메모리에만 두고 기록하지 않는다
-    static func fetch() -> (data: Data?, expired: Bool) {
-        guard let raw = Keychain.read(credentialsService()),
-              let j = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
-              let oauth = j["claudeAiOauth"] as? [String: Any],
-              let token = oauth["accessToken"] as? String else { return (nil, false) }
-        if let exp = (oauth["expiresAt"] as? NSNumber)?.doubleValue, exp / 1000 < Date().timeIntervalSince1970 { return (nil, true) }
+    private func show(_ out: [Limit]) {
+        if out != limits { withAnimation(.spring(response: 0.6, dampingFraction: 0.85)) { limits = out } }
+    }
+}
+
+// MARK: 사용량의 진짜 어댑터 — 규칙은 BoardRules/Usage.swift, 포트는 BoardRules/Ports.swift(가짜 어댑터는 Tests 에만).
+// 셋 다 상태가 없는 struct 라 그대로 Sendable 이다
+
+// 사용량 캐시 — 상태줄 스크립트와 함께 쓰는 파일. 자리·형식을 바꾸지 않는다
+struct UsageCacheFile: UsageCache {
+    let path = "/tmp/.claude-usage-cache.json"
+    func modifiedAt() -> Date? { mtime(path) }
+    func read() -> Data? { FileManager.default.contents(atPath: path) }
+    func write(_ data: Data) { try? data.write(to: URL(fileURLWithPath: path), options: .atomic) }
+    func remove() { try? FileManager.default.removeItem(atPath: path) }
+}
+
+// Claude Code 로그인 정보 — 키체인에서 읽기만 한다(계정 전환의 쓰기는 AccountStore)
+struct KeychainCredentials: LoginCredentials {
+    func read() -> Data? { Keychain.read(credentialsService()) }
+}
+
+// 키체인의 Claude Code 로그인 토큰으로 사용량 API 를 부른다 — 토큰은 메모리에만 두고 기록하지 않는다
+struct OAuthUsageAPI: UsageAPI {
+    func fetch(token: String) -> Data? {
         var req = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!, timeoutInterval: 10)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
@@ -481,40 +492,8 @@ final class UsageStore: ObservableObject {
             sem.signal()
         }.resume()
         _ = sem.wait(timeout: .now() + 12)
-        return (result, false)
+        return result
     }
-
-    @discardableResult
-    func apply(_ data: Data) -> Bool {
-        guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let five = j["five_hour"] as? [String: Any] else { return false }
-        var out: [Limit] = []
-        func add(_ id: String, _ label: String, _ o: [String: Any]?, _ key: String) {
-            guard let o, let v = (o[key] as? NSNumber)?.doubleValue else { return }
-            out.append(Limit(id: id, label: label, pct: v, resets: isoDate(o["resets_at"] as? String)))
-        }
-        add("5h", "5시간", five, "utilization")
-        add("7d", "주간 · 전체", j["seven_day"] as? [String: Any], "utilization")
-        for l in j["limits"] as? [[String: Any]] ?? [] where l["kind"] as? String == "weekly_scoped" {
-            let name = ((l["scope"] as? [String: Any])?["model"] as? [String: Any])?["display_name"] as? String ?? "모델"
-            add("7d-\(name)", "주간 · \(name)", l, "percent")
-        }
-        if out != limits { withAnimation(.spring(response: 0.6, dampingFraction: 0.85)) { limits = out } }
-        return true
-    }
-}
-
-// 날짜 형식기는 만들기가 비싸다 — 매초 다시 그리는 줄마다 새로 만들지 않게 한 번만 만든다
-private let isoFractional: ISO8601DateFormatter = {
-    let f = ISO8601DateFormatter()
-    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return f
-}()
-private let isoPlain = ISO8601DateFormatter()
-
-func isoDate(_ s: String?) -> Date? {
-    guard let s else { return nil }
-    return isoFractional.date(from: s) ?? isoPlain.date(from: s)
 }
 
 // MARK: - 계정 전환

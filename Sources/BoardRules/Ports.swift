@@ -1,9 +1,10 @@
-// 보드 규칙의 포트 — 세션 상태 판정(scanSessions)이 바깥(세션 기록 파일·프로세스·Claude Code 상태·대화 기록·컨텍스트·시계)을 부르는 자리.
+// 보드 규칙의 포트 — 세션 상태 판정(scanSessions)이 바깥(세션 기록 파일·프로세스·Claude Code 상태·대화 기록·컨텍스트·시계)을 부르는 자리,
+// 사용량 규칙(Usage.swift)이 바깥(사용량 캐시·로그인 정보·사용량 API·시계)을 부르는 자리.
 // 진짜 어댑터는 보드 앱(ClaudeBoard.swift)에, 가짜 어댑터는 Tests/BoardRulesTests 에만 둔다(이슈 #9 헥사고날 첫 단계).
 // 규칙에 새 OS 호출(파일·프로세스·시각·환경 변수·홈 폴더)이 필요하면 여기 포트를 거친다 — 코어에서 FileManager·kill·Date() 를 직접 부르지 않는다.
 // 포트는 역할로 나눈다(범용 FileSystem 포트를 두면 시험이 경로 문자열 시험이 된다).
 //
-// 포트는 Sendable 이다. 진짜 어댑터는 mtime 캐시를 쥔 클래스라 @unchecked Sendable 로 적는다 — Store.reload 가 메인 스레드에서만 부르고
+// 포트는 Sendable 이다. 세션 상태 판정의 진짜 어댑터는 mtime 캐시를 쥔 클래스라 @unchecked Sendable 로 적는다 — Store.reload 가 메인 스레드에서만 부르고
 // (1초 타이머·알림 관찰자), scanSessions 는 그 안에서 동기로 돈다. 다른 스레드에서 부르려면 어댑터에 잠금이 먼저 있어야 한다
 import Foundation
 
@@ -80,4 +81,32 @@ public protocol ContextUsage: Sendable {
 // 시계 — scanSessions 는 한 번만 읽고 그 시각을 결과(SessionScan.now)로 돌려준다
 public protocol Clock: Sendable {
     var now: Date { get }
+}
+
+// MARK: - 사용량 (Usage.swift)
+// 진짜 어댑터 셋은 상태가 없는 struct 라 그대로 Sendable 이다. 받기(fetchUsage)는 백그라운드 큐에서, 캐시 확인·결과 처리는 메인에서 부른다
+
+// 사용량 캐시 /tmp/.claude-usage-cache.json — 상태줄 스크립트와 함께 쓰는 약속이라 자리·형식(사용량 API 응답 그대로)을 바꾸지 않는다.
+// 수정 시각과 내용을 따로 읽는다 — 내용은 믿을 수 있는 캐시일 때만 읽는다
+public protocol UsageCache: Sendable {
+    /// 캐시 파일 수정 시각. 없으면 nil
+    func modifiedAt() -> Date?
+    /// 캐시 파일 내용. 없거나 못 읽으면 nil
+    func read() -> Data?
+    /// 받은 응답 그대로 쓴다(통째로 바꿔 쓰기)
+    func write(_ data: Data)
+    /// 계정을 바꾼 뒤 앞 계정 값이 든 캐시를 지운다
+    func remove()
+}
+
+// Claude Code 로그인 정보 — 키체인 "Claude Code-credentials" 의 JSON 바이트. 토큰이 들어 있으니 어댑터·규칙 모두 기록하지 않는다
+public protocol LoginCredentials: Sendable {
+    /// 로그인 정보 JSON. 항목이 없으면 nil
+    func read() -> Data?
+}
+
+// 사용량 API(api.anthropic.com/api/oauth/usage) — 토큰은 메모리에만 두고 기록하지 않는다
+public protocol UsageAPI: Sendable {
+    /// 그 토큰으로 사용량을 받는다. 200 일 때만 본문, 그 밖(다른 상태·연결 실패·시간 초과)은 nil. 끝날 때까지 기다린다
+    func fetch(token: String) -> Data?
 }
