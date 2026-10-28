@@ -23,6 +23,7 @@ swift test --disable-keychain --triple "$(uname -m)-apple-macosx14.0" --toolset 
 #    같은 -F·-rpath 를 Package.swift 의 unsafeFlags 로 넣으면 시험이 0개 돌고 성공으로 끝나므로 toolset 파일로만 넣는다. 처음에는 앱·엔진까지 debug 로 빌드해 1분 남짓
 swiftc -typecheck ClaudeNotifier.swift
 python3 -m py_compile state.py notify.py hooks.py board-tui.py   # 만들어진 __pycache__ 는 지운다
+python3 -I hook-table/gen.py && git diff --exit-code hook-table/   # hook 공유 시험 표 다시 만들기·차이 확인(Rust 쪽: cd windows && cargo test -p claude-board-core --test hook_table)
 claude plugin validate plugins/md-render --strict && claude plugin test plugins/md-render   # Claude Code 가 저장소 사본에 만드는 tsconfig.json 은 올리지 않는다
 
 # 시험 빌드 — 설치된 보드·hook 은 건드리지 않는다
@@ -41,6 +42,8 @@ claude plugin validate plugins/md-render --strict && claude plugin test plugins/
 packaging/release.sh <버전>   # 버전은 시맨틱 버전 MAJOR.MINOR.PATCH(3.0.0 부터). make-dmg.sh 로 universal(arm64+x86_64) 빌드·서명 → gh release 생성
 ```
 
+macOS CI `.github/workflows/rules.yml` 이 hook·보드 규칙 파일이 바뀐 push·PR 마다 표 차이·`hooks.py` 사본(`cmp`)·core `cargo test`·`swift test`(시험 수가 0 이면 실패)를 돌린다.
+
 `release.sh` 는 CHANGELOG 의 `## <버전>` 항목이 없으면 빌드 전에 멈추고, 그 항목을 릴리스 설명으로 쓴다. `gh auth login` 과 서명 인증서(`packaging/make-cert.sh` 로 만드는 "Claude Board Signing")가 필요하다.
 
 ## 구조
@@ -57,6 +60,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
 - hook 스크립트는 Claude Code 를 막거나 실패시키면 안 된다 — `main()` 전체를 `except Exception: pass` 로 감싸고, 패널은 `start_new_session=True` 로 띄우고 바로 끝난다.
 - `state.py` 는 서브에이전트가 동시에 hook 을 돌리므로 `.<sid>.lock` 을 `flock` 으로 잡고 읽고-고쳐-쓴다. 서브에이전트 이벤트(`agent_id` 있음)는 세션 상태 대신 `subagents` 에만 남긴다.
 - 스크립트는 자기 파일 옆의 `sessions/` 를 쓴다 — 저장소에서 바로 실행하면 저장소 안에 `sessions/` 가 생긴다.
+- `hook-table/`(맨 위) — hook 규칙의 공유 시험 표. `gen.py` 가 state.py·notify.py·hooks.py 의 `main()` 을 바깥만 가짜로 바꿔 끝까지 돌려 만들고, Windows 판 core 시험(`windows/crates/core/tests/hook_table.rs`)이 같은 표로 견준다. hook 규칙을 고치면 표를 다시 만들어 같은 커밋에 넣고 Rust 를 맞추거나 다른 점을 그 README 에 적는다.
 
 ### 파일로 주고받는 약속 (`~/.claude/notifier/`)
 
