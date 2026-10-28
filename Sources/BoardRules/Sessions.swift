@@ -24,7 +24,7 @@ public struct Session: Identifiable, Equatable, Sendable {
     public let paused: Bool        // 보드에서 일시중지한 세션 — sessions/<id>.paused 가 있다
     public let muted: Bool         // 보드에서 알림을 끈 세션 — sessions/<id>.mute 가 있으면 notify.py 가 패널을 띄우지 않는다
     public let limitAt: Date?      // 사용 한도에 걸려 응답이 끊긴 시각 — state.py 가 기록하고, 세션이 다시 움직이면 지운다
-    public let name: String?       // Claude Code 의 세션 이름(ClaudeNames — pid 로 찾음). 끝난 세션·못 읽으면 nil
+    public let name: String?       // Claude Code 의 세션 이름(ClaudeLive 포트 — pid 로 찾음). 끝난 세션·못 읽으면 nil
 
     public init(id: String, cwd: String, projectDir: String, state: String, since: Date, updated: Date, headless: Bool,
                 tty: String, topic: String, message: String, resumeCmd: String, file: String, ctx: Ctx?, brain: Brain?,
@@ -57,7 +57,7 @@ public struct Sub: Identifiable, Equatable, Sendable {
     public let ended: Date?
     public let tool: String
     public let background: Bool
-    public var brain: Brain? = nil  // 서브에이전트 대화 기록의 마지막 응답 모델·effort(Store.reload 가 채운다)
+    public var brain: Brain? = nil  // 서브에이전트 대화 기록의 마지막 응답 모델·effort(scanSessions 가 채운다)
 
     public init(id: String, type: String, desc: String, state: String, started: Date, ended: Date?, tool: String,
                 background: Bool, brain: Brain? = nil) {

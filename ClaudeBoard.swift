@@ -286,6 +286,74 @@ final class ContextReader {
     }
 }
 
+// MARK: 세션 상태 판정의 진짜 어댑터 — 판정 규칙은 BoardRules.scanSessions, 포트는 BoardRules/Ports.swift(가짜 어댑터는 Tests 에만).
+// 모두 Store.reload 가 메인 스레드에서만 부르므로 캐시에 잠금이 없다 — 포트가 Sendable 이라 @unchecked Sendable 로 적는다
+
+// 세션 기록 — sessions/<sid>.json 과 보드가 남기는 표지(.paused·.mute·mute-all)
+final class SessionFiles: SessionRecords, @unchecked Sendable {
+    private let dir = sessionsDir
+    // 매초 30여 개 파일을 다시 읽어 풀던 것을, 파일이 바뀔 때만 다시 읽는다
+    private var records: [String: (mtime: Date, j: [String: Any])] = [:]
+
+    func load() -> [SessionRecord] {
+        let fm = FileManager.default
+        var out: [SessionRecord] = []
+        var seen = Set<String>()
+        for name in (try? fm.contentsOfDirectory(atPath: dir)) ?? [] where name.hasSuffix(".json") {
+            let path = (dir as NSString).appendingPathComponent(name)
+            guard let m = mtime(path) else { continue }
+            seen.insert(path)
+            if let c = records[path], c.mtime == m {
+                out.append(SessionRecord(name: name, file: path, json: c.j))
+                continue
+            }
+            guard let data = fm.contents(atPath: path),
+                  let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+            records[path] = (m, parsed)
+            out.append(SessionRecord(name: name, file: path, json: parsed))
+        }
+        records = records.filter { seen.contains($0.key) }
+        return out
+    }
+
+    func remove(_ record: SessionRecord) { try? FileManager.default.removeItem(atPath: record.file) }
+    func isPaused(_ sid: String) -> Bool { FileManager.default.fileExists(atPath: (dir as NSString).appendingPathComponent("\(sid).paused")) }
+    func isMuted(_ sid: String) -> Bool { FileManager.default.fileExists(atPath: (dir as NSString).appendingPathComponent("\(sid).mute")) }
+    func allMuted() -> Bool { FileManager.default.fileExists(atPath: muteAllPath) }
+}
+
+// 프로세스 — 셸 수는 Store.refreshShells 가 뒤에서 센 것을 들고 있다가 준다(여기서 ps 를 돌리지 않는다)
+final class SystemProcesses: ProcessProbe, @unchecked Sendable {
+    var shellCounts: [Int32: Int] = [:]
+    func isGone(_ pid: Int32) -> Bool { kill(pid, 0) != 0 && errno == ESRCH }
+    func backgroundShells(_ pid: Int32) -> Int { shellCounts[pid] ?? 0 }
+}
+
+// 대화 기록 — 꼬리를 읽는 세 reader 를 묶는다
+final class TranscriptFiles: Transcripts, @unchecked Sendable {
+    private let models = ModelReader()
+    private let interrupts = InterruptReader()
+    private let handoffs = HandoffReader()
+
+    func locate(given: String?, cwd: String, session: String) -> String { transcriptPath(given, cwd, session) }
+    func exists(_ path: String) -> Bool { FileManager.default.fileExists(atPath: path) }
+    func interruptedAt(_ path: String) -> Date? { interrupts.read(path) }
+    func handoff(_ path: String) -> (id: String, at: Date)? { handoffs.read(path) }
+    func brain(_ path: String, fallbackModel: String, now: Date) -> Brain? { models.read(path, fallbackModel: fallbackModel, now: now) }
+    func prune(keep: Set<String>, keepHandoffs: Set<String>) {
+        models.prune(keep: keep)
+        interrupts.prune(keep: keep)
+        handoffs.prune(keep: keepHandoffs)
+    }
+}
+
+extension ClaudeNames: ClaudeLive, @unchecked Sendable {}
+extension ContextReader: ContextUsage, @unchecked Sendable {}
+
+struct SystemClock: Clock {
+    var now: Date { Date() }
+}
+
 // 요금제 사용 한도: 5시간·주간(전체)·주간(모델별 — 예: Fable)
 struct Limit: Equatable, Identifiable {
     let id: String
@@ -1158,18 +1226,16 @@ final class Store: ObservableObject {
     @Published var collapsed = Set(UserDefaults.standard.stringArray(forKey: "collapsed") ?? [])
     // 전체 알림 끄기 — ~/.claude/notifier/mute-all 이 있으면 notify.py 가 모든 세션의 알림을 띄우지 않는다
     @Published var allMuted = FileManager.default.fileExists(atPath: muteAllPath)
-    private let dir = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/notifier/sessions")
     private var timer: Timer?
+    // 세션 상태 판정(BoardRules.scanSessions)에 넘기는 진짜 어댑터 — Claude Code 상태는 ClaudeNames.shared
+    private let sessionFiles = SessionFiles()
+    private let processes = SystemProcesses()
+    private let transcripts = TranscriptFiles()
     private let contexts = ContextReader()
-    private let models = ModelReader()
-    private let interrupts = InterruptReader()
-    private let handoffs = HandoffReader()
-    // 백그라운드 셸 수 — ps 를 메인 스레드에서 돌리면 클릭 처리가 밀리므로 뒤에서 세고 다음 reload 가 쓴다
-    private var shellCounts: [Int32: Int] = [:]
+    private let clock = SystemClock()
+    // 백그라운드 셸 수 — ps 를 메인 스레드에서 돌리면 클릭 처리가 밀리므로 뒤에서 세고 다음 reload 가 쓴다(processes 가 들고 있다)
     private var shellsBusy = false
     private var shellsAt = Date.distantPast
-    // 세션 기록 — 매초 30여 개 파일을 다시 읽어 풀던 것을, 파일이 바뀔 때만 다시 읽는다
-    private var records: [String: (mtime: Date, j: [String: Any])] = [:]
 
     // ps 는 프로세스 수백 개를 훑으므로 3초에 한 번만 센다
     private func refreshShells() {
@@ -1179,7 +1245,7 @@ final class Store: ObservableObject {
         DispatchQueue.global(qos: .utility).async {
             let counts = backgroundShells()
             DispatchQueue.main.async { [weak self] in
-                self?.shellCounts = counts
+                self?.processes.shellCounts = counts
                 self?.shellsBusy = false
             }
         }
@@ -1304,120 +1370,14 @@ final class Store: ObservableObject {
     }
 
     func reload(force: Bool = false) {
-        now = Date()
+        // 세션 상태 판정은 BoardRules.scanSessions 가 포트로 한다 — 시계는 거기서 한 번만 읽고 여기서도 그 시각을 쓴다.
+        // 셸 수는 직전까지 뒤에서 센 것을 쓰고(refreshShells 의 결과는 이 reload 가 끝난 뒤에 들어온다), 낡은 세션 기록 지우기·reader 캐시 정리도 거기서 한다
+        let scan = scanSessions(records: sessionFiles, processes: processes, live: ClaudeNames.shared,
+                                transcripts: transcripts, contexts: contexts, clock: clock)
+        now = scan.now
         SecondTicker.shared.now = now
-        let fm = FileManager.default
-        let shells = shellCounts
         refreshShells()
-        var sessions: [Session] = []
-        var brainPaths = Set<String>()
-        var transcripts = Set<String>()
-        var handedTo: [String: String] = [:]   // 대화를 백그라운드로 넘긴 세션 → 이어 받은 세션 id
-        var seen = Set<String>()
-        for name in (try? fm.contentsOfDirectory(atPath: dir)) ?? [] where name.hasSuffix(".json") {
-            let path = (dir as NSString).appendingPathComponent(name)
-            guard let m = mtime(path) else { continue }
-            seen.insert(path)
-            let j: [String: Any]
-            if let c = records[path], c.mtime == m {
-                j = c.j
-            } else {
-                guard let data = fm.contents(atPath: path),
-                      let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-                records[path] = (m, parsed)
-                j = parsed
-            }
-            var state = j["state"] as? String ?? "idle"
-            let updated = Date(timeIntervalSince1970: j["updated"] as? Double ?? 0)
-            if state != "ended", let pid = (j["pid"] as? NSNumber)?.int32Value, kill(pid, 0) != 0, errno == ESRCH {
-                state = "ended"
-            }
-            // 질문 없이 끝난 세션은 대화 기록 파일이 없어 이어 열 수 없으므로 목록에서 뺀다
-            let sid = sessionID(j, fileName: name)
-            let cwdPath = j["cwd"] as? String ?? "?"
-            let transcript = transcriptPath(j["transcript_path"] as? String, cwdPath, sid)
-            if state == "ended", now.timeIntervalSince(updated) > 2 * 86400
-                || !fm.fileExists(atPath: transcript) {
-                try? fm.removeItem(atPath: path)
-                continue
-            }
-            // Esc 로 끊긴 세션은 입력을 기다리는 중이다 — 그 뒤에도 도는 서브에이전트·셸이 있으면 아래에서 다시 작업 중이 된다.
-            // 첫 응답이 오기 전에 끊으면 대화 기록에 중단 표시가 남지 않으므로 Claude Code 의 status 가 이번 상태 뒤에 idle 이 된 것도 본다
-            let pid = (j["pid"] as? NSNumber)?.int32Value ?? 0
-            var since = Date(timeIntervalSince1970: j["since"] as? Double ?? 0)
-            let live = ClaudeNames.shared.statusChange(pid, session: sid).flatMap { $0.at > since ? $0 : nil }
-            if state == "working" || state == "waiting",
-               let at = interrupts.read(transcript) ?? (live?.status == "idle" ? live?.at : nil) {
-                state = "idle"
-                since = at
-            } else if state == "waiting", let live, live.status == "busy" {
-                // 승인한 도구가 도는 동안은 hook 이 없다(PostToolUse 까지) — 승인 창이 닫혀 Claude Code 가 다시 busy 면 작업 중이다
-                state = "working"
-                since = live.at
-            }
-            // 응답은 끝났어도 서브에이전트나 백그라운드 셸이 돌고 있으면 작업 중으로 보인다
-            let subDir = ((transcript.hasSuffix(".jsonl") ? String(transcript.dropLast(6)) : transcript) as NSString)
-                .appendingPathComponent("subagents")
-            let subs = Sub.parse(j["subagents"] as? [String: Any], alive: state != "ended", now: now).map { sub -> Sub in
-                var sub = sub
-                let p = (subDir as NSString).appendingPathComponent("agent-\(sub.id).jsonl")
-                brainPaths.insert(p)
-                sub.brain = models.read(p, now: now)
-                return sub
-            }
-            let shellCount = state == "idle" ? shells[pid] ?? 0 : 0   // 응답 중에 도는 셸은 보통 도구 호출이라 세지 않는다
-            if state == "idle", shellCount > 0 || subs.contains(where: { $0.state != "done" }) {
-                state = "working"
-            }
-            // 일시중지 표지는 보드가 남기고, 새 요청이 들어오면 state.py 가 지운다
-            let pausedFile = (dir as NSString).appendingPathComponent("\(sid).paused")
-            let paused = fm.fileExists(atPath: pausedFile)
-            if paused, state != "ended" { state = "paused" }
-            let muted = fm.fileExists(atPath: (dir as NSString).appendingPathComponent("\(sid).mute"))
-            var brain: Brain? = nil
-            if state != "ended" {
-                brainPaths.insert(transcript)
-                brain = models.read(transcript, fallbackModel: j["model"] as? String ?? "", now: now)
-                if let b = brain, let e = contexts.liveEffort(sid, transcript: transcript) { brain = Brain(model: b.model, effort: e) }
-            }
-            let clean = { (s: String) in
-                s.replacingOccurrences(of: "[#*`]+", with: "", options: .regularExpression)
-                    .trimmingCharacters(in: .whitespaces)
-            }
-            // 대화를 백그라운드로 넘긴 세션(끝난 것도) — 넘긴 뒤에 이 세션이 다시 열렸으면(--resume 의 SessionStart 로 started 가 새로 잡힘)
-            // 아직 대화 줄이 없어도 넘긴 세션으로 보지 않는다
-            transcripts.insert(transcript)
-            if let to = handoffs.read(transcript), to.id != sid,
-               (j["started"] as? Double ?? 0) <= to.at.timeIntervalSince1970 {
-                handedTo[sid] = to.id
-            }
-            sessions.append(Session(id: sid,
-                                    cwd: j["cwd"] as? String ?? "?",
-                                    projectDir: j["project_dir"] as? String ?? j["cwd"] as? String ?? "?",
-                                    state: state,
-                                    since: since,
-                                    updated: updated,
-                                    headless: j["headless"] as? Bool ?? false,
-                                    tty: j["tty"] as? String ?? "",
-                                    topic: clean(j["topic"] as? String ?? ""),
-                                    message: clean(j["last_message"] as? String ?? ""),
-                                    resumeCmd: j["resume_cmd"] as? String ?? "",
-                                    file: path,
-                                    ctx: contexts.read(sid, transcript: transcript, model: j["model"] as? String ?? "", now: now),
-                                    brain: brain,
-                                    pid: pid,
-                                    subagents: subs,
-                                    shells: shellCount,
-                                    paused: paused,
-                                    muted: muted,
-                                    limitAt: ((j["limit_hit"] as? [String: Any])?["at"] as? Double).map { Date(timeIntervalSince1970: $0) },
-                                    name: state == "ended" ? nil : ClaudeNames.shared.name(pid)))
-        }
-        ClaudeNames.shared.prune(keep: Set(sessions.map(\.pid)))
-        models.prune(keep: brainPaths)
-        interrupts.prune(keep: brainPaths)
-        handoffs.prune(keep: transcripts)
-        records = records.filter { seen.contains($0.key) }
+        let sessions = scan.sessions
         // 탭 짝짓기는 넘긴 세션까지 모두 본다 — 보드 탭에서 넘긴 원래 claude 가 그 탭에 남아 있을 수 있고(탭 줄 이름·쥔 목록),
         // 카드 목록에서만 뺀다
         // 1초 타이머·알림 관찰자 모두 메인 스레드. 탭 claude 가 넘긴 작업을 붙여 보는 중이면 탭은 그 작업 세션을 따라간다(parkedFrom = 넘긴 쪽)
@@ -1425,9 +1385,9 @@ final class Store: ObservableObject {
         // 넘긴 세션은 이어 받은 세션의 카드가 있을 때만 뺀다 — 그 세션 파일이 없으면(아직 hook 이 안 왔거나 지워짐) 지금처럼 보인다.
         // 탭이 이어 받은 작업을 따라가는 동안의 탭 claude 세션도 뺀다(그 탭의 카드는 작업 쪽 하나).
         // groups 가 이 목록으로 만들어지므로 상태별 개수·메뉴 막대·감독 말·종료 확인도 함께 빠진다
-        let shown = visibleSessions(sessions, handedTo: handedTo, parkedFrom: parkedFrom)
+        let shown = visibleSessions(sessions, handedTo: scan.handedTo, parkedFrom: parkedFrom)
         expandNewlyWaiting(shown)
-        let muted = fm.fileExists(atPath: muteAllPath)
+        let muted = sessionFiles.allMuted()
         if muted != allMuted { allMuted = muted }
         let grouped = groupSessions(shown)
         // 지운 뒤 새 활동이 없는 작업경로는 빼고, 새 활동이 생긴 작업경로는 지운 목록에서 꺼낸다
