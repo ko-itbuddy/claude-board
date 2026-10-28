@@ -1,6 +1,7 @@
 // Claude Code 세션 보드 — 작업 경로별 카드로 세션 상태를 보여 주는 네이티브 창
 // 상태 파일: ~/.claude/notifier/sessions/*.json (state.py 가 hook 에서 기록)
 import AppKit
+import BoardRules
 import Carbon.HIToolbox
 import Combine
 import CryptoKit
@@ -18,109 +19,9 @@ func mtime(_ path: String) -> Date? {
     return Date(timeIntervalSince1970: TimeInterval(st.st_mtimespec.tv_sec) + TimeInterval(st.st_mtimespec.tv_nsec) / 1e9)
 }
 
-struct Session: Identifiable, Equatable {
-    let id: String
-    let cwd: String
-    let projectDir: String  // claude 를 띄운 폴더(state.py 의 project_dir, 없으면 cwd) — cd·워크트리에도 그대로라 카드는 이것으로 묶는다
-    let state: String
-    let since: Date
-    let updated: Date
-    let headless: Bool
-    let tty: String
-    let topic: String
-    let message: String
-    let resumeCmd: String
-    let file: String
-    let ctx: Ctx?
-    let brain: Brain?       // 마지막 응답의 모델·effort
-    let pid: Int32
-    let subagents: [Sub]
-    let shells: Int         // 세션에 붙어 도는 백그라운드 셸 수
-    let paused: Bool        // 보드에서 일시중지한 세션 — sessions/<id>.paused 가 있다
-    let muted: Bool         // 보드에서 알림을 끈 세션 — sessions/<id>.mute 가 있으면 notify.py 가 패널을 띄우지 않는다
-    let limitAt: Date?      // 사용 한도에 걸려 응답이 끊긴 시각 — state.py 가 기록하고, 세션이 다시 움직이면 지운다
-    let name: String?       // Claude Code 의 세션 이름(ClaudeNames — pid 로 찾음). 끝난 세션·못 읽으면 nil
-
-    var rank: Int { ["waiting": 0, "working": 1, "paused": 2, "idle": 2, "ended": 3][state] ?? 9 }
-    var title: String { topic.isEmpty ? (message.isEmpty ? "요청 전" : message) : topic }
-}
-
-// 세션이 호출한 서브에이전트 — state.py 가 SubagentStart·SubagentStop·도구 hook 으로 기록한다
-struct Sub: Identifiable, Equatable {
-    let id: String
-    let type: String
-    let desc: String
-    let state: String       // running | waiting | done
-    let started: Date
-    let ended: Date?
-    let tool: String
-    let background: Bool
-    var brain: Brain? = nil  // 서브에이전트 대화 기록의 마지막 응답 모델·effort
-
-    // 보드 상태 이름으로 바꿔 아이콘·색을 세션과 같이 쓴다
-    var boardState: String { ["running": "working", "waiting": "waiting", "done": "idle"][state] ?? "working" }
-
-    static func parse(_ j: [String: Any]?, alive: Bool, now: Date) -> [Sub] {
-        guard alive, let j else { return [] }
-        return j.compactMap { id, v -> Sub? in
-            guard let v = v as? [String: Any] else { return nil }
-            let ended = (v["ended"] as? Double).map { Date(timeIntervalSince1970: $0) }
-            // 끝난 서브에이전트는 10초 동안만 보여 준다
-            if let ended, now.timeIntervalSince(ended) > 10 { return nil }
-            // 시작 hook 없이 생긴 기록(끝 hook 이나 도구 hook 만 옴)은 실제 서브에이전트가 아니다 — 전사 파일도 종류도 없고,
-            // 끝 hook 이 끝내 안 오면 실행 중으로 남아 세션을 계속 작업 중으로 보이게 하므로 목록에서 뺀다
-            if !(v["started_seen"] as? Bool ?? false) { return nil }
-            return Sub(id: id,
-                       type: v["type"] as? String ?? "",
-                       desc: v["description"] as? String ?? "",
-                       state: v["state"] as? String ?? "running",
-                       started: Date(timeIntervalSince1970: v["started"] as? Double ?? 0),
-                       ended: ended,
-                       tool: v["tool"] as? String ?? "",
-                       background: v["background"] as? Bool ?? false)
-        }
-        .sorted { ($0.state == "done" ? 1 : 0, $0.started) < ($1.state == "done" ? 1 : 0, $1.started) }
-    }
-}
-
-struct Group: Identifiable, Equatable {
-    let id: String          // 세션들의 projectDir
-    let sessions: [Session]
-    var name: String { (id as NSString).lastPathComponent }
-    var path: String { id.replacingOccurrences(of: NSHomeDirectory(), with: "~") }
-    var urgent: String { sessions.min { $0.rank < $1.rank }?.state ?? "idle" }
-    // 작업 중·승인 대기 세션 — sessions 는 급한 순이라 첫째가 대표다
-    var active: [Session] { sessions.filter { $0.state == "waiting" || $0.state == "working" } }
-}
-
-// 세션이 지금 하는 일 — 승인 대기면 요청 내용, 아니면 세션 제목. 접힌 카드와 미니 화면이 쓴다
-func doing(_ s: Session) -> String { s.state == "waiting" && !s.message.isEmpty ? s.message : s.title }
-
-// 컨텍스트 사용량: 마지막 요청에 실린 입력 토큰 / 모델의 컨텍스트 크기
-struct Ctx: Equatable {
-    let used: Int
-    let size: Int
-    var pct: Int { size > 0 ? min(100, used * 100 / size) : 0 }
-}
-
-// 응답을 만든 모델과 effort — 대화 기록의 assistant 줄에 message.model 과 effort 가 실린다
-struct Brain: Equatable {
-    let model: String       // claude-opus-5-5 등
-    let effort: String      // low | medium | high | xhigh | max, 모르면 ""
-
-    // 모델 계열 이름 — 라벨에 짧게 쓴다
-    var family: String {
-        for f in ["opus", "sonnet", "haiku", "fable"] where model.contains(f) { return f.prefix(1).uppercased() + f.dropFirst() }
-        return model.replacingOccurrences(of: "claude-", with: "")
-    }
-    // 계열 뒤 버전 숫자 — claude-opus-5-5 → 5.5, claude-fable-5-1 → 5.1
-    var version: String {
-        guard let r = model.range(of: "-(\\d+)-(\\d+)", options: .regularExpression) else { return "" }
-        return model[r].dropFirst().replacingOccurrences(of: "-", with: ".")
-    }
-    static let efforts = ["low", "medium", "high", "xhigh", "max"]
-    var effortLevel: Int { (Self.efforts.firstIndex(of: effort) ?? -1) + 1 }   // 0 = 모름
-}
+// 세션·서브에이전트·카드 모델과 세션 기록 해석·카드 묶음 규칙은 BoardRules 모듈(Sources/BoardRules)에 있다 — Tests/BoardRulesTests 가 시험한다.
+// SwiftUI 에도 Group 이 있어 그대로 쓰면 모호하다 — 이 파일의 별칭이 가져온 이름보다 앞선다(SwiftUI 의 것은 SwiftUI.Group 으로 쓴다)
+typealias Group = BoardRules.Group
 
 // 대화 기록 끝에서 마지막 응답의 모델·effort 를 읽는다 — 파일이 바뀌어도 3초에 한 번만 다시 읽는다
 final class ModelReader {
@@ -1432,7 +1333,7 @@ final class Store: ObservableObject {
                 state = "ended"
             }
             // 질문 없이 끝난 세션은 대화 기록 파일이 없어 이어 열 수 없으므로 목록에서 뺀다
-            let sid = j["session_id"] as? String ?? String(name.dropLast(5))
+            let sid = sessionID(j, fileName: name)
             let cwdPath = j["cwd"] as? String ?? "?"
             let transcript = transcriptPath(j["transcript_path"] as? String, cwdPath, sid)
             if state == "ended", now.timeIntervalSince(updated) > 2 * 86400
@@ -1488,9 +1389,9 @@ final class Store: ObservableObject {
             transcripts.insert(transcript)
             if let to = handoffs.read(transcript), to.id != sid,
                (j["started"] as? Double ?? 0) <= to.at.timeIntervalSince1970 {
-                handedTo[j["session_id"] as? String ?? name] = to.id
+                handedTo[sid] = to.id
             }
-            sessions.append(Session(id: j["session_id"] as? String ?? name,
+            sessions.append(Session(id: sid,
                                     cwd: j["cwd"] as? String ?? "?",
                                     projectDir: j["project_dir"] as? String ?? j["cwd"] as? String ?? "?",
                                     state: state,
@@ -1524,16 +1425,11 @@ final class Store: ObservableObject {
         // 넘긴 세션은 이어 받은 세션의 카드가 있을 때만 뺀다 — 그 세션 파일이 없으면(아직 hook 이 안 왔거나 지워짐) 지금처럼 보인다.
         // 탭이 이어 받은 작업을 따라가는 동안의 탭 claude 세션도 뺀다(그 탭의 카드는 작업 쪽 하나).
         // groups 가 이 목록으로 만들어지므로 상태별 개수·메뉴 막대·감독 말·종료 확인도 함께 빠진다
-        let ids = Set(sessions.map(\.id))
-        let shown = handedTo.isEmpty && parkedFrom.isEmpty ? sessions : sessions.filter { s in
-            !parkedFrom.contains(s.id) && (handedTo[s.id].map { !ids.contains($0) } ?? true)
-        }
+        let shown = visibleSessions(sessions, handedTo: handedTo, parkedFrom: parkedFrom)
         expandNewlyWaiting(shown)
         let muted = fm.fileExists(atPath: muteAllPath)
         if muted != allMuted { allMuted = muted }
-        let grouped = Dictionary(grouping: shown, by: \.projectDir).map { dir, list in
-            Group(id: dir, sessions: list.sorted { $0.rank != $1.rank ? $0.rank < $1.rank : $0.since > $1.since })
-        }
+        let grouped = groupSessions(shown)
         // 지운 뒤 새 활동이 없는 작업경로는 빼고, 새 활동이 생긴 작업경로는 지운 목록에서 꺼낸다
         var visible: [Group] = []
         for g in grouped {
@@ -1545,14 +1441,7 @@ final class Store: ObservableObject {
             visible.append(g)
         }
         foldQuiet(visible)
-        let pins = pinnedGroups
-        let sorted = visible.sorted {
-            let pa = pins.firstIndex(of: $0.id) ?? Int.max, pb = pins.firstIndex(of: $1.id) ?? Int.max
-            if pa != pb { return pa < pb }
-            let a = $0.sessions.map(\.rank).min() ?? 9, b = $1.sessions.map(\.rank).min() ?? 9
-            if a != b { return a < b }
-            return ($0.sessions.map(\.updated).max() ?? .distantPast) > ($1.sessions.map(\.updated).max() ?? .distantPast)
-        }
+        let sorted = sortGroups(visible, pinned: pinnedGroups)
         AmbientTicker.shared.busy = sorted.contains { $0.sessions.contains { $0.state == "working" || $0.state == "waiting" } }
         if force || sorted != groups {
             withAnimation(.spring(response: 0.45, dampingFraction: 0.82)) { groups = sorted }
@@ -1591,12 +1480,7 @@ private let hourMinute = formatter("HH:mm"), dayHourMinute = formatter("M/d(E) H
 // 종료된 세션은 흐르는 시간 대신 끝난 시각을 고정해서 보여 준다
 func clock(_ date: Date) -> String { hourMinute.string(from: date) }
 
-func elapsed(_ from: Date, _ now: Date) -> String {
-    let s = max(0, Int(now.timeIntervalSince(from)))
-    if s < 60 { return "\(s)초" }
-    if s < 3600 { return "\(s / 60)분 \(s % 60)초" }
-    return "\(s / 3600)시간 \(s % 3600 / 60)분"
-}
+// 경과 시간 글자(elapsed)는 BoardRules 에 있다
 
 // 매초 바뀌는 글자(경과 시간·남은 시간·감독 말)만 보는 1초 시계 — 줄·카드에 시각을 넘기면 매초 모든 줄의 입력이 바뀐다.
 // 시계를 따로 돌리지 않고 Store.reload 가 함께 바꾼다(한 번에 다시 그리게)
@@ -7317,7 +7201,7 @@ struct WorkspaceButton: View {
         .contentShape(Rectangle())
         .onTapGesture { TerminalHub.shared.showWorkspace(path) }
         .clickable($hover)
-        .hint(path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+        .hint(displayPath(path, home: NSHomeDirectory()))
     }
 }
 
@@ -7462,7 +7346,7 @@ struct NewSessionSheet: View {
                     .foregroundStyle(on ? Palette.color("working") : .secondary)
                 VStack(alignment: .leading, spacing: 1) {
                     Text((p as NSString).lastPathComponent).boardFont(13, weight: .semibold)
-                    Text(p.replacingOccurrences(of: NSHomeDirectory(), with: "~")).boardFont(11).foregroundStyle(.secondary)
+                    Text(displayPath(p, home: NSHomeDirectory())).boardFont(11).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle)
                 }
                 Spacer(minLength: 0)

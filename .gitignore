@@ -9,6 +9,9 @@
 !/ClaudeBoard.swift
 !/Package.swift
 !/Package.resolved
+!/Sources/
+!/Tests/
+!/clt-testing.json
 !/ClaudeNotifier.swift
 !/ClaudeStatus.swift
 !/AppIcon.swift
