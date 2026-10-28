@@ -834,6 +834,9 @@ mod tests {
         run(&dir, "working", br#"{"cwd":"/a"}"#, &fake());
         let n = fs::read_dir(&dir).unwrap().count();
         assert_eq!(n, 2);
+        // BOM 은 hook 입력을 받는 쪽(crates/hook main.rs read_input)이 뗀다 — 여기서는 받지 않는다
+        run(&dir, "working", b"\xEF\xBB\xBF{\"session_id\":\"bom\"}", &fake());
+        assert!(!dir.join("bom.json").exists());
         fs::remove_dir_all(&dir).unwrap();
     }
 

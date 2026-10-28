@@ -11,6 +11,7 @@
   import ModelLabel from "./ModelLabel.svelte";
   import NameLabel from "./NameLabel.svelte";
   import MuteSwitch from "./MuteSwitch.svelte";
+  import PlaceChip from "./PlaceChip.svelte";
   import StateIcon from "./StateIcon.svelte";
   import SubagentRow from "./SubagentRow.svelte";
   import { clock, elapsed, stateName, stateRgb } from "./format";
@@ -103,7 +104,8 @@
       <Fit count={3} class="meta">
         {#snippet content(level)}
           <span class="items">
-            <span class="num">{ended ? `${clock(s.updated)} 종료` : s.state === "idle" ? `${elapsed(s.since, now)} 전` : elapsed(s.since, now)}</span>
+            <span class="num el">{ended ? `${clock(s.updated)} 종료` : s.state === "idle" ? `${elapsed(s.since, now)} 전` : elapsed(s.since, now)}</span>
+            {#if s.place}<PlaceChip place={s.place} headless={s.headless} />{/if}
             {#if s.subagents.length || s.shells > 0 || s.ctx || s.brain}<span>·</span>{/if}
             {#if s.subagents.length}
               {@const n = running > 0 && running < s.subagents.length ? `${running}/${s.subagents.length}` : `${s.subagents.length}`}
@@ -113,7 +115,7 @@
                 ondblclick={stop}
                 use:hint={`하위 작업 ${s.subagents.length}개 — ` + (subOpen ? "서브에이전트 목록 접기" : "서브에이전트 목록 펼치기")}
               >
-                <Icon name="people" size={10} />
+                <Icon name="people" size={12.6} pad={1.45} />
                 {level > 0 ? n : `하위 작업 ${n}`}
                 {#if level === 0}<span class="fold">{subOpen ? "· 접기" : "· 펼치기"}</span>{/if}
               </button>
@@ -210,9 +212,11 @@
     gap: 8px;
     min-height: 20px;
   }
+  /* SwiftUI 는 제목과 스위치 사이에 Spacer(최소 4)와 간격 둘이 끼어 제목이 스위치에서 12px 더 떨어져 잘린다 */
   .title {
     flex: 1;
     min-width: 0;
+    margin-right: 12px;
     font-size: 13px;
     font-weight: 500;
     white-space: nowrap;
@@ -260,6 +264,9 @@
     align-items: center;
     gap: 5px;
     white-space: nowrap;
+  }
+  .el {
+    margin-right: 2px;
   }
   .subtoggle {
     --s: 242 140 191;
