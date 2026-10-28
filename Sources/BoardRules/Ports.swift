@@ -1,6 +1,7 @@
 // 보드 규칙의 포트 — 세션 상태 판정(scanSessions)이 바깥(세션 기록 파일·프로세스·Claude Code 상태·대화 기록·컨텍스트·시계)을 부르는 자리,
 // 사용량 규칙(Usage.swift)이 바깥(사용량 캐시·로그인 정보·사용량 API·시계)을 부르는 자리,
-// 계정 전환 규칙(Accounts.swift)이 바깥(키체인·Claude Code 설정·저장 계정 목록·로그인 정보 쓰기 잠금·시계)을 부르는 자리.
+// 계정 전환 규칙(Accounts.swift)이 바깥(키체인·Claude Code 설정·저장 계정 목록·로그인 정보 쓰기 잠금·시계)을 부르는 자리,
+// 다른 터미널 조작(Terminals.swift)·세션 조작(SessionControl.swift)이 바깥(다른 터미널 앱·프로세스·tty 제목·보드 탭·세션 표지·세션 터미널·시계)을 부르는 자리.
 // 진짜 어댑터는 보드 앱(ClaudeBoard.swift)에, 가짜 어댑터는 Tests/BoardRulesTests 에만 둔다(이슈 #9 헥사고날 첫 단계).
 // 규칙에 새 OS 호출(파일·프로세스·시각·환경 변수·홈 폴더)이 필요하면 여기 포트를 거친다 — 코어에서 FileManager·kill·Date() 를 직접 부르지 않는다.
 // 포트는 역할로 나눈다(범용 FileSystem 포트를 두면 시험이 경로 문자열 시험이 된다).
@@ -163,4 +164,94 @@ public protocol SavedAccountList: Sendable {
 public protocol CredentialsWriteLock: Sendable {
     /// 잠금 안에서 body 를 돌린다. 잠금을 잡지 못하면(오래 쥐고 있음) 던진다
     func withLock<T>(_ body: () throws -> T) throws -> T
+}
+
+// MARK: - 다른 터미널·세션 조작 (Terminals.swift·SessionControl.swift)
+// 큐(ghosttyQueue·백그라운드·메인)와 타이머는 앱이 쥔다 — 포트 메서드는 부른 큐에서 그대로 돈다.
+// 다른 터미널 앱·프로세스·tty 제목의 진짜 어댑터는 상태 없는 struct 라 어느 큐에서나 부른다(앱 활성화만 메인에서).
+// 보드 탭·세션 터미널의 진짜 어댑터는 @MainActor 인 TerminalHub·앱 함수를 MainActor.assumeIsolated 로 부르므로 메인에서만 부른다
+
+/// 터미널 키·글자 단계 — ("key", "escape"|"enter") | ("text", 붙여 넣을 글자) | ("wait", 초). 그 밖의 종류는 wait 처럼 다룬다(지금 동작).
+/// AutoSwitcher·BoardSurface 가 쓰는 꼴 그대로 둔다
+public typealias TerminalSteps = [(String, String)]
+
+// 다른 터미널 앱(Ghostty·iTerm2·Terminal·그 밖) — 진짜 어댑터는 NSRunningApplication·NSWorkspace·NSAppleScript
+public protocol TerminalApps: Sendable {
+    /// 그 번들 id 의 앱이 떠 있는가
+    func isRunning(_ bundleId: String) -> Bool
+    /// 떠 있으면 앞으로, 아니면 띄운다(메인에서)
+    func activate(_ bundleId: String)
+    /// 기본 터미널(Ghostty)을 띄운다 — 떠 있으면 앞으로 온다. activate(Ghostty) 와 길이 달라(언제나 openApplication) 따로 둔다(메인에서)
+    func openGhostty()
+    /// AppleScript 를 돌려 결과 글자(stringValue)를 준다. 오류(권한 거부 등)는 어댑터가 board.log 에 남기고 nil
+    func run(_ script: String) -> String?
+    /// 다른 터미널이 바뀐 제목을 읽을 때까지 잠깐 기다린다 — 진짜 어댑터는 Thread.sleep(ghosttyQueue 에서만 부른다)
+    func wait(_ seconds: TimeInterval)
+}
+
+// 프로세스 조작 — 세션 claude 의 조상 앱, 살아 있는지, 끝내라는 신호.
+// ProcessProbe(세션 상태 판정)를 넓히지 않고 따로 둔다: ProcessProbe.isGone 은 권한이 없어 못 보는 pid(EPERM)를 살아 있다고 보지만
+// 여기 isAlive 는 지금 동작(kill(pid, 0) == 0)대로 EPERM 을 끝난 것으로 본다. 두 뜻을 한 포트에 두면 헷갈리고,
+// 신호 보내기를 1초마다 도는 판정 쪽에 열지 않는다. 셸 수(backgroundShells)도 이쪽에는 필요 없다
+public protocol ProcessControl: Sendable {
+    /// pid 의 조상을 따라 올라가 찾은 앱의 번들 id(iTerm2 셸 서버·앱 안 보조 프로세스 포함). 못 찾으면 nil
+    func ancestorBundleID(_ pid: Int32) -> String?
+    /// kill(pid, 0) == 0 — 권한이 없어 못 보는 pid(EPERM)도 false
+    func isAlive(_ pid: Int32) -> Bool
+    /// SIGTERM
+    func terminate(_ pid: Int32)
+}
+
+// 세션 tty 의 창 제목 — Ghostty 터미널을 표지 제목으로 찾을 때 쓴다(OSC 2 를 /dev/<tty> 에 쓴다)
+public protocol TerminalTitles: Sendable {
+    func write(tty: String, title: String)
+}
+
+// 보드 탭(내장 터미널) — 진짜 어댑터는 TerminalHub(메인에서만). 화면·탭은 UUID 로 가리킨다(reveal 은 화면 id·탭 id 모두 받는다)
+public protocol BoardTabs: Sendable {
+    /// 세션이 도는 곳 — 정하는 규칙(TerminalHub.place·pair)은 앱에 있다
+    func place(_ s: Session) -> SessionPlace
+    /// 탭 claude 가 넘긴 대화를 이어 받은 작업이면 그 작업을 붙여 보여 주는 화면
+    func parkedTab(_ s: Session) -> UUID?
+    /// 그 화면이 있고 pid 가 화면의 앞(포그라운드) 프로그램인가 — 화면이 없으면 false
+    func isForeground(_ screen: UUID, pid: Int32) -> Bool
+    /// 그 화면에 단계를 넣는다(키는 키 경로, 글자는 붙여넣기, wait 은 메인 타이머). 끝나면 done(메인에서)
+    func drive(_ screen: UUID, _ steps: TerminalSteps, done: @escaping (Bool) -> Void)
+    /// 그 화면(또는 탭)을 보이게 한다 — 접혀 있으면 펼치고 보드를 앞으로
+    func reveal(_ id: UUID)
+    /// 그 세션이 마지막으로 돌던 화면이 dir 의 셸 프롬프트로 남아 있으면 그 화면
+    func promptScreen(session: String, dir: String) -> UUID?
+    /// 그 화면의 셸에 claude 명령을 넣는다
+    func run(_ command: String, in screen: UUID, session: String, mdRenderOff: Bool)
+    /// dir 에 새 탭을 열고 claude 명령을 넣는다
+    func launch(_ command: String, in dir: String, session: String, mdRenderOff: Bool)
+    /// 보드 탭에서 칠 claude 명령 — 답변 꾸미기(md-render)의 --plugin-dir 을 고쳐 붙인 명령과, 그 세션이 꾸미기를 끈 세션인가
+    func claudeCommand(_ base: String, session: String) -> (command: String, mdRenderOff: Bool)
+    /// 세션의 실행 방식(-p·--bg, 대화형이면 nil)
+    func mode(_ s: Session) -> String?
+    /// 보드 위 안내 한 줄
+    func toast(_ text: String)
+}
+
+// 세션 표지(~/.claude/notifier/sessions/) — 보드가 쓰고 지운다. 읽기는 SessionRecords.isPaused·isMuted 가 짝이다
+public protocol SessionMarks: Sendable {
+    /// <sid>.paused 를 그 내용으로 쓴다(일시중지 — 새 요청이 오면 state.py 가 지운다)
+    func writePaused(_ sid: String, _ data: Data)
+    /// <sid>.paused 를 지운다(없으면 그대로)
+    func clearPaused(_ sid: String)
+    /// <sid>.mute 를 만들거나(빈 파일) 지운다
+    func setMuted(_ sid: String, _ on: Bool)
+}
+
+// 세션 터미널 — 세션 조작이 부르는 단계 넣기·끝나기 기다리기·포커스. 진짜 어댑터는 앱의 driveSession·waitExit·focusSession·activateOwner 로,
+// 큐(ghosttyQueue)·타이머(0.2초 간격 확인)를 앱이 쥔다. 넣는 길 고르기는 TerminalControl.driveRoute, 기다리기 판단은 exitWait 이다
+public protocol SessionTerminals: Sendable {
+    /// 세션 터미널에 단계를 넣는다 — 보드 탭은 그 화면에 직접, Ghostty 는 AppleScript. 넣을 수 없으면 done(false). done 은 메인에서
+    func drive(_ s: Session, _ steps: TerminalSteps, done: @escaping (Bool) -> Void)
+    /// pid 가 끝나기를 기다린다(최대 timeout 초) — 끝나면 done(true)
+    func waitForExit(_ pid: Int32, timeout: Double, done: @escaping (Bool) -> Void)
+    /// 두 번 눌렀을 때 — 그 세션의 터미널 창까지
+    func focus(_ s: Session)
+    /// 한 번 눌렀을 때 — 그 세션의 터미널 앱만 앞으로
+    func bringForward(_ s: Session)
 }

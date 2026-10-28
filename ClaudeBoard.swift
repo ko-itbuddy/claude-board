@@ -5930,7 +5930,7 @@ final class SplitNode {
         for ws in workspaces { states[ws] = tabs(in: ws).flatMap(\.surfaces).compactMap { $0.parked ?? $0.session }.min { $0.rank < $1.rank }?.state ?? "idle" }
         if states != workspaceStates { workspaceStates = states }
         saveTabs()   // 세션 id·resume_cmd·셸 경로·고른 탭이 바뀌었으면 남긴다
-        // 다른 터미널 세션의 앱 이름 — 조상 프로세스로만(AppleScript 를 쓰는 ownerApp 은 부르지 않는다)
+        // 다른 터미널 세션의 앱 이름 — 조상 프로세스로만(AppleScript 를 쓰는 TerminalControl.owner 는 부르지 않는다)
         var names = appNames
         for s in sessions where s.state != "ended" && !s.headless && map[s.id] == nil && names[s.id] == nil && s.pid > 0 {
             if let id = ancestorApp(s.pid) {
@@ -6226,13 +6226,7 @@ final class SplitNode {
     }
 }
 
-// 세션이 도는 곳 — 칩·클릭 흐름·카드 구역이 쓴다
-enum SessionPlace: Equatable {
-    case tab(UUID, headless: Bool)   // 보드 탭의 화면(headless = 그 화면 안에서 시작된 claude -p)
-    case terminal                    // 다른 터미널 앱
-    case background                  // claude -p·--bg 등 터미널 없이 도는 세션
-    case ended
-}
+// 세션이 도는 곳(SessionPlace — 칩·클릭 흐름·카드 구역이 쓴다)은 BoardRules/Terminals.swift 에 있다. 정하는 것은 TerminalHub.place
 
 // pid 의 조상 가운데 화면의 맨 위 프로세스가 있으면 그 화면
 func tabAncestor(_ pid: Int32, _ tabPids: [Int32: BoardSurface]) -> BoardSurface? {
@@ -6342,8 +6336,7 @@ func sessionRecord(_ id: String) -> [String: Any]? {
     }
     var marks: [String] = []
     for s in mains.values where !FileManager.default.fileExists(atPath: pausedMark(s)) {
-        let mark = ["paused_at": Date().timeIntervalSince1970, "topic": s.topic] as [String: Any]
-        if let data = try? JSONSerialization.data(withJSONObject: mark), FileManager.default.createFile(atPath: pausedMark(s), contents: data) {
+        if let data = pausedMarkData(topic: s.topic, at: Date()), FileManager.default.createFile(atPath: pausedMark(s), contents: data) {
             marks.append(pausedMark(s))
         }
     }
@@ -9366,49 +9359,142 @@ func addSnapButton() {
     window.addTitlebarAccessoryViewController(vc)
 }
 
-func activateTerminal() {
-    if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.mitchellh.ghostty") {
-        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
-    }
-}
+// MARK: 다른 터미널·세션 조작의 진짜 어댑터 — 규칙(터미널 가르기·조작 길 고르기·AppleScript 글자·Ghostty 찾기·세션 조작 순서·끝나기 기다리기 판단)은
+// BoardRules/Terminals.swift·SessionControl.swift, 포트는 BoardRules/Ports.swift(가짜 어댑터는 Tests 에만).
+// 여기는 어댑터와, 확인 창·애니메이션 기다리기·큐(ghosttyQueue·백그라운드·메인)·타이머를 쥔 앱 함수다
 
-// 더블 클릭한 세션의 Ghostty 터미널로 포커스를 옮긴다.
-// Ghostty AppleScript 사전에는 tty 가 없으므로, 그 tty 에 잠시 표지 제목을 써서 터미널을 찾은 뒤 원래 제목으로 되돌린다.
+// Ghostty 조작(표지 제목으로 터미널 찾기·키 보내기·포커스)은 이 큐에서 차례로 — 표지 제목을 쓰고 기다리는 동안 메인을 막지 않는다
 let ghosttyQueue = DispatchQueue(label: "com.claude.board.ghostty")
 
-func runScript(_ source: String) -> NSAppleEventDescriptor? {
-    var err: NSDictionary?
-    let r = NSAppleScript(source: source)?.executeAndReturnError(&err)
-    // 권한 거부 같은 AppleScript 오류는 board.log 에 남긴다 — 보드 화면에는 드러나지 않기 때문
-    if let err {
-        let line = "\(Date()) \(err[NSAppleScript.errorNumber] ?? "") \(err[NSAppleScript.errorMessage] ?? "")\n"
-        let log = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/notifier/board.log")
-        if let h = FileHandle(forWritingAtPath: log) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
-        else { FileManager.default.createFile(atPath: log, contents: Data(line.utf8)) }
+// 다른 터미널 앱 — NSRunningApplication·NSWorkspace·NSAppleScript. 상태 없는 struct 라 어느 큐에서나 부른다(activate·openGhostty 는 메인에서)
+struct SystemTerminalApps: TerminalApps {
+    func isRunning(_ bundleId: String) -> Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).isEmpty
     }
-    return r
+
+    func activate(_ bundleId: String) {
+        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first {
+            app.activate()
+        } else if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
+            NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+        }
+    }
+
+    func openGhostty() {
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: TerminalBundle.ghostty) {
+            NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+        }
+    }
+
+    func run(_ script: String) -> String? {
+        var err: NSDictionary?
+        let r = NSAppleScript(source: script)?.executeAndReturnError(&err)
+        // 권한 거부 같은 AppleScript 오류는 board.log 에 남긴다 — 보드 화면에는 드러나지 않기 때문
+        if let err {
+            let line = "\(Date()) \(err[NSAppleScript.errorNumber] ?? "") \(err[NSAppleScript.errorMessage] ?? "")\n"
+            let log = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/notifier/board.log")
+            if let h = FileHandle(forWritingAtPath: log) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
+            else { FileManager.default.createFile(atPath: log, contents: Data(line.utf8)) }
+        }
+        return r?.stringValue
+    }
+
+    func wait(_ seconds: TimeInterval) { Thread.sleep(forTimeInterval: seconds) }
 }
 
-func writeTitle(_ tty: String, _ title: String) {
-    guard let h = FileHandle(forWritingAtPath: "/dev/\(tty)") else { return }
-    h.write("\u{1b}]2;\(title)\u{07}".data(using: .utf8)!)
-    try? h.close()
+// 프로세스 — 조상 앱 찾기는 아래 ancestorApp(TerminalHub.pair 도 쓴다), 살아 있는지·끝내기는 kill
+struct SystemProcessControl: ProcessControl {
+    func ancestorBundleID(_ pid: Int32) -> String? { ancestorApp(pid) }
+    func isAlive(_ pid: Int32) -> Bool { kill(pid, 0) == 0 }
+    func terminate(_ pid: Int32) { kill(pid, SIGTERM) }
 }
 
-// 지원하는 터미널 앱 — Ghostty 는 AppleScript 에 tty 가 없어 표지 제목으로 찾고, iTerm2·Terminal 은 tty 로 바로 찾는다
-let ghosttyId = "com.mitchellh.ghostty", itermId = "com.googlecode.iterm2", terminalId = "com.apple.Terminal"
-
-func activateApp(_ bundleId: String) {
-    if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first {
-        app.activate()
-    } else if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
-        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+// 세션 tty 의 창 제목(OSC 2)
+struct TtyTitles: TerminalTitles {
+    func write(tty: String, title: String) {
+        guard let h = FileHandle(forWritingAtPath: "/dev/\(tty)") else { return }
+        h.write("\u{1b}]2;\(title)\u{07}".data(using: .utf8)!)
+        try? h.close()
     }
 }
 
-func isRunning(_ bundleId: String) -> Bool {
-    !NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).isEmpty
+// 보드 탭 — TerminalHub(@MainActor). 조작 길 고르기(driveRoute)와 세션 조작이 메인에서만 부른다
+struct HubTabs: BoardTabs {
+    func place(_ s: Session) -> SessionPlace { MainActor.assumeIsolated { TerminalHub.shared.place(s) } }
+    func parkedTab(_ s: Session) -> UUID? { MainActor.assumeIsolated { TerminalHub.shared.parkedTab(s) } }
+
+    func isForeground(_ screen: UUID, pid: Int32) -> Bool {
+        MainActor.assumeIsolated { TerminalHub.shared.surface(screen)?.isForeground(pid) == true }
+    }
+
+    func drive(_ screen: UUID, _ steps: TerminalSteps, done: @escaping (Bool) -> Void) {
+        MainActor.assumeIsolated {
+            guard let surface = TerminalHub.shared.surface(screen) else { return done(false) }
+            surface.drive(steps) { done($0) }
+        }
+    }
+
+    func reveal(_ id: UUID) { MainActor.assumeIsolated { TerminalHub.shared.reveal(id) } }
+
+    func promptScreen(session: String, dir: String) -> UUID? {
+        MainActor.assumeIsolated { TerminalHub.shared.surfaces.first { $0.sessionId == session && $0.atPrompt && $0.cwd == dir }?.id }
+    }
+
+    func run(_ command: String, in screen: UUID, session: String, mdRenderOff: Bool) {
+        MainActor.assumeIsolated {
+            let hub = TerminalHub.shared
+            if let surface = hub.surface(screen) { hub.run(command, in: surface, sessionId: session, mdRenderOff: mdRenderOff) }
+        }
+    }
+
+    func launch(_ command: String, in dir: String, session: String, mdRenderOff: Bool) {
+        MainActor.assumeIsolated { TerminalHub.shared.launch(command, in: dir, sessionId: session, mdRenderOff: mdRenderOff) }
+    }
+
+    // 답변 꾸미기는 기본으로 켠다(보드 밖에서 시작한 세션도) — 새 세션 창에서 끄고 띄운 세션만 끈 채로
+    func claudeCommand(_ base: String, session: String) -> (command: String, mdRenderOff: Bool) {
+        let off = isMdRenderOff(session)
+        return (mdRenderCommand(base, args: sessionRecord(session)?["args"] as? [String], off: off), off)
+    }
+
+    func mode(_ s: Session) -> String? { MainActor.assumeIsolated { TerminalHub.shared.mode(s) } }
+    func toast(_ text: String) { MainActor.assumeIsolated { TerminalHub.shared.toast(text) } }
 }
+
+// 세션 표지 — sessions/<sid>.paused·<sid>.mute. 알림 끄기 표지는 세션 기록이 지워질 때 state.py prune 이 함께 치운다
+struct SessionMarkFiles: SessionMarks {
+    private func path(_ sid: String, _ ext: String) -> String { (sessionsDir as NSString).appendingPathComponent("\(sid).\(ext)") }
+    func writePaused(_ sid: String, _ data: Data) { FileManager.default.createFile(atPath: path(sid, "paused"), contents: data) }
+    func clearPaused(_ sid: String) { try? FileManager.default.removeItem(atPath: path(sid, "paused")) }
+    func setMuted(_ sid: String, _ on: Bool) {
+        if on {
+            FileManager.default.createFile(atPath: path(sid, "mute"), contents: Data())
+        } else {
+            try? FileManager.default.removeItem(atPath: path(sid, "mute"))
+        }
+    }
+}
+
+// 세션 터미널 — 아래 앱 함수(큐·타이머를 쥔다). 세션 조작이 메인에서만 부른다
+struct AppSessionTerminals: SessionTerminals {
+    func drive(_ s: Session, _ steps: TerminalSteps, done: @escaping (Bool) -> Void) {
+        MainActor.assumeIsolated { driveSession(s, steps) { done($0) } }
+    }
+
+    func waitForExit(_ pid: Int32, timeout: Double, done: @escaping (Bool) -> Void) {
+        MainActor.assumeIsolated { waitExit(pid, timeout: timeout) { done($0) } }
+    }
+
+    func focus(_ s: Session) { focusSession(s) }
+    func bringForward(_ s: Session) { activateOwner(s) }
+}
+
+let systemTerminals = SystemTerminalApps()
+let boardTabs = HubTabs()
+// 세션을 띄운 앱의 기억(세션마다)을 쥔다 — 보드가 떠 있는 동안 하나
+let terminalControl = TerminalControl(apps: systemTerminals, processes: SystemProcessControl(), titles: TtyTitles(), tabs: boardTabs)
+let sessionControl = SessionControl(terminals: AppSessionTerminals(), tabs: boardTabs, processes: SystemProcessControl(),
+                                    marks: SessionMarkFiles(), clock: SystemClock())
 
 // claude 프로세스의 조상을 따라 올라가 그 세션을 띄운 앱을 찾는다.
 // iTerm2 는 셸을 별도 서버 프로세스(부모가 launchd)에서 돌린다 — 그 서버 실행 경로로 iTerm2 로 판별한다. 못 찾으면 nil
@@ -9423,7 +9509,7 @@ func ancestorApp(_ pid: Int32) -> String? {
             return id
         }
         // iTerm2 의 셸 서버는 앱 번들 밖(~/Library/Application Support/iTerm2/iTermServer-x.y.z)에 있다
-        if String(cString: buf).contains("/Application Support/iTerm2/iTermServer") { return itermId }
+        if String(cString: buf).contains("/Application Support/iTerm2/iTermServer") { return TerminalBundle.iterm }
         var info = kinfo_proc()
         var size = MemoryLayout<kinfo_proc>.stride
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, p]
@@ -9433,201 +9519,79 @@ func ancestorApp(_ pid: Int32) -> String? {
     return nil
 }
 
-// tty 로 iTerm2·Terminal 의 탭을 찾아 앞으로 가져온다 — 찾으면 true
-func focusByTty(_ bundleId: String, _ tty: String) -> Bool {
-    let dev = "/dev/" + tty
-    let script: String
-    if bundleId == itermId {
-        script = """
-        tell application id "\(itermId)"
-          repeat with w in windows
-            repeat with t in tabs of w
-              repeat with s in sessions of t
-                if tty of s is "\(dev)" then
-                  select w
-                  tell t to select
-                  tell s to select
-                  activate
-                  return "ok"
-                end if
-              end repeat
-            end repeat
-          end repeat
-          return ""
-        end tell
-        """
-    } else {
-        script = """
-        tell application id "\(terminalId)"
-          repeat with w in windows
-            repeat with t in tabs of w
-              if tty of t is "\(dev)" then
-                set selected tab of w to t
-                set index of w to 1
-                activate
-                return "ok"
-              end if
-            end repeat
-          end repeat
-          return ""
-        end tell
-        """
-    }
-    return runScript(script)?.stringValue == "ok"
-}
-
-// 세션을 띄운 터미널 앱 — 조상으로 못 찾으면 실행 중인 iTerm2·Terminal 에서 tty 를 찾는다. 세션마다 기억한다
-// ghosttyQueue 와 따로 잠근다 — ghosttyQueue 안(중단 등)에서 ownerApp 을 불러도 같은 큐에 sync 를 걸어 교착하지 않게
-var ownerCache: [String: String] = [:]
-let ownerLock = NSLock()
-
-func ownerApp(_ s: Session) -> String? {
-    if let c = ownerLock.withLock({ ownerCache[s.id] }) { return c }
-    var found = s.pid > 0 ? ancestorApp(s.pid) : nil
-    if found == nil, !s.tty.isEmpty {
-        found = [itermId, terminalId].first { isRunning($0) && ttyExists($0, s.tty) }
-    }
-    if let f = found { ownerLock.withLock { ownerCache[s.id] = f } }
-    return found
-}
-
-func ttyExists(_ bundleId: String, _ tty: String) -> Bool {
-    let dev = "/dev/" + tty
-    let script = bundleId == itermId
-        ? "tell application id \"\(itermId)\" to return (count of (every session of every tab of every window whose tty is \"\(dev)\")) as text"
-        : "tell application id \"\(terminalId)\" to return (count of (every tab of every window whose tty is \"\(dev)\")) as text"
-    return (Int(runScript(script)?.stringValue ?? "") ?? 0) > 0
-}
-
-// 한 번 클릭: 그 세션의 터미널 앱만 앞으로 가져온다
+// 한 번 클릭: 그 세션의 터미널 앱만 앞으로 가져온다 — 백그라운드·끝난 세션이나 앱을 못 찾으면 기본 터미널(Ghostty)
 func activateOwner(_ s: Session) {
     DispatchQueue.global(qos: .userInitiated).async {
-        let app = s.headless || s.state == "ended" ? nil : ownerApp(s)
-        DispatchQueue.main.async { app.map(activateApp) ?? activateTerminal() }
+        let app = terminalControl.ownerToActivate(s)
+        DispatchQueue.main.async {
+            if let app { systemTerminals.activate(app) } else { systemTerminals.openGhostty() }
+        }
     }
 }
 
+// 두 번 클릭: 그 세션의 터미널 창까지 — iTerm2·Terminal 은 tty 로 그 탭을(못 찾으면 앱만), 그 밖의 앱(VS Code 등)은 앱만,
+// Ghostty 이거나 앱을 못 찾으면 표지 제목으로 그 터미널을. 터미널이 없는 세션은 기본 터미널(Ghostty)만
 func focusSession(_ s: Session) {
-    guard !s.headless, !s.tty.isEmpty, s.state != "ended" else { return activateTerminal() }
+    guard terminalControl.canFocus(s) else { return systemTerminals.openGhostty() }
     DispatchQueue.global(qos: .userInitiated).async {
-        let app = ownerApp(s)
-        if app == itermId || app == terminalId {
-            if focusByTty(app!, s.tty) { return }
-            DispatchQueue.main.async { activateApp(app!) }
-            return
+        switch terminalControl.focusRoute(s) {
+        case .tty(let app):
+            if terminalControl.focusByTty(app, s.tty) { return }
+            DispatchQueue.main.async { systemTerminals.activate(app) }
+        case .app(let app):
+            DispatchQueue.main.async { systemTerminals.activate(app) }
+        case .ghostty:
+            focusGhostty(s)
         }
-        if let app, app != ghosttyId {   // 그 밖의 앱(VS Code 등)은 앱만 앞으로 가져온다
-            DispatchQueue.main.async { activateApp(app) }
-            return
-        }
-        focusGhostty(s)
     }
 }
 
-// 세션이 도는 Ghostty 터미널의 id 를 찾는다 — 그 tty 에 잠깐 표지 제목을 써서 찾고 원래 제목으로 되돌린다. ghosttyQueue 안에서 부른다
-func ghosttyTerminalId(_ s: Session) -> String? {
-    // tell 안에서 tab 은 Ghostty 의 탭 객체 이름으로 읽혀 글자 "tab" 이 들어간다 — 탭 문자는 character id 9 로 쓴다
-    let list = """
-    tell application "Ghostty"
-      set out to ""
-      repeat with t in terminals
-        set out to out & (id of t) & (character id 9) & (name of t) & linefeed
-      end repeat
-      return out
-    end tell
-    """
-    var before: [String: String] = [:]
-    for line in (runScript(list)?.stringValue ?? "").split(separator: "\n") {
-        let parts = line.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
-        if parts.count == 2 { before[String(parts[0])] = String(parts[1]) }
-    }
-    let marker = "CBFIND-\(UUID().uuidString.prefix(8))"
-    writeTitle(s.tty, marker)
-    var found: String?
-    for _ in 0..<10 {
-        Thread.sleep(forTimeInterval: 0.05)
-        found = runScript("""
-        tell application "Ghostty"
-          repeat with t in terminals
-            if name of t is "\(marker)" then return id of t
-          end repeat
-          return ""
-        end tell
-        """)?.stringValue
-        if let f = found, !f.isEmpty { break }
-    }
-    if let f = found, !f.isEmpty, let old = before[f] {
-        writeTitle(s.tty, old)
-        return f
-    }
-    writeTitle(s.tty, (s.cwd as NSString).lastPathComponent)
-    return nil
-}
-
-// Ghostty 터미널에 키·글자를 보낸다. 단계: ("key", 키 이름) | ("text", 붙여 넣을 글자) | ("wait", 초)
-func ghosttySend(_ id: String, _ steps: [(String, String)]) -> Bool {
-    let esc = { (t: String) in t.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") }
-    let body = steps.map { kind, v in
-        switch kind {
-        case "key": return "send key \"\(esc(v))\" to t"
-        case "text": return "input text \"\(esc(v))\" to t"
-        default: return "delay \(v)"
+// 더블 클릭한 세션의 Ghostty 터미널로 포커스를 옮긴다 — Ghostty AppleScript 사전에는 tty 가 없으므로 그 tty 에 잠시 표지 제목을 써서
+// 터미널을 찾은 뒤 원래 제목으로 되돌린다. 못 찾으면 Ghostty 밖(다른 터미널)에서 도는 세션이다 — 앱만 앞으로 가져온다
+func focusGhostty(_ s: Session) {
+    ghosttyQueue.async {
+        if !terminalControl.focusGhostty(s, marker: titleMarker("CBFOCUS", UUID())) {
+            DispatchQueue.main.async { systemTerminals.openGhostty() }
         }
-    }.joined(separator: "\n      ")
-    return runScript("""
-    tell application "Ghostty"
-      repeat with t in terminals
-        if (id of t as text) is "\(id)" then
-          \(body)
-          return "ok"
-        end if
-      end repeat
-      return ""
-    end tell
-    """)?.stringValue == "ok"
+    }
 }
 
 // Ghostty 에서 도는 터미널 세션인가 — AppleScript 로 키를 보낼 수 있다
-func canDrive(_ s: Session) -> Bool {
-    !s.headless && !s.tty.isEmpty && s.state != "ended" && ownerApp(s) == ghosttyId
-}
+func canDrive(_ s: Session) -> Bool { terminalControl.canDrive(s) }
 
 // 세션 터미널에 직접 키를 넣을 수 있는가 — 보드 탭 세션(그 탭의 대화형 claude)과 Ghostty 세션
-@MainActor func canDriveSession(_ s: Session) -> Bool {
-    let hub = TerminalHub.shared
-    switch hub.place(s) {
-    case .tab(let id, let headless): return !headless && hub.surface(id).map { $0.isForeground(s.pid) } == true
-    case .terminal: return canDrive(s)
-    default: return false
-    }
-}
+@MainActor func canDriveSession(_ s: Session) -> Bool { terminalControl.driveRoute(s) != .unavailable }
 
 // 세션 터미널에 키·글자를 넣는다. 단계: ("key", "escape"|"enter") | ("text", 붙여 넣을 글자) | ("wait", 초).
-// 보드 탭 세션은 그 탭에 직접, Ghostty 세션은 AppleScript. 넣을 수 없으면 done(false) — done 은 메인에서
+// 보드 탭 세션은 그 탭에 직접, Ghostty 세션은 AppleScript(ghosttyQueue). 넣을 수 없으면 done(false) — done 은 메인에서
 @MainActor func driveSession(_ s: Session, _ steps: [(String, String)], done: @escaping @MainActor (Bool) -> Void = { _ in }) {
-    let hub = TerminalHub.shared
-    if case .tab(let id, false) = hub.place(s), let surface = hub.surface(id), surface.isForeground(s.pid) {
-        surface.drive(steps, done: done)
-        return
-    }
-    guard hub.place(s) == .terminal, canDrive(s) else { return done(false) }
-    ghosttyQueue.async {
-        let ok = ghosttyTerminalId(s).map { ghosttySend($0, steps) } ?? false
-        DispatchQueue.main.async { done(ok) }
+    switch terminalControl.driveRoute(s) {
+    case .tab(let id):
+        boardTabs.drive(id, steps) { ok in MainActor.assumeIsolated { done(ok) } }
+    case .ghostty:
+        ghosttyQueue.async {
+            let ok = terminalControl.ghosttyDrive(s, steps, marker: titleMarker("CBFIND", UUID()))
+            DispatchQueue.main.async { done(ok) }
+        }
+    case .unavailable:
+        done(false)
     }
 }
 
-// 프로세스가 끝나기를 기다린다(최대 timeout 초) — 끝나면 done(true)
+// 프로세스가 끝나기를 기다린다(최대 timeout 초) — 끝나면 done(true). 0.2초마다 다시 본다(판단은 BoardRules.exitWait)
 @MainActor func waitExit(_ pid: Int32, timeout: Double, done: @escaping @MainActor (Bool) -> Void) {
-    guard pid > 0, kill(pid, 0) == 0 else { return done(true) }
-    guard timeout > 0 else { return done(false) }
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { waitExit(pid, timeout: timeout - 0.2, done: done) }
+    switch exitWait(pid: pid, timeout: timeout, processes: SystemProcessControl()) {
+    case .exited: done(true)
+    case .timedOut: done(false)
+    case .poll(let after, let remaining):
+        DispatchQueue.main.asyncAfter(deadline: .now() + after) { waitExit(pid, timeout: remaining, done: done) }
+    }
 }
 
 // 다른 터미널(Ghostty)에서 도는 세션을 보드로 — 그쪽을 /exit 로 끝내고, 끝나면 보드 새 탭에서 resume_cmd 로 이어 연다(대화 그대로)
 @MainActor func moveToBoard(_ s: Session) {
     guard TerminalHub.shared.slide == nil else { return whenPaneSettled { moveToBoard(s) } }
-    if s.state == "working" || s.state == "waiting" {
+    if moveNeedsConfirm(s) {
         let a = NSAlert()
         a.messageText = "보드로 옮길까요?"
         a.informativeText = "\(s.title)\n\n지금 터미널의 세션을 끝내고 보드 새 탭에서 같은 대화를 이어 엽니다. 진행 중인 응답은 끊깁니다."
@@ -9636,13 +9600,7 @@ func canDrive(_ s: Session) -> Bool {
         NSApp.activate(ignoringOtherApps: true)
         guard a.runModal() == .alertFirstButtonReturn else { return }
     }
-    let name = (s.cwd as NSString).lastPathComponent
-    driveSession(s, [("key", "escape"), ("wait", "0.4"), ("text", "/exit"), ("wait", "0.2"), ("key", "enter")]) { ok in
-        guard ok else { return TerminalHub.shared.toast("\(name): 세션 터미널을 찾지 못해 보드로 옮기지 못했습니다") }
-        waitExit(s.pid, timeout: 8) { exited in
-            if exited { resumeSession(s) } else { TerminalHub.shared.toast("\(name): 세션이 끝나지 않아 보드로 옮기지 못했습니다. 그 터미널을 확인해 주세요") }
-        }
-    }
+    sessionControl.moveToBoard(s)
 }
 
 let sessionsDir = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/notifier/sessions")
@@ -9659,48 +9617,28 @@ extension EnvironmentValues {
     }
 }
 
-func muteMark(_ s: Session) -> String { (sessionsDir as NSString).appendingPathComponent("\(s.id).mute") }
-
 extension Notification.Name { static let boardReload = Notification.Name("com.claude.board.reload") }
 
 // 알림 끄기 표지는 세션 기록이 지워질 때 state.py prune 이 함께 치운다
 func setMuted(_ s: Session, _ on: Bool) {
     // 화면은 MuteToggle 이 먼저 바꾸고, 표지 파일 반영과 다시 읽기는 다음 틱에 한다
     DispatchQueue.main.async {
-        if on {
-            FileManager.default.createFile(atPath: muteMark(s), contents: Data())
-        } else {
-            try? FileManager.default.removeItem(atPath: muteMark(s))
-        }
+        SessionMarkFiles().setMuted(s.id, on)
         NotificationCenter.default.post(name: .boardReload, object: nil)
     }
 }
 
 func pausedMark(_ s: Session) -> String { (sessionsDir as NSString).appendingPathComponent("\(s.id).paused") }
-let carryOnPrompt = "보드에서 일시중지했던 세션을 재개합니다. 중단된 지점부터 직전 작업을 이어서 진행해 주세요."
 
-// 일시중지: Esc 로 지금 응답을 멈춘다. 그때까지 한 작업은 대화 기록에 남아 있으므로 재개하면 바로 이어 간다
-@MainActor func pauseSession(_ s: Session) {
-    driveSession(s, [("key", "escape")]) { ok in
-        guard ok else { return }
-        let mark = ["paused_at": Date().timeIntervalSince1970, "topic": s.topic] as [String: Any]
-        if let data = try? JSONSerialization.data(withJSONObject: mark) {
-            FileManager.default.createFile(atPath: pausedMark(s), contents: data)
-        }
-    }
-}
+// 일시중지: Esc 로 지금 응답을 멈추고 표지를 남긴다(BoardRules.SessionControl.pause)
+@MainActor func pauseSession(_ s: Session) { sessionControl.pause(s) }
 
-// 재개: 살아 있는 세션은 그 터미널에 이어서 진행하라는 요청을 넣고, 꺼진 세션은 보드 새 탭에서 이어 연다
-@MainActor func resumePaused(_ s: Session) {
-    guard s.pid > 0, kill(s.pid, 0) == 0 else { return resumeSession(s, carryOn: true) }
-    driveSession(s, [("text", carryOnPrompt), ("wait", "0.2"), ("key", "enter")]) { ok in
-        if ok { try? FileManager.default.removeItem(atPath: pausedMark(s)) } else { resumeSession(s, carryOn: true) }
-    }
-}
+// 재개: 살아 있는 세션은 그 터미널에 이어서 진행하라는 요청을 넣고, 꺼진 세션은 보드 새 탭에서 이어 연다(SessionControl.resumePaused)
+@MainActor func resumePaused(_ s: Session) { sessionControl.resumePaused(s) }
 
 // 중단: 확인을 받은 뒤 세션을 끝낸다. 터미널 세션(보드 탭·Ghostty)은 Esc → /exit, 그 밖의 터미널 세션과 보드 탭 안의
 // claude -p 는 SIGTERM. 진짜 백그라운드 세션에는 신호를 보내지 않는다(메뉴에도 없다 — 보드는 백그라운드 세션을 건드리지 않는다).
-// 대화 기록은 남으므로 종료 세션 메뉴의 "세션 다시 열기"로 이어 열 수 있다
+// 대화 기록은 남으므로 종료 세션 메뉴의 "세션 다시 열기"로 이어 열 수 있다. 순서와 판단은 SessionControl.stop
 @MainActor func stopSession(_ s: Session, confirm: Bool = true) {
     if confirm, TerminalHub.shared.slide != nil { return whenPaneSettled { stopSession(s, confirm: confirm) } }
     if confirm {
@@ -9713,57 +9651,7 @@ let carryOnPrompt = "보드에서 일시중지했던 세션을 재개합니다. 
     NSApp.activate(ignoringOtherApps: true)
     guard alert.runModal() == .alertFirstButtonReturn else { return }
     }
-    try? FileManager.default.removeItem(atPath: pausedMark(s))
-    if TerminalHub.shared.place(s) == .background { return }
-    driveSession(s, [("key", "escape"), ("wait", "0.4"), ("text", "/exit"), ("wait", "0.2"), ("key", "enter")]) { ok in
-        if !ok, s.pid > 0 { kill(s.pid, SIGTERM) }
-    }
-}
-
-func focusGhostty(_ s: Session) {
-    ghosttyQueue.async {
-        // 표지를 쓰기 전 제목을 기억해 둔다 — 터미널 id 와 제목을 줄 단위로 받는다
-        let list = """
-        tell application "Ghostty"
-          set out to ""
-          repeat with t in terminals
-            set out to out & (id of t) & (character id 9) & (name of t) & linefeed
-          end repeat
-          return out
-        end tell
-        """
-        var before: [String: String] = [:]
-        for line in (runScript(list)?.stringValue ?? "").split(separator: "\n") {
-            let parts = line.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
-            if parts.count == 2 { before[String(parts[0])] = String(parts[1]) }
-        }
-        let marker = "CBFOCUS-\(UUID().uuidString.prefix(8))"
-        writeTitle(s.tty, marker)
-        var found: String?
-        for _ in 0..<10 {
-            Thread.sleep(forTimeInterval: 0.05)
-            found = runScript("""
-            tell application "Ghostty"
-              repeat with t in terminals
-                if name of t is "\(marker)" then
-                  focus t
-                  activate
-                  return id of t
-                end if
-              end repeat
-              return ""
-            end tell
-            """)?.stringValue
-            if let f = found, !f.isEmpty { break }
-        }
-        if let f = found, let old = before[f] {
-            writeTitle(s.tty, old)
-        } else {
-            // Ghostty 밖(다른 터미널)에서 돌고 있는 세션이다 — 표지 제목만 지우고 앱만 앞으로 가져온다
-            writeTitle(s.tty, (s.cwd as NSString).lastPathComponent)
-            DispatchQueue.main.async { activateTerminal() }
-        }
-    }
+    sessionControl.stop(s)
 }
 
 // 대화 기록 위치 — hook 이 알려 준 경로가 없으면 ~/.claude/projects/<작업 경로의 영숫자 외 문자를 - 로 바꾼 이름>/<세션 ID>.jsonl
@@ -9775,43 +9663,13 @@ func transcriptPath(_ given: String?, _ cwd: String, _ id: String) -> String {
 
 // 끝난 세션을 보드 탭에서 그 세션의 프로젝트 경로(claude 를 띄운 폴더 — 보드 카드·탭의 경로와 같다. cd·워크트리로 옮긴 cwd 가 아니다)로
 // 이어 연다 — 그 세션이 마지막으로 돌던 화면이 같은 경로의 셸 프롬프트로 남아 있으면 그 화면에, 아니면 새 탭에. 대화 이력은 claude --resume 이 불러오고,
-// 실행 인자·마지막 권한 모드·모델은 state.py 가 기록한 resume_cmd 에 담겨 있다(-p 는 넘기지 않아 대화형으로 열린다)
-@MainActor func resumeSession(_ s: Session, carryOn: Bool = false) {
-    // 답변 꾸미기는 기본으로 켠다(보드 밖에서 시작한 세션도) — 새 세션 창에서 끄고 띄운 세션만 끈 채로. 재개 문구보다 앞에
-    let off = isMdRenderOff(s.id)
-    var cmd = mdRenderCommand(s.resumeCmd.isEmpty ? "claude --resume \(s.id)" : s.resumeCmd, args: sessionRecord(s.id)?["args"] as? [String], off: off)
-    // 일시중지했던 세션은 첫 요청으로 이어서 진행하라는 문구를 넘겨 바로 다음 작업을 시작하게 한다
-    if carryOn {
-        cmd += " '" + carryOnPrompt.replacingOccurrences(of: "'", with: "'\\''") + "'"
-        try? FileManager.default.removeItem(atPath: pausedMark(s))
-    }
-    let hub = TerminalHub.shared
-    if let surface = hub.surfaces.first(where: { $0.sessionId == s.id && $0.atPrompt && $0.cwd == s.projectDir }) {
-        hub.run(cmd, in: surface, sessionId: s.id, mdRenderOff: off)
-        hub.reveal(surface.id)
-    } else {
-        hub.launch(cmd, in: s.projectDir, sessionId: s.id, mdRenderOff: off)
-    }
-}
+// 실행 인자·마지막 권한 모드·모델은 state.py 가 기록한 resume_cmd 에 담겨 있다(-p 는 넘기지 않아 대화형으로 열린다).
+// 일시중지했던 세션(carryOn)은 첫 요청으로 이어서 진행하라는 문구를 넘겨 바로 다음 작업을 시작하게 한다. 순서는 SessionControl.reopen
+@MainActor func resumeSession(_ s: Session, carryOn: Bool = false) { sessionControl.reopen(s, carryOn: carryOn) }
 
 // 세션을 한 번 눌렀을 때(목록·미니·알림 패널 "세션으로 이동") — 보드 탭이면 펼치고 그 탭의 그 화면으로, 끝난 세션은 보드 새 탭에서 이어 열기,
-// 백그라운드 세션은 안내만, 다른 터미널 세션은 지금처럼 그 터미널로(두 번 누르면 그 세션의 터미널 창까지)
-@MainActor func openSession(_ s: Session, double: Bool = false) {
-    let hub = TerminalHub.shared
-    // 탭 claude 가 넘긴 대화를 이어 받은 작업 — 그 작업을 붙여 보여 주는 탭으로 간다(탭에 아무것도 넣지 않는다)
-    if let id = hub.parkedTab(s) { return hub.reveal(id) }
-    switch hub.place(s) {
-    case .tab(let id, _):
-        hub.reveal(id)
-    case .ended:
-        // 끝난 백그라운드 세션은 누르면 아무것도 하지 않는다 — 메뉴의 "세션 다시 열기"로만 보드 탭에서 연다
-        if !s.headless { resumeSession(s, carryOn: s.paused) }
-    case .background:
-        hub.toast("\(s.title): claude \(hub.mode(s) ?? "-p") 로 실행된 세션이라 터미널이 없습니다. 보드에서는 상태만 보여 주고, 업데이트·종료에도 영향받지 않습니다.")
-    case .terminal:
-        double ? focusSession(s) : activateOwner(s)
-    }
-}
+// 백그라운드 세션은 안내만, 다른 터미널 세션은 지금처럼 그 터미널로(두 번 누르면 그 세션의 터미널 창까지). 갈래는 SessionControl.open
+@MainActor func openSession(_ s: Session, double: Bool = false) { sessionControl.open(s, double: double) }
 
 // 터미널을 펼쳐 창이 화면 전체를 덮은 동안에는 고정하지 않는다 — 화면 전체를 덮은 창이 늘 위에 있으면 다른 앱을 쓸 수 없다.
 // 펼친 채 창 크기 전환(60%)·손으로 줄인 창과 접은 창은 고정
