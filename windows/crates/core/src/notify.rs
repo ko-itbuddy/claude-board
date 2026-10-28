@@ -12,7 +12,7 @@ use regex::Regex;
 use serde_json::Value;
 
 use crate::text::{is_py_space, non_empty_str, truthy};
-use crate::{claude_live, fileio, paths, proc, Record};
+use crate::{claude_live, fileio, paths, proc, state, Record};
 
 /// 본문 최대 길이(코드포인트).
 pub const MAX_BODY: usize = 140;
@@ -148,7 +148,7 @@ pub struct Panel {
 
 /// `notify <stop|notification>` 의 판단 — 띄울 패널이 없으면 None.
 ///
-/// 거르기: `mute-all` 이 있음 / `sessions/<sid>.mute` 가 있음 / `notification` 인데 `idle_prompt` /
+/// 거르기: `mute-all` 이 있음 / `sessions/<sid>.mute` 가 있음 / `notification` 인데 종류가 승인 계열([`state::WAIT_NOTIFICATIONS`]) 밖 /
 /// `app-path` 가 없거나 그 파일이 없음. `cwd_fallback` 은 입력에 cwd 가 없을 때의 현재 폴더.
 pub fn prepare(kind: &str, data: &Record, notifier: &Path, cwd_fallback: &str) -> Option<Panel> {
     // 보드 윗줄 종 단추로 전체 알림을 끄면 mute-all 이 생긴다 — 세션별 설정보다 먼저 본다
@@ -162,9 +162,10 @@ pub fn prepare(kind: &str, data: &Record, notifier: &Path, cwd_fallback: &str) -
             return None;
         }
     }
-    // 응답을 마친 뒤 입력이 없을 때 오는 알림은 이미 '작업 완료' 로 알렸으므로 띄우지 않는다
+    // 응답을 마친 뒤 입력이 없을 때 오는 알림(idle_prompt)은 이미 '작업 완료' 로 알렸고, 다른 백그라운드 작업이 끝남
+    // 같은 승인과 상관없는 알림은 승인 대기가 아니므로 띄우지 않는다(종류가 없는 예전 Claude Code 의 알림은 띄운다)
     let wait = kind == "notification";
-    if wait && data.get("notification_type").and_then(Value::as_str) == Some("idle_prompt") {
+    if wait && non_empty_str(data.get("notification_type")).is_some_and(|k| !state::WAIT_NOTIFICATIONS.contains(&k)) {
         return None;
     }
 
@@ -326,6 +327,9 @@ mod tests {
         // idle_prompt·세션 음소거·전체 음소거
         let idle = json!({"session_id": "s1", "notification_type": "idle_prompt"});
         assert_eq!(prepare("notification", idle.as_object().unwrap(), &dir, "/x"), None);
+        // 다른 백그라운드 작업이 끝났다는 알림은 승인 대기가 아니다
+        let done = json!({"session_id": "s1", "message": "작업 failed", "notification_type": "agent_completed"});
+        assert_eq!(prepare("notification", done.as_object().unwrap(), &dir, "/x"), None);
         fs::write(dir.join("sessions/s1.mute"), "").unwrap();
         assert_eq!(prepare("stop", stop.as_object().unwrap(), &dir, "/x"), None);
         fs::remove_file(dir.join("sessions/s1.mute")).unwrap();

@@ -169,7 +169,7 @@ Claude Code 문서(hooks): `args` 가 있으면 `command` 를 실행 파일로 �
 
 stdin JSON 하나를 읽는다. 앞의 UTF-8 BOM 은 `main.rs` 의 `read_input` 이 한 번만 떼어 `state`·`notify` 가 같은 입력을 본다. 이 관용은 Windows 에만 있다 — PowerShell 5.1 의 `|` 같은 도구가 BOM 을 붙이는데, `state.py`·`notify.py` 는 BOM 을 거부한다(`json.load` 가 `Unexpected UTF-8 BOM`). `state.py` 규칙이 아니다. 어떤 오류도 Claude Code 를 막지 않게 **전체를 잡아 종료 코드 0** 으로 끝낸다. 출력은 쓰지 않는다.
 
-1. `state == "waiting"` 이고 `notification_type == "idle_prompt"` 면 `idle` 로 바꾼다.
+1. `state == "waiting"` 이고 `notification_type == "idle_prompt"` 면 `idle` 로 바꾼다. `notification_type` 이 그 밖의 비지 않은 값인데 승인 계열(`permission_prompt`·`worker_permission_prompt`·`elicitation_dialog`·`elicitation_url_dialog`)이 아니면 아무것도 쓰지 않고 끝 — 다른 백그라운드 작업이 끝남(`agent_completed`)·입력 필요(`agent_needs_input`)·로그인 성공 같은 알림도 같은 hook 으로 온다. 종류가 없으면 승인으로 본다.
 2. `session_id` 가 없으면 끝. `sessions/` 를 만든다. `idle` + `hook_event_name == "SessionStart"` 면 prune(§3.5).
 3. `.<sid>.lock` 배타 잠금 아래에서 읽고 고쳐 쓴다:
    - 기록에 `pid` 가 없거나, 이벤트가 `SessionStart` 거나, 기록된 pid 가 살아 있지 않으면: Claude 프로세스를 다시 찾아 `pid`·`pid_ctime`·`tty`(null)·`headless`·`started=now`·`args` 를 새로 쓴다. 이미 있는데 `args` 만 없으면 args 만 채운다.
@@ -218,7 +218,7 @@ stdin JSON 하나를 읽는다. 앞의 UTF-8 BOM 은 `main.rs` 의 `read_input` 
 
 ### 3.6 `notify <stop|notification>` — `notify.py`
 
-1. stdin JSON(BOM 은 `read_input` 이 뗀다. 깨졌으면 `{}`). `mute-all` 이 있으면 끝. `sessions/<sid>.mute` 가 있으면 끝. `notification` 이고 `notification_type == "idle_prompt"` 면 끝.
+1. stdin JSON(BOM 은 `read_input` 이 뗀다. 깨졌으면 `{}`). `mute-all` 이 있으면 끝. `sessions/<sid>.mute` 가 있으면 끝. `notification` 이고 `notification_type` 이 비지 않았는데 승인 계열(§3.2 1)이 아니면(`idle_prompt` 포함) 끝.
 2. notification: 제목 "승인 대기", kind `wait`, 소리 wait, 본문 `message` 또는 "Claude 가 입력을 기다리고 있습니다".
    stop: 제목 "작업 완료", kind `done`, 소리 done, 본문 `last_assistant_message` 또는 transcript 끝 400KB 에서 찾은 마지막 assistant 텍스트.
 3. 본문 다듬기(`plain`·`first_sentence`): 코드 블록 제거, 인라인 코드·굵게 기호 제거, 줄머리 `#`·`-`·`*`·`1.`·`|` 제거, 공백 정리, 140자 넘으면 139자 + `…`. 그다음 첫 문장(`.!?。` 로 끝나는 가장 짧은 앞부분, 없으면 전체).

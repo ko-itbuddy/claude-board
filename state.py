@@ -19,6 +19,10 @@ import time
 
 SESSIONS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sessions")
 ICONS = {"working": "🔵", "waiting": "🟠", "idle": "🟢", "ended": "⚫"}
+# 사람의 답을 기다리게 하는 Notification(notification_type) — 승인 창(서브에이전트·팀원 것 포함)과 MCP 의 입력 요청.
+# 다른 백그라운드 작업이 끝남(agent_completed)·입력 필요(agent_needs_input), 로그인 성공 같은 알림도 같은 hook 으로 오므로
+# (2.1.312 에 17가지) 이 밖의 알림은 이 세션의 상태가 아니다. notify.py 에 같은 목록이 있다
+WAIT_NOTIFICATIONS = {"permission_prompt", "worker_permission_prompt", "elicitation_dialog", "elicitation_url_dialog"}
 
 
 def find_claude():
@@ -192,8 +196,12 @@ def main():
     data = json.load(sys.stdin)
     sub_event = bool(data.get("agent_id"))
     # 응답을 마친 뒤 입력을 오래 기다릴 때 오는 Notification 은 승인 대기가 아니라 (입력) 대기다
-    if state == "waiting" and data.get("notification_type") == "idle_prompt":
+    kind = data.get("notification_type")
+    if state == "waiting" and kind == "idle_prompt":
         state = "idle"
+    # 승인과 상관없는 알림은 세션 기록을 건드리지 않는다(종류가 없는 예전 Claude Code 의 알림은 승인으로 본다)
+    elif state == "waiting" and kind and kind not in WAIT_NOTIFICATIONS:
+        return
     sid = data.get("session_id")
     if not sid:
         return

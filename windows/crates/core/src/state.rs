@@ -145,6 +145,18 @@ pub fn resume_cmd(rec: &Record) -> String {
     resume_cmd_with(rec, quote::join)
 }
 
+/// 사람의 답을 기다리게 하는 Notification(`notification_type`) — 승인 창(서브에이전트·팀원 것 포함)과 MCP 의 입력 요청.
+/// 다른 백그라운드 작업이 끝남(`agent_completed`)·입력 필요(`agent_needs_input`), 로그인 성공 같은 알림도 같은 hook 으로 오므로
+/// 이 밖의 알림은 이 세션의 상태가 아니다. 알림 패널([`crate::notify::prepare`])도 이 목록만 띄운다.
+pub const WAIT_NOTIFICATIONS: [&str; 4] =
+    ["permission_prompt", "worker_permission_prompt", "elicitation_dialog", "elicitation_url_dialog"];
+
+/// 승인과 상관없는 Notification 이면 참 — 세션 기록을 건드리지 않는다. 종류가 없는 예전 Claude Code 의 알림은 승인으로 본다.
+pub fn unrelated_notification(state: &str, data: &Record) -> bool {
+    state == "waiting"
+        && non_empty_str(data.get("notification_type")).is_some_and(|k| k != "idle_prompt" && !WAIT_NOTIFICATIONS.contains(&k))
+}
+
 /// 응답을 마친 뒤 입력을 오래 기다릴 때 오는 Notification 은 승인 대기가 아니라 (입력) 대기다.
 pub fn effective_state(state: &str, data: &Record) -> String {
     if state == "waiting" && data.get("notification_type").and_then(Value::as_str) == Some("idle_prompt") {
@@ -462,6 +474,9 @@ pub fn prune(sessions: &Path, now: f64, alive: impl Fn(&Record) -> bool) {
 /// 어떤 오류도 Claude Code 를 막으면 안 되므로 실패는 조용히 버린다(부르는 쪽이 패닉도 잡는다).
 pub fn run(sessions: &Path, state_arg: &str, input: &[u8], env: &dyn Env) {
     let Ok(Value::Object(data)) = serde_json::from_slice::<Value>(input) else { return };
+    if unrelated_notification(state_arg, &data) {
+        return;
+    }
     let state = effective_state(state_arg, &data);
     // 경로 구분자가 든 id 는 sessions 밖에 쓰게 되므로 받지 않는다
     let Some(sid) = non_empty_str(data.get("session_id")).filter(|s| !s.contains(['/', '\\']) && *s != "..") else {
@@ -877,6 +892,35 @@ mod tests {
         // BOM 은 hook 입력을 받는 쪽(crates/hook main.rs read_input)이 뗀다 — 여기서는 받지 않는다
         run(&dir, "working", b"\xEF\xBB\xBF{\"session_id\":\"bom\"}", &fake());
         assert!(!dir.join("bom.json").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn run_ignores_unrelated_notifications() {
+        let dir = std::env::temp_dir().join(format!("cb-noti-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let env = Fake { found: None, alive: true, meta: Map::new(), project_dir: None };
+        let noti = |kind: &str| {
+            format!(r#"{{"session_id":"s1","hook_event_name":"Notification","message":"m","notification_type":"{kind}"}}"#)
+        };
+        run(&dir, "working", br#"{"session_id":"s1","hook_event_name":"UserPromptSubmit","prompt":"hi"}"#, &env);
+        let before = fs::read(dir.join("s1.json")).unwrap();
+        // 다른 백그라운드 작업이 끝남·입력 필요, 로그인 성공 같은 알림은 기록을 그대로 둔다
+        for kind in ["agent_completed", "agent_needs_input", "auth_success", "push_notification"] {
+            run(&dir, "waiting", noti(kind).as_bytes(), &env);
+            assert_eq!(fs::read(dir.join("s1.json")).unwrap(), before, "{kind}");
+        }
+        for kind in WAIT_NOTIFICATIONS {
+            assert!(!unrelated_notification("waiting", &obj(serde_json::from_str(&noti(kind)).unwrap())), "{kind}");
+        }
+        run(&dir, "waiting", noti("permission_prompt").as_bytes(), &env);
+        assert_eq!(fileio::read_record(&dir.join("s1.json")).unwrap()["state"], "waiting");
+        // 종류가 없는 예전 알림·idle_prompt 는 지금처럼
+        let old = obj(json!({"session_id": "s1", "hook_event_name": "Notification", "message": "m"}));
+        assert!(!unrelated_notification("waiting", &old));
+        run(&dir, "waiting", noti("idle_prompt").as_bytes(), &env);
+        assert_eq!(fileio::read_record(&dir.join("s1.json")).unwrap()["state"], "idle");
         fs::remove_dir_all(&dir).unwrap();
     }
 
