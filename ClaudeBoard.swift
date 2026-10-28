@@ -474,9 +474,10 @@ struct UsageCacheFile: UsageCache {
     func remove() { try? FileManager.default.removeItem(atPath: path) }
 }
 
-// Claude Code 로그인 정보 — 키체인에서 읽기만 한다(계정 전환의 쓰기는 AccountStore)
+// Claude Code 로그인 정보 — 키체인에서 읽기만 한다. 계정 전환이 쓰는 키체인 어댑터(SystemKeychain)·항목 주소(claudeLoginItem)를 그대로 쓴다.
+// LoginCredentials 포트는 사용량 쪽 읽기 전용 역할로 따로 둔다 — 사용량 규칙에 쓰기·지우기를 열지 않는다
 struct KeychainCredentials: LoginCredentials {
-    func read() -> Data? { Keychain.read(credentialsService()) }
+    func read() -> Data? { SystemKeychain().read(claudeLoginItem()) }
 }
 
 // 키체인의 Claude Code 로그인 토큰으로 사용량 API 를 부른다 — 토큰은 메모리에만 두고 기록하지 않는다
@@ -579,10 +580,12 @@ func credentialsService(_ configDir: String? = nil) -> String {
     return "Claude Code-credentials-\(hex.prefix(8))"
 }
 
-struct AccountError: LocalizedError {
-    let errorDescription: String?
-    init(_ m: String) { errorDescription = m }
+// Claude Code 로그인 정보 항목 — 서비스는 위 이름, 계정 이름은 $USER(Keychain.user). configDir 이 없으면 CLAUDE_CONFIG_DIR 없이 띄운 세션들이 쓰는 주 항목
+func claudeLoginItem(_ configDir: String? = nil) -> KeychainItem {
+    KeychainItem(service: credentialsService(configDir), account: Keychain.user)
 }
+
+// 계정 전환 오류(AccountError)는 BoardRules(Accounts.swift)에 있다 — 아래 잠금·설정 고치기도 그것으로 던진다
 
 // Claude Code 와 같은 잠금 — proper-lockfile 처럼 "<파일>.lock" 폴더를 만들어 잡는다. 15초 넘게 갱신되지 않은 잠금은 버려진 것으로 본다
 func withFileLock<T>(_ file: String, _ body: () throws -> T) throws -> T {
@@ -613,34 +616,47 @@ func patchJSON(_ path: String, _ change: (inout [String: Any]) -> Void) throws {
     }
 }
 
-// 저장해 둔 Claude 계정 — 토큰은 키체인(서비스 "Claude Board-account", 계정 이름 = id)에만 두고 여기에는 화면에 보일 정보만 담는다
-struct Account: Identifiable, Equatable {
-    let id: String                  // accountUuid|organizationUuid — 같은 사람도 조직이 다르면 토큰이 따로다
-    let oauth: [String: Any]        // ~/.claude.json 의 oauthAccount 그대로 — 전환할 때 이 값으로 바꿔 넣는다
-    var refreshExpires: Date?       // 이 시각이 지나면 다시 로그인해야 한다
+// MARK: 계정 전환의 진짜 어댑터 — 규칙(계정 모델·저장 계정 목록·전환 JSON 변환·저장·전환·지우기·자동 전환 판단)은
+// BoardRules/Accounts.swift·AutoSwitch.swift, 포트는 BoardRules/Ports.swift(가짜 어댑터는 Tests 에만). 넷 다 상태 없는 struct 라 그대로 Sendable 이다
 
-    init?(oauth: [String: Any], refreshExpires: Date? = nil) {
-        guard let uuid = oauth["accountUuid"] as? String, !uuid.isEmpty else { return nil }
-        id = uuid + "|" + (oauth["organizationUuid"] as? String ?? "")
-        self.oauth = oauth
-        self.refreshExpires = refreshExpires
+// 키체인 일반 암호 항목 — security 명령·16진수 풀기·ASCII JSON·4KB 넘으면 명령줄은 Keychain 에 그대로 있다
+struct SystemKeychain: KeychainItems {
+    func read(_ item: KeychainItem) -> Data? { Keychain.read(item.service, account: item.account) }
+    func exists(_ item: KeychainItem) -> Bool { Keychain.exists(item.service, account: item.account) }
+    func write(_ item: KeychainItem, json: [String: Any]) throws -> Bool {
+        Keychain.write(item.service, account: item.account, try Keychain.asciiJSON(json))
     }
+    func delete(_ item: KeychainItem) { Keychain.delete(item.service, account: item.account) }
+}
 
-    var email: String { oauth["emailAddress"] as? String ?? "?" }
-    var org: String { oauth["organizationName"] as? String ?? "" }
-    // 요금제 — organizationType claude_max + 한도 등급 …_5x → "Max 5x"
-    var plan: String {
-        let t = (oauth["organizationType"] as? String ?? "").replacingOccurrences(of: "claude_", with: "")
-        var p = t.prefix(1).uppercased() + t.dropFirst()
-        if let tier = oauth["organizationRateLimitTier"] as? String,
-           let r = tier.range(of: "_\\d+x$", options: .regularExpression) { p += " " + tier[r].dropFirst() }
-        return p
+// Claude Code 설정(~/.claude.json, 계정 추가 중에는 따로 마련한 설정 폴더의 것)
+struct ClaudeConfigFile: ClaudeConfig {
+    let path: String
+    init(_ path: String = NSHomeDirectory() + "/.claude.json") { self.path = path }
+    // 수정 시각 — AccountStore 가 3초마다 보고 바뀔 때만 다시 읽는다(규칙은 쓰지 않는다)
+    func modifiedAt() -> Date? { mtime(path) }
+    func oauthAccount() -> [String: Any]? {
+        guard let data = FileManager.default.contents(atPath: path),
+              let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return j["oauthAccount"] as? [String: Any]
     }
-    var expired: Bool { refreshExpires.map { $0 < Date() } ?? false }
+    func patch(_ change: (inout [String: Any]) -> Void) throws { try patchJSON(path, change) }
+}
 
-    static func == (a: Account, b: Account) -> Bool {
-        a.id == b.id && a.email == b.email && a.org == b.org && a.plan == b.plan && a.refreshExpires == b.refreshExpires
+// 보드의 저장 계정 목록 — 이메일·조직 이름이 들어 있어 0600
+struct SavedAccountsFile: SavedAccountList {
+    let path = NSHomeDirectory() + "/.claude/notifier/accounts.json"
+    func read() -> Data? { FileManager.default.contents(atPath: path) }
+    func write(_ data: Data) throws {
+        try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
     }
+}
+
+// Claude Code 가 토큰을 갱신해 쓸 때 잡는 잠금
+struct StorageWriteLock: CredentialsWriteLock {
+    let path = NSHomeDirectory() + "/.claude/.storage-write"
+    func withLock<T>(_ body: () throws -> T) throws -> T { try withFileLock(path, body) }
 }
 
 // 계정 추가 로그인 창 — 로그인 명령이 열려던 주소(localhost 콜백)를 보드가 띄운 웹 창에서 연다. 외부 브라우저 탭은 닫아도 보드가
@@ -695,7 +711,9 @@ final class LoginWebWindow: NSObject, NSWindowDelegate, WKUIDelegate {
 }
 
 // 계정 전환: 계정마다 브라우저 로그인을 한 번 받아 토큰을 저장해 두고, 고르면 Claude Code 로그인 항목의 토큰만 바꿔 넣는다.
-// 실행 중인 세션은 요청을 보낼 때마다 키체인을 다시 읽으므로(최대 30초 캐시) 모든 세션이 다음 요청부터 새 계정으로 이어 간다
+// 실행 중인 세션은 요청을 보낼 때마다 키체인을 다시 읽으므로(최대 30초 캐시) 모든 세션이 다음 요청부터 새 계정으로 이어 간다.
+// 계정 모델·저장 계정 목록·전환할 때의 JSON 변환·저장·전환·지우기는 BoardRules(Accounts.swift)에 있다 — 여기는 @Published 상태·큐·3초 감시·안내,
+// 계정 추가 로그인 흐름(pty·로그인 창·코드 넣기·끝났는지 보기)을 쥔다
 final class AccountStore: ObservableObject {
     struct Notice: Equatable { let text: String; let error: Bool }
 
@@ -712,17 +730,11 @@ final class AccountStore: ObservableObject {
     }
     var onSwitch: (() -> Void)?
 
-    static let vault = "Claude Board-account"
-    // Claude Code 가 /login 으로 다른 계정에 들어갈 때 ~/.claude.json 에서 비우는 계정별 캐시(2.1.300 기준) —
-    // 같이 비워야 새 계정의 모델 목록·조직 기본 모델·사용량 표시를 다시 받는다
-    static let accountCaches = ["additionalModelOptionsCache", "additionalModelOptionsAnsweredAt", "additionalModelCostsCache",
-                                "modelAccessCache", "orgModelDefaultCache", "cachedArtifactRoster", "artifactRosterDenied",
-                                "lastSeenOrgDefaultUpdatedAt", "clientDataCache", "clientDataCacheSlots", "autoCompactWindowsCache",
-                                "cachedUsageUtilization", "metricsStatusCache", "metricsStatusCacheByPrincipal",
-                                "githubWebConnectionStatusCache", "startupPrefetchedAt"]
-    private let configDir = NSHomeDirectory() + "/.claude"
-    private let globalConfig = NSHomeDirectory() + "/.claude.json"
-    private let metaPath = NSHomeDirectory() + "/.claude/notifier/accounts.json"
+    // 지금 계정 — 3초마다 수정 시각을 보고 바뀔 때만 다시 읽는다
+    private let config = ClaudeConfigFile()
+    // 저장·전환·지우기 유스케이스에 넘기는 진짜 어댑터. 로그인 정보는 CLAUDE_CONFIG_DIR 없이 띄운 세션들이 쓰는 주 항목만 바꾼다
+    private let ports = AccountPorts(keychain: SystemKeychain(), login: claudeLoginItem(), config: ClaudeConfigFile(),
+                                     saved: SavedAccountsFile(), writeLock: StorageWriteLock(), clock: SystemClock())
     private let loginRoot = NSHomeDirectory() + "/.claude/notifier/accounts"
     private let queue = DispatchQueue(label: "com.claude.board.accounts")
     private var currentMtime: Date?
@@ -753,64 +765,17 @@ final class AccountStore: ObservableObject {
         }
     }
 
-    static func oauthAccount(at path: String) -> [String: Any]? {
-        guard let data = FileManager.default.contents(atPath: path),
-              let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return j["oauthAccount"] as? [String: Any]
-    }
-
     func loadCurrent(force: Bool = false) {
-        let m = mtime(globalConfig)
+        let m = config.modifiedAt()
         guard force || m != currentMtime else { return }
         currentMtime = m
-        let a = Self.oauthAccount(at: globalConfig).flatMap { Account(oauth: $0) }
+        let a = currentAccount(config)
         if a != current { current = a }
     }
 
-    private static func readMeta(_ path: String) -> [[String: Any]] {
-        guard let d = FileManager.default.contents(atPath: path),
-              let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return [] }
-        return j["accounts"] as? [[String: Any]] ?? []
-    }
-
-    private static func metaId(_ e: [String: Any]) -> String? {
-        (e["oauthAccount"] as? [String: Any]).flatMap { Account(oauth: $0) }?.id
-    }
-
-    private func writeMeta(_ list: [[String: Any]]) throws {
-        let data = try JSONSerialization.data(withJSONObject: ["accounts": list], options: [.prettyPrinted, .withoutEscapingSlashes])
-        try data.write(to: URL(fileURLWithPath: metaPath), options: .atomic)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: metaPath)   // 이메일·조직 이름이 들어 있다
-    }
-
     private func loadSaved() {
-        let list = Self.readMeta(metaPath).compactMap { e -> Account? in
-            guard let oa = e["oauthAccount"] as? [String: Any] else { return nil }
-            let exp = (e["refreshTokenExpiresAt"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue / 1000) }
-            return Account(oauth: oa, refreshExpires: exp)
-        }
+        let list = loadSavedAccounts(ports.saved)
         if list != saved { saved = list }
-    }
-
-    // 계정 토큰(claudeAiOauth)은 키체인에, 보일 정보는 accounts.json 에 넣는다 — 같은 계정은 제자리에서 바꾼다. queue 에서 부른다
-    private func store(_ oa: [String: Any], _ oauth: [String: Any]) throws {
-        guard let a = Account(oauth: oa) else { throw AccountError("계정 정보가 없습니다") }
-        guard Keychain.write(Self.vault, account: a.id, try Keychain.asciiJSON(["claudeAiOauth": oauth])) else {
-            throw AccountError("키체인에 저장하지 못했습니다")
-        }
-        var e: [String: Any] = ["oauthAccount": oa, "savedAt": Date().timeIntervalSince1970]
-        if let r = oauth["refreshTokenExpiresAt"] { e["refreshTokenExpiresAt"] = r }
-        var list = Self.readMeta(metaPath)
-        if let i = list.firstIndex(where: { Self.metaId($0) == a.id }) { list[i] = e } else { list.append(e) }
-        try writeMeta(list)
-    }
-
-    // 지금 로그인된 계정의 최신 토큰을 저장한다 — 쓰는 동안 갱신되며 바뀐 토큰이라, 처음 저장했던 것은 이미 못 쓸 수 있다.
-    // .storage-write 잠금 안에서 부른다
-    private func saveCurrent(except skip: String? = nil) throws {
-        guard let oa = Self.oauthAccount(at: globalConfig), Account(oauth: oa)?.id != skip,
-              let co = Keychain.json(credentialsService())?["claudeAiOauth"] as? [String: Any] else { return }
-        try store(oa, co)
     }
 
     // note: 전환했을 때 띄울 안내(자동 전환), done: 전환했는지 — 자동 전환이 결과를 받는다
@@ -819,7 +784,7 @@ final class AccountStore: ObservableObject {
         switching = true
         queue.async { [weak self] in
             guard let self else { return }
-            let r = Result { try self.performSwitch(a) }
+            let r = Result { try switchAccount(to: a, ports: self.ports) }
             DispatchQueue.main.async {
                 self.switching = false
                 self.loadCurrent(force: true)
@@ -836,43 +801,6 @@ final class AccountStore: ObservableObject {
                 }
             }
         }
-    }
-
-    // queue 에서 부른다. 고칠 수 없었던 부분이 있으면 그 안내를 돌려준다
-    private func performSwitch(_ target: Account) throws -> String? {
-        guard let oauth = Keychain.json(Self.vault, account: target.id)?["claudeAiOauth"] as? [String: Any] else {
-            throw AccountError("저장된 로그인 정보가 없습니다. 계정을 다시 추가해 주세요")
-        }
-        // CLAUDE_CONFIG_DIR 을 따로 정해 띄운 세션은 이름 뒤에 경로 해시가 붙은 다른 항목을 쓴다 — 그 항목은 건드리지 않는다.
-        // 같은 토큰을 두 항목에 넣으면 한쪽이 갱신(회전)할 때 다른 쪽 토큰이 무효가 되기 때문
-        let main = credentialsService()
-        let previous = Self.oauthAccount(at: globalConfig).flatMap { Account(oauth: $0) }?.id
-        // Claude Code 가 토큰을 갱신해 쓸 때 잡는 잠금 — 그 사이에 끼어 앞 계정 토큰으로 덮이지 않게 한다
-        try withFileLock(configDir + "/.storage-write") {
-            var cur: [String: Any] = [:]
-            if let raw = Keychain.read(main) {
-                guard let j = try? JSONSerialization.jsonObject(with: raw) as? [String: Any] else {
-                    throw AccountError("지금 로그인 정보를 읽지 못했습니다")
-                }
-                cur = j
-            } else if Keychain.exists(main) {
-                throw AccountError("지금 로그인 정보를 읽지 못했습니다")
-            }
-            try saveCurrent(except: target.id)
-            // 계정 토큰만 바꿔 넣는다 — MCP 서버 로그인(mcpOAuth) 같은 다른 값은 그대로 둔다
-            cur["claudeAiOauth"] = oauth
-            guard Keychain.write(main, try Keychain.asciiJSON(cur)) else { throw AccountError("키체인에 쓰지 못했습니다") }
-        }
-        // 계정 정보 — /status·claude auth status·보드 계정 표시가 새 계정으로 보이게. 다른 계정이면 앞 계정의 캐시도 비운다
-        do {
-            try patchJSON(globalConfig) { j in
-                j["oauthAccount"] = target.oauth
-                if previous != target.id { for k in Self.accountCaches { j[k] = nil } }
-            }
-        } catch {
-            return "토큰은 바꿨지만 계정 정보 파일을 고치지 못했습니다: \(error.localizedDescription)"
-        }
-        return nil
     }
 
     // 계정 추가: 따로 정한 설정 폴더(CLAUDE_CONFIG_DIR)로 claude auth login 을 터미널에서 띄운다 — 지금 로그인은 건드리지 않는다.
@@ -1023,12 +951,12 @@ final class AccountStore: ObservableObject {
             guard let self else { return }
             var result: Result<Account, Error>?
             var tokenOnly = false
-            if let oa = Self.oauthAccount(at: l.slot + "/.claude.json"), let a = Account(oauth: oa),
+            if let oa = ClaudeConfigFile(l.slot + "/.claude.json").oauthAccount(), let a = Account(oauth: oa),
                let oauth = Keychain.json(credentialsService(l.slot))?["claudeAiOauth"] as? [String: Any] {
                 result = Result {
-                    try self.store(oa, oauth)
+                    try storeAccount(oa, credentials: oauth, ports: self.ports)
                     // 지금 계정도 함께 저장해 둔다 — 목록에 나란히 보이고 언제든 돌아올 수 있게
-                    try? withFileLock(self.configDir + "/.storage-write") { try self.saveCurrent(except: a.id) }
+                    try? self.ports.writeLock.withLock { try saveCurrentAccount(except: a.id, ports: self.ports) }
                     Self.dropSlot(l.slot)
                     return a
                 }
@@ -1071,8 +999,7 @@ final class AccountStore: ObservableObject {
     func remove(_ a: Account) {
         queue.async { [weak self] in
             guard let self else { return }
-            Keychain.delete(Self.vault, account: a.id)
-            try? self.writeMeta(Self.readMeta(self.metaPath).filter { Self.metaId($0) != a.id })
+            removeAccount(a.id, ports: self.ports)
             DispatchQueue.main.async {
                 self.loadSaved()
                 self.flash("\(a.email) 계정을 목록에서 지웠습니다")
@@ -1093,12 +1020,10 @@ final class AccountStore: ObservableObject {
 
 // 지금 계정의 5시간·주간 한도가 차거나 세션이 한도에 걸려 멈추면 저장한 다른 계정으로 바꾸고, 한도로 멈췄던 세션에 이어서 진행하라는 요청을 넣는다.
 // 계정 메뉴에서 켜고 끄며 기본은 꺼짐. 다른 계정의 남은 한도는 미리 알 수 없어(저장한 토큰은 그 계정으로 전환해야 갱신된다)
-// 그 계정이 지금 계정이었을 때 한도가 찼던 기록으로 고른다. 결정마다 ~/.claude/notifier/auto-switch.log 에 한 줄씩 남긴다
+// 그 계정이 지금 계정이었을 때 한도가 찼던 기록으로 고른다. 결정마다 ~/.claude/notifier/auto-switch.log 에 한 줄씩 남긴다.
+// 판단(한도에 걸린 세션·전환할지와 까닭·다음 계정과 한도 표시·이어 갈 세션)은 BoardRules(AutoSwitch.swift)의 decideAutoSwitch 가 하고,
+// 여기는 3초 타이머·UserDefaults·로그·안내·전환 요청·터미널 조작(driveSession)을 쥔다
 final class AutoSwitcher {
-    // 실행 중인 세션은 로그인 정보를 최대 30초 동안 기억해 두고 쓴다 — 전환한 뒤 이만큼은 이전 계정으로 요청이 나갈 수 있다
-    static let settle: TimeInterval = 40
-    // 이보다 오래된 한도 기록은 보지 않는다 — 오래전에 멈춘 세션을 계정을 바꿀 때마다 깨우지 않게
-    static let recent: TimeInterval = 6 * 3600
     static let prompt = "사용 한도로 멈췄던 세션을 다른 계정으로 전환해 재개합니다. 중단된 지점부터 직전 작업을 이어서 진행해 주세요."
     private let store: Store
     private let usage: UsageStore
@@ -1133,28 +1058,38 @@ final class AutoSwitcher {
     private func tick() {
         guard accounts.autoSwitch else { return }
         let now = Date()
-        let settled = lastSwitch.addingTimeInterval(Self.settle)
-        // 승인 대기 세션은 Esc 가 승인을 거절하므로 건드리지 않는다
-        let limited = store.groups.flatMap(\.sessions).filter {
-            guard let at = $0.limitAt else { return false }
-            return !["ended", "paused", "waiting"].contains($0.state) && now.timeIntervalSince(at) < Self.recent
-        }
-        // 1) 전환 — 지금 계정으로 새로 한도에 걸린 세션이 있거나, 지금 계정의 5시간·주간 한도가 찼다
-        if !pending, !accounts.switching, now > settled, let cur = accounts.current {
-            let fullLimit = usage.limits.first { ($0.id == "5h" || $0.id == "7d") && $0.pct >= 100 && ($0.resets ?? .distantFuture) > now }
-            if let hit = limited.first(where: { $0.limitAt! > settled }) {
-                switchAway(cur, because: "\((hit.cwd as NSString).lastPathComponent) 세션이 한도에 걸림(\(hit.message))", now: now)
-            } else if let fullLimit {
-                switchAway(cur, because: "\(fullLimit.label) 한도 \(Int(fullLimit.pct))%", now: now)
+        let d = decideAutoSwitch(sessions: store.groups.flatMap(\.sessions), limits: usage.limits,
+                                 current: accounts.current, saved: accounts.saved, full: full, resumed: resumed,
+                                 lastSwitch: lastSwitch, pending: pending, switching: accounts.switching, now: now)
+        // 1) 전환 — 지금 계정은 한도가 풀릴 때까지 고르지 않게 적어 두고(후보가 없어도), 저장한 계정 가운데 지금 계정 다음부터 쓸 수 있는 계정으로 바꾼다
+        if let marks = d.full { full = marks }
+        switch d.move {
+        case .stay:
+            break
+        case .noCandidate(let reason):
+            if !noCandidate {
+                noCandidate = true
+                log("\(reason): 전환할 계정 없음")
+                accounts.flash("사용 한도에 도달했지만 전환할 다른 계정이 없습니다. 저장한 계정이 모두 한도에 도달했거나 다시 로그인이 필요합니다", error: true)
+            }
+        case .switchTo(let next, let cur, let reason, let stopped):
+            pending = true
+            log("\(reason): \(cur.email) 에서 \(next.email) 로 전환")
+            let note = "사용 한도에 도달해 \(next.email) 계정으로 자동 전환했습니다"
+                + (stopped ? ". 한도로 멈춘 세션은 \(Int(AutoSwitchRule.settle))초 뒤 이어서 진행합니다" : "")
+            accounts.switchTo(next, note: note) { [weak self] ok in
+                self?.pending = false
+                guard !ok else { return }
+                self?.log("\(next.email) 로 전환하지 못함 (1시간 동안 고르지 않음)")
+                self?.full[next.id] = now.addingTimeInterval(AutoSwitchRule.retryAfter).timeIntervalSince1970
             }
         }
         // 2) 이어 가기 — 전환하고 settle 이 지났으면, 그 전(이전 계정)에 한도로 멈춘 세션에 이어서 진행하라는 요청을 넣는다
-        guard now > settled else { return }
-        let todo = limited.filter { $0.limitAt! <= settled && !resumed.contains("\($0.id)@\($0.limitAt!.timeIntervalSince1970)") }
-        guard !todo.isEmpty else { return }
+        guard !d.resume.isEmpty else { return }
         var manual: [String] = []
-        for s in todo {
-            resumed.insert("\(s.id)@\(s.limitAt!.timeIntervalSince1970)")
+        for r in d.resume {
+            resumed.insert(r.key)
+            let s = r.session
             let name = (s.cwd as NSString).lastPathComponent
             // 1초 타이머(메인 스레드)에서 부른다
             guard MainActor.assumeIsolated({ canDriveSession(s) }) else {
@@ -1170,40 +1105,10 @@ final class AutoSwitcher {
                 }
             }
         }
-        let n = todo.count - manual.count
+        let n = d.resume.count - manual.count
         accounts.flash((n > 0 ? "한도로 멈췄던 세션 \(n)개를 이어서 진행합니다" : "")
                        + (manual.isEmpty ? "" : (n > 0 ? ". " : "") + "\(manual.joined(separator: ", ")) 세션은 보드 탭·Ghostty 밖이라 직접 이어 주세요"),
                        error: !manual.isEmpty)
-    }
-
-    // 지금 계정은 한도가 풀릴 때까지 고르지 않게 적어 두고, 저장한 계정 가운데 지금 계정 다음부터 쓸 수 있는 계정으로 바꾼다
-    private func switchAway(_ cur: Account, because reason: String, now: Date) {
-        // 풀리는 시각은 지금 계정의 찬 한도에서 읽는다 — 모르면 1시간 뒤 다시 본다
-        let resets = usage.limits.filter { $0.pct >= 100 }.compactMap(\.resets).filter { $0 > now }.max()
-        var marks = full.filter { $0.value > now.timeIntervalSince1970 }
-        marks[cur.id] = (resets ?? now.addingTimeInterval(3600)).timeIntervalSince1970
-        full = marks
-        let saved = accounts.saved
-        let start = saved.firstIndex { $0.id == cur.id }.map { $0 + 1 } ?? 0
-        guard let next = (saved[start...] + saved[..<start]).first(where: { $0.id != cur.id && !$0.expired && marks[$0.id] == nil }) else {
-            if !noCandidate {
-                noCandidate = true
-                log("\(reason): 전환할 계정 없음")
-                accounts.flash("사용 한도에 도달했지만 전환할 다른 계정이 없습니다. 저장한 계정이 모두 한도에 도달했거나 다시 로그인이 필요합니다", error: true)
-            }
-            return
-        }
-        pending = true
-        log("\(reason): \(cur.email) 에서 \(next.email) 로 전환")
-        let stopped = store.groups.flatMap(\.sessions).contains { $0.limitAt != nil && $0.state != "ended" }
-        let note = "사용 한도에 도달해 \(next.email) 계정으로 자동 전환했습니다"
-            + (stopped ? ". 한도로 멈춘 세션은 \(Int(Self.settle))초 뒤 이어서 진행합니다" : "")
-        accounts.switchTo(next, note: note) { [weak self] ok in
-            self?.pending = false
-            guard !ok else { return }
-            self?.log("\(next.email) 로 전환하지 못함 (1시간 동안 고르지 않음)")
-            self?.full[next.id] = now.addingTimeInterval(3600).timeIntervalSince1970
-        }
     }
 
     private func log(_ text: String) {
@@ -1999,10 +1904,10 @@ struct AccountChip: View {
         for a in list {
             let isCurrent = a.id == accounts.current?.id
             let title = [a.email, a.plan].filter { !$0.isEmpty }.joined(separator: "  ·  ")
-                + (!isCurrent && a.expired ? "  (다시 로그인 필요)" : "")
+                + (!isCurrent && a.isExpired(at: Date()) ? "  (다시 로그인 필요)" : "")
             let item = ActionItem(title, enabled: !accounts.switching) {
                 guard !isCurrent else { return }
-                a.expired ? addInSettings(email: a.email) : accounts.confirmSwitch(a, busy: busy())
+                a.isExpired(at: Date()) ? addInSettings(email: a.email) : accounts.confirmSwitch(a, busy: busy())
             }
             item.state = isCurrent ? .on : .off
             if !a.org.isEmpty { item.toolTip = a.org }
@@ -9373,7 +9278,7 @@ struct AccountList: View {
                         .buttonStyle(.plain)
                         .transition(.opacity)
                     }
-                    if account.expired {
+                    if account.isExpired(at: Date()) {
                         SettingsButton("다시 로그인", enabled: !accounts.switching && !accounts.adding) { accounts.beginAdd(email: account.email) }
                     } else {
                         SettingsButton("전환", enabled: !accounts.switching) { accounts.confirmSwitch(account, busy: busy()) }

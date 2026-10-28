@@ -1,5 +1,6 @@
 // 보드 규칙의 포트 — 세션 상태 판정(scanSessions)이 바깥(세션 기록 파일·프로세스·Claude Code 상태·대화 기록·컨텍스트·시계)을 부르는 자리,
-// 사용량 규칙(Usage.swift)이 바깥(사용량 캐시·로그인 정보·사용량 API·시계)을 부르는 자리.
+// 사용량 규칙(Usage.swift)이 바깥(사용량 캐시·로그인 정보·사용량 API·시계)을 부르는 자리,
+// 계정 전환 규칙(Accounts.swift)이 바깥(키체인·Claude Code 설정·저장 계정 목록·로그인 정보 쓰기 잠금·시계)을 부르는 자리.
 // 진짜 어댑터는 보드 앱(ClaudeBoard.swift)에, 가짜 어댑터는 Tests/BoardRulesTests 에만 둔다(이슈 #9 헥사고날 첫 단계).
 // 규칙에 새 OS 호출(파일·프로세스·시각·환경 변수·홈 폴더)이 필요하면 여기 포트를 거친다 — 코어에서 FileManager·kill·Date() 를 직접 부르지 않는다.
 // 포트는 역할로 나눈다(범용 FileSystem 포트를 두면 시험이 경로 문자열 시험이 된다).
@@ -109,4 +110,57 @@ public protocol LoginCredentials: Sendable {
 public protocol UsageAPI: Sendable {
     /// 그 토큰으로 사용량을 받는다. 200 일 때만 본문, 그 밖(다른 상태·연결 실패·시간 초과)은 nil. 끝날 때까지 기다린다
     func fetch(token: String) -> Data?
+}
+
+// MARK: - 계정 전환 (Accounts.swift)
+// 진짜 어댑터는 상태 없는 struct 라 그대로 Sendable 이다. 전환·저장·지우기는 AccountStore 의 큐(백그라운드)에서, 지금 계정 읽기는 메인에서 부른다.
+// 토큰이 든 값(키체인 항목 내용·claudeAiOauth)은 어댑터·규칙 모두 기록하지 않는다
+
+/// 키체인 일반 암호 항목의 자리 — 서비스 이름과 계정 이름. 보드 저장 계정은 KeychainItem.savedAccount(id),
+/// Claude Code 로그인 정보는 앱이 정해 넘긴다(서비스는 CLAUDE_CONFIG_DIR 에 따라 해시가 붙고 계정 이름은 $USER 라 규칙이 정하지 않는다)
+public struct KeychainItem: Hashable, Sendable, CustomStringConvertible {
+    public let service: String
+    public let account: String
+    public init(service: String, account: String) { self.service = service; self.account = account }
+
+    /// 보드가 저장한 계정 토큰의 키체인 서비스 — Uninstall.command·설치 가이드도 이 이름을 쓴다(바꾸면 저장한 계정을 잃는다)
+    public static let savedAccountService = "Claude Board-account"
+    /// 저장 계정 하나의 토큰 항목 — 계정 이름은 Account.id
+    public static func savedAccount(_ id: String) -> KeychainItem { KeychainItem(service: savedAccountService, account: id) }
+
+    public var description: String { "\(service)/\(account)" }
+}
+
+// 키체인 일반 암호 항목 — 진짜 어댑터는 /usr/bin/security 로 읽고 쓴다(16진수로 나온 값 풀기·ASCII JSON·4KB 넘으면 명령줄은 어댑터 몫)
+public protocol KeychainItems: Sendable {
+    /// 항목 내용. 없거나 못 읽거나 비었으면 nil
+    func read(_ item: KeychainItem) -> Data?
+    /// 항목이 있는지 — 읽기는 실패했는데 항목은 있는 경우를 가른다
+    func exists(_ item: KeychainItem) -> Bool
+    /// JSON 을 그 항목에 쓴다(있으면 바꾼다). JSON 으로 바꾸지 못하면 그 오류를 던지고, 쓰기에 실패하면 false
+    func write(_ item: KeychainItem, json: [String: Any]) throws -> Bool
+    func delete(_ item: KeychainItem)
+}
+
+// Claude Code 설정 ~/.claude.json — 지금 로그인된 계정(oauthAccount)과 계정별 캐시가 있다
+public protocol ClaudeConfig: Sendable {
+    /// oauthAccount. 파일이 없거나 JSON 객체가 아니거나 그 키가 객체가 아니면 nil
+    func oauthAccount() -> [String: Any]?
+    /// Claude Code 와 같은 잠금 아래에서 읽고 몇 키만 고쳐 바꿔 넣는다(권한은 그대로). 못 읽거나 못 쓰면 던진다
+    func patch(_ change: (inout [String: Any]) -> Void) throws
+}
+
+// 보드의 저장 계정 목록 ~/.claude/notifier/accounts.json — 화면에 보일 계정 정보만(토큰은 키체인). 형식은 규칙(Accounts.swift)이 정한다
+public protocol SavedAccountList: Sendable {
+    /// 파일 내용. 없거나 못 읽으면 nil
+    func read() -> Data?
+    /// 통째로 바꿔 쓴다. 이메일·조직 이름이 들어 있어 권한은 0600
+    func write(_ data: Data) throws
+}
+
+// Claude Code 로그인 정보 쓰기 잠금(~/.claude/.storage-write) — Claude Code 가 토큰을 갱신해 쓸 때 잡는다.
+// 전환이 그 사이에 끼어 앞 계정 토큰으로 덮이지 않게 같은 잠금 안에서 읽고 쓴다
+public protocol CredentialsWriteLock: Sendable {
+    /// 잠금 안에서 body 를 돌린다. 잠금을 잡지 못하면(오래 쥐고 있음) 던진다
+    func withLock<T>(_ body: () throws -> T) throws -> T
 }
