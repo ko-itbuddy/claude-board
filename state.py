@@ -26,7 +26,12 @@ WAIT_NOTIFICATIONS = {"permission_prompt", "worker_permission_prompt", "elicitat
 
 
 def find_claude():
-    """hook 프로세스의 조상 가운데 claude 프로세스의 pid 와 tty 를 찾는다."""
+    """hook 프로세스의 조상 가운데 claude 세션 프로세스의 pid 와 tty 를 찾는다.
+
+    Claude Code 의 백그라운드 작업은 데몬(claude daemon run) → pty 호스트(--bg-pty-host) → 세션 프로세스로 뜨고,
+    세션 프로세스는 이름을 "claude bg-spare" 로 바꿔 쓰거나 버전 경로(…/claude/versions/2.1.312)로 뜬다(2.1.312 실측).
+    이름이 claude 인 것만 찾으면 그 위의 pty 호스트나 데몬을 세션으로 잡는다.
+    """
     pid = os.getppid()
     for _ in range(6):
         try:
@@ -37,8 +42,16 @@ def find_claude():
         if len(out) < 3:
             return None, None
         ppid, tty, comm = out
-        if os.path.basename(comm.strip()) == "claude":
-            return pid, (None if tty.startswith("?") else tty)
+        comm = comm.strip()
+        words = os.path.basename(comm).split()
+        if "/claude/versions/" in comm or words[:1] == ["claude"]:
+            argv = proc_args(pid)
+            if "--bg-pty-host" in argv or argv[1:2] == ["daemon"] or words[1:] == ["bg-pty-host"]:
+                return None, None
+            # 백그라운드 작업의 tty 는 pty 호스트가 만든 것이라 사람이 보는 터미널이 아니다
+            if tty.startswith("?") or "--bg-pty-host" in proc_args(int(ppid)):
+                tty = None
+            return pid, tty
         pid = int(ppid)
     return None, None
 
