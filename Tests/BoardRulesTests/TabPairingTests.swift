@@ -4,7 +4,9 @@
 // 표본은 옮기기 전 TerminalHub.pair·place·parkedTab·shownPlace(0b309cd 의 ClaudeBoard.swift)를 줄 그대로 떼어 가짜 화면·OS 로 돌린 덤프 도구와
 // 같은 것이고, 기대 글(expected)은 그 덤프에서 앱에 남은 몫(다른 터미널 앱 이름·프로세스 인자 캐시·@Published 쓰기 기록)만 뺀 줄 그대로다.
 // 화면의 맨 위 프로세스(leader)는 덤프의 앞 프로세스와 getsid 표에서 앱 어댑터(BoardSurface.screen)가 낼 값을 적었다.
-// 버그 의심(같은 tty 세션 둘의 차례·다른 터미널에서 이어 연 세션의 자리·같은 순위 상태 점의 차례)도 지금 동작으로 적고 고치지 않는다
+// 버그 의심(같은 tty 세션 둘의 차례·같은 순위 상태 점의 차례)도 지금 동작으로 적고 고치지 않는다.
+// 덤프 뒤에 고친 것은 고친 동작으로 적었다: 짝 없는 세션을 세션 id 로 화면에 붙이는 길은 그 화면에서 claude 가 뜨는 중이거나 돌 때만
+// (6 은 다른 터미널, 11 은 그 화면이지만 runsClaude 를 묻는다)
 import Foundation
 import Testing
 import BoardRules
@@ -188,7 +190,8 @@ private let cases: [PairingCase] = [
                     SessSpec(id: "e2", state: "ended", tty: "ttys002", pid: 2002),
                     SessSpec(id: "e3", state: "ended", tty: "", pid: 0),
                 ])]),
-    // 버그 의심(고치지 않음): 화면에서 끝난 세션을 다른 터미널에서 이어 열면(tty 가 다름) 화면의 세션 id 가 남아 있어 place 가 그 화면을 준다
+    // 고침: 화면에서 끝난 세션을 다른 터미널에서 이어 열면(tty 가 다름) 화면에 세션 id 가 남아 있어도 그 화면에서 claude 가 돌지 않으므로 다른 터미널
+    // (고치기 전에는 그 화면을 주어 누르면 보드 탭으로 가고 키 넣기가 막혔다)
     PairingCase(name: "6 셸 프롬프트·다른 터미널에서 이어 연 세션",
                 screens: [ScreenSpec(name: "A1", tty: "ttys001", leader: 1000, sessionId: "s1", command: "claude --session-id s1", mdOff: true)],
                 rounds: [RoundSpec(sessions: [SessSpec(id: "s1", state: "idle", tty: "ttys007", pid: 2001)])]),
@@ -356,7 +359,78 @@ private func run(_ c: PairingCase) -> String {
     return out.map { $0.replacingOccurrences(of: #"\s+$"#, with: "", options: .regularExpression) }.joined(separator: "\n")
 }
 
+// MARK: - 자리 표 — 짝(paired)이 없는 세션을 같은 세션 id 로 연 화면에 붙이는 길은 그 화면에서 claude 가 뜨는 중이거나 돌 때만(끝난 세션과 같은 조건).
+// 화면 값은 이름·세션 id·runs 만 본다. paired·owned 는 화면 이름으로 적는다
+
+private struct PlaceCase: Sendable, CustomTestStringConvertible {
+    var name: String
+    var session: SessSpec
+    var screens: [ScreenSpec]
+    var paired: [String: String] = [:]   // 세션 id → 화면 이름
+    var owned: Set<String> = []
+    var place: String                    // fmt 결과
+    var calls: [String]                  // 자리 한 번에 부른 포트(runsClaude)
+    var testDescription: String { name }
+}
+
+private let placeCases: [PlaceCase] = [
+    PlaceCase(name: "보드 탭에서 끝나 셸만 남은 화면 + 다른 터미널에서 이어 연 같은 세션(다른 tty) → 다른 터미널",
+              session: SessSpec(id: "x", state: "idle", tty: "ttys007", pid: 4001),
+              screens: [ScreenSpec(name: "A1", tty: "ttys001", leader: 1000, sessionId: "x")],
+              place: "terminal", calls: ["runsClaude A1"]),
+    PlaceCase(name: "같은 장면에서 이어 연 세션이 작업 중이어도 다른 터미널",
+              session: SessSpec(id: "x", state: "working", tty: "ttys007", pid: 4001),
+              screens: [ScreenSpec(name: "A1", tty: "ttys001", leader: 1000, sessionId: "x")],
+              place: "terminal", calls: ["runsClaude A1"]),
+    PlaceCase(name: "같은 장면에서 이어 연 세션이 headless(tty 없음)면 백그라운드",
+              session: SessSpec(id: "x", state: "working", headless: true, pid: 4001),
+              screens: [ScreenSpec(name: "A1", tty: "ttys001", leader: 1000, sessionId: "x")],
+              place: "background", calls: ["runsClaude A1"]),
+    PlaceCase(name: "이어 열기를 넣은 직후(화면에서 claude 가 뜨는 중, 세션 파일 tty 아직 없음) → 그 화면",
+              session: SessSpec(id: "x", state: "idle", tty: "", pid: 0),
+              screens: [ScreenSpec(name: "A1", tty: "ttys001", leader: 1000, sessionId: "x", runs: true)],
+              place: "tab A1 headless=false", calls: ["runsClaude A1"]),
+    PlaceCase(name: "같은 tty 로 짝지은 세션 → 그 화면(화면 목록을 만들지 않고 묻지 않는다)",
+              session: SessSpec(id: "x", state: "working", tty: "ttys001", pid: 2001),
+              screens: [ScreenSpec(name: "A1", tty: "ttys001", leader: 1000, sessionId: "x")], paired: ["x": "A1"],
+              place: "tab A1 headless=false", calls: []),
+    PlaceCase(name: "화면 안에서 시작된 headless → 그 화면(headless 표시)",
+              session: SessSpec(id: "h", state: "working", headless: true, pid: 3001),
+              screens: [ScreenSpec(name: "A1", tty: "ttys001", leader: 1000, sessionId: "s1", runs: true)], paired: ["h": "A1"], owned: ["h"],
+              place: "tab A1 headless=true", calls: []),
+    PlaceCase(name: "끝난 세션 — 같은 세션 id 화면에서 claude 가 뜨는 중이면 그 화면(그대로)",
+              session: SessSpec(id: "x", state: "ended", tty: "ttys001", pid: 2001),
+              screens: [ScreenSpec(name: "A1", tty: "ttys001", leader: 1000, sessionId: "x", runs: true)],
+              place: "tab A1 headless=false", calls: ["runsClaude A1"]),
+    PlaceCase(name: "끝난 세션 — 셸만 남은 화면이면 끝남(그대로)",
+              session: SessSpec(id: "x", state: "ended", tty: "ttys001", pid: 2001),
+              screens: [ScreenSpec(name: "A1", tty: "ttys001", leader: 1000, sessionId: "x")],
+              place: "ended", calls: ["runsClaude A1"]),
+    PlaceCase(name: "세션 id 가 다른 화면은 claude 가 돌아도 묻지 않고, 같은 세션 id 화면 가운데 claude 가 도는 첫 화면",
+              session: SessSpec(id: "x", state: "idle", tty: "", pid: 0),
+              screens: [ScreenSpec(name: "B1", tty: "ttys002", sessionId: "other", runs: true),
+                        ScreenSpec(name: "A1", tty: "ttys001", sessionId: "x"),
+                        ScreenSpec(name: "A2", tty: "ttys003", sessionId: "x", runs: true)],
+              place: "tab A2 headless=false", calls: ["runsClaude A1", "runsClaude A2"]),
+]
+
 @Suite("보드 탭 짝짓기·자리") struct TabPairingTests {
+    @Test("자리: 짝 없는 세션은 같은 세션 id 화면에서 claude 가 뜨는 중이거나 돌 때만 그 화면", arguments: placeCases)
+    fileprivate func placeBySessionId(_ c: PlaceCase) {
+        var ids: [String: UUID] = [:], names: [UUID: String] = [:]
+        for (i, s) in c.screens.enumerated() {
+            let id = UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", i + 1))!
+            ids[s.name] = id; names[id] = s.name
+        }
+        let log = Log()
+        let probe = FakeProbe(log: log, names: names, running: Set(c.screens.filter(\.runs).map { ids[$0.name]! }), modes: [:])
+        let screens = c.screens.map { ScreenSession(id: ids[$0.name]!, sessionId: $0.sessionId) }
+        let place = sessionPlace(session(c.session), paired: c.paired.mapValues { ids[$0]! }, ownedHeadless: c.owned,
+                                 screens: screens, probe: probe)
+        #expect(fmt(place, names) == c.place)
+        #expect(log.calls == c.calls)
+    }
+
     @Test("보드 탭 짝짓기·자리 — 옮기기 전 덤프와 같다(포트 호출 차례까지)", arguments: cases)
     fileprivate func pairingMatchesDump(_ c: PairingCase) {
         #expect(run(c) == expected[c.name])
@@ -521,7 +595,7 @@ private let expected: [String: String] = [
     parkedFrom:
     states: /w/a→idle
     화면 A1: sid=s1 cmd=nil off=false session=nil parked=nil
-    자리 s1[idle]: place=tab A1 headless=false shown=tab A1 headless=false parkedTab=nil 조회:
+    자리 s1[idle]: place=terminal shown=terminal parkedTab=nil 조회: runsClaude A1 | runsClaude A1
     """,
     "7 /clear·사람이 친 claude·실행 방식": """
     === 7 /clear·사람이 친 claude·실행 방식 / 판 1
@@ -693,8 +767,8 @@ private let expected: [String: String] = [
     states: /w/a→working
     화면 A1: sid=n1 cmd=claude --session-id n1 off=false session=n1 parked=nil
     화면 A2: sid=n2 cmd=claude -p hi off=false session=n2 parked=nil
-    자리 n1[working]: place=tab A1 headless=false shown=tab A1 headless=false parkedTab=nil 조회:
-    자리 n2[working]: place=tab A2 headless=false shown=tab A2 headless=false parkedTab=nil 조회:
+    자리 n1[working]: place=tab A1 headless=false shown=tab A1 headless=false parkedTab=nil 조회: runsClaude A1 | runsClaude A1
+    자리 n2[working]: place=tab A2 headless=false shown=tab A2 headless=false parkedTab=nil 조회: runsClaude A2 | runsClaude A2
     """,
     "12 앞 프로세스 없음·0·getsid 실패": """
     === 12 앞 프로세스 없음·0·getsid 실패 / 판 1

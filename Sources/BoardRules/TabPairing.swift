@@ -1,5 +1,6 @@
 // 보드 탭(내장 터미널) 짝짓기·자리 규칙 — 세션을 보드 탭의 화면과 짝짓고(pairTabs), 세션이 도는 곳을 가른다(sessionPlace·parkedScreen·shownSessionPlace).
 // ClaudeBoard.swift 의 TerminalHub.pair·place·parkedTab·shownPlace 와 tabAncestor 에 있던 판단을 옮김(이슈 #9 마지막 칸) — 결과·포트 호출 차례는 그대로다.
+// 옮긴 뒤 고친 것: 짝 없는 세션을 세션 id 로 화면에 붙이는 길은 그 화면에서 claude 가 뜨는 중이거나 돌 때만(sessionPlace).
 // 화면의 지금 값(tty·맨 위 프로세스·세션 id·명령)은 앱이 떠서 값(TabScreen·ScreenSession)으로 넘긴다. 비싸서 그 갈래에서만 묻던 것은 포트로 부른다:
 // 화면의 claude·세션 실행 방식은 TabProbe, 부모 pid 는 ProcessControl, 넘긴 작업 id 는 ClaudeLive.
 // 결과는 값(TabPairing)으로 돌려주고 앱(TerminalHub)이 화면(BoardSurface)·@Published 에 쓴다. 다른 터미널 세션의 앱 이름(appNames)·쥔 탭 목록 남기기·
@@ -58,6 +59,7 @@ public struct TabPairing: Equatable, Sendable {
 }
 
 /// 화면과 그 화면의 세션 id — 자리 판정(sessionPlace)이 읽는 가벼운 값. place 는 카드를 그릴 때마다 불리므로 tty·앞 프로세스는 읽지 않는다
+/// (화면의 tty 는 BoardSurface 에 저장된 값이 아니라 읽을 때마다 엔진을 부르는 값이라, 화면마다 떠서 넘기면 카드를 그릴 때마다 화면 수만큼 엔진을 부른다)
 public struct ScreenSession: Equatable, Sendable {
     public let id: UUID
     public let sessionId: String?
@@ -132,12 +134,14 @@ func tabAncestor(_ pid: Int32, _ leaders: [Int32: UUID], _ processes: ProcessCon
 // MARK: - 자리
 
 /// 세션이 어디서 도는가 — 보드 탭의 화면(그 안에서 시작된 claude -p 포함)·다른 터미널·백그라운드·끝남.
-/// 짝(paired)이 없으면 같은 세션 id 로 연 화면(앞 것) — 끝난 세션은 그 화면에서 claude 가 막 뜨는 중일 때만(이어 열기를 넣은 직후),
-/// claude 가 끝나 셸만 남은 화면이면 끝남. headless 표시는 화면 안에서 시작된 headless(ownedHeadless)일 때만.
+/// 짝(paired)이 없으면 같은 세션 id 로 연 화면 가운데 claude 가 막 뜨는 중이거나 도는 첫 화면(이어 열기를 넣은 직후·tty 를 아직 안 쓴 새 세션).
+/// claude 가 끝나 셸만 남은 화면에는 붙이지 않는다 — 끝난 세션은 끝남, 끝나지 않은 세션은 다른 곳에서 돈다(보드 탭에서 끝난 세션을
+/// 다른 터미널에서 이어 열면 화면에 세션 id 가 남아 있어도 다른 터미널. 전에는 끝나지 않은 세션이면 claude 가 돌지 않는 화면에도 붙였다).
+/// runsClaude 는 세션 id 가 같은 화면에서만 묻는다. headless 표시는 화면 안에서 시작된 headless(ownedHeadless)일 때만.
 /// screens 는 짝이 없을 때만 만든다(카드를 그릴 때마다 불린다)
 public func sessionPlace(_ s: Session, paired: [String: UUID], ownedHeadless: Set<String>,
                          screens: @autoclosure () -> [ScreenSession], probe: TabProbe) -> SessionPlace {
-    if let id = paired[s.id] ?? screens().first(where: { $0.sessionId == s.id && (s.state != "ended" || probe.runsClaude($0.id)) })?.id {
+    if let id = paired[s.id] ?? screens().first(where: { $0.sessionId == s.id && probe.runsClaude($0.id) })?.id {
         return .tab(id, headless: ownedHeadless.contains(s.id))
     }
     if s.state == "ended" { return .ended }
