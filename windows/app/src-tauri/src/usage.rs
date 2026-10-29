@@ -12,6 +12,9 @@ use serde_json::Value;
 use crate::model::{Limit, UsageView};
 use crate::util::{http_get, ms, mtime, num, obj};
 
+#[cfg(test)]
+mod table;
+
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 
 pub struct Usage {
@@ -44,17 +47,17 @@ impl Usage {
     /// 캐시를 먼저 보고, 120초 넘게 낡았으면 새로 받으라고 알린다.
     pub fn refresh(&mut self, now: f64) -> Next {
         let written = mtime(&self.cache).filter(|m| *m > self.trust_after);
-        if written.is_some() {
-            if let Some(limits) = fs::read(&self.cache).ok().and_then(|b| parse(&b)) {
-                self.limits = limits;
-            }
+        let body = if written.is_some() { fs::read(&self.cache).ok() } else { None };
+        let (limits, fetch) = check_cache(written, body.as_deref(), self.fetching, now);
+        if let Some(limits) = limits {
+            self.limits = limits;
         }
-        let age = now - written.unwrap_or(f64::NEG_INFINITY);
-        if age <= 120.0 || self.fetching {
-            return Next::Idle;
+        if fetch {
+            self.fetching = true;
+            Next::Fetch(self.generation)
+        } else {
+            Next::Idle
         }
-        self.fetching = true;
-        Next::Fetch(self.generation)
     }
 
     /// 받은 결과를 넣는다. 받는 사이 계정을 바꿨으면 false(다시 받아야 한다).
@@ -101,6 +104,15 @@ pub fn fetch(credentials: &Path) -> (Option<Vec<u8>>, bool) {
         Ok((200, body)) => (Some(body), false),
         _ => (None, false),
     }
+}
+
+/// 캐시로 판단하는 순수 함수, (믿어 쓸 한도, 새로 받을지).
+/// `written` 은 trust_after 뒤에 쓰인 캐시의 수정 시각(None 이면 못 믿는다), `body` 는 그때 읽은 본문.
+/// 믿을 만하게 쓰인 캐시일 때만 본문을 한도로 해석하고, 나이가 120초를 넘는(age > 120) 캐시를 받고 있지 않으면 받는다.
+pub fn check_cache(written: Option<f64>, body: Option<&[u8]>, fetching: bool, now: f64) -> (Option<Vec<Limit>>, bool) {
+    let limits = if written.is_some() { body.and_then(parse) } else { None };
+    let age = now - written.unwrap_or(f64::NEG_INFINITY);
+    (limits, age > 120.0 && !fetching)
 }
 
 fn limit(id: String, label: String, o: &Record, key: &str) -> Option<Limit> {
@@ -200,5 +212,32 @@ mod tests {
         assert!(matches!(u.refresh(clock::now()), Next::Fetch(1)));
         assert!(u.limits.is_empty());
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn check_cache_pins_today() {
+        let now = 1_000_000.0;
+        let body = SAMPLE.as_bytes();
+        // 캐시가 없으면 믿어 쓸 한도가 없어 바로 받는다
+        assert_eq!(check_cache(None, None, false, now), (None, true));
+        // 낡지 않은 캐시(10초)는 그대로 쓰고 받지 않는다
+        assert_eq!(check_cache(Some(now - 10.0), Some(body), false, now), (parse(body), false));
+        // 경계 넘을 때만 받는다, 나이가 정확히 120초면 아직 받지 않는다
+        assert_eq!(check_cache(Some(now - 120.0), Some(body), false, now), (parse(body), false));
+        // 낡은 캐시(121초)는 받는다
+        assert_eq!(check_cache(Some(now - 121.0), Some(body), false, now), (parse(body), true));
+        // 받고 있는 동안에는 낡아도 다시 받지 않는다
+        assert_eq!(check_cache(Some(now - 121.0), Some(body), true, now), (parse(body), false));
+    }
+
+    #[test]
+    fn check_cache_limits_need_trusted_written_body() {
+        let now = 1_000_000.0;
+        // 믿을 수 없게 쓰인 캐시(written None)면 본문이 있어도 한도로 버린다
+        assert_eq!(check_cache(None, Some(SAMPLE.as_bytes()), false, now), (None, true));
+        // 본문을 못 읽으면 한도도 없고, 캐시가 아직 낭신하므로 받지도 않는다
+        assert_eq!(check_cache(Some(now - 5.0), None, false, now), (None, false));
+        // 본문이 잘못된 JSON 이면 한도가 없다
+        assert_eq!(check_cache(Some(now - 5.0), Some(b"not json" as &[u8]), false, now), (None, false));
     }
 }
