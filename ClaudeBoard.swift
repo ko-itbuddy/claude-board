@@ -1027,10 +1027,15 @@ final class AccountStore: ObservableObject {
     func remove(_ a: Account) {
         queue.async { [weak self] in
             guard let self else { return }
-            removeAccount(a.id, ports: self.ports)
+            // 다 했으면 nil, 토큰은 지웠지만 목록을 고치지 못했으면 그 안내, 키체인에서 못 지웠으면 던진다(목록은 그대로)
+            let r = Result { try removeAccount(a.id, ports: self.ports) }
             DispatchQueue.main.async {
                 self.loadSaved()
-                self.flash("\(a.email) 계정을 목록에서 지웠습니다")
+                switch r {
+                case .success(nil): self.flash("\(a.email) 계정을 목록에서 지웠습니다")
+                case .success(let warning?): self.flash("\(a.email): \(warning)", error: true)
+                case .failure(let e): self.flash("\(a.email) 계정을 지우지 못했습니다: \(e.localizedDescription)", error: true)
+                }
             }
         }
     }
@@ -1062,7 +1067,9 @@ final class AutoSwitcher {
         didSet { UserDefaults.standard.set(lastSwitch.timeIntervalSince1970, forKey: "autoSwitchLast") }
     }
     private var pending = false              // 자동 전환을 요청하고 결과를 기다리는 중
-    private var resumed = Set<String>()      // 이어 가기를 넣은 "세션 id@한도 시각" — 한 번만 넣는다
+    // 이어 가기를 넣은 "세션 id@한도 시각" — 한 번만 넣는다. 메모리에만 두는 것은 의도다: 요청이 들어가면 state.py 가 UserPromptSubmit 에서
+    // limit_hit 을 지워 그 세션은 다시 고르지 않으므로, 보드를 다시 켠 뒤 다시 넣는 것은 넣기에 실패해 limit_hit 이 남은 세션뿐이고 그때는 다시 해 보는 편이 낫다
+    private var resumed = Set<String>()
     private var noCandidate = false          // 전환할 계정이 없다고 이미 알렸다 — 계정이 바뀌기 전에는 다시 알리지 않는다
     // 한도가 찬 계정 id 와 풀리는 시각 — 그 전에는 고르지 않는다
     private var full = UserDefaults.standard.dictionary(forKey: "autoSwitchFull") as? [String: Double] ?? [:] {

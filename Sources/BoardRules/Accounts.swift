@@ -1,5 +1,6 @@
 // 계정 전환 규칙 — 저장 계정 모델, 저장 계정 목록(accounts.json) 해석·고치기, 전환할 때의 JSON 변환, 저장·전환·지우기 유스케이스
-// (AccountStore 에 있던 것을 옮김, 동작·호출 순서·오류 글자는 그대로, 옮긴 뒤 고친 것: 깨진 accounts.json 은 쓰기 전에 옆으로 치운다).
+// (AccountStore 에 있던 것을 옮김, 동작·호출 순서·오류 글자는 그대로, 옮긴 뒤 고친 것: 깨진 accounts.json 은 쓰기 전에 옆으로 치운다,
+// 이슈 #9 3차: 요금제 글자의 앞 빈칸, 지우기의 결과 안내, 지금 계정 정보가 모자라 전환을 막을 때의 안내).
 // 바깥(키체인·~/.claude.json·accounts.json·쓰기 잠금·시계)은 포트(Ports.swift)로만 부른다.
 //
 // 계정 전환: 계정마다 브라우저 로그인을 한 번 받아 토큰을 저장해 두고, 고르면 Claude Code 로그인 항목의 토큰만 바꿔 넣는다.
@@ -27,13 +28,13 @@ public struct Account: Identifiable, Equatable {
 
     public var email: String { oauth["emailAddress"] as? String ?? "?" }
     public var org: String { oauth["organizationName"] as? String ?? "" }
-    /// 요금제 — organizationType claude_max + 한도 등급 …_5x → "Max 5x"
+    /// 요금제 — organizationType claude_max + 한도 등급 …_5x → "Max 5x". 비지 않은 조각만 빈칸으로 잇는다(등급만 있으면 "5x")
     public var plan: String {
         let t = (oauth["organizationType"] as? String ?? "").replacingOccurrences(of: "claude_", with: "")
-        var p = t.prefix(1).uppercased() + t.dropFirst()
+        var parts = [t.prefix(1).uppercased() + t.dropFirst()]
         if let tier = oauth["organizationRateLimitTier"] as? String,
-           let r = tier.range(of: "_\\d+x$", options: .regularExpression) { p += " " + tier[r].dropFirst() }
-        return p
+           let r = tier.range(of: "_\\d+x$", options: .regularExpression) { parts.append(String(tier[r].dropFirst())) }
+        return parts.filter { !$0.isEmpty }.joined(separator: " ")
     }
     /// 다시 로그인해야 하나 — refreshExpires 가 now 보다 앞일 때만(같은 시각은 아직 아니다). 없으면 만료되지 않는다
     public func isExpired(at now: Date) -> Bool { refreshExpires.map { $0 < now } ?? false }
@@ -163,6 +164,12 @@ public func loadSavedAccounts(_ saved: SavedAccountList) -> [Account] {
 
 /// 깨진 저장 계정 목록을 옆으로 치우지 못했을 때의 안내 — 글자가 그대로 안내(flash)에 나온다
 let savedAccountsSetAsideFailed = "저장 계정 목록(accounts.json)을 읽지 못해 옆으로 옮기려 했지만 옮기지 못했습니다"
+/// 지금 로그인된 계정의 정보(~/.claude.json 의 oauthAccount)에 accountUuid 가 없어 그 계정을 저장하지 못할 때 — 전환 실패 안내 뒤에 붙는다
+let currentAccountIncomplete = "지금 로그인된 계정의 정보가 모자라 그 계정을 먼저 저장할 수 없습니다(그대로 바꾸면 그 로그인을 잃습니다). Claude Code 에서 /login 으로 다시 로그인한 뒤 해 주세요"
+/// 저장 계정 지우기의 안내 — 키체인에서 못 지움(던짐), 목록이 깨짐·목록을 못 씀(돌려줌, 앞에 오류 글자가 붙는다)
+let removeKeychainFailed = "키체인의 로그인 정보를 지우지 못해 목록에 그대로 두었습니다. 잠시 뒤 다시 지워 주세요"
+let removeListBroken = "로그인 정보는 지웠지만 저장 계정 목록(accounts.json)을 읽지 못해 목록은 그대로 두었습니다"
+let removeListWriteFailed = "로그인 정보는 지웠지만 저장 계정 목록(accounts.json)을 쓰지 못했습니다: "
 
 /// 계정 토큰(claudeAiOauth)은 키체인에, 보일 정보는 accounts.json 에 넣는다 — 같은 계정은 제자리에서 바꾼다.
 /// 차례: 키체인 쓰기 → 목록 읽기 → (깨졌으면 옆으로 치우기) → 목록 쓰기. 키체인에 못 쓰면 목록은 건드리지 않는다.
@@ -186,10 +193,16 @@ public func storeAccount(_ oa: [String: Any], credentials oauth: [String: Any], 
 }
 
 /// 지금 로그인된 계정의 최신 토큰을 저장한다 — 쓰는 동안 갱신되며 바뀐 토큰이라, 처음 저장했던 것은 이미 못 쓸 수 있다.
-/// 지금 계정이 skip 이거나, 계정 정보·로그인 토큰이 없으면 하지 않는다. 쓰기 잠금 안에서 부른다
+/// 지금 계정이 skip 이거나, 계정 정보·로그인 토큰이 없으면 하지 않는다. 쓰기 잠금 안에서 부른다.
+/// 계정 정보는 있는데 accountUuid 가 없어 계정을 만들지 못하고 로그인 토큰은 있으면 던진다(currentAccountIncomplete) —
+/// 저장하지 못한 채 전환이 그 토큰을 덮어쓰면 그 계정을 잃으므로 전환을 막고, 까닭과 할 일을 알린다.
+/// storeAccount 의 "계정 정보가 없습니다" 와 따로 둔다(계정 추가는 계정을 만든 뒤 storeAccount 를 부르고, 여기는 try? 로 부른다)
 public func saveCurrentAccount(except skip: String?, ports: AccountPorts) throws {
-    guard let oa = ports.config.oauthAccount(), Account(oauth: oa)?.id != skip,
-          let co = credentialsJSON(ports.keychain.read(ports.login))?["claudeAiOauth"] as? [String: Any] else { return }
+    guard let oa = ports.config.oauthAccount() else { return }
+    let cur = Account(oauth: oa)
+    if let cur, cur.id == skip { return }
+    guard let co = credentialsJSON(ports.keychain.read(ports.login))?["claudeAiOauth"] as? [String: Any] else { return }
+    guard cur != nil else { throw AccountError(currentAccountIncomplete) }
     try storeAccount(oa, credentials: co, ports: ports)
 }
 
@@ -227,12 +240,21 @@ public func switchAccount(to target: Account, ports: AccountPorts) throws -> Str
     return nil
 }
 
-/// 저장한 계정을 지운다 — 키체인의 토큰을 지우고 목록에서 뺀다. 목록을 못 써도 알리지 않는다(지금 동작).
-/// 목록이 깨졌으면 목록 파일은 건드리지 않는다(빈 목록으로 덮어쓰면 다른 계정의 표시 정보를 잃는다)
-public func removeAccount(_ id: String, ports: AccountPorts) {
-    ports.keychain.delete(.savedAccount(id))
-    guard let entries = writableSavedAccountEntries(ports.saved.read()) else { return }
-    try? ports.saved.write(savedAccountsData(removingSavedAccount(entries, id: id)))
+/// 저장한 계정을 지운다 — 키체인의 토큰을 지우고, 지워졌는지 본 뒤 목록에서 뺀다. 다 했으면 nil.
+/// 키체인 항목이 지운 뒤에도 남아 있으면 던지고 목록은 건드리지 않는다(목록에서 빼면 다시 지울 길이 없다). 항목이 원래 없었으면 지운 것으로 본다.
+/// 토큰은 지웠는데 목록을 고치지 못했으면 그 안내를 돌려준다: 목록이 깨졌으면 목록 파일은 건드리지 않고(빈 목록으로 덮어쓰면
+/// 다른 계정의 표시 정보를 잃는다, 깨진 파일은 다음 저장·전환이 옆으로 옮긴다), 목록을 못 쓰면 그 오류를 붙인다
+public func removeAccount(_ id: String, ports: AccountPorts) throws -> String? {
+    let item = KeychainItem.savedAccount(id)
+    ports.keychain.delete(item)
+    guard !ports.keychain.exists(item) else { throw AccountError(removeKeychainFailed) }
+    guard let entries = writableSavedAccountEntries(ports.saved.read()) else { return removeListBroken }
+    do {
+        try ports.saved.write(savedAccountsData(removingSavedAccount(entries, id: id)))
+    } catch {
+        return removeListWriteFailed + error.localizedDescription
+    }
+    return nil
 }
 
 // 키체인 항목 내용(JSON 객체) — 없거나 JSON 객체가 아니면 nil

@@ -1,5 +1,6 @@
 // 사용 한도 자동 전환의 판단 — 한도에 걸린 세션 고르기, 전환할지와 그 까닭, 다음 계정과 한도 표시(full), 이어 갈 세션
-// (AutoSwitcher.tick·switchAway 에 있던 판단을 옮김, 동작은 그대로). 바깥을 부르지 않는 순수 함수이고 시각은 받는다.
+// (AutoSwitcher.tick·switchAway 에 있던 판단을 옮김, 동작은 그대로, 이슈 #9 3차에 고친 것: 지금 계정의 한도 표시 기간도 떠날 까닭처럼
+// 5시간·주간(전체)만 본다). 바깥을 부르지 않는 순수 함수이고 시각은 받는다.
 //
 // 지금 계정의 5시간·주간 한도가 차거나 세션이 한도에 걸려 멈추면 저장한 다른 계정으로 바꾸고, 한도로 멈췄던 세션에 이어서 진행하라는 요청을 넣는다.
 // 다른 계정의 남은 한도는 미리 알 수 없어(저장한 토큰은 그 계정으로 전환해야 갱신된다) 그 계정이 지금 계정이었을 때 한도가 찼던 기록(full)으로 고른다.
@@ -26,24 +27,30 @@ public func limitedSessions(_ sessions: [Session], now: Date) -> [Session] {
 /// 이어 가기 표지 — "세션 id@한도 시각(1970 기준 초)". 같은 한도에는 한 번만 넣는다
 public func resumeKey(id: String, limitAt: Date) -> String { "\(id)@\(limitAt.timeIntervalSince1970)" }
 
+/// 계정에서 떠나게 하는 찬 한도 — 5시간·주간(전체)이 100% 이상. 모델별 주간은 그 모델을 쓰는 세션만 막아 보지 않는다
+/// (그 모델에 걸린 세션은 세션 쪽 까닭으로 떠난다). 떠날 까닭과 한도 표시 기간이 같은 판정을 쓴다
+private func blocksAccount(_ l: Limit) -> Bool { (l.id == "5h" || l.id == "7d") && l.pct >= 100 }
+
 /// 지금 계정에서 떠날 까닭 — settle 뒤에 새로 한도에 걸린 세션(첫 것)이 있거나, 5시간·주간(전체) 한도가 100% 이상이고 풀리는 시각이 미래(모르면 미래로 본다).
 /// 둘 다면 세션 쪽. 떠날 까닭이 없으면 nil
 public func autoSwitchReason(limited: [Session], limits: [Limit], settled: Date, now: Date) -> String? {
     if let hit = limited.first(where: { $0.limitAt.map { $0 > settled } ?? false }) {
         return "\((hit.cwd as NSString).lastPathComponent) 세션이 한도에 걸림(\(hit.message))"
     }
-    if let full = limits.first(where: { ($0.id == "5h" || $0.id == "7d") && $0.pct >= 100 && ($0.resets ?? .distantFuture) > now }) {
+    if let full = limits.first(where: { blocksAccount($0) && ($0.resets ?? .distantFuture) > now }) {
         return "\(full.label) 한도 \(Int(full.pct))%"
     }
     return nil
 }
 
-/// 다음 계정과 새 한도 표시. 표시는 지난 것을 치우고, 지금 계정은 찬 한도(모델별 주간 포함, 100% 이상)의 가장 늦은 풀림 시각까지
-/// (미래 것이 없으면 1시간 뒤) 표시한다. 다음 계정은 저장 목록에서 지금 계정 다음부터 한 바퀴 돌며(지금 계정이 목록에 없으면 처음부터)
+/// 다음 계정과 새 한도 표시. 표시는 지난 것을 치우고, 지금 계정은 찬 5시간·주간(전체) 한도(100% 이상)의 가장 늦은 풀림 시각까지
+/// (미래 것이 없거나 모르면 1시간 뒤) 표시한다 — 떠날 까닭(autoSwitchReason)과 같은 한도만 본다. 모델별 주간까지 보면 5시간이 차서 떠난
+/// 계정을 며칠 뒤에 풀리는 모델별 주간 때문에 그만큼 고르지 않았다. 세션이 모델별 한도에 걸려 떠났으면 1시간 뒤 다시 고를 수 있다
+/// (그 모델을 쓰는 세션이 다시 걸리면 다시 떠난다). 다음 계정은 저장 목록에서 지금 계정 다음부터 한 바퀴 돌며(지금 계정이 목록에 없으면 처음부터)
 /// 지금 계정·다시 로그인해야 하는 계정·표시가 남은 계정을 뺀 첫 것. 없으면 nil — 그때도 표시는 새로 바꾼다
 public func nextAccount(from current: Account, saved: [Account], limits: [Limit], full: [String: Double],
                         now: Date) -> (next: Account?, full: [String: Double]) {
-    let resets = limits.filter { $0.pct >= 100 }.compactMap(\.resets).filter { $0 > now }.max()
+    let resets = limits.filter(blocksAccount).compactMap(\.resets).filter { $0 > now }.max()
     var marks = full.filter { $0.value > now.timeIntervalSince1970 }
     marks[current.id] = (resets ?? now.addingTimeInterval(AutoSwitchRule.retryAfter)).timeIntervalSince1970
     let start = saved.firstIndex { $0.id == current.id }.map { $0 + 1 } ?? 0

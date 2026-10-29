@@ -1,5 +1,6 @@
 // 사용 한도 자동 전환 판단 시험 — 바깥이 없는 순수 함수라 가짜 어댑터 없이 세션·한도·계정 값만 넣는다.
-// 기대값은 AutoSwitcher.tick·switchAway 에 있던 지금 동작 그대로다. 계정·이메일은 가짜다
+// 기대값은 AutoSwitcher.tick·switchAway 에 있던 지금 동작 그대로다. 다만 지금 계정의 한도 표시 기간은 고친 동작이다(이슈 #9 3차):
+// 떠날 까닭과 같이 5시간·주간(전체)만 본다. 계정·이메일은 가짜다
 import Foundation
 import Testing
 import BoardRules
@@ -93,9 +94,18 @@ private let decideRows: [DecideRow] = [
     .init(note: "주간 120% → 전환, 퍼센트는 정수로", limits: [LimitSpec("5h", 10, 1800), LimitSpec("7d", 120.7, 7200)],
           move: "switch A→B [주간 · 전체 한도 120%]", marks: ["A": 7200]),
     .init(note: "모델별 주간만 100% → 전환하지 않는다(5시간·주간 전체만 본다)", limits: [LimitSpec("7d-Fable", 100, 7200)], move: "stay"),
-    .init(note: "표시 풀림 시각은 모델별 주간까지 100% 이상 한도 가운데 가장 늦은 미래 것",
+    .init(note: "표시 풀림 시각은 5시간·주간(전체) 가운데 100% 이상인 것의 가장 늦은 미래 것 — 모델별 주간은 떠날 까닭처럼 보지 않는다",
           sessions: [SessionSpec(id: "s1", limitAt: -5)], limits: [LimitSpec("5h", 100, 1800), LimitSpec("7d-Fable", 100, 7200), LimitSpec("7d", 100, -10), LimitSpec("7d", 50, 99999)],
-          move: "switch A→B [\(hitReason)] stopped", marks: ["A": 7200]),
+          move: "switch A→B [\(hitReason)] stopped", marks: ["A": 1800]),
+    .init(note: "5시간·주간(전체) 둘 다 100% 면 더 늦게 풀리는 것까지",
+          limits: [LimitSpec("5h", 100, 1800), LimitSpec("7d", 100, 50000), LimitSpec("7d-Fable", 100, 90000)],
+          move: "switch A→B [5시간 한도 100%]", marks: ["A": 50000]),
+    .init(note: "세션이 걸려 떠날 때 찬 것이 모델별 주간뿐이면 풀림을 모르는 것과 같이 1시간",
+          sessions: [SessionSpec(id: "s1", limitAt: -5)], limits: [LimitSpec("5h", 40, 1800), LimitSpec("7d-Fable", 100, 7200)],
+          move: "switch A→B [\(hitReason)] stopped", marks: ["A": 3600]),
+    .init(note: "5시간·주간(전체)의 풀림을 모르면 모델별 주간의 풀림이 있어도 1시간",
+          limits: [LimitSpec("5h", 100), LimitSpec("7d-Fable", 100, 7200)],
+          move: "switch A→B [5시간 한도 100%]", marks: ["A": 3600]),
     .init(note: "세션과 한도가 함께면 세션 까닭, 세션이 여럿이면 첫 것",
           sessions: [SessionSpec(id: "s1", limitAt: -5), SessionSpec(id: "s2", limitAt: -3)], limits: [LimitSpec("5h", 100, 1800)],
           move: "switch A→B [\(hitReason)] stopped", marks: ["A": 1800]),
