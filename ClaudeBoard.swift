@@ -651,6 +651,24 @@ struct SavedAccountsFile: SavedAccountList {
         try data.write(to: URL(fileURLWithPath: path), options: .atomic)
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
     }
+    // 깨진 목록을 accounts.json.broken-<지역 시각 yyyyMMdd-HHmmss> 로 옮긴다(파일 이름에 쓰려고 쌍점 없이). 같은 이름이 있으면 -2, -3 … 을 붙인다.
+    // 다른 계정의 로그인 정보는 키체인에 그대로 있으므로 사용자가 이 파일에서 항목을 되살리면 된다
+    func setAside(at date: Date) throws {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyyMMdd-HHmmss"
+        let base = path + ".broken-" + f.string(from: date)
+        var target = base, n = 2
+        while FileManager.default.fileExists(atPath: target) { target = "\(base)-\(n)"; n += 1 }
+        do {
+            try FileManager.default.moveItem(atPath: path, toPath: target)
+        } catch {
+            boardLog("저장 계정 목록(accounts.json)을 읽지 못해 옆으로 옮기려 했지만 옮기지 못함: \(error.localizedDescription)")
+            throw error
+        }
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target)
+        boardLog("저장 계정 목록(accounts.json)을 읽지 못해 \((target as NSString).lastPathComponent) 로 옮김")
+    }
 }
 
 // Claude Code 가 토큰을 갱신해 쓸 때 잡는 잠금
@@ -9560,11 +9578,13 @@ func pausedMark(_ s: Session) -> String { (sessionsDir as NSString).appendingPat
 // 일시중지: Esc 로 지금 응답을 멈추고 표지를 남긴다(BoardRules.SessionControl.pause)
 @MainActor func pauseSession(_ s: Session) { sessionControl.pause(s) }
 
-// 재개: 살아 있는 세션은 그 터미널에 이어서 진행하라는 요청을 넣고, 꺼진 세션은 보드 새 탭에서 이어 연다(SessionControl.resumePaused)
+// 재개: 살아 있는 세션(끝나지 않았고 pid 가 없거나 살아 있음)은 그 터미널에 이어서 진행하라는 요청을 넣고, 꺼진 세션은 보드 새 탭에서 이어 연다.
+// 살아 있는데 키를 넣지 못하면 이어 열지 않고(claude 가 둘이 된다) 그 터미널에서 이어 가라고 알린다(SessionControl.resumePaused)
 @MainActor func resumePaused(_ s: Session) { sessionControl.resumePaused(s) }
 
 // 중단: 확인을 받은 뒤 세션을 끝낸다. 터미널 세션(보드 탭·Ghostty)은 Esc → /exit, 그 밖의 터미널 세션과 보드 탭 안의
-// claude -p 는 SIGTERM. 진짜 백그라운드 세션에는 신호를 보내지 않는다(메뉴에도 없다 — 보드는 백그라운드 세션을 건드리지 않는다).
+// claude -p 는 pid 가 살아 있을 때만 SIGTERM. 진짜 백그라운드 세션에는 신호를 보내지 않는다(메뉴에도 없다 — 보드는 백그라운드 세션을 건드리지 않는다).
+// 끝난 세션(--action stop 으로 올 수 있다)은 일시중지 표지만 지우고 신호를 보내지 않는다 — 남은 pid 를 다른 프로세스가 다시 쓸 수 있다.
 // 대화 기록은 남으므로 종료 세션 메뉴의 "세션 다시 열기"로 이어 열 수 있다. 순서와 판단은 SessionControl.stop
 @MainActor func stopSession(_ s: Session, confirm: Bool = true) {
     if confirm, TerminalHub.shared.slide != nil { return whenPaneSettled { stopSession(s, confirm: confirm) } }

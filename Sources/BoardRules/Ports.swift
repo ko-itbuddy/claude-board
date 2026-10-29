@@ -158,6 +158,9 @@ public protocol SavedAccountList: Sendable {
     func read() -> Data?
     /// 통째로 바꿔 쓴다. 이메일·조직 이름이 들어 있어 권한은 0600
     func write(_ data: Data) throws
+    /// 깨진 파일을 옆으로 치운다 — 진짜 어댑터는 accounts.json.broken-<at 의 시각> 으로 이름을 바꾸고(0600) board.log 에 한 줄.
+    /// 옮기지 못하면 던진다(규칙은 그때 목록을 쓰지 않는다)
+    func setAside(at: Date) throws
 }
 
 // Claude Code 로그인 정보 쓰기 잠금(~/.claude/.storage-write) — Claude Code 가 토큰을 갱신해 쓸 때 잡는다.
