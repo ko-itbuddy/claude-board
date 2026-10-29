@@ -76,6 +76,8 @@ Claude Board 는 Claude Code 세션 상태를 한눈에 보여 주는 보드 창
     curl -fsSL https://github.com/suhojang/claude-board/releases/latest/download/install.sh | bash
 
 설치가 끝나면 보드 창이 자동으로 열립니다. 이미 실행 중인 Claude Code 세션은 종료하고 다시 시작하세요.
+업데이트할 때 이 명령을 보드 안 터미널에서 실행하면 그 보드는 끄지 않습니다(보드를 끄면 탭의 세션도 끊기므로).
+설치가 끝나면 보드를 종료(⌘Q)하고 다시 열어야 새 버전이 뜹니다. 보드의 업데이트 단추나 다른 터미널에서 실행하면 보드가 바로 다시 뜹니다.
 
 [dmg 로 설치]
 1) 받은 ClaudeBoard-<버전>.dmg 파일을 더블 클릭해 엽니다.

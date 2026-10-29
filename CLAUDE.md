@@ -161,6 +161,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
   다섯 파일만 build-board.sh·make-dmg.sh 가 이름으로 골라 싣는다(두 곳을 함께 고친다). `tests/` 는 `claude plugin test` 용이라 싣지 않는다.
 - `packaging/THIRD_PARTY_NOTICES.txt` — 앱에 정적으로 들어간 구성 요소(엔진과 그 안의 MIT 아닌 것까지)의 고지. 두 스크립트가 `Contents/Resources/` 에 복사한다. 엔진 버전을 올리면 다시 만든다.
 - 설치 경로는 두 가지다: `packaging/install.sh`(curl 설치·업데이트, 보드의 업데이트 단추도 이것을 실행)와 dmg 안의 pkg(`pkg/scripts/postinstall` → `user-setup.sh`). 둘 다 사용자 설정은 앱 안의 `user-setup.sh` 가 맡는다.
+  `install.sh` 는 떠 있는 보드를 끄고(`pkill`) `user-setup.sh` 가 LaunchAgent 를 `bootout`·`bootstrap` 해 새 앱을 띄운다. 단 설치된 보드의 터미널(보드 탭) 안에서 돌면(`in_board_tab`: 조상의 보드 바로 아래가 탭의 `login` — 업데이트 단추는 보드 → `bash -c` 라 아님) 보드를 끄지 않고 `CLAUDE_BOARD_KEEP_RUNNING` 으로 `user-setup.sh` 의 `launchctl`·`open` 도 건너뛴다(LaunchAgent 로 뜬 보드는 `bootout` 이 확인 없이 끄고, 그 안에서 돌던 설치도 함께 끊긴다).
 - 저장소 `suhojang/claude-board` 와 릴리스 파일 이름 `ClaudeBoard.zip`·`install.sh`·`VERSION` 은 `release.sh`·`install.sh`·`Sources/ClaudeBoard/AppUpdate.swift`(`releaseRepo`) 가 함께 쓴다 — 이름을 바꾸면 이미 설치된 앱의 업데이트가 깨진다.
 - `install.sh` 는 서명 인증서의 SHA1(`CERT_SHA1`)을 고정해 확인한다. 인증서를 바꾸면 기존 사용자의 업데이트가 거부되고 Ghostty 제어 권한을 다시 묻는다.
 
