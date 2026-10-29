@@ -283,7 +283,7 @@ Claude Code 는 사용자가 Esc 로 응답을 끊으면 `Stop` hook 을 부르�
 
 - 상태 보정: ended 가 아닌데 pid 가 죽었으면 `ended`.
   세션 파일에 `pid` 가 없으면(hook 이 Claude 프로세스를 못 찾음) 끝나지 않은 세션은 `~/.claude/sessions/*.json`(§2.3) 가운데 `sessionId` 가 세션 id 와 같은 것(둘 이상이면 가장 최근에 고쳐 쓴 것)의 pid 로 같은 판정을 한다. 그런 파일이 없으면 그대로 둔다(끝났다고 단정하지 않는다: `claude -p` 처럼 그 파일을 쓰지 않는 세션). 끝난 세션은 찾지 않는다(mac 규칙과 같다).
-  찾은 pid 는 상태 덮기(§3.9)·세션 이름에도 쓰지만, 세션의 `pid` 값(구동·중단·끝나기 기다리기·탭 짝짓기·백그라운드 셸 수 대상)은 세션 파일 그대로 둔다(`BoardRules.scanSessions`). 그래서 SessionEnd 없이 죽은 세션도 목록에서 끝남으로 보인다. pid 가 없는 살아 있는 세션은 백그라운드 셸 수를 세지 않는다(macOS 은 찾은 pid 로 셈: 다른 한계).
+  찾은 pid 는 상태 덮기(§3.9)·세션 이름에도 쓰지만, 세션의 `pid` 값(구동·중단·끝나기 기다리기·탭 짝짓기·백그라운드 셸 수 대상)은 세션 파일 그대로 둔다(`BoardRules.scanSessions`). 그래서 SessionEnd 없이 죽은 세션도 목록에서 끝남으로 보인다. pid 가 없는 살아 있는 세션은 백그라운드 셸 수를 세지 않는다(macOS 는 찾은 pid 로 셈: 다른 한계).
 - `transcript = transcript_path` 또는 `~/.claude/projects/<cwd 의 영숫자 밖 문자를 - 로>/<sid>.jsonl`. ended 이고 (`updated` 가 2일 넘었거나 transcript 파일이 없으면) 세션 파일을 지우고 뺀다.
 - Claude Code 실시간 상태 덮기(§3.9): 위 종료 판정과 prune 뒤, 아래 셸·서브에이전트로 working 을 올리는 단계와 paused 판정 앞에서 적용한다(`Store.reload` 의 순서).
   기록 상태가 working·waiting 일 때만 `live_state` 를 부르고, 덮이면 `state` 와 `since` 가 바뀐다. 세션 id 는 파일 이름으로 대신해도 된다.
@@ -311,7 +311,7 @@ Claude Code 는 사용자가 Esc 로 응답을 끊으면 `Stop` hook 을 부르�
 
 1순위 `context/<sid>.json`: `context_window_size > 0` 이고 transcript 수정 시각이 기록의 `at` 보다 60초 넘게 늦지 않으면 used = 세 입력 토큰 합(0 이면 `used_percentage`). 그 모델의 크기를 `context-windows.json` 에 배워 둔다.
 2순위 transcript 끝 1.5MB 에서 사이드체인이 아닌 마지막 assistant 의 usage 합. 크기 = 배운 값 또는 기본(`[1m]` 이나 `claude-opus-5`·`claude-sonnet-5`·`claude-haiku-5`·`claude-fable-5` 로 시작하면 1,000,000, 그 밖 200,000), used 가 크기보다 크면 1,000,000. pct = min(100, used×100/size).
-reload 가 끝나면 목록에 남은 세션(끝난 것 포함)의 세션 id·transcript 몫만 남기고 세션 하나하나의 `context/<sid>.json` 캐시를 정리한다. 끝난 세션 몫이 쌓이는 것을 막는다(mac PR #12 규칙). 배운 모델별 크기(`context-windows.json`)는 그대로 둔다.
+reload 가 끝나면 목록에 남은 세션(끝난 것 포함)의 세션 id·transcript 몫만 남기고 세션 하나하나의 `context/<sid>.json` 캐시를 정리한다. 끝난 세션 몫이 쌓이는 것을 막는다. 배운 모델별 크기(`context-windows.json`)는 그대로 둔다.
 
 ### 5.4 사용 한도 — `UsageStore` (`ClaudeBoard.swift UsageStore`)
 
