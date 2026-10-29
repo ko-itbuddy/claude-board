@@ -17,6 +17,11 @@ use crate::readers::{ClaudeNames, ContextReader, InterruptReader, ModelReader};
 use crate::settings::{set_in, Settings};
 use crate::util::{ms, num, obj};
 
+#[cfg(test)]
+mod scan_table;
+
+mod group_table;
+
 /// 조용한 카드를 자동으로 접기까지의 시간
 const QUIET_FOLD_AFTER: f64 = 30.0 * 60.0;
 /// 종료된 세션 기록을 지우는 나이

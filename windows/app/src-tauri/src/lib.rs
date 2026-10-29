@@ -15,6 +15,8 @@ mod proc_wait;
 mod pty;
 mod readers;
 mod ring;
+#[cfg(test)]
+mod rules_table;
 mod session_action;
 mod settings;
 mod shutdown;
