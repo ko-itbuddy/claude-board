@@ -15,6 +15,7 @@ const RUN_VALUE: &str = "ClaudeBoard";
 const BOARD_CMD: &str = "claude-board.cmd";
 const TUI_CMD: &str = "claude-board-tui.cmd";
 const OLD_PREFIX: &str = "claude-board-hook.old-";
+const BROKEN_PREFIX: &str = "accounts.json.broken-";
 
 /// macOS 개발 기기에서는 macOS 판이 쓰는 ~/.claude 를 덮어쓰지 않도록 환경변수로 폴더를 바꿨을 때만 허락한다.
 fn guard() -> Result<(), ExitCode> {
@@ -223,15 +224,7 @@ pub fn uninstall() -> ExitCode {
 
     println!("3) hook 사본·세션 기록·저장한 계정·답변 꾸미기 사본 제거");
     let notifier = paths::notifier_dir();
-    let mut files = vec![paths::hook_exe(), paths::app_path_file(), paths::notify_position_file(), notifier.join("accounts.json")];
-    for entry in fs::read_dir(&notifier).into_iter().flatten().flatten() {
-        if entry.file_name().to_string_lossy().starts_with(OLD_PREFIX) {
-            files.push(entry.path());
-        }
-    }
-    for f in &files {
-        ok &= remove(f, fs::remove_file(f));
-    }
+    ok &= remove_notifier_files(&notifier);
     ok &= remove_notifier_dirs(&notifier, notifier_redirected());
     let _ = fs::remove_dir(&notifier);
 
@@ -249,6 +242,24 @@ pub fn uninstall() -> ExitCode {
     } else {
         ExitCode::FAILURE
     }
+}
+
+/// notifier 바로 아래의 보드 자기 파일들을 지운다 — hook 사본, 앱 경로, 알림 위치, 저장 계정과
+/// 그 깨진 목록 백업(`accounts.json.broken-<시각>`, mac `Uninstall.command` 과 같다), 지난 setup 이 비켜 둔 사본.
+/// 그 밖의 파일은 건드리지 않는다.
+fn remove_notifier_files(notifier: &Path) -> bool {
+    let mut files = vec![notifier.join(paths::HOOK_EXE), notifier.join("app-path"), notifier.join("notify-position"), notifier.join("accounts.json")];
+    for entry in fs::read_dir(notifier).into_iter().flatten().flatten() {
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        if file_name.starts_with(OLD_PREFIX) || file_name.starts_with(BROKEN_PREFIX) {
+            files.push(entry.path());
+        }
+    }
+    let mut ok = true;
+    for f in &files {
+        ok &= remove(f, fs::remove_file(f));
+    }
+    ok
 }
 
 /// notifier 아래에서 통째로 지우는 폴더들 — 세션 기록, 저장 계정(accounts\ 에는 DPAPI 로 암호화한 토큰(vault)도 있다),
@@ -365,6 +376,20 @@ mod tests {
         assert!(notifier.join("plugins").join("other").join("keep.txt").exists());
         assert!(!notifier.join("sessions").exists());
         assert!(!notifier.join("accounts").exists());
+        fs::remove_dir_all(&notifier).unwrap();
+    }
+
+    #[test]
+    fn uninstall_removes_broken_accounts_backups() {
+        let notifier = scratch("broken-accounts");
+        // 깨진 accounts.json 은 accounts.json.broken-<시각>(-2) 으로 옮겨진다. 제거 때 이 백업들도 지운다(mac Uninstall.command 와 같다)
+        touch(&notifier.join("accounts.json.broken-20261029-101010"));
+        touch(&notifier.join("accounts.json.broken-20261029-101010-2"));
+        touch(&notifier.join("keep.txt"));
+        assert!(remove_notifier_files(&notifier));
+        assert!(!notifier.join("accounts.json.broken-20261029-101010").exists(), "broken 백업(-1)은 지워진다");
+        assert!(!notifier.join("accounts.json.broken-20261029-101010-2").exists(), "broken 백업(-2)은 지워진다");
+        assert!(notifier.join("keep.txt").exists(), "관계 없는 파일은 남아야 한다");
         fs::remove_dir_all(&notifier).unwrap();
     }
 
