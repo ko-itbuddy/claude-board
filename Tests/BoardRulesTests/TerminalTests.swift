@@ -1093,9 +1093,9 @@ private let reopenEndedRows: [ReopenEndedRow] = [
 
     // 실측(Claude Code 2.1.312): 첫 출력 전에 Esc 로 멈추면 그 요청은 대화 맥락에서 빠지고 입력 칸에 되돌아온다. 재개 글을 그 뒤에 바로
     // 붙이면 두 글이 이어 붙고, 지우면 할 일이 사라진다 — 줄을 바꿔 한 메시지로 보내고, 위에 요청이 있는 경우와 없는 경우를 모두 받는 글로
-    @Test("살아 있는 세션의 재개 글 — 줄바꿈으로 시작하고 위에 되돌아온 요청이 있으면 그것을, 없으면 이어서") func 재개_글() {
+    @Test("살아 있는 세션의 재개 글 — 줄바꿈으로 시작하고, 이어서 진행하되 위에 되돌아온 요청이 있으면 그것이 중단된 작업") func 재개_글() {
         #expect(SessionSteps.resume.map { "\($0.0):\($0.1)" } == ["text:\n\(resumePrompt)", "wait:0.2", "key:enter"])
-        #expect(resumePrompt == "보드에서 일시중지했던 세션을 재개합니다. 이 글 위에 요청이 있으면 그 요청을, 없으면 중단된 지점부터 직전 작업을 이어서 진행해 주세요.")
+        #expect(resumePrompt == "보드에서 일시중지했던 세션을 재개합니다. 중단된 지점부터 직전 작업을 이어서 진행해 주세요. 이 메시지에 이 문장보다 먼저 적힌 요청이 있으면 그 요청이 중단된 작업입니다.")
     }
 
     @Test("이어 열 명령의 바탕", arguments: [("", "claude --resume s1"), ("claude --resume s1 --model x", "claude --resume s1 --model x")])
