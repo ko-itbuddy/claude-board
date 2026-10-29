@@ -33,7 +33,7 @@ if let i = CommandLine.arguments.firstIndex(of: "--action"), i + 2 < CommandLine
     case "pause": pauseSession(s)
     case "resume": resumePaused(s)
     case "stop": stopSession(s, confirm: false)
-    case "reopen": resumeSession(s, carryOn: true)
+    case "reopen": reopenEnded(s)
     case "focus": openSession(s, double: true)   // 보드 탭 세션은 펼치고 그 탭으로, 다른 터미널은 그 세션의 터미널 창으로
     default: break
     }

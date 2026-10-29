@@ -1005,6 +1005,32 @@ private let openRows: [OpenRow] = [
     .init(note: "다른 터미널 — 두 번은 터미널 창까지", place: .terminal, double: true, calls: ["parked s1", "place s1", "focus s1"]),
 ]
 
+struct ReopenEndedRow: Row {
+    let note: String
+    let place: SessionPlace
+    var state = "ended"
+    var headless = false
+    var paused = false
+    let calls: [String]
+}
+
+private let reopenPlain = ["command s1 claude --resume s1", "prompt s1 /w/proj", "launch /w/proj s1 off=false claude --resume s1 +md"]
+private let notEnded = "toast proj: 세션이 아직 끝나지 않아 다시 열지 않았습니다"
+
+private let reopenEndedRows: [ReopenEndedRow] = [
+    .init(note: "끝난 세션은 이어 열되 일시중지하지 않았으면 이어서 진행 요청을 붙이지 않는다(메뉴의 세션 다시 열기)", place: .ended,
+          calls: ["place s1"] + reopenPlain),
+    .init(note: "끝난 일시중지 세션은 이어서 진행(메뉴의 세션 재개)", place: .ended, paused: true, calls: ["place s1"] + reopenCarry),
+    .init(note: "끝난 백그라운드 세션도 대화형으로 이어 연다(메뉴에 있다, 한 번 누르기와 다름)", place: .ended, headless: true,
+          calls: ["place s1"] + reopenPlain),
+    .init(note: "기록은 끝났어도 보드 탭이 그 세션의 claude 를 돌리고 있으면(place 가 탭) 열지 않는다(같은 대화의 claude 가 둘이 된다)",
+          place: .tab(tabA, headless: false), calls: ["place s1", notEnded]),
+    .init(note: "다른 터미널에서 도는 세션은 열지 않는다", place: .terminal, state: "working", calls: ["place s1", notEnded]),
+    .init(note: "살아 있는 일시중지 세션도 열지 않는다(재개를 쓴다)", place: .terminal, state: "paused", paused: true,
+          calls: ["place s1", notEnded]),
+    .init(note: "도는 백그라운드 세션도 열지 않는다", place: .background, state: "working", headless: true, calls: ["place s1", notEnded]),
+]
+
 @Suite("세션 조작: 이어 열기·한 번 누르기") struct ReopenOpenTests {
     @Test("이어 열기", arguments: reopenRows)
     func 이어_열기(_ row: ReopenRow) {
@@ -1023,6 +1049,14 @@ private let openRows: [OpenRow] = [
         if let m = row.mode { w.tabs.modes["s1"] = m }
         let state = row.place == .ended ? "ended" : "working"
         w.sessions.open(session(state: state, headless: row.headless, paused: row.paused), double: row.double)
+        #expect(w.log.calls == row.calls)
+    }
+
+    @Test("명령줄 다시 열기(--action reopen)", arguments: reopenEndedRows)
+    func 명령줄_다시_열기(_ row: ReopenEndedRow) {
+        let w = World()
+        w.tabs.places["s1"] = row.place
+        w.sessions.reopenEnded(session(state: row.state, headless: row.headless, paused: row.paused))
         #expect(w.log.calls == row.calls)
     }
 

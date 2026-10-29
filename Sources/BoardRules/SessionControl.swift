@@ -140,6 +140,17 @@ public struct SessionControl: Sendable {
         }
     }
 
+    /// 명령줄 다시 열기(`--action reopen`) — 메뉴의 "세션 다시 열기"·끝난 일시중지 세션의 "세션 재개 (이어서 진행)" 와 같게, 끝난 세션만 이어 열고
+    /// 이어서 진행 요청은 일시중지했던 세션에만 붙인다(일시중지하지 않은 세션에 붙이면 claude 가 지난 작업을 혼자 다시 시작한다).
+    /// 끝났는지는 기록의 state 가 아니라 place 로 가른다 — 기록은 끝났어도 보드 탭이 그 세션의 claude 를 돌리고 있으면 탭이다.
+    /// 끝나지 않은 세션은 열지 않고 알리기만 한다(같은 대화의 claude 가 둘이 된다). 끝난 백그라운드 세션은 메뉴처럼 대화형으로 이어 연다
+    public func reopenEnded(_ s: Session) {
+        guard tabs.place(s) == .ended else {
+            return tabs.toast("\((s.cwd as NSString).lastPathComponent): 세션이 아직 끝나지 않아 다시 열지 않았습니다")
+        }
+        reopen(s, carryOn: s.paused)
+    }
+
     /// 세션을 한 번 눌렀을 때(목록·미니·알림 패널 "세션으로 이동") — 넘긴 대화를 붙여 보여 주는 화면이 먼저, 보드 탭이면 그 화면으로,
     /// 끝난 세션은 보드 새 탭에서 이어 열기(끝난 백그라운드 세션은 아무것도 하지 않는다), 백그라운드 세션은 안내만,
     /// 다른 터미널 세션은 그 앱으로(두 번 누르면 그 세션의 터미널 창까지)
