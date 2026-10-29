@@ -120,6 +120,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
   업데이트 판단은 `ReleaseVersions`(최신 VERSION, 진짜 어댑터 `GitHubReleaseVersions` — URLSession), 단축키 글자는 `KeyboardLayout`(지금 ASCII 자판, 진짜 어댑터 `SystemKeyboardLayout` — `asciiKeyCharacters`) 포트로만 부른다.
   사용자가 바꾼 키는 포트 없이 값으로 넘긴다(읽고 쓰기는 UserDefaults 한 줄씩이라). Carbon 수정키 `carbonMods`·NSEvent 변환·시스템 단축키 목록 읽기(`systemHotKeys`)는 앱에 둔다.
   규칙에 새 OS 호출(파일·프로세스·시각·홈 폴더)을 넣을 때는 포트를 거친다 — BoardRules 에서 FileManager·kill·`Date()` 를 직접 부르지 않는다(남은 예외: `Group.path` 의 `NSHomeDirectory()`).
+  새 기능(다음은 자율주행)도 같은 꼴로 쓴다: 판정은 Foundation 만 쓰는 규칙 라이브러리(BoardRules 또는 따로 타깃, 예: `Sources/AutopilotRules`)에, 바깥(git·프로세스·HTTP·SQLite 등)은 포트로, 가짜 어댑터 표 시험을 붙인다. 이미 있는 코드는 한꺼번에 옮기지 않고 손대는 부분부터 옮기며, 옮길 때는 옮기기 전 출력과 견주는 덤프·시험으로 동작이 그대로인지 확인한다.
 - `ClaudeNotifier.swift` — 알림 패널. 인자는 파일 머리 주석 참고. 여러 패널이 동시에 뜨면 슬롯 파일로 자리를 나눈다. `--session` 을 받으면 누를 때 보드에 `focus` 동작을 알린다.
 - `board-tui.py` — 터미널판 보드(`claude-board-tui`).
 - `AppIcon.swift` — 앱 아이콘 PNG(iconset 이름 규칙)를 인자로 준 폴더에 그린다. 결과 `AppIcon.icns` 는 저장소에 커밋되어 있다.
