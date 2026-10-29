@@ -487,14 +487,24 @@ struct OAuthUsageAPI: UsageAPI {
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         let sem = DispatchSemaphore(value: 0)
-        var result: Data?
+        let result = FetchedBody()
         URLSession.shared.dataTask(with: req) { data, resp, _ in
-            if (resp as? HTTPURLResponse)?.statusCode == 200 { result = data }
+            if (resp as? HTTPURLResponse)?.statusCode == 200 { result.put(data) }
             sem.signal()
         }.resume()
         _ = sem.wait(timeout: .now() + 12)
-        return result
+        return result.take()
     }
+}
+
+// 받은 본문 상자 — URLSession 콜백 스레드가 쓰고 기다린 스레드가 읽으므로 둘 다 잠금 안에서만 만진다.
+// 기다린 쪽이 꺼낼 때 닫는다: 12초 기다림이 끝난 뒤 늦게 온 응답은 버린다(돌려준 뒤에 쓰지 않는다)
+private final class FetchedBody: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data: Data?
+    private var closed = false
+    func put(_ d: Data?) { lock.withLock { if !closed { data = d } } }
+    func take() -> Data? { lock.withLock { closed = true; return data } }
 }
 
 // MARK: - 계정 전환
