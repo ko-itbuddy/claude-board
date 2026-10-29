@@ -1079,6 +1079,7 @@ final class AutoSwitcher {
     // limit_hit 을 지워 그 세션은 다시 고르지 않으므로, 보드를 다시 켠 뒤 다시 넣는 것은 넣기에 실패해 limit_hit 이 남은 세션뿐이고 그때는 다시 해 보는 편이 낫다
     private var resumed = Set<String>()
     private var noCandidate = false          // 전환할 계정이 없다고 이미 알렸다 — 계정이 바뀌기 전에는 다시 알리지 않는다
+    private var unknownCurrent = false       // 지금 계정을 몰라 전환하지 못했다고 이미 알렸다 — 지금 계정이 알려지거나 계정이 바뀌기 전에는 다시 알리지 않는다
     // 지금 계정·시스템 쪽 전환 실패로 자동 전환을 쉬는 중 — 지금 계정이 바뀌거나 1시간이 지날 때까지(판단은 decideAutoSwitch 가 본다).
     // 메모리에만 두는 것은 의도다: 보드를 다시 켜면 한 번 다시 해 보고, 같은 까닭이면 다시 한 번 알리고 쉰다(/login 등으로 고친 뒤에는 그쪽이 낫다)
     private var pause: AutoSwitchPause?
@@ -1099,11 +1100,13 @@ final class AutoSwitcher {
     func switched() {
         lastSwitch = Date()
         noCandidate = false
+        unknownCurrent = false
         pause = nil
     }
 
     private func tick() {
         guard accounts.autoSwitch else { return }
+        if accounts.current != nil { unknownCurrent = false }   // 지금 계정이 알려졌다 — 다시 모르게 되면 다시 알린다
         let now = Date()
         let d = decideAutoSwitch(sessions: store.groups.flatMap(\.sessions), limits: usage.limits,
                                  current: accounts.current, saved: accounts.saved, full: full, resumed: resumed,
@@ -1113,6 +1116,12 @@ final class AutoSwitcher {
         switch d.move {
         case .stay:
             break
+        case .unknownCurrent(let reason):
+            if !unknownCurrent {
+                unknownCurrent = true
+                log("\(reason): 지금 계정을 몰라 전환하지 못함")
+                accounts.flash("사용 한도에 도달했지만 지금 로그인된 계정의 정보를 읽지 못해 자동 전환을 하지 못했습니다. Claude Code 에서 /login 으로 다시 로그인해 주세요", error: true)
+            }
         case .noCandidate(let reason):
             if !noCandidate {
                 noCandidate = true
