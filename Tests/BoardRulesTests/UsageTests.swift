@@ -1,6 +1,7 @@
 // 사용량 규칙 시험 — 사용량 캐시·로그인 정보·사용량 API·시계를 가짜 어댑터로 넣어 파일·키체인·네트워크 없이 돌린다.
 // 가짜는 이 파일에만 둔다(Sources/BoardRules 에 두지 않는다). 가짜는 부른 것을 적어 두어 캐시를 언제 읽고 쓰는지·API 를 언제 부르는지까지 확인한다.
-// 기대값은 UsageStore 에 있던 지금 동작 그대로다. 시험의 토큰은 가짜 글자이고 note·#expect 메시지에 토큰을 넣지 않는다
+// 기대값은 UsageStore 에 있던 지금 동작 그대로다. 다만 캐시 신선도와 빈 한도 응답은 고친 동작이다(이슈 #9 2차): 못 푸는 캐시와
+// 수정 시각이 미래인 캐시는 받고, 푼 한도가 하나도 없는 응답은 실패다. 시험의 토큰은 가짜 글자이고 note·#expect 메시지에 토큰을 넣지 않는다
 import Foundation
 import Testing
 import BoardRules
@@ -109,7 +110,15 @@ private let parseRows: [ParseRow] = [
     .init(note: "숫자 아님은 그 항목만 빠짐(주간 null·모델별 percent 글자)", json: #"""
           {"five_hour":{"utilization":5},"seven_day":{"utilization":null},"limits":[{"kind":"weekly_scoped","percent":"x"},{"kind":"weekly_scoped","percent":3,"scope":{"model":{"display_name":"Opus"}}}]}
           """#, expected: [L("5h", "5시간", 5), L("7d-Opus", "주간 · Opus", 3)]),
-    .init(note: "지금 동작: five_hour 는 있으나 값이 숫자가 아니면 빈 목록으로 성공(버그 의심, 고치지 않음)", json: #"{"five_hour":{"utilization":null}}"#, expected: []),
+    .init(note: "five_hour 는 있으나 값이 숫자가 아니어서 푼 한도가 없음 → 실패", json: #"{"five_hour":{"utilization":null}}"#, expected: nil),
+    .init(note: "five_hour 가 빈 객체라 푼 한도가 없음 → 실패", json: #"{"five_hour":{}}"#, expected: nil),
+    .init(note: "푼 한도가 없음(주간도 숫자 아님·모델별 percent 없음) → 실패", json: #"""
+          {"five_hour":{"utilization":null},"seven_day":{"utilization":"13"},"limits":[{"kind":"weekly_scoped","scope":{"model":{"display_name":"Opus"}}}]}
+          """#, expected: nil),
+    .init(note: "5시간은 못 풀어도 주간이 풀리면 그대로 성공", json: #"{"five_hour":{},"seven_day":{"utilization":13}}"#, expected: [L("7d", "주간 · 전체", 13)]),
+    .init(note: "5시간은 못 풀어도 모델별 주간이 풀리면 그대로 성공", json: #"""
+          {"five_hour":{"utilization":null},"limits":[{"kind":"weekly_scoped","percent":3,"scope":{"model":{"display_name":"Opus"}}}]}
+          """#, expected: [L("7d-Opus", "주간 · Opus", 3)]),
     .init(note: "seven_day 가 객체가 아니면 그 항목만 빠짐", json: #"{"five_hour":{"utilization":5},"seven_day":"x"}"#, expected: [L("5h", "5시간", 5)]),
     .init(note: "limits 가 배열이 아니면 모델별 주간 없음", json: #"{"five_hour":{"utilization":5},"limits":{"kind":"weekly_scoped","percent":3}}"#,
           expected: [L("5h", "5시간", 5)]),
@@ -125,7 +134,7 @@ private let parseRows: [ParseRow] = [
 ]
 
 @Suite("사용량: 응답 해석") struct UsageParseTests {
-    @Test("five_hour 가 있어야 성공, 항목마다 숫자가 아니면 그 항목만 뺀다", arguments: parseRows)
+    @Test("five_hour 가 있고 푼 한도가 하나 이상이어야 성공, 항목마다 숫자가 아니면 그 항목만 뺀다", arguments: parseRows)
     func 표(_ row: ParseRow) {
         #expect(parseUsage(Data(row.json.utf8))?.map(L.init) == row.expected)
     }
@@ -240,15 +249,23 @@ private let cacheRows: [CacheRow] = [
     .init(note: "trustAfter 뒤에 쓰인 캐시 → 믿는다", modified: -5, content: fiveOnly, trustAfter: -10, cached: fiveOnlyLimits, fetch: false, read: true),
     .init(note: "받는 중 + 오래된 캐시 → 적용은 하되 받지 않는다", modified: -300, content: fiveOnly, fetching: true, cached: fiveOnlyLimits, fetch: false, read: true),
     .init(note: "받는 중 + 캐시 없음 → 받지 않는다", modified: nil, content: nil, fetching: true, cached: nil, fetch: false, read: false),
-    .init(note: "깨진 캐시 + 30초 → 적용하지 않고, 나이는 수정 시각으로 세어 받지도 않는다", modified: -30, content: "{\"five_", cached: nil, fetch: false, read: true),
+    .init(note: "깨진 캐시 + 10초 전 → 적용하지 않고, 믿을 캐시가 없는 것과 같게 받는다", modified: -10, content: "{\"five_", cached: nil, fetch: true, read: true),
     .init(note: "깨진 캐시 + 120초 넘음 → 받는다", modified: -200, content: "garbage", cached: nil, fetch: true, read: true),
-    .init(note: "five_hour 없는 캐시 → 적용하지 않는다", modified: -30, content: #"{"seven_day":{"utilization":1}}"#, cached: nil, fetch: false, read: true),
-    .init(note: "수정 시각은 있으나 내용을 못 읽음(그 사이 지워짐) → 적용 없음, 나이는 수정 시각으로", modified: -30, content: nil, cached: nil, fetch: false, read: true),
-    .init(note: "수정 시각이 미래(시계 어긋남) → 나이가 음수라 받지 않는다", modified: 60, content: fiveOnly, cached: fiveOnlyLimits, fetch: false, read: true),
+    .init(note: "깨진 캐시 + 받는 중 → 받지 않는다", modified: -10, content: "garbage", fetching: true, cached: nil, fetch: false, read: true),
+    .init(note: "five_hour 없는 캐시 → 적용하지 않고 받는다", modified: -30, content: #"{"seven_day":{"utilization":1}}"#, cached: nil, fetch: true, read: true),
+    .init(note: "빈 한도 캐시(푼 한도 없음) + 10초 전 → 깨진 캐시와 같게 받는다", modified: -10, content: #"{"five_hour":{"utilization":null}}"#,
+          cached: nil, fetch: true, read: true),
+    .init(note: "수정 시각은 있으나 내용을 못 읽음(그 사이 지워짐) → 적용 없이 받는다", modified: -30, content: nil, cached: nil, fetch: true, read: true),
+    .init(note: "수정 시각이 미래(시계 어긋남) + 풀리는 내용 → 적용하고 받는다", modified: 60, content: fiveOnly, cached: fiveOnlyLimits, fetch: true, read: true),
+    .init(note: "수정 시각이 0.5초 미래 → 적용하고 받는다", modified: 0.5, content: fiveOnly, cached: fiveOnlyLimits, fetch: true, read: true),
+    .init(note: "지금 막 쓰인 캐시(나이 0) → 적용만 하고 받지 않는다", modified: 0, content: fiveOnly, cached: fiveOnlyLimits, fetch: false, read: true),
+    .init(note: "수정 시각이 미래 + 받는 중 → 적용하되 받지 않는다", modified: 60, content: fiveOnly, fetching: true, cached: fiveOnlyLimits, fetch: false, read: true),
+    .init(note: "수정 시각이 미래 + 깨진 내용 → 받는다", modified: 60, content: "garbage", cached: nil, fetch: true, read: true),
 ]
 
 @Suite("사용량: 캐시를 믿을지·새로 받을지") struct UsageCacheTests {
-    @Test("trustAfter 뒤에 쓰인 캐시만 믿고, 120초 넘었거나 믿을 캐시가 없으면 받는다(받는 중이면 받지 않는다)", arguments: cacheRows)
+    @Test("trustAfter 뒤에 쓰인 캐시만 믿고, 믿을 캐시가 없거나 못 풀거나 수정 시각이 미래거나 120초 넘었으면 받는다(받는 중이면 받지 않는다)",
+          arguments: cacheRows)
     func 표(_ row: CacheRow) {
         let cache = FakeUsageCache()
         cache.modified = row.modified.map { u0 + $0 }
@@ -321,8 +338,16 @@ private let settleRows: [SettleRow] = [
     .init(note: "200 이지만 해석 실패 + 한도 있음 → 그대로", data: "not json", shown: true, limits: nil, failed: nil, written: false),
     .init(note: "만료 + 한도 비었음 → tokenExpired, failed", data: nil, expired: true, shown: false, limits: nil, failed: true, written: false),
     .init(note: "만료 + 한도 있음 → tokenExpired, failed 그대로", data: nil, expired: true, shown: true, limits: nil, failed: nil, written: false),
-    .init(note: "지금 동작: five_hour 값이 숫자가 아니면 빈 목록으로 성공 → failed 풀리고 캐시에 쓴다(버그 의심, 고치지 않음)",
-          data: #"{"five_hour":{"utilization":null}}"#, shown: false, limits: [], failed: false, written: true),
+    .init(note: "빈 한도 응답(값이 숫자 아님) + 한도 비었음 → failed, 캐시에 쓰지 않는다",
+          data: #"{"five_hour":{"utilization":null}}"#, shown: false, limits: nil, failed: true, written: false),
+    .init(note: "빈 한도 응답(값이 숫자 아님) + 한도 있음 → 그대로, 캐시에 쓰지 않는다",
+          data: #"{"five_hour":{"utilization":null}}"#, shown: true, limits: nil, failed: nil, written: false),
+    .init(note: "빈 한도 응답(five_hour 빈 객체) + 한도 비었음 → failed, 캐시에 쓰지 않는다",
+          data: #"{"five_hour":{}}"#, shown: false, limits: nil, failed: true, written: false),
+    .init(note: "빈 한도 응답(five_hour 빈 객체) + 한도 있음 → 그대로, 캐시에 쓰지 않는다",
+          data: #"{"five_hour":{}}"#, shown: true, limits: nil, failed: nil, written: false),
+    .init(note: "5시간은 못 풀어도 주간이 풀리면 성공 → 적용·캐시에 쓰기",
+          data: #"{"five_hour":{"utilization":null},"seven_day":{"utilization":13}}"#, shown: false, limits: [L("7d", "주간 · 전체", 13)], failed: false, written: true),
 ]
 
 @Suite("사용량: 받은 결과 처리") struct UsageSettleTests {
@@ -372,5 +397,27 @@ private let settleRows: [SettleRow] = [
         #expect(check.cached?.map(L.init) == realisticLimits)
         #expect(!check.fetch)
         #expect(api.tokens.count == 1)
+    }
+
+    @Test("상태줄이 못 읽는 내용을 계속 쓰면 확인마다 받고, 받아 쓴 뒤로는 믿는다") func 깨진_캐시() {
+        let cache = FakeUsageCache(), login = FakeCredentials(), api = FakeUsageAPI()
+        login.raw = credentials(validLogin)
+        // 상태줄이 5초 전에 깨진 내용을 썼다 — 확인할 때마다(앱은 30초마다) 받는다
+        cache.modified = u0 - 5
+        cache.content = data("{\"five_")
+        for t in [0.0, 30, 60] {
+            let check = checkUsageCache(cache: cache, clock: FixedClock(now: u0 + t), trustAfter: .distantPast, fetching: false)
+            #expect(check.cached == nil)
+            #expect(check.fetch, "\(t)초")
+            cache.modified = u0 + t + 1          // 받는 동안 상태줄이 또 깨진 내용을 쓴다
+        }
+        // 받은 응답이 풀리면 캐시에 그대로 쓰고, 다음 확인부터는 그 캐시를 믿어 받지 않는다
+        api.reply = data(fiveOnly)
+        cache.writeAt = u0 + 62
+        let settled = settleUsage(fetchUsage(credentials: login, api: api, clock: FixedClock(now: u0 + 61)), current: [], trustAfter: .distantPast, cache: cache)
+        #expect(settled.limits?.map(L.init) == fiveOnlyLimits)
+        let check = checkUsageCache(cache: cache, clock: FixedClock(now: u0 + 90), trustAfter: .distantPast, fetching: false)
+        #expect(check.cached?.map(L.init) == fiveOnlyLimits)
+        #expect(!check.fetch)
     }
 }

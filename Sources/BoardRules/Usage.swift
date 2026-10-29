@@ -1,5 +1,6 @@
 // 요금제 사용량 규칙 — 사용량 API 응답 해석, 로그인 정보의 토큰 상태, 캐시를 믿을지·새로 받을지, 받은 결과 처리
 // (UsageStore 에 있던 것을 옮김, 동작은 그대로). 바깥(사용량 캐시·로그인 정보·사용량 API·시계)은 포트(Ports.swift)로만 부른다.
+// 옮긴 뒤 고친 것(이슈 #9 2차): 못 푸는 캐시와 수정 시각이 미래인 캐시는 받고, 푼 한도가 하나도 없는 응답은 실패로 본다.
 //
 // 모양: 유스케이스 셋 — 캐시 확인(checkUsageCache, 메인) → 받기(fetchUsage, 백그라운드) → 받은 결과 처리(settleUsage, 메인).
 // 받기와 처리 사이에 앱의 계정 전환 세대 확인이 낀다: 받는 사이 계정을 바꿨으면 받은 값은 앞 계정 것이라 캐시에 쓰지도 않고 버린다.
@@ -30,7 +31,9 @@ public struct Limit: Equatable, Identifiable, Sendable {
 // MARK: - 사용량 API 응답 해석
 
 /// 사용량 API 응답(캐시 파일도 같은 형식)을 한도 목록으로 푼다. JSON 이 아니거나 five_hour 가 없으면 nil(실패).
-/// 항목마다 값이 숫자가 아니면 그 항목만 뺀다. 차례: 5시간 → 주간 전체 → limits 의 weekly_scoped(모델별, 응답 차례)
+/// 항목마다 값이 숫자가 아니면 그 항목만 뺀다. 푼 한도가 하나도 없어도 nil(실패) — 빈 "성공" 을 적용하고 캐시에 쓰면
+/// 보이던 한도가 사라지고 상태줄도 그 빈 캐시를 믿는다. 5시간을 못 풀어도 다른 한도가 풀리면 성공이다.
+/// 차례: 5시간 → 주간 전체 → limits 의 weekly_scoped(모델별, 응답 차례)
 public func parseUsage(_ data: Data) -> [Limit]? {
     guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let five = j["five_hour"] as? [String: Any] else { return nil }
@@ -45,7 +48,7 @@ public func parseUsage(_ data: Data) -> [Limit]? {
         let name = ((l["scope"] as? [String: Any])?["model"] as? [String: Any])?["display_name"] as? String ?? "모델"
         add("7d-\(name)", "주간 · \(name)", l, "percent")
     }
-    return out
+    return out.isEmpty ? nil : out
 }
 
 // 날짜 형식기는 만들기가 비싸다 — 매초 다시 그리는 줄마다 새로 만들지 않게 한 번만 만든다
@@ -99,13 +102,17 @@ public struct UsageCacheCheck: Equatable, Sendable {
 }
 
 /// 캐시 파일은 수정 시각이 trustAfter 뒤일 때만 믿는다(같은 시각은 믿지 않는다) — 계정을 바꾼 직후 상태줄이 앞 계정 토큰으로 받던 값을
-/// 늦게 써 넣을 수 있다. 내용은 믿을 때만 읽는다. 믿을 캐시가 없거나 그 나이가 120초를 넘으면 받는다 — 받는 중이면 받지 않는다.
-/// 캐시 적용은 받을지와 따로다(받는 중이어도 적용한다). 내용이 깨진 캐시는 적용하지 않지만 나이는 그 수정 시각으로 센다
+/// 늦게 써 넣을 수 있다. 내용은 믿을 때만 읽는다. 믿을 캐시가 없거나, 내용을 풀지 못하거나(깨짐·못 읽음·푼 한도 없음),
+/// 나이가 음수(수정 시각이 미래, 시계 어긋남)거나 120초를 넘으면 받는다 — 받는 중이면 받지 않는다.
+/// 못 푸는 캐시는 믿을 캐시가 없는 것과 같다(나이 .distantPast): 상태줄 스크립트가 같은 파일에 못 읽는 내용을 계속 써도 그 수정 시각에
+/// 막혀 120초씩 기다리지 않는다. 그 대신 그런 내용이 계속 쓰이면 확인할 때마다(앱은 30초마다) 받는다.
+/// 캐시 적용은 받을지와 따로다(받는 중이어도, 수정 시각이 미래여도 풀리면 적용한다)
 public func checkUsageCache(cache: UsageCache, clock: Clock, trustAfter: Date, fetching: Bool) -> UsageCacheCheck {
     let written = cache.modifiedAt().flatMap { $0 > trustAfter ? $0 : nil }
-    let age = clock.now.timeIntervalSince(written ?? .distantPast)
     let cached = written != nil ? cache.read().flatMap(parseUsage) : nil
-    return UsageCacheCheck(cached: cached, fetch: age > 120 && !fetching)
+    let fresh = cached != nil ? written : nil     // 나이를 셀 캐시 — 풀린 것만
+    let age = clock.now.timeIntervalSince(fresh ?? .distantPast)
+    return UsageCacheCheck(cached: cached, fetch: (age < 0 || age > 120) && !fetching)
 }
 
 // MARK: - 유스케이스: 받기 (백그라운드)
@@ -137,8 +144,8 @@ public struct UsageSettle: Equatable, Sendable {
     }
 }
 
-/// 200 이고 풀리면: 적용하고, 받은 응답 그대로 캐시에 쓰고(상태줄 스크립트가 같은 파일을 읽는다), trustAfter 를 풀고, failed 를 푼다.
-/// 아니면 지금 한도가 비어 있을 때만 failed — 앞서 보이던 값이 있으면 그대로 둔다
+/// 200 이고 풀리면(푼 한도가 하나 이상): 적용하고, 받은 응답 그대로 캐시에 쓰고(상태줄 스크립트가 같은 파일을 읽는다), trustAfter 를 풀고,
+/// failed 를 푼다. 아니면(푼 한도가 없는 응답도) 캐시에 쓰지 않고, 지금 한도가 비어 있을 때만 failed — 앞서 보이던 값이 있으면 그대로 둔다
 public func settleUsage(_ fetched: UsageFetch, current: [Limit], trustAfter: Date, cache: UsageCache) -> UsageSettle {
     if let data = fetched.data, let limits = parseUsage(data) {
         cache.write(data)

@@ -1,6 +1,8 @@
 // 단축키 판정(Shortcuts.swift) 시험 — 지금 ASCII 자판을 가짜 어댑터(미국 자판 일부를 적은 표)로 넣어 Carbon 없이 돌린다.
 // 가짜는 이 파일에만 둔다(Sources/BoardRules 에 두지 않는다). 가짜는 물은 키 번호·Shift 를 적어 두어 특수키는 자판을 묻지 않는지까지 본다.
 // 기대값은 앱의 // MARK: - 단축키 에 있던 지금 동작 그대로다(옮기기 전 코드로 만든 덤프와 옮긴 뒤 덤프가 바이트까지 같은 것도 확인했다).
+// 다만 저장값 검증은 고친 동작이다(이슈 #9 2차): 이상한 항목 하나는 그 항목만 버려 기본값으로 읽고(앞에는 사전 전체를 잃거나 멈췄다),
+// 길이가 2 가 아닌 저장값도 비움이 아니라 기본값이다.
 // 저장값(보드 설정 shortcuts 의 [키 번호, 수정키 raw])은 숫자 리터럴로 박는다 — 리팩터가 인코딩을 조용히 바꾸면 사용자가 바꾼 키가 사라진다
 import Foundation
 import Testing
@@ -44,7 +46,7 @@ private let O: UInt = 524_288        // ⌥
 private let S: UInt = 131_072        // ⇧
 private let capsLock: UInt = 65_536, function: UInt = 8_388_608, numericPad: UInt = 2_097_152
 
-private func key(_ code: Int, _ raw: UInt) -> KeyCombo { KeyCombo(code, KeyModifiers(rawValue: raw)) }
+private func key(_ code: Int, _ raw: UInt) -> KeyCombo { KeyCombo(UInt16(code), KeyModifiers(rawValue: raw)) }
 /// 저장 꼴 — ShortcutTable.set 이 남기는 [키 번호, 수정키 raw]
 private func stored(_ c: KeyCombo?) -> [Int]? { c.map { [Int($0.code), Int($0.mods.rawValue)] } }
 private func hex(_ s: String) -> String { s.unicodeScalars.map { String(format: "%04X", $0.value) }.joined(separator: " ") }
@@ -276,8 +278,11 @@ private let comboRows: [ComboRow] = [
     .init(note: "저장값의 캡스록 비트는 버린다", overrides: ["zoom": [36, 1245184]], id: "zoom", expected: [36, 1179648]),
     .init(note: "수정키 없는 저장값", overrides: ["boardSmaller": [27, 0]], id: "boardSmaller", expected: [27, 0]),
     .init(note: "다른 동작의 저장값은 보지 않는다", overrides: ["pin": [11, 786432]], id: "snap", expected: [11, 786432]),
-    .init(note: "지금 동작: 길이가 1 이면 비움(버그 의심, 고치지 않음)", overrides: ["tab1": [1]], id: "tab1", expected: nil),
-    .init(note: "지금 동작: 길이가 3 이면 비움(버그 의심, 고치지 않음)", overrides: ["tab2": [1, 2, 3]], id: "tab2", expected: nil),
+    .init(note: "길이가 1 이면 기본값(비움이 아니다)", overrides: ["tab1": [1]], id: "tab1", expected: [18, 1048576]),
+    .init(note: "길이가 3 이면 기본값(비움이 아니다)", overrides: ["tab2": [1, 2, 3]], id: "tab2", expected: [19, 1048576]),
+    .init(note: "기본값이 없는 동작에 길이 1 → 키 없음", overrides: ["terminalReset": [1]], id: "terminalReset", expected: nil),
+    .init(note: "키 번호 경계 0·65535 는 그 키", overrides: ["pin": [65535, 0], "snap": [0, 786432]], id: "pin", expected: [65535, 0]),
+    .init(note: "UInt 에 담기는 큰 수정키는 ⌘⌃⌥⇧ 만 남긴다", overrides: ["pin": [35, Int.max]], id: "pin", expected: [35, 1966080]),
     .init(note: "표에 없는 id 도 저장값이 있으면 읽는다", overrides: ["unknown": [0, 1048576]], id: "unknown", expected: [0, 1048576]),
     .init(note: "표에 없는 id 에 저장값이 없으면 키 없음", overrides: [:], id: "unknown", expected: nil),
 ]
@@ -321,6 +326,142 @@ private let comboRows: [ComboRow] = [
             #expect(t.overrides[a.id] == [111, 1966080])
             #expect(t.combo(a.id) == c)
         }
+    }
+}
+
+// 범위 밖 저장값이 표에 바로 들어온 경우(검증을 거치지 않은 길) — 앞에는 키 번호 UInt16(…)·수정키 UInt(…) 에서 멈췄다.
+// 멈추면 시험 프로세스가 죽으므로 이 줄들은 따로 둔다
+private let outOfRangeRows: [ComboRow] = [
+    .init(note: "음수 수정키 → 기본값", overrides: ["pin": [35, -1]], id: "pin", expected: [35, 1048576]),
+    .init(note: "Int.min 수정키 → 기본값", overrides: ["pin": [35, Int.min]], id: "pin", expected: [35, 1048576]),
+    .init(note: "키 번호 70000 → 기본값", overrides: ["pin": [70000, 1048576]], id: "pin", expected: [35, 1048576]),
+    .init(note: "키 번호 65536 → 기본값", overrides: ["pin": [65536, 1048576]], id: "pin", expected: [35, 1048576]),
+    .init(note: "음수 키 번호 → 기본값", overrides: ["pin": [-1, 1048576]], id: "pin", expected: [35, 1048576]),
+    .init(note: "기본값이 없는 동작에 음수 수정키 → 키 없음", overrides: ["terminalReset": [25, -1]], id: "terminalReset", expected: nil),
+    .init(note: "표에 없는 id 에 범위 밖 키 번호 → 키 없음", overrides: ["unknown": [70000, 0]], id: "unknown", expected: nil),
+]
+
+@Suite("단축키: 범위 밖 저장값") struct ShortcutOutOfRangeTests {
+    @Test("범위 밖 저장값이 표에 바로 들어와도 멈추지 않고 기본값으로 읽는다", arguments: outOfRangeRows)
+    func 해석(_ r: ComboRow) {
+        #expect(stored(ShortcutTable(overrides: r.overrides).combo(r.id)) == r.expected)
+    }
+
+    @Test("범위 밖 저장값이 있어도 겹침·찾기가 멈추지 않는다 — 그 동작은 기본 키로 본다")
+    func 겹침찾기() {
+        let t = ShortcutTable(overrides: ["pin": [35, -1], "snap": [70000, 786432]])
+        #expect(t.conflicts("pin") == [])
+        #expect(t.conflicts("showBoard") == [])
+        #expect(t.actionID(for: key(35, C)) == "pin")
+        #expect(t.actionID(for: key(11, K | O)) == "snap")
+    }
+}
+
+// MARK: - 저장값 검증 (보드 설정 shortcuts 원본)
+
+/// 보드 설정 shortcuts 원본 — UserDefaults.dictionary 가 돌려주는 것과 같은 꼴(NSNumber 정수·실수·참거짓, NSString …)을 plist 에서 만든다.
+/// entries 는 <dict> 안쪽, nil 이면 저장값 없음(dictionary(forKey:) 가 nil)
+private func defaultsValue(_ entries: String?) -> [String: Any]? {
+    guard let entries else { return nil }
+    let xml = #"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>"# + entries + "</dict></plist>"
+    return try! PropertyListSerialization.propertyList(from: Data(xml.utf8), format: nil) as? [String: Any]
+}
+private func entry(_ id: String, _ value: String) -> String { "<key>\(id)</key>\(value)" }
+private func ints(_ v: Int...) -> String { "<array>" + v.map { "<integer>\($0)</integer>" }.joined() + "</array>" }
+
+struct StoredRow: Row {
+    let note: String
+    let plist: String?               // shortcuts 의 plist <dict> 안쪽, nil 이면 저장값 없음
+    let expected: [String: [Int]]
+}
+
+// Foundation 의 숫자 읽기(2026-10, macOS 26 에서 확인): 정수는 Int, 딱 떨어지는 실수(11.0)도 Int 로 넘기고, 11.5·Int 밖 수는 넘기지 않는다.
+// 참/거짓도 1·0 으로 넘긴다. 정수로 보는 것은 이 읽기 그대로다(앞에 사전 전체를 [String: [Int]] 로 읽을 때와 같다)
+private let storedRows: [StoredRow] = [
+    .init(note: "저장값 없음 → 빈 사전", plist: nil, expected: [:]),
+    .init(note: "빈 사전", plist: "", expected: [:]),
+    .init(note: "[키 번호, 수정키] 는 그대로", plist: entry("pin", ints(11, 786432)), expected: ["pin": [11, 786432]]),
+    .init(note: "[] 는 비움 그대로", plist: entry("snap", ints()), expected: ["snap": []]),
+    .init(note: "수정키 0·fn 비트가 든 수정키도 그대로(⌘⌃⌥⇧ 밖 비트는 읽을 때 버린다)", plist: entry("boardSmaller", ints(27, 0)) + entry("newSession", ints(17, 9437184)),
+          expected: ["boardSmaller": [27, 0], "newSession": [17, 9437184]]),
+    .init(note: "키 번호 경계 0·65535 는 그대로", plist: entry("pin", ints(0, 1048576)) + entry("snap", ints(65535, 786432)),
+          expected: ["pin": [0, 1048576], "snap": [65535, 786432]]),
+    .init(note: "음수 수정키 → 그 항목만 버림", plist: entry("pin", ints(35, -1)), expected: [:]),
+    .init(note: "키 번호 70000(UInt16 밖) → 버림", plist: entry("pin", ints(70000, 1048576)), expected: [:]),
+    .init(note: "키 번호 65536 → 버림", plist: entry("pin", ints(65536, 1048576)), expected: [:]),
+    .init(note: "음수 키 번호 → 버림", plist: entry("pin", ints(-1, 1048576)), expected: [:]),
+    .init(note: "길이 1 → 버림", plist: entry("tab1", ints(1)), expected: [:]),
+    .init(note: "길이 3 → 버림", plist: entry("tab2", ints(1, 2, 3)), expected: [:]),
+    .init(note: "문자열 값 → 버림", plist: entry("pin", "<string>⌘P</string>"), expected: [:]),
+    .init(note: "문자열이 섞인 배열 → 버림", plist: entry("pin", "<array><string>35</string><integer>1048576</integer></array>"), expected: [:]),
+    .init(note: "숫자 글자만 든 배열(defaults write 로 넣은 꼴) → 버림", plist: entry("pin", "<array><string>35</string><string>1048576</string></array>"), expected: [:]),
+    .init(note: "정수 값(배열 아님) → 버림", plist: entry("pin", "<integer>35</integer>"), expected: [:]),
+    .init(note: "사전 값 → 버림", plist: entry("pin", "<dict/>"), expected: [:]),
+    .init(note: "실수 11.5 → Foundation 이 Int 로 넘기지 않아 버림", plist: entry("snap", "<array><real>11.5</real><integer>786432</integer></array>"), expected: [:]),
+    .init(note: "딱 떨어지는 실수 11.0 → Foundation 이 11 로 넘겨 그 키(앞과 같음)", plist: entry("snap", "<array><real>11.0</real><real>786432.0</real></array>"),
+          expected: ["snap": [11, 786432]]),
+    .init(note: "Int 에 담기지 않는 수정키(UInt64 최대) → 버림", plist: entry("pin", "<array><integer>35</integer><integer>18446744073709551615</integer></array>"),
+          expected: [:]),
+    .init(note: "참/거짓은 Foundation 이 1·0 으로 넘긴다 → 그 키(앞과 같음, 앱은 쓰지 않는 꼴)", plist: entry("pin", "<array><true/><integer>1048576</integer></array>"),
+          expected: ["pin": [1, 1048576]]),
+    .init(note: "멀쩡한 둘 + 음수 수정키 하나 → 둘은 그대로", plist: entry("pin", ints(11, 786432)) + entry("snap", ints()) + entry("terminal", ints(17, -786432)),
+          expected: ["pin": [11, 786432], "snap": []]),
+    .init(note: "멀쩡한 둘 + 문자열 하나 → 둘은 그대로", plist: entry("pin", ints(11, 786432)) + entry("snap", ints()) + entry("terminal", "<string>x</string>"),
+          expected: ["pin": [11, 786432], "snap": []]),
+    .init(note: "멀쩡한 둘 + 실수 11.5 하나 → 둘은 그대로", plist: entry("pin", ints(11, 786432)) + entry("snap", ints()) + entry("terminal", "<array><real>11.5</real><integer>786432</integer></array>"),
+          expected: ["pin": [11, 786432], "snap": []]),
+    .init(note: "멀쩡한 둘 + 길이 3 하나 → 둘은 그대로", plist: entry("pin", ints(11, 786432)) + entry("snap", ints()) + entry("terminal", ints(17, 786432, 0)),
+          expected: ["pin": [11, 786432], "snap": []]),
+    .init(note: "표에 없는 id 의 멀쩡한 저장값은 남긴다(지금처럼)", plist: entry("unknown", ints(0, 1048576)), expected: ["unknown": [0, 1048576]]),
+]
+
+@Suite("단축키: 저장값 검증") struct ShortcutStoredTests {
+    @Test("항목마다 따로 본다 — [] 와 [키 번호 0...65535, 수정키 0 이상] 만 남기고 그 밖은 그 항목만 버린다", arguments: storedRows)
+    func 검증(_ r: StoredRow) {
+        #expect(parseShortcutOverrides(defaultsValue(r.plist)) == r.expected)
+    }
+
+    @Test("깨진 항목 하나가 있어도 바꾼 키를 모두 잃지 않는다 — 깨진 동작만 기본 키")
+    func 깨진항목() {
+        let t = ShortcutTable(overrides: parseShortcutOverrides(defaultsValue(
+            entry("pin", ints(11, 786432)) + entry("snap", ints()) + entry("terminal", "<string>x</string>"))))
+        #expect(stored(t.combo("pin")) == [11, 786432])
+        #expect(t.combo("snap") == nil)
+        #expect(stored(t.combo("terminal")) == [17, 786432])
+        #expect(stored(t.combo("showBoard")) == [29, 1048576])
+    }
+
+    @Test("버린 항목은 다음 저장 때 사라진다 — 앱은 고친 값(overrides)을 통째로 다시 쓴다")
+    func 다음저장() {
+        var t = ShortcutTable(overrides: parseShortcutOverrides(defaultsValue(
+            entry("pin", ints(11, 786432)) + entry("terminal", ints(17, -1)) + entry("tab1", "<string>x</string>"))))
+        t.set("zoom", key(36, C))
+        #expect(t.overrides == ["pin": [11, 786432], "zoom": [36, 1048576]])
+    }
+
+    @Test("멀쩡한 저장값의 해석은 그대로 — 기본 표 45개를 저장 꼴로 넣은 사전과 몇 개를 바꾼 사전을 plist 로 오가도 같다")
+    func 멀쩡한저장값() throws {
+        var all: [String: [Int]] = [:]
+        for a in ShortcutTable.actions { all[a.id] = stored(a.initial) ?? [] }
+        #expect(all.count == 45)
+        var changed: [String: [Int]] = [:]
+        changed["pin"] = [11, 786432]
+        changed["snap"] = []
+        changed["tab1"] = [111, 1966080]
+        changed["newSession"] = [17, 9437184]
+        changed["unknown"] = [0, 1048576]
+        for overrides in [all, changed] {
+            let data = try PropertyListSerialization.data(fromPropertyList: overrides, format: .binary, options: 0)
+            let raw = try #require(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+            let parsed = parseShortcutOverrides(raw)
+            #expect(parsed == overrides)
+            let before = ShortcutTable(overrides: overrides), after = ShortcutTable(overrides: parsed)
+            for a in ShortcutTable.actions + [ShortcutAction(id: "unknown", group: "", title: "", initial: nil)] {
+                #expect(after.combo(a.id) == before.combo(a.id), "\(a.id)")
+                #expect(after.conflicts(a.id) == before.conflicts(a.id), "\(a.id)")
+            }
+        }
+        for a in ShortcutTable.actions { #expect(ShortcutTable(overrides: all).combo(a.id) == a.initial, "\(a.id)") }
     }
 }
 

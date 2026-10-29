@@ -487,14 +487,24 @@ struct OAuthUsageAPI: UsageAPI {
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         let sem = DispatchSemaphore(value: 0)
-        var result: Data?
+        let result = FetchedBody()
         URLSession.shared.dataTask(with: req) { data, resp, _ in
-            if (resp as? HTTPURLResponse)?.statusCode == 200 { result = data }
+            if (resp as? HTTPURLResponse)?.statusCode == 200 { result.put(data) }
             sem.signal()
         }.resume()
         _ = sem.wait(timeout: .now() + 12)
-        return result
+        return result.take()
     }
+}
+
+// 받은 본문 상자 — URLSession 콜백 스레드가 쓰고 기다린 스레드가 읽으므로 둘 다 잠금 안에서만 만진다.
+// 기다린 쪽이 꺼낼 때 닫는다: 12초 기다림이 끝난 뒤 늦게 온 응답은 버린다(돌려준 뒤에 쓰지 않는다)
+private final class FetchedBody: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data: Data?
+    private var closed = false
+    func put(_ d: Data?) { lock.withLock { if !closed { data = d } } }
+    func take() -> Data? { lock.withLock { closed = true; return data } }
 }
 
 // MARK: - 계정 전환
@@ -7888,7 +7898,7 @@ extension KeyModifiers {
 }
 
 extension KeyCombo {
-    init(_ e: NSEvent) { self.init(Int(e.keyCode), KeyModifiers(e.modifierFlags)) }
+    init(_ e: NSEvent) { self.init(e.keyCode, KeyModifiers(e.modifierFlags)) }
 
     // 화면에 보이는 키·메뉴 keyEquivalent — 글자는 지금 ASCII 자판에서
     var label: String { label(layout: SystemKeyboardLayout()) }
@@ -7912,7 +7922,8 @@ extension KeyCombo {
 
     static var actions: [ShortcutAction] { ShortcutTable.actions }
 
-    @Published private(set) var table = ShortcutTable(overrides: UserDefaults.standard.dictionary(forKey: "shortcuts") as? [String: [Int]] ?? [:])
+    // 저장값은 항목마다 따로 검증한다 — 이상한 항목은 그 동작만 기본값으로 읽고(다음 저장 때 사라진다) 멀쩡한 항목은 지킨다
+    @Published private(set) var table = ShortcutTable(overrides: parseShortcutOverrides(UserDefaults.standard.dictionary(forKey: "shortcuts")))
     var overrides: [String: [Int]] { table.overrides }
     @Published private(set) var hotKeyFailed: Set<String> = []   // 전역 단축키로 등록하지 못한 동작
     private var items: [String: NSMenuItem] = [:]
