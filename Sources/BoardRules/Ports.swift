@@ -1,7 +1,8 @@
 // 보드 규칙의 포트 — 세션 상태 판정(scanSessions)이 바깥(세션 기록 파일·프로세스·Claude Code 상태·대화 기록·컨텍스트·시계)을 부르는 자리,
 // 사용량 규칙(Usage.swift)이 바깥(사용량 캐시·로그인 정보·사용량 API·시계)을 부르는 자리,
 // 계정 전환 규칙(Accounts.swift)이 바깥(키체인·Claude Code 설정·저장 계정 목록·로그인 정보 쓰기 잠금·시계)을 부르는 자리,
-// 다른 터미널 조작(Terminals.swift)·세션 조작(SessionControl.swift)이 바깥(다른 터미널 앱·프로세스·tty 제목·보드 탭·세션 표지·세션 터미널·시계)을 부르는 자리.
+// 다른 터미널 조작(Terminals.swift)·세션 조작(SessionControl.swift)이 바깥(다른 터미널 앱·프로세스·tty 제목·보드 탭·세션 표지·세션 터미널·시계)을 부르는 자리,
+// 보드 탭 짝짓기·자리(TabPairing.swift)가 바깥(보드 탭 화면·부모 pid·Claude Code 의 넘긴 작업 id)을 부르는 자리.
 // 업데이트 판단(Updates.swift)이 바깥(최신 릴리스 VERSION)을 부르는 자리, 단축키 판정(Shortcuts.swift)이 바깥(지금 ASCII 자판의 글자)을 부르는 자리.
 // 진짜 어댑터는 보드 앱(ClaudeBoard.swift)에, 가짜 어댑터는 Tests/BoardRulesTests 에만 둔다(이슈 #9 헥사고날 첫 단계).
 // 규칙에 새 OS 호출(파일·프로세스·시각·환경 변수·홈 폴더)이 필요하면 여기 포트를 거친다 — 코어에서 FileManager·kill·Date() 를 직접 부르지 않는다.
@@ -45,7 +46,7 @@ public protocol ProcessProbe: Sendable {
     func backgroundShells(_ pid: Int32) -> Int
 }
 
-// Claude Code 가 도는 세션마다 쓰는 ~/.claude/sessions/<pid>.json — status 가 바뀐 시각과 세션 이름
+// Claude Code 가 도는 세션마다 쓰는 ~/.claude/sessions/<pid>.json — status 가 바뀐 시각과 세션 이름, 넘긴 작업 id(보드 탭 짝짓기)
 public protocol ClaudeLive: Sendable {
     /// status(idle·busy·waiting)와 그것이 바뀐 시각. 그 파일의 sessionId 가 이 세션일 때만
     func statusChange(_ pid: Int32, session: String) -> (status: String, at: Date)?
@@ -56,6 +57,9 @@ public protocol ClaudeLive: Sendable {
     func pid(forSession session: String) -> Int32?
     /// 목록에 남은 세션의 pid(기록의 pid, 없으면 위에서 찾은 pid)만 캐시에 남긴다
     func prune(keep: Set<Int32>)
+    /// 대화를 백그라운드 작업으로 넘기고 그 작업을 붙여 보여 주는 중인 claude 의 작업 id(parkedJobId — 이어 받은 세션 id 앞 8글자).
+    /// 그 파일의 sessionId 가 이 세션일 때만. 세션 상태 판정은 부르지 않고 보드 탭 짝짓기(pairTabs)가 화면의 세션마다 부른다
+    func parkedJob(_ pid: Int32, session: String) -> String?
 }
 
 // 대화 기록(~/.claude/projects/…/<sid>.jsonl) — 어디 있는지, 있는지, 끝에 적힌 Esc 중단·넘김·마지막 응답의 모델
@@ -200,10 +204,13 @@ public protocol TerminalApps: Sendable {
 // 여기 isAlive 는 지금 동작(kill(pid, 0) == 0)대로 EPERM 을 끝난 것으로 본다. 두 갈래는 의도다(이슈 #9 3차에 확인, 고치지 않음):
 // 판정은 sudo 등 다른 사용자로 도는 claude 를 끝남으로 잘못 보지 않으려고 EPERM 을 살아 있음으로, 조작은 신호를 보낼 수 없는 pid 에
 // SIGTERM 을 보내지 않으려고(보내도 EPERM 으로 실패한다) EPERM 을 끝남으로 본다.
-// 두 뜻을 한 포트에 두면 헷갈리고, 신호 보내기를 1초마다 도는 판정 쪽에 열지 않는다. 셸 수(backgroundShells)도 이쪽에는 필요 없다
+// 두 뜻을 한 포트에 두면 헷갈리고, 신호 보내기를 1초마다 도는 판정 쪽에 열지 않는다. 셸 수(backgroundShells)도 이쪽에는 필요 없다.
+// 보드 탭 짝짓기(pairTabs, 1초마다)도 이 포트를 받지만 조상 찾기(parentPID)만 부른다 — 신호·살아 있는지는 부르지 않는다(가짜가 부른 것을 적어 시험이 본다)
 public protocol ProcessControl: Sendable {
     /// pid 의 조상을 따라 올라가 찾은 앱의 번들 id(iTerm2 셸 서버·앱 안 보조 프로세스 포함). 못 찾으면 nil
     func ancestorBundleID(_ pid: Int32) -> String?
+    /// 부모 pid(sysctl KERN_PROC_PID 의 e_ppid). 못 읽으면(없는 pid 등) nil — 짝짓기는 거기서 조상 찾기를 멈춘다
+    func parentPID(_ pid: Int32) -> Int32?
     /// kill(pid, 0) == 0 — 권한이 없어 못 보는 pid(EPERM)도 false
     func isAlive(_ pid: Int32) -> Bool
     /// SIGTERM
@@ -217,7 +224,7 @@ public protocol TerminalTitles: Sendable {
 
 // 보드 탭(내장 터미널) — 진짜 어댑터는 TerminalHub(메인에서만). 화면·탭은 UUID 로 가리킨다(reveal 은 화면 id·탭 id 모두 받는다)
 public protocol BoardTabs: Sendable {
-    /// 세션이 도는 곳 — 정하는 규칙(TerminalHub.place·pair)은 앱에 있다
+    /// 세션이 도는 곳 — 진짜 어댑터는 TerminalHub.place, 정하는 규칙은 sessionPlace·pairTabs(TabPairing.swift)
     func place(_ s: Session) -> SessionPlace
     /// 탭 claude 가 넘긴 대화를 이어 받은 작업이면 그 작업을 붙여 보여 주는 화면
     func parkedTab(_ s: Session) -> UUID?
@@ -239,6 +246,17 @@ public protocol BoardTabs: Sendable {
     func mode(_ s: Session) -> String?
     /// 보드 위 안내 한 줄
     func toast(_ text: String)
+}
+
+// 보드 탭 화면 — 짝짓기·자리 판정(TabPairing.swift)이 그 갈래에서만 묻는 것. 화면의 지금 값(tty·맨 위 프로세스·세션 id·명령)은 앱이 값(TabScreen)으로 넘긴다.
+// 이 둘은 프로세스 인자를 읽어 비싸므로(place 는 카드를 그릴 때마다 불린다) 값으로 미리 뜨지 않고 지금처럼 필요한 갈래에서만 부른다.
+// 진짜 어댑터는 TerminalHub(@MainActor 라 메인에서만). BoardTabs 를 넓히지 않은 것은 BoardTabs.place 의 진짜 어댑터가 이 규칙을 부르기 때문이다
+// (규칙이 제 결과를 내는 포트를 입력으로 받지 않게, 시험 가짜도 두 메서드로)
+public protocol TabProbe: Sendable {
+    /// 그 화면에서 보드가 넣은 claude 가 셸이 뜨기를 기다리거나 막 넣었거나(3초) 앞에서 도는가(BoardSurface.runsClaude). 화면이 없으면 false
+    func runsClaude(_ screen: UUID) -> Bool
+    /// 세션의 실행 방식(-p·--bg, 대화형이면 nil) — BoardTabs.mode 와 같은 TerminalHub.mode(pid 마다 기억)
+    func mode(_ s: Session) -> String?
 }
 
 // 세션 표지(~/.claude/notifier/sessions/) — 보드가 쓰고 지운다. 읽기는 SessionRecords.isPaused·isMuted 가 짝이다

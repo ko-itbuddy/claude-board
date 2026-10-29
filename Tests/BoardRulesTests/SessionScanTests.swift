@@ -45,6 +45,7 @@ private final class FakeLive: ClaudeLive, @unchecked Sendable {
     func name(_ pid: Int32) -> String? { names[pid] }
     func pid(forSession session: String) -> Int32? { pidAsked.append(session); return sessionPids[session] }
     func prune(keep: Set<Int32>) { pruned.append(keep) }
+    func parkedJob(_ pid: Int32, session: String) -> String? { nil }   // 세션 상태 판정은 부르지 않는다(보드 탭 짝짓기 몫)
 }
 
 private final class FakeTranscripts: Transcripts, @unchecked Sendable {

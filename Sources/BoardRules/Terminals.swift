@@ -14,7 +14,7 @@ public enum TerminalBundle {
     public static let terminal = "com.apple.Terminal"
 }
 
-/// 세션이 도는 곳 — 칩·클릭 흐름·카드 구역이 쓴다. 정하는 규칙(TerminalHub.place·pair)은 앱에 있다
+/// 세션이 도는 곳 — 칩·클릭 흐름·카드 구역이 쓴다. 정하는 규칙은 sessionPlace·pairTabs(TabPairing.swift)
 public enum SessionPlace: Equatable, Sendable {
     case tab(UUID, headless: Bool)   // 보드 탭의 화면(headless = 그 화면 안에서 시작된 claude -p)
     case terminal                    // 다른 터미널 앱
