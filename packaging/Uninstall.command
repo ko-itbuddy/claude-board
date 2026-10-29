@@ -22,7 +22,8 @@ for f in claude-notifier notify.py state.py board-tui.py hooks.py notify-positio
 rm -rf "$N/sessions" "$N/__pycache__" "$N/plugins"
 # 계정 전환용으로 저장해 둔 로그인 토큰(키체인)과 계정 목록 — 지금 Claude Code 로그인("Claude Code-credentials")은 그대로 둔다
 while security delete-generic-password -s "Claude Board-account" >/dev/null 2>&1; do :; done
-rm -rf "$N/accounts.json" "$N/accounts"
+# accounts.json.broken-*: 깨진 목록을 보드가 옆으로 치운 것(이메일이 들어 있다)
+rm -rf "$N/accounts.json" "$N"/accounts.json.broken-* "$N/accounts"
 rmdir "$N" 2>/dev/null || true
 rm -f "$HOME/.local/bin/claude-board" "$HOME/.local/bin/claude-board-tui"
 
