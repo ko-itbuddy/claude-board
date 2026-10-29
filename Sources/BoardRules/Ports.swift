@@ -2,6 +2,7 @@
 // 사용량 규칙(Usage.swift)이 바깥(사용량 캐시·로그인 정보·사용량 API·시계)을 부르는 자리,
 // 계정 전환 규칙(Accounts.swift)이 바깥(키체인·Claude Code 설정·저장 계정 목록·로그인 정보 쓰기 잠금·시계)을 부르는 자리,
 // 다른 터미널 조작(Terminals.swift)·세션 조작(SessionControl.swift)이 바깥(다른 터미널 앱·프로세스·tty 제목·보드 탭·세션 표지·세션 터미널·시계)을 부르는 자리.
+// 업데이트 판단(Updates.swift)이 바깥(최신 릴리스 VERSION)을 부르는 자리, 단축키 판정(Shortcuts.swift)이 바깥(지금 ASCII 자판의 글자)을 부르는 자리.
 // 진짜 어댑터는 보드 앱(ClaudeBoard.swift)에, 가짜 어댑터는 Tests/BoardRulesTests 에만 둔다(이슈 #9 헥사고날 첫 단계).
 // 규칙에 새 OS 호출(파일·프로세스·시각·환경 변수·홈 폴더)이 필요하면 여기 포트를 거친다 — 코어에서 FileManager·kill·Date() 를 직접 부르지 않는다.
 // 포트는 역할로 나눈다(범용 FileSystem 포트를 두면 시험이 경로 문자열 시험이 된다).
@@ -254,4 +255,22 @@ public protocol SessionTerminals: Sendable {
     func focus(_ s: Session)
     /// 한 번 눌렀을 때 — 그 세션의 터미널 앱만 앞으로
     func bringForward(_ s: Session)
+}
+
+// MARK: - 업데이트 (Updates.swift)
+
+// 최신 릴리스의 VERSION — 진짜 어댑터는 URLSession(GitHub releases/latest/download/VERSION, 캐시 무시, 15초). 상태 없는 struct
+public protocol ReleaseVersions: Sendable {
+    /// VERSION 을 받아 (HTTP 상태, 본문)을 넘긴다 — 응답이 없으면(연결 실패·시간 초과) 상태 nil. 본문 검증은 규칙(releaseVersion)이 한다.
+    /// done 은 어댑터의 큐(URLSession 의 큐)에서 부른다
+    func fetchLatest(_ done: @escaping (_ status: Int?, _ body: Data?) -> Void)
+}
+
+// MARK: - 단축키 (Shortcuts.swift)
+
+// 지금 ASCII 자판(ABC 등) — 키 번호로 치는 글자. 진짜 어댑터는 Carbon UCKeyTranslate(앱의 asciiKeyCharacters, 내장 터미널의 ⌘ 키도 쓴다).
+// 한글 입력기를 쓰는 중이어도 ASCII 자판에서 읽으므로 화면 글자·메뉴 키가 영문 그대로다. 상태 없는 struct
+public protocol KeyboardLayout: Sendable {
+    /// 그 키 번호가 치는 글자(Shift 만 반영). 글자가 없거나 ASCII 가 아니면 nil
+    func characters(forKeyCode code: UInt16, shift: Bool) -> String?
 }

@@ -4715,10 +4715,21 @@ struct BoardView: View {
 // MARK: - 업데이트
 
 // GitHub 최신 릴리스의 VERSION 과 이 앱 버전을 비교해 새 버전이 있으면 보드 위에 알린다.
-// 업데이트 단추는 설치와 같은 install.sh 를 curl 로 받아 실행한다 — 스크립트가 앱을 바꿔 끼우고 보드를 다시 띄운다
+// 업데이트 단추는 설치와 같은 install.sh 를 curl 로 받아 실행한다 — 스크립트가 앱을 바꿔 끼우고 보드를 다시 띄운다.
+// 판단(본문 검증·새 버전인지·확인하는 빌드인지·확인 결과와 안내)은 BoardRules/Updates.swift, 포트는 ReleaseVersions(가짜 어댑터는 Tests 에만).
+// 여기는 어댑터와 타이머·설정 읽기·알림 줄·애니메이션·업데이트 실행이다
 let releaseRepo = "suhojang/claude-board"   // packaging/install.sh·release.sh 의 REPO 와 같게
 let releaseBase = "https://github.com/\(releaseRepo)/releases/latest/download"
 let changelogURL = URL(string: "https://github.com/\(releaseRepo)/blob/main/CHANGELOG.md")!
+
+// 최신 릴리스 VERSION 받기 — 캐시 무시, 15초. done 은 URLSession 의 큐에서
+struct GitHubReleaseVersions: ReleaseVersions {
+    func fetchLatest(_ done: @escaping (_ status: Int?, _ body: Data?) -> Void) {
+        let req = URLRequest(url: URL(string: releaseBase + "/VERSION")!, cachePolicy: .reloadIgnoringLocalCacheData,
+                             timeoutInterval: 15)
+        URLSession.shared.dataTask(with: req) { data, resp, _ in done((resp as? HTTPURLResponse)?.statusCode, data) }.resume()
+    }
+}
 
 final class Updater: ObservableObject {
     static let shared = Updater()
@@ -4731,8 +4742,9 @@ final class Updater: ObservableObject {
     private let logPath = NSHomeDirectory() + "/.claude/notifier/update.log"
     private var timer: Timer?
     private var noticeHide: DispatchWorkItem?
+    private let releases: ReleaseVersions = GitHubReleaseVersions()
     // build-board.sh 로 만든 개발용 빌드(1.0)는 배포판으로 덮어쓰지 않게 확인하지 않는다
-    private var eligible: Bool { !current.isEmpty && current != "1.0" }
+    private var eligible: Bool { updateEligible(current) }
 
     private init() {
         guard eligible else { return }
@@ -4746,28 +4758,24 @@ final class Updater: ObservableObject {
     func check(manual: Bool = false) {
         if manual {
             guard !checking else { return }
-            guard eligible else { show("hammer.fill", "개발용 빌드(\(current))는 업데이트를 확인하지 않습니다"); return }
+            // 개발용 빌드는 받지 않고 바로 알린다 — 도는 중(checking)으로 바꾸지 않는다
+            guard eligible else { if let n = UpdateCheckResult.devBuild.notice(current: current) { show(n.icon, n.text) }; return }
             checking = true
         }
-        let req = URLRequest(url: URL(string: releaseBase + "/VERSION")!, cachePolicy: .reloadIgnoringLocalCacheData,
-                             timeoutInterval: 15)
-        URLSession.shared.dataTask(with: req) { [weak self] data, resp, _ in
+        checkForUpdate(current: current, releases: releases) { [weak self] result in
             guard let self else { return }
-            var v: String?
-            if (resp as? HTTPURLResponse)?.statusCode == 200, let data,
-               let s = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-               s.range(of: "^[0-9]+(\\.[0-9]+)*$", options: .regularExpression) != nil { v = s }
             DispatchQueue.main.async {
-                if let v {
-                    let newer = v.compare(self.current, options: .numeric) == .orderedDescending
-                    withAnimation(.easeOut(duration: 0.2)) { self.latest = newer ? v : nil }
+                // 받지 못했으면 알던 새 버전을 그대로 둔다
+                switch result {
+                case .newer(let v): withAnimation(.easeOut(duration: 0.2)) { self.latest = v }
+                case .upToDate: withAnimation(.easeOut(duration: 0.2)) { self.latest = nil }
+                case .failed, .devBuild: break
                 }
                 guard manual else { return }
                 self.checking = false
-                if v == nil { self.show("exclamationmark.triangle.fill", "업데이트를 확인하지 못했습니다") }
-                else if self.latest == nil { self.show("checkmark.circle.fill", "최신 버전입니다 (\(self.current))") }
+                if let n = result.notice(current: self.current) { self.show(n.icon, n.text) }
             }
-        }.resume()
+        }
     }
 
     private func show(_ icon: String, _ text: String) {
@@ -7847,50 +7855,28 @@ struct SnapButton: View {
 
 // MARK: - 단축키
 
-// 키 하나 — 키 번호(자판 위치)와 수정키(⌘⌃⌥⇧ 만). 글자가 아니라 키 번호로 맞추므로 한글 입력기에서도 같은 키다
-struct KeyCombo: Equatable {
-    var code: UInt16
-    var mods: NSEvent.ModifierFlags
+// 판정(키 하나 KeyCombo·글자 label·menuKey·동작 표·사용자가 바꾼 키의 해석과 고치기·겹침·키 받기·시스템 단축키와 겹침)은 BoardRules/Shortcuts.swift,
+// 포트는 KeyboardLayout(가짜 어댑터는 Tests 에만). 여기는 어댑터와 NSEvent·Carbon 변환, @Published 상태·UserDefaults·메뉴·전역 단축키다
 
-    init(_ code: Int, _ mods: NSEvent.ModifierFlags) {
-        self.code = UInt16(code)
-        self.mods = mods.intersection([.command, .control, .option, .shift])
-    }
-    init(_ e: NSEvent) { self.init(Int(e.keyCode), e.modifierFlags) }
+// 지금 ASCII 자판의 글자 — Carbon UCKeyTranslate(asciiKeyCharacters)
+struct SystemKeyboardLayout: KeyboardLayout {
+    func characters(forKeyCode code: UInt16, shift: Bool) -> String? { asciiKeyCharacters(code, shift: shift) }
+}
 
-    // 글자로 나오지 않는 키 — 화면에 보일 기호와 메뉴 keyEquivalent 글자
-    static let specialKeys: [Int: (label: String, key: String)] = {
-        func fk(_ v: Int) -> String { String(Character(UnicodeScalar(v)!)) }
-        var m: [Int: (label: String, key: String)] = [
-            36: ("↩", "\r"), 76: ("⌤", "\u{3}"), 48: ("⇥", "\t"), 49: ("Space", " "), 51: ("⌫", "\u{8}"),
-            117: ("⌦", fk(NSDeleteFunctionKey)), 115: ("↖", fk(NSHomeFunctionKey)), 119: ("↘", fk(NSEndFunctionKey)),
-            116: ("⇞", fk(NSPageUpFunctionKey)), 121: ("⇟", fk(NSPageDownFunctionKey)),
-            123: ("←", fk(NSLeftArrowFunctionKey)), 124: ("→", fk(NSRightArrowFunctionKey)),
-            125: ("↓", fk(NSDownArrowFunctionKey)), 126: ("↑", fk(NSUpArrowFunctionKey)),
-        ]
-        for (i, code) in functionKeys.enumerated() { m[code] = ("F\(i + 1)", fk(NSF1FunctionKey + i)) }
-        return m
-    }()
-    static let functionKeys = [122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111]   // F1~F12
+extension KeyModifiers {
+    // raw 값이 NSEvent.ModifierFlags 와 같은 비트라 그대로 옮긴다(⌘⌃⌥⇧ 밖 비트는 KeyCombo 가 버린다)
+    init(_ flags: NSEvent.ModifierFlags) { self.init(rawValue: flags.rawValue) }
+    var eventFlags: NSEvent.ModifierFlags { NSEvent.ModifierFlags(rawValue: rawValue) }
+}
 
-    // 화면에 보이는 키 — macOS 메뉴와 같은 순서(⌃⌥⇧⌘)
-    var label: String {
-        var s = ""
-        if mods.contains(.control) { s += "⌃" }
-        if mods.contains(.option) { s += "⌥" }
-        if mods.contains(.shift) { s += "⇧" }
-        if mods.contains(.command) { s += "⌘" }
-        return s + (KeyCombo.specialKeys[Int(code)]?.label ?? asciiKeyCharacters(code, shift: false)?.uppercased() ?? "#\(code)")
-    }
+extension KeyCombo {
+    init(_ e: NSEvent) { self.init(Int(e.keyCode), KeyModifiers(e.modifierFlags)) }
 
-    // 메뉴 항목의 keyEquivalent — 글자는 ASCII 자판에서 읽는다(Shift 기호는 Shift 글자 그대로 ⇧⌘[ = "{", 영문자는 소문자 + Shift).
-    // ⇧⇥ 는 AppKit 이 backtab 글자로 보낸다
-    var menuKey: String {
-        if code == 48, mods.contains(.shift) { return "\u{19}" }
-        if let k = KeyCombo.specialKeys[Int(code)] { return k.key }
-        return (asciiKeyCharacters(code, shift: mods.contains(.shift)) ?? "").lowercased()
-    }
+    // 화면에 보이는 키·메뉴 keyEquivalent — 글자는 지금 ASCII 자판에서
+    var label: String { label(layout: SystemKeyboardLayout()) }
+    var menuKey: String { menuKey(layout: SystemKeyboardLayout()) }
 
+    // 전역 단축키(RegisterEventHotKey)·시스템 단축키 목록의 수정키
     var carbonMods: UInt32 {
         var m = 0
         if mods.contains(.command) { m |= cmdKey }
@@ -7901,89 +7887,34 @@ struct KeyCombo: Equatable {
     }
 }
 
-// 바꿀 수 있는 동작 하나 — id 는 보드 설정 shortcuts 의 열쇠라 바꾸면 사용자가 바꾼 키가 사라진다
-struct ShortcutAction {
-    let id: String
-    let group: String
-    let title: String
-    let initial: KeyCombo?
-}
-
-// 보드 단축키 표 — 설정 > 단축키(⌘,)에서 바꾼다. 메뉴의 keyEquivalent·전역 단축키(Carbon)·화면의 안내 글자를 모두 여기서 만든다.
-// 바꾼 것만 보드 설정 shortcuts 에 [id: [키 번호, 수정키]] 로 남기고, 비운 것은 [] 다.
-// ⌘C·⌘Q 같은 macOS 표준 키와 ⌘W(엔진이 화면을 닫는다)는 표에 없고 고를 수도 없다(reserved)
+// 보드 단축키 — 표(ShortcutTable)에 사용자가 바꾼 키를 얹어 쥐고, 바뀌면 보드 설정 shortcuts 에 남기고 메뉴·전역 단축키를 다시 만든다.
+// 화면의 안내 글자는 @Published 로 따라 바뀐다
 @MainActor final class Shortcuts: ObservableObject {
     static let shared = Shortcuts()
 
-    static let actions: [ShortcutAction] = {
-        var a: [ShortcutAction] = []
-        func add(_ group: String, _ id: String, _ title: String, _ code: Int?, _ mods: NSEvent.ModifierFlags = []) {
-            a.append(ShortcutAction(id: id, group: group, title: title, initial: code.map { KeyCombo($0, mods) }))
-        }
-        let co: NSEvent.ModifierFlags = [.control, .option]
-        add("보드", "showBoard", "세션 보드 보기", 29, .command)
-        add("보드", "pin", "항상 위에 고정", 35, .command)
-        add("보드", "snap", "처음 크기로 붙이기 (어느 앱에서든)", 11, co)
-        add("보드", "terminal", "터미널 펼치기·접기 (어느 앱에서든)", 17, co)
-        add("터미널", "newSession", "새 세션…", 17, .command)
-        add("터미널", "rename", "탭 이름 바꾸기", 15, [.command, .shift])
-        for (n, code) in zip(1...9, [18, 19, 20, 21, 23, 22, 26, 28, 25]) { add("탭으로 가기", "tab\(n)", "탭 \(n)", code, .command) }
-        add("탭으로 가기", "prevTab", "이전 탭", 123, co)
-        add("탭으로 가기", "nextTab", "다음 탭", 124, co)
-        add("탭으로 가기", "prevTab2", "이전 탭 (보조)", 33, [.command, .shift])
-        add("탭으로 가기", "nextTab2", "다음 탭 (보조)", 30, [.command, .shift])
-        add("탭으로 가기", "prevTab3", "이전 탭 (보조 2)", 48, [.control, .shift])
-        add("탭으로 가기", "nextTab3", "다음 탭 (보조 2)", 48, .control)
-        add("탭으로 가기", "prevWorkspace", "이전 경로", 126, co)
-        add("탭으로 가기", "nextWorkspace", "다음 경로", 125, co)
-        add("화면 나누기", "splitRight", "오른쪽으로 나누기", 2, .command)
-        add("화면 나누기", "splitDown", "아래로 나누기", 2, [.command, .shift])
-        add("화면 나누기", "prevSurface", "이전 화면", 33, .command)
-        add("화면 나누기", "nextSurface", "다음 화면", 30, .command)
-        let arrows = [("Up", "위로", 126), ("Down", "아래로", 125), ("Left", "왼쪽으로", 123), ("Right", "오른쪽으로", 124)]
-        for (id, name, code) in arrows { add("화면 나누기", "focus\(id)", "\(name) 화면 고르기", code, [.command, .option]) }
-        for (id, name, code) in arrows { add("화면 나누기", "resize\(id)", "경계를 \(name) 옮기기", code, [.command, .control]) }
-        add("화면 나누기", "equalize", "크기 고르게", 24, [.command, .control])
-        add("화면 나누기", "zoom", "화면 하나 크게 보기", 36, [.command, .shift])
-        add("글자 크기", "terminalBigger", "터미널 글자 크게", 24, [.command, .shift])
-        add("글자 크기", "terminalBigger2", "터미널 글자 크게 (보조)", 24, .command)
-        add("글자 크기", "terminalSmaller", "터미널 글자 작게", 27, .command)
-        add("글자 크기", "terminalReset", "터미널 글자 원래 크기", nil)
-        add("글자 크기", "boardBigger", "보드 글자 크게", 24, [.command, .option, .shift])
-        add("글자 크기", "boardBigger2", "보드 글자 크게 (보조)", 24, [.command, .option])
-        add("글자 크기", "boardSmaller", "보드 글자 작게", 27, [.command, .option])
-        add("글자 크기", "boardReset", "보드 글자 원래 크기", 29, [.command, .option])
-        return a
-    }()
+    static var actions: [ShortcutAction] { ShortcutTable.actions }
 
-    // 고를 수 없는 키 — macOS 표준 편집·창 키(⌘Q·⌘H·⌥⌘H·⌘M·⌘W·⌘C·⌘V·⌘X·⌘A·⌘Z·⇧⌘Z)와 이 창을 여는 ⌘,
-    static let reserved = [12, 4, 46, 13, 8, 9, 7, 0, 6, 43].map { KeyCombo($0, .command) }
-        + [KeyCombo(6, [.command, .shift]), KeyCombo(4, [.command, .option])]
-    static let settingsKey = KeyCombo(43, .command)
-
-    @Published private(set) var overrides = UserDefaults.standard.dictionary(forKey: "shortcuts") as? [String: [Int]] ?? [:]
+    @Published private(set) var table = ShortcutTable(overrides: UserDefaults.standard.dictionary(forKey: "shortcuts") as? [String: [Int]] ?? [:])
+    var overrides: [String: [Int]] { table.overrides }
     @Published private(set) var hotKeyFailed: Set<String> = []   // 전역 단축키로 등록하지 못한 동작
     private var items: [String: NSMenuItem] = [:]
     private var hotKeyRefs: [EventHotKeyRef] = []
     private var handlerInstalled = false
 
-    func action(_ id: String) -> ShortcutAction? { Self.actions.first { $0.id == id } }
+    func action(_ id: String) -> ShortcutAction? { ShortcutTable.action(id) }
 
-    func combo(_ id: String) -> KeyCombo? {
-        guard let v = overrides[id] else { return action(id)?.initial }
-        return v.count == 2 ? KeyCombo(v[0], NSEvent.ModifierFlags(rawValue: UInt(v[1]))) : nil
-    }
+    func combo(_ id: String) -> KeyCombo? { table.combo(id) }
 
     func label(_ id: String) -> String? { combo(id)?.label }
 
     // 기본값과 같은 키로 돌아오면 남긴 것을 지운다. nil 은 비우기
     func set(_ id: String, _ c: KeyCombo?) {
-        if c == action(id)?.initial { overrides[id] = nil } else { overrides[id] = c.map { [Int($0.code), Int($0.mods.rawValue)] } ?? [] }
+        table.set(id, c)
         save()
     }
 
     func resetAll() {
-        overrides = [:]
+        table.resetAll()
         save()
     }
 
@@ -7998,15 +7929,12 @@ struct ShortcutAction {
     func bind(_ item: NSMenuItem, _ id: String) {
         let c = combo(id)
         item.keyEquivalent = c?.menuKey ?? ""
-        item.keyEquivalentModifierMask = c?.mods ?? []
+        item.keyEquivalentModifierMask = c?.mods.eventFlags ?? []
         items[id] = item
     }
 
     // 같은 키를 쓰는 다른 동작 — 메뉴는 앞의 것만 받는다
-    func conflicts(_ id: String) -> [String] {
-        guard let c = combo(id) else { return [] }
-        return Self.actions.filter { $0.id != id && combo($0.id) == c }.map(\.id)
-    }
+    func conflicts(_ id: String) -> [String] { table.conflicts(id) }
 
     // 앱 안 키 감시 — 표의 키를 키 번호로 맞춰 그 메뉴 동작을 바로 부른다. 그래서 한글 입력기에서 ⌃⌥ + 글자 키가 메뉴에 맞지 않는 일도,
     // 터미널에 포커스가 있을 때 엔진이 사용자가 고른 키를 먼저 가져가는 일도 없다(엔진의 unbind 목록을 사용자 키마다 늘리지 않는다).
@@ -8018,12 +7946,12 @@ struct ShortcutAction {
               (e.window?.firstResponder as? NSTextView)?.hasMarkedText() != true else { return e }
         let c = KeyCombo(e)
         // ⌘, 는 엔진 기본값(open_config)이 먼저 가져가므로 여기서 받는다
-        if c == Self.settingsKey { SettingsScreen.shared.toggle(); return nil }
+        if c == ShortcutTable.settingsKey { SettingsScreen.shared.toggle(); return nil }
         // 설정 화면의 Esc — 검색어를 지우고, 없으면 닫는다(키 받기 취소는 위에서)
         if c == KeyCombo(53, []), SettingsScreen.shared.shown, e.window === window { SettingsScreen.shared.escape(); return nil }
         // 설정 화면의 ⌘W — 보드 창을 닫지 않고 설정 화면을 닫는다
         if c == KeyCombo(13, .command), SettingsScreen.shared.shown, e.window === window { SettingsScreen.shared.close(); return nil }
-        guard let id = Self.actions.first(where: { combo($0.id) == c })?.id, let item = items[id], let sel = item.action else { return e }
+        guard let id = table.actionID(for: c), let item = items[id], let sel = item.action else { return e }
         NSApp.sendAction(sel, to: item.target, from: item)
         return nil
     }
@@ -8094,7 +8022,7 @@ func systemHotKeys() -> [[Int]] {
         systemKeys = systemHotKeys()
     }
 
-    func systemTaken(_ c: KeyCombo) -> Bool { systemKeys.contains([Int(c.code), Int(c.carbonMods)]) }
+    func systemTaken(_ c: KeyCombo) -> Bool { systemShortcutTaken(c, carbonMods: c.carbonMods, system: systemKeys) }
 
     // 받는 동안은 전역 단축키를 풀어 둔다 — 누른 키가 동작하지 않고 여기로 오게
     func startRecording(_ id: String) {
@@ -8108,23 +8036,22 @@ func systemHotKeys() -> [[Int]] {
         Shortcuts.shared.registerHotKeys()
     }
 
-    // 받는 중에 누른 키 — Esc 취소, ⌫·⌦ 비우기. ⌘·⌃·⌥ 가 없는 키(F1~F12 는 된다)와 고를 수 없는 키는 받지 않고 알린다
+    // 받는 중에 누른 키 — Esc 취소, ⌫·⌦ 비우기. ⌘·⌃·⌥ 가 없는 키(F1~F12 는 된다)와 고를 수 없는 키는 받지 않고 알린다(판정은 recordShortcut)
     func record(_ e: NSEvent) -> NSEvent? {
         guard e.type == .keyDown, let id = recording else { return e }
-        let c = KeyCombo(e)
-        if c.mods.isEmpty, c.code == 53 { stopRecording(); return nil }
-        if c.mods.isEmpty, c.code == 51 || c.code == 117 { stopRecording(); Shortcuts.shared.set(id, nil); return nil }
-        if c.mods.subtracting(.shift).isEmpty, !KeyCombo.functionKeys.contains(Int(c.code)) {
-            refused = "⌘·⌃·⌥ 가운데 하나를 함께 눌러 주세요"
-            return nil
+        switch recordShortcut(KeyCombo(e), layout: SystemKeyboardLayout()) {
+        case .cancel:
+            stopRecording()
+        case .clear:
+            stopRecording()
+            Shortcuts.shared.set(id, nil)
+        case .refuse(let text):
+            refused = text
+        case .accept(let c):
+            refused = nil
+            recording = nil
+            Shortcuts.shared.set(id, c)   // 전역 단축키도 여기서 다시 등록된다
         }
-        if Shortcuts.reserved.contains(c) {
-            refused = "\(c.label): macOS 기본 키라 쓸 수 없습니다"
-            return nil
-        }
-        refused = nil
-        recording = nil
-        Shortcuts.shared.set(id, c)   // 전역 단축키도 여기서 다시 등록된다
         return nil
     }
 }
