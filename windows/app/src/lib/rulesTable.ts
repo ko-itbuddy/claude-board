@@ -25,9 +25,10 @@ export type RuleFn = (c: RuleCase) => string | null;
 /** `only == "mac"` 줄은 프론트 돌리는 쪽이 건너뛴다(mac 쪽이 돌릴 줄) */
 const SKIPPED_ONLY = "mac";
 
-/** 저장소 맨 위 rules-table/ 폴더 — 이 파일(src/lib)에서 네 층 위다. */
+/** 저장소 맨 위 rules-table/ 폴더. 이 파일(windows/app/src/lib)의 다섯 층 위다. */
 const RULES_TABLE_DIR = path.resolve(
   fileURLToPath(import.meta.url),
+  "..",
   "..",
   "..",
   "..",
