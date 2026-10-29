@@ -1,6 +1,7 @@
 // 세션 조작의 순서와 판단 — 일시중지·재개·중단·보드로 옮기기·이어 열기·한 번 누르기의 갈래, 끝나기 기다리기
 // (ClaudeBoard.swift 의 pauseSession·resumePaused·stopSession·moveToBoard·resumeSession·openSession·waitExit 에 있던 것을 옮김,
-// 동작·포트 호출 차례·안내 글자는 그대로). 확인 창·애니메이션 기다리기(whenPaneSettled)·큐·타이머는 앱이 쥐고, 확인을 받은 뒤 여기를 부른다.
+// 동작·포트 호출 차례·안내 글자는 그대로, 옮긴 뒤 고친 것: 중단은 끝난 세션·이미 없는 pid 에 신호를 보내지 않는다).
+// 확인 창·애니메이션 기다리기(whenPaneSettled)·큐·타이머는 앱이 쥐고, 확인을 받은 뒤 여기를 부른다.
 // 바깥은 포트로만 부른다: 세션 터미널(단계 넣기·끝나기 기다리기·포커스), 보드 탭, 프로세스, 세션 표지, 시계.
 //
 // 할 일 목록 값 대신 포트를 받는 유스케이스로 둔 까닭: 흐름이 "단계를 넣고 → 넣었는지에 따라 표지·신호·끝나기 기다리기 → 그 결과에 따라 이어 열기·안내"
@@ -88,13 +89,17 @@ public struct SessionControl: Sendable {
         }
     }
 
-    /// 중단(확인을 받은 뒤) — 일시중지 표지를 지우고, 진짜 백그라운드 세션은 건드리지 않는다. 그 밖은 끝내기 단계를 넣고,
-    /// 못 넣으면(보드 탭 안의 claude -p·Ghostty 밖 터미널·끝난 세션 포함) 기록의 pid 가 있을 때 SIGTERM
+    /// 중단(확인을 받은 뒤) — 일시중지 표지를 지우고, 진짜 백그라운드 세션과 끝난 세션은 더 건드리지 않는다. 그 밖은 끝내기 단계를 넣고,
+    /// 못 넣으면(보드 탭 안의 claude -p·Ghostty 밖 터미널 포함) 기록의 pid 가 아직 살아 있을 때만 SIGTERM.
+    /// 끝난 세션에 신호를 보내지 않는 까닭: 끝난 카드는 이틀 남는데 그 사이 기록의 pid 를 다른 프로세스가 다시 쓸 수 있다
+    /// (메뉴는 끝난 세션에 중단을 보이지 않지만 --action stop <id> 는 확인 없이 여기로 온다).
+    /// 가르는 것은 place 다 — 기록은 끝났어도 보드 탭이 그 세션의 claude 를 돌리고 있으면 탭이라 끝내기 단계를 넣는다
     public func stop(_ s: Session) {
         marks.clearPaused(s.id)
-        if tabs.place(s) == .background { return }
+        let place = tabs.place(s)
+        if place == .background || place == .ended { return }
         terminals.drive(s, SessionSteps.exit) { ok in
-            if !ok, s.pid > 0 { processes.terminate(s.pid) }
+            if !ok, s.pid > 0, processes.isAlive(s.pid) { processes.terminate(s.pid) }
         }
     }
 

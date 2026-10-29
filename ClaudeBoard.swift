@@ -9564,7 +9564,8 @@ func pausedMark(_ s: Session) -> String { (sessionsDir as NSString).appendingPat
 @MainActor func resumePaused(_ s: Session) { sessionControl.resumePaused(s) }
 
 // 중단: 확인을 받은 뒤 세션을 끝낸다. 터미널 세션(보드 탭·Ghostty)은 Esc → /exit, 그 밖의 터미널 세션과 보드 탭 안의
-// claude -p 는 SIGTERM. 진짜 백그라운드 세션에는 신호를 보내지 않는다(메뉴에도 없다 — 보드는 백그라운드 세션을 건드리지 않는다).
+// claude -p 는 pid 가 살아 있을 때만 SIGTERM. 진짜 백그라운드 세션에는 신호를 보내지 않는다(메뉴에도 없다 — 보드는 백그라운드 세션을 건드리지 않는다).
+// 끝난 세션(--action stop 으로 올 수 있다)은 일시중지 표지만 지우고 신호를 보내지 않는다 — 남은 pid 를 다른 프로세스가 다시 쓸 수 있다.
 // 대화 기록은 남으므로 종료 세션 메뉴의 "세션 다시 열기"로 이어 열 수 있다. 순서와 판단은 SessionControl.stop
 @MainActor func stopSession(_ s: Session, confirm: Bool = true) {
     if confirm, TerminalHub.shared.slide != nil { return whenPaneSettled { stopSession(s, confirm: confirm) } }
