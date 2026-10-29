@@ -19,6 +19,7 @@ Xcode 프로젝트는 없다. 보드(`Sources/ClaudeBoard/`)는 내장 터미널
 # 빠른 확인 — 보드는 import GhosttyTerminal 때문에 swiftc -typecheck 를 못 쓰고 빌드로 확인한다(첫 빌드는 엔진 약 77 MB 를 내려받아 1분 남짓, 그 뒤 약 20초)
 swift build -c release --disable-keychain --triple "$(uname -m)-apple-macosx14.0"
 swift test --disable-keychain --triple "$(uname -m)-apple-macosx14.0" --toolset clt-testing.json   # BoardRules 시험. 끝 줄 "Test run with N tests" 의 N 이 0 보다 큰지 본다
+#  → Windows 판과 함께 쓰는 보드 규칙 표 rules-table/*.json 도 읽는다(RulesTableTests.swift, 꼴은 rules-table/README.md — 사람이 쓴 의도라 Swift 출력으로 만들지 않는다)
 #  → --toolset 은 Command Line Tools 만 있는 Mac 용(SwiftPM 이 CLT 의 Testing.framework 를 못 찾아 빼면 no such module 'Testing'). Xcode 가 있는 Mac 에서는 뺀다.
 #    같은 -F·-rpath 를 Package.swift 의 unsafeFlags 로 넣으면 시험이 0개 돌고 성공으로 끝나므로 toolset 파일로만 넣는다. 처음에는 앱·엔진까지 debug 로 빌드해 1분 남짓
 swiftc -typecheck ClaudeNotifier.swift
@@ -132,7 +133,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
   업데이트 판단(`Updates.swift`: VERSION 본문 검증 `releaseVersion`·새 버전인지 `isNewerVersion`·확인하는 빌드 `updateEligible`·결과 `UpdateCheckResult`(손으로 확인한 안내 `notice`)·유스케이스 `checkForUpdate`),
   단축키 판정(`Shortcuts.swift`: 수정키 `KeyModifiers`(raw 값이 `NSEvent.ModifierFlags` 와 같고 보드 설정 `shortcuts` 에 그대로 남으므로 동작 id 처럼 바꾸지 않는다)·키 `KeyCombo`(`label`·`menuKey`)·
   동작 표와 사용자가 바꾼 키 `ShortcutTable`(`combo`·`set`·`conflicts`·`actionID`)·키 받기 판정 `recordShortcut`·시스템 단축키와 겹침 `systemShortcutTaken`).
-  보드가 `import BoardRules` 로 쓰고, SwiftUI 와 겹치는 `Group` 은 보드 `BoardData.swift` 의 별칭이 이것을 가리킨다. 규칙을 바꾸면 `Tests/BoardRulesTests/` 의 입력·기대값 표도 함께 고친다(이슈 #9).
+  보드가 `import BoardRules` 로 쓰고, SwiftUI 와 겹치는 `Group` 은 보드 `BoardData.swift` 의 별칭이 이것을 가리킨다. 규칙을 바꾸면 `Tests/BoardRulesTests/` 의 입력·기대값 표와, 그 규칙이 맨 위 `rules-table/`(Windows 판과 함께 쓰는 표)에 있으면 그 줄도 함께 고친다(이슈 #9 — 한 판만의 차이는 줄에 `only` 와 까닭).
   포트·어댑터: 세션 상태 판정 `scanSessions`(`SessionScan.swift`)는 바깥을 포트(`Ports.swift`: `SessionRecords`·`ProcessProbe`·`ClaudeLive`·`Transcripts`·`ContextUsage`·`Clock`)로만 부른다 — 포트는 BoardRules, 진짜 어댑터는 보드 `BoardData.swift`(`SessionFiles`·`SystemProcesses`·`TranscriptFiles`·`ClaudeNames`·`ContextReader`·`SystemClock`, mtime 캐시도 어댑터에), 가짜 어댑터는 `Tests/` 에만 둔다.
   사용량 규칙도 같은 방식으로 `UsageCache`(`/tmp/.claude-usage-cache.json`, 상태줄과 함께 쓰는 약속)·`LoginCredentials`(키체인 로그인 정보)·`UsageAPI`·`Clock` 포트로만 부른다 — 진짜 어댑터는 `UsageCacheFile`·`KeychainCredentials`·`OAuthUsageAPI`(상태 없는 struct).
   계정 전환 규칙은 `KeychainItems`(키체인 일반 암호 항목, 자리는 `KeychainItem`)·`ClaudeConfig`(`~/.claude.json`)·`SavedAccountList`(`~/.claude/notifier/accounts.json`)·`CredentialsWriteLock`(`~/.claude/.storage-write`)·`Clock` 포트로만 부른다(묶음 `AccountPorts`) —
