@@ -18,9 +18,18 @@ public enum SessionSteps {
     public static let exit: TerminalSteps = [("key", "escape"), ("wait", "0.4"), ("text", "/exit"), ("wait", "0.2"), ("key", "enter")]
     /// 살아 있는 세션에 요청 글을 넣고 보낸다
     public static func prompt(_ text: String) -> TerminalSteps { [("text", text), ("wait", "0.2"), ("key", "enter")] }
+    /// 살아 있는 일시중지 세션의 재개 — 줄을 바꾼 뒤 resumePrompt 를 붙여넣고 보낸다. 첫 출력 전에 멈췄으면 Claude Code 가 그 요청을
+    /// 입력 칸에 되돌려 두므로(대화 맥락에서는 빠짐) 재개 글이 그 아래 줄에 붙어 한 메시지로 간다. 입력 칸이 비었으면 맨 앞 줄바꿈은 그대로 보내져도 해가 없다.
+    /// 두 길 모두 붙여넣기라 줄바꿈이 Return 이 되지 않는다(보드 탭 paste, Ghostty `input text` 는 "붙여넣은 것처럼")
+    public static let resume: TerminalSteps = prompt("\n" + resumePrompt)
 }
 
-/// 일시중지했던 세션을 재개할 때 넣는 요청 — 살아 있으면 그 터미널에, 꺼졌으면 이어 여는 claude 의 첫 요청으로
+/// 살아 있는 세션을 재개할 때 넣는 글 — 위에 되돌아온 요청이 있으면 그것을, 없으면 멈춘 곳부터 이어 가게 한다.
+/// 실측(Claude Code 2.1.312, haiku): 되돌아온 요청 + carryOnPrompt 는 요청은 하고도 "재개할 이전 작업을 알 수 없다" 고 덧붙였고, 이 글은 요청만 했다.
+/// 출력 중에 멈춘 세션은 이 글로 멈춘 곳부터 이어 썼다
+public let resumePrompt = "보드에서 일시중지했던 세션을 재개합니다. 이 글 위에 요청이 있으면 그 요청을, 없으면 중단된 지점부터 직전 작업을 이어서 진행해 주세요."
+
+/// 꺼진 일시중지 세션을 이어 열 때 claude 의 첫 요청(명령 인자)으로 넘기는 글 — 되돌아온 요청은 꺼진 claude 와 함께 사라져 위에 붙을 것이 없다
 public let carryOnPrompt = "보드에서 일시중지했던 세션을 재개합니다. 중단된 지점부터 직전 작업을 이어서 진행해 주세요."
 
 /// 일시중지 표지(sessions/<id>.paused) 내용 — {"paused_at": 1970 기준 초, "topic": 주제}. 키 차례는 정하지 않는다(읽는 쪽은 JSON 으로 푼다)
@@ -99,7 +108,7 @@ public struct SessionControl: Sendable {
         let alive = s.state != "ended" && (s.pid <= 0 || processes.isAlive(s.pid))
         guard alive else { return reopen(s, carryOn: true) }
         let name = (s.cwd as NSString).lastPathComponent
-        terminals.drive(s, SessionSteps.prompt(carryOnPrompt)) { ok in
+        terminals.drive(s, SessionSteps.resume) { ok in
             if ok { marks.clearPaused(s.id) } else { tabs.toast("\(name): 세션이 아직 돌고 있지만 그 터미널에 키를 넣지 못했습니다. 그 터미널에서 이어 가 주세요") }
         }
     }
