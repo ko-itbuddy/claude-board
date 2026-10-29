@@ -129,7 +129,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
   다른 터미널 조작(`Terminals.swift`: 세션이 도는 곳 `SessionPlace`, 조상 앱 번들 id → `terminalKind`, AppleScript 글자 `ghosttySendScript`·`ghosttyFindScript`·`ghosttyFocusScript`·`ttyFocusScript`·`ttyCountScript`(바이트까지 시험이 고정),
   `TerminalControl` — 세션을 띄운 앱 `owner`(세션마다 기억)·`canDrive`·조작 길 `driveRoute`(보드 탭 먼저, 다음 Ghostty)·`focusRoute`·Ghostty 표지 제목 찾기 `ghosttyTerminalId`·`focusGhostty`·`focusByTty`),
   보드 탭 짝짓기·자리(`TabPairing.swift`: 화면 값 `TabScreen` → `pairTabs`(tty 짝·headless 조상·셸만 남은 화면·넘긴 작업 따라가기·경로 상태 점, 결과 `TabPairing`)·자리 `sessionPlace`·`parkedScreen`·`shownSessionPlace`),
-  세션 조작 순서(`SessionControl.swift`: 단계 `SessionSteps`·`carryOnPrompt`·일시중지할 응답이 있는가 `isPausable`·일시중지 표지 `pausedMarkData`·끝나기 기다리기 한 번의 판단 `exitWait`, `SessionControl` 의 `pause`·`resumePaused`·`stop`·`moveToBoard`·`reopen`·`reopenEnded`·`open`),
+  세션 조작 순서(`SessionControl.swift`: 단계 `SessionSteps`(살아 있는 세션 재개 `resume` 은 줄바꿈 + `resumePrompt` — 첫 출력 전에 멈춰 입력 칸에 되돌아온 요청 아래 줄에 붙는다)·꺼진 세션 이어 열기의 첫 요청 `carryOnPrompt`·일시중지할 응답이 있는가 `isPausable`·일시중지 표지 `pausedMarkData`·끝나기 기다리기 한 번의 판단 `exitWait`, `SessionControl` 의 `pause`·`resumePaused`·`stop`·`moveToBoard`·`reopen`·`reopenEnded`·`open`),
   업데이트 판단(`Updates.swift`: VERSION 본문 검증 `releaseVersion`·새 버전인지 `isNewerVersion`·확인하는 빌드 `updateEligible`·결과 `UpdateCheckResult`(손으로 확인한 안내 `notice`)·유스케이스 `checkForUpdate`),
   단축키 판정(`Shortcuts.swift`: 수정키 `KeyModifiers`(raw 값이 `NSEvent.ModifierFlags` 와 같고 보드 설정 `shortcuts` 에 그대로 남으므로 동작 id 처럼 바꾸지 않는다)·키 `KeyCombo`(`label`·`menuKey`)·
   동작 표와 사용자가 바꾼 키 `ShortcutTable`(`combo`·`set`·`conflicts`·`actionID`)·키 받기 판정 `recordShortcut`·시스템 단축키와 겹침 `systemShortcutTaken`).
