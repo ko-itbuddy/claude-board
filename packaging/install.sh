@@ -9,6 +9,23 @@ REPO="suhojang/claude-board"
 CERT_SHA1="a4ad1a544ebf9e6662c18b2cec24a9fe3f828eff"
 APP="/Applications/Claude Board.app"
 
+# 설치된 보드의 터미널(보드 탭) 안에서 돌고 있는가 — 조상을 거슬러 올라가 그 보드를 만나면, 보드 바로 아래가 탭의 login 이면 보드 탭이다.
+# 업데이트 단추는 보드 → bash -c → 이 스크립트라 보드 바로 아래가 bash 다(보드를 꺼야 하는 길). 조상에 보드가 없으면 보드 밖이다
+in_board_tab() {
+  local p=$$ child="" n=0 comm
+  while [ -n "$p" ] && [ "$p" -gt 1 ] && [ "$n" -lt 64 ]; do
+    comm="$(ps -o comm= -p "$p" 2>/dev/null)"
+    if [ "$comm" = "$APP/Contents/MacOS/ClaudeBoard" ]; then
+      [ -n "$child" ] && [ "$(basename "$(ps -o comm= -p "$child" 2>/dev/null)")" = "login" ]
+      return
+    fi
+    child="$p"
+    p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
+    n=$((n + 1))
+  done
+  return 1
+}
+
 # 받는 도중 끊겨도 아무것도 실행되지 않게 전체를 함수로 감싸 마지막 줄에서 부른다
 main() {
   export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -65,15 +82,18 @@ main() {
   # 실행 중인 보드를 끄고 user-setup.sh 가 자동 실행 등록과 함께 새 앱을 띄운다.
   # 보드의 업데이트 단추로 실행했어도 이 스크립트는 별도 프로세스 그룹이라 보드가 꺼져도 끝까지 돈다.
   # macOS pkill 은 자기 조상을 빼고 찾는다 — 업데이트 단추로 돌면(출력이 파일) 보드가 이 스크립트의 조상이라 -a 로 함께 끈다.
-  # 터미널에서 손으로 돌릴 때는 -a 를 쓰지 않는다 — 보드 안 터미널이면 보드를 끄는 순간 이 스크립트도 함께 끊긴다
+  # 보드 안 터미널(보드 탭)에서 손으로 돌렸으면 보드를 끄지 않는다 — 보드를 끄는 순간 탭의 세션이 확인·일시중지 표지 없이 끊기고
+  # 이 스크립트도 함께 끊겨 새 보드를 띄우지 못한다. user-setup.sh 에도 알려(CLAUDE_BOARD_KEEP_RUNNING) 로그인 자동 실행으로 뜬 보드를
+  # launchctl 로 내렸다 올리지 않게 한다(내리면 보드가 꺼진다). 출력이 파일이어도(에이전트가 돌림 등) 보드 탭이면 같다
   KEPT=""
-  if [ -t 1 ]; then
-    if ! pgrep -xq ClaudeBoard && pgrep -axq ClaudeBoard; then KEPT=1; fi
+  if in_board_tab; then
+    KEPT=1
+  elif [ -t 1 ]; then
     pkill -x ClaudeBoard 2>/dev/null || true
   else
     pkill -a -x ClaudeBoard 2>/dev/null || true
   fi
-  if ! bash "$APP/Contents/Resources/user-setup.sh" "$APP"; then
+  if ! CLAUDE_BOARD_KEEP_RUNNING="$KEPT" bash "$APP/Contents/Resources/user-setup.sh" "$APP"; then
     open -a "$APP" || true
     echo "사용자 설정 중 실패했습니다. 위 메시지를 확인하고 다시 실행하세요." >&2
     exit 1
@@ -82,7 +102,7 @@ main() {
   echo
   echo "설치를 마쳤습니다."
   if [ -n "$KEPT" ]; then
-    echo "보드 안 터미널에서 실행해 지금 보드는 다시 띄우지 않았습니다. 보드를 종료(⌘Q)하고 다시 열면 새 버전이 뜹니다."
+    echo "보드 안 터미널에서 실행해 지금 보드는 끄지 않았습니다. 새 세션은 바로 새 hook 을 쓰고, 보드는 종료(⌘Q)하고 다시 열면 새 버전이 뜹니다."
   fi
   if [ -n "$FIRST" ]; then
     echo "이미 실행 중인 Claude Code 세션은 다시 시작해야 hook 이 적용됩니다."
