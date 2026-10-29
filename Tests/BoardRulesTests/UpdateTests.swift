@@ -1,6 +1,7 @@
 // 업데이트 판단(Updates.swift) 시험 — 최신 릴리스 VERSION 받기를 가짜 어댑터로 넣어 네트워크 없이 돌린다.
 // 가짜는 이 파일에만 둔다(Sources/BoardRules 에 두지 않는다). 가짜는 받은 횟수를 세어 개발용 빌드가 받지 않는지까지 본다.
-// 기대값은 Updater.check 에 있던 지금 동작 그대로다(버그 의심도 "지금 동작" 으로 적고 고치지 않는다)
+// 기대값은 Updater.check 에 있던 지금 동작 그대로다(버그 의심도 "지금 동작" 으로 적고 고치지 않는다).
+// 다만 자릿수가 다른 버전 견주기는 고친 동작이다(이슈 #9 3차): 모자란 자리를 0 으로 채워 견주므로 3.2 와 3.2.0 은 같다
 import Foundation
 import Testing
 import BoardRules
@@ -74,8 +75,20 @@ private let versionRows: [VersionRow] = [
         ("3.2.0", "3.2.1", false),       // 더 낮으면 아니다
         ("3.9.0", "3.10.0", false),
         ("03.2", "3.2", false),          // 앞의 0 은 같은 수
-        ("3.2.0", "3.2", true),          // 지금 동작: 자릿수가 다르면 짧은 쪽이 작다(버그 의심, 고치지 않음)
-        ("3.2", "3.2.0", false),         // 지금 동작: 거꾸로는 새 버전이 아니다
+        ("3.02", "3.2", false),
+        ("3.2.0", "3.2", false),         // 자릿수가 다르면 모자란 자리를 0 으로 채운다 — 같은 버전
+        ("3.2", "3.2.0", false),
+        ("3.0.0", "3", false),
+        ("3", "3.0.0", false),
+        ("3.2.1", "3.2", true),          // 채운 0 보다 크면 새 버전
+        ("3.2", "3.2.1", false),
+        ("3.0.1", "3", true),
+        ("3.2.0.1", "3.2", true),
+        ("3.10.0", "3.9.9", true),       // 자리마다 숫자로
+        ("3.9.9", "3.10", false),
+        ("4", "3.99.99", true),
+        ("3", "2.9.9", true),
+        ("99999999999999999999.0", "3.2", true),   // Int 를 넘는 자리도 숫자로 견준다
     ])
     func 견주기(_ v: String, _ current: String, _ expected: Bool) {
         #expect(isNewerVersion(v, than: current) == expected)
@@ -102,6 +115,8 @@ struct ResultRow: Row {
 private let resultRows: [ResultRow] = [
     .init(note: "새 버전", status: 200, body: "3.3.0\n", current: "3.2.1", expected: .newer("3.3.0")),
     .init(note: "3.10.0 은 3.9.0 보다 새 버전", status: 200, body: "3.10.0", current: "3.9.0", expected: .newer("3.10.0")),
+    .init(note: "자릿수만 다른 같은 버전(3.2.0 과 3.2)은 최신", status: 200, body: "3.2.0", current: "3.2", expected: .upToDate),
+    .init(note: "3.2.1 은 3.2 보다 새 버전", status: 200, body: "3.2.1", current: "3.2", expected: .newer("3.2.1")),
     .init(note: "같은 버전이면 최신 — 알던 새 버전을 지운다", status: 200, body: "3.2.1", current: "3.2.1", expected: .upToDate),
     .init(note: "더 낮은 버전도 최신", status: 200, body: "3.2.0", current: "3.2.1", expected: .upToDate),
     .init(note: "본문이 버전이 아니면 실패 — 알던 새 버전을 그대로 둔다", status: 200, body: "v3.3.0", current: "3.2.1", expected: .failed),

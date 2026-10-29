@@ -604,7 +604,7 @@ func withFileLock<T>(_ file: String, _ body: () throws -> T) throws -> T {
     while mkdir(lock, 0o755) != 0 {
         guard errno == EEXIST else { throw AccountError("잠금을 만들지 못했습니다: \(lock)") }
         if let m = mtime(lock), Date().timeIntervalSince(m) > 15 { rmdir(lock); continue }
-        guard Date() < deadline else { throw AccountError("Claude Code 가 로그인 정보를 쓰는 중입니다. 잠시 뒤 다시 시도해 주세요") }
+        guard Date() < deadline else { throw AccountError("Claude Code 가 로그인 정보를 쓰는 중입니다. 잠시 뒤 다시 시도해 주세요", side: .busy) }
         Thread.sleep(forTimeInterval: 0.1)
     }
     defer { rmdir(lock) }
@@ -806,9 +806,16 @@ final class AccountStore: ObservableObject {
         if list != saved { saved = list }
     }
 
-    // note: 전환했을 때 띄울 안내(자동 전환), done: 전환했는지 — 자동 전환이 결과를 받는다
-    func switchTo(_ a: Account, note: String? = nil, done: ((Bool) -> Void)? = nil) {
-        guard !switching else { done?(false); return }
+    // 전환 요청의 결과 — 자동 전환이 받는다. 실패는 던진 오류 그대로(쪽은 BoardRules 의 switchFailureSide 가 가른다)
+    enum SwitchOutcome {
+        case switched
+        case busy               // 다른 전환이 도는 중이라 하지 않음 — 자동 전환은 표시도 쉼도 없이 다음 판단에서 다시 본다
+        case failed(Error)
+    }
+
+    // note: 전환했을 때 띄울 안내(자동 전환), done: 결과 — 자동 전환이 받는다. 실패 안내는 여기서 띄운다(손으로 전환하는 길과 같다)
+    func switchTo(_ a: Account, note: String? = nil, done: ((SwitchOutcome) -> Void)? = nil) {
+        guard !switching else { done?(.busy); return }
         switching = true
         queue.async { [weak self] in
             guard let self else { return }
@@ -822,10 +829,10 @@ final class AccountStore: ObservableObject {
                     self.onSwitch?()
                     self.flash(warning ?? note ?? "\(a.email) 계정으로 전환했습니다. 실행 중인 세션도 다음 요청부터 이 계정을 씁니다",
                                error: warning != nil)
-                    done?(true)
+                    done?(.switched)
                 case .failure(let e):
                     self.flash("전환하지 못했습니다: \(e.localizedDescription)", error: true)
-                    done?(false)
+                    done?(.failed(e))
                 }
             }
         }
@@ -1027,10 +1034,15 @@ final class AccountStore: ObservableObject {
     func remove(_ a: Account) {
         queue.async { [weak self] in
             guard let self else { return }
-            removeAccount(a.id, ports: self.ports)
+            // 다 했으면 nil, 토큰은 지웠지만 목록을 고치지 못했으면 그 안내, 키체인에서 못 지웠으면 던진다(목록은 그대로)
+            let r = Result { try removeAccount(a.id, ports: self.ports) }
             DispatchQueue.main.async {
                 self.loadSaved()
-                self.flash("\(a.email) 계정을 목록에서 지웠습니다")
+                switch r {
+                case .success(nil): self.flash("\(a.email) 계정을 목록에서 지웠습니다")
+                case .success(let warning?): self.flash("\(a.email): \(warning)", error: true)
+                case .failure(let e): self.flash("\(a.email) 계정을 지우지 못했습니다: \(e.localizedDescription)", error: true)
+                }
             }
         }
     }
@@ -1049,7 +1061,8 @@ final class AccountStore: ObservableObject {
 // 지금 계정의 5시간·주간 한도가 차거나 세션이 한도에 걸려 멈추면 저장한 다른 계정으로 바꾸고, 한도로 멈췄던 세션에 이어서 진행하라는 요청을 넣는다.
 // 계정 메뉴에서 켜고 끄며 기본은 꺼짐. 다른 계정의 남은 한도는 미리 알 수 없어(저장한 토큰은 그 계정으로 전환해야 갱신된다)
 // 그 계정이 지금 계정이었을 때 한도가 찼던 기록으로 고른다. 결정마다 ~/.claude/notifier/auto-switch.log 에 한 줄씩 남긴다.
-// 판단(한도에 걸린 세션·전환할지와 까닭·다음 계정과 한도 표시·이어 갈 세션)은 BoardRules(AutoSwitch.swift)의 decideAutoSwitch 가 하고,
+// 판단(한도에 걸린 세션·전환할지와 까닭·다음 계정과 한도 표시·이어 갈 세션)은 BoardRules(AutoSwitch.swift)의 decideAutoSwitch 가,
+// 전환 실패 뒤의 표시와 쉼은 autoSwitchFailed 가 하고,
 // 여기는 3초 타이머·UserDefaults·로그·안내·전환 요청·터미널 조작(driveSession)을 쥔다
 final class AutoSwitcher {
     static let prompt = "사용 한도로 멈췄던 세션을 다른 계정으로 전환해 재개합니다. 중단된 지점부터 직전 작업을 이어서 진행해 주세요."
@@ -1062,8 +1075,13 @@ final class AutoSwitcher {
         didSet { UserDefaults.standard.set(lastSwitch.timeIntervalSince1970, forKey: "autoSwitchLast") }
     }
     private var pending = false              // 자동 전환을 요청하고 결과를 기다리는 중
-    private var resumed = Set<String>()      // 이어 가기를 넣은 "세션 id@한도 시각" — 한 번만 넣는다
+    // 이어 가기를 넣은 "세션 id@한도 시각" — 한 번만 넣는다. 메모리에만 두는 것은 의도다: 요청이 들어가면 state.py 가 UserPromptSubmit 에서
+    // limit_hit 을 지워 그 세션은 다시 고르지 않으므로, 보드를 다시 켠 뒤 다시 넣는 것은 넣기에 실패해 limit_hit 이 남은 세션뿐이고 그때는 다시 해 보는 편이 낫다
+    private var resumed = Set<String>()
     private var noCandidate = false          // 전환할 계정이 없다고 이미 알렸다 — 계정이 바뀌기 전에는 다시 알리지 않는다
+    // 지금 계정·시스템 쪽 전환 실패로 자동 전환을 쉬는 중 — 지금 계정이 바뀌거나 1시간이 지날 때까지(판단은 decideAutoSwitch 가 본다).
+    // 메모리에만 두는 것은 의도다: 보드를 다시 켜면 한 번 다시 해 보고, 같은 까닭이면 다시 한 번 알리고 쉰다(/login 등으로 고친 뒤에는 그쪽이 낫다)
+    private var pause: AutoSwitchPause?
     // 한도가 찬 계정 id 와 풀리는 시각 — 그 전에는 고르지 않는다
     private var full = UserDefaults.standard.dictionary(forKey: "autoSwitchFull") as? [String: Double] ?? [:] {
         didSet { UserDefaults.standard.set(full, forKey: "autoSwitchFull") }
@@ -1081,6 +1099,7 @@ final class AutoSwitcher {
     func switched() {
         lastSwitch = Date()
         noCandidate = false
+        pause = nil
     }
 
     private func tick() {
@@ -1088,7 +1107,7 @@ final class AutoSwitcher {
         let now = Date()
         let d = decideAutoSwitch(sessions: store.groups.flatMap(\.sessions), limits: usage.limits,
                                  current: accounts.current, saved: accounts.saved, full: full, resumed: resumed,
-                                 lastSwitch: lastSwitch, pending: pending, switching: accounts.switching, now: now)
+                                 lastSwitch: lastSwitch, pending: pending, switching: accounts.switching, pause: pause, now: now)
         // 1) 전환 — 지금 계정은 한도가 풀릴 때까지 고르지 않게 적어 두고(후보가 없어도), 저장한 계정 가운데 지금 계정 다음부터 쓸 수 있는 계정으로 바꾼다
         if let marks = d.full { full = marks }
         switch d.move {
@@ -1105,11 +1124,27 @@ final class AutoSwitcher {
             log("\(reason): \(cur.email) 에서 \(next.email) 로 전환")
             let note = "사용 한도에 도달해 \(next.email) 계정으로 자동 전환했습니다"
                 + (stopped ? ". 한도로 멈춘 세션은 \(Int(AutoSwitchRule.settle))초 뒤 이어서 진행합니다" : "")
-            accounts.switchTo(next, note: note) { [weak self] ok in
-                self?.pending = false
-                guard !ok else { return }
-                self?.log("\(next.email) 로 전환하지 못함 (1시간 동안 고르지 않음)")
-                self?.full[next.id] = now.addingTimeInterval(AutoSwitchRule.retryAfter).timeIntervalSince1970
+            // 실패하면 까닭의 쪽으로 가른다(autoSwitchFailed) — 대상 계정 쪽이면 그 계정만 1시간 고르지 않고 다음 판단이 다음 후보로,
+            // 그 밖(지금 계정·시스템 쪽)이면 다른 계정으로 해도 같으므로 후보를 쓰지 않고 쉬며 한 번만 알린다(switchTo 의 실패 안내를 바꿔 띄움)
+            accounts.switchTo(next, note: note) { [weak self] r in
+                guard let self else { return }
+                self.pending = false
+                guard case .failed(let e) = r else { return }
+                let side = switchFailureSide(e)
+                let after = autoSwitchFailed(side, target: next, from: cur, full: self.full, now: now)
+                self.full = after.full
+                self.pause = after.pause
+                switch side {
+                case .target:
+                    self.log("\(next.email) 로 전환하지 못함 (1시간 동안 고르지 않음): \(e.localizedDescription)")
+                case .busy:
+                    // 쓰기 잠금은 곧 풀린다 — 알리지 않고 잠깐 쉰 뒤 같은 후보로 다시 해 본다
+                    self.log("\(next.email) 로 전환하지 못함, \(Int(AutoSwitchRule.busyRetry))초 뒤 다시: \(e.localizedDescription)")
+                case .other:
+                    self.log("\(next.email) 로 전환하지 못함, 지금 계정이 바뀌거나 1시간이 지날 때까지 자동 전환을 쉼: \(e.localizedDescription)")
+                    self.accounts.flash("사용 한도에 도달해 \(next.email) 계정으로 자동 전환하려 했지만 하지 못했습니다: \(e.localizedDescription). "
+                                        + "계정이 바뀌거나 1시간이 지날 때까지 자동 전환을 쉽니다", error: true)
+                }
             }
         }
         // 2) 이어 가기 — 전환하고 settle 이 지났으면, 그 전(이전 계정)에 한도로 멈춘 세션에 이어서 진행하라는 요청을 넣는다
@@ -1332,6 +1367,8 @@ final class Store: ObservableObject {
         SecondTicker.shared.now = now
         refreshShells()
         let sessions = scan.sessions
+        // 세션을 띄운 앱 기억도 판정의 캐시 정리(contexts.prune)처럼 목록에 남은 세션 몫만 남긴다
+        terminalControl.prune(keep: Set(sessions.map(\.id)))
         // 탭 짝짓기는 넘긴 세션까지 모두 본다 — 보드 탭에서 넘긴 원래 claude 가 그 탭에 남아 있을 수 있고(탭 줄 이름·쥔 목록),
         // 카드 목록에서만 뺀다
         // 1초 타이머·알림 관찰자 모두 메인 스레드. 탭 claude 가 넘긴 작업을 붙여 보는 중이면 탭은 그 작업 세션을 따라간다(parkedFrom = 넘긴 쪽)
@@ -9365,10 +9402,11 @@ struct SystemProcessControl: ProcessControl {
     func terminate(_ pid: Int32) { kill(pid, SIGTERM) }
 }
 
-// 세션 tty 의 창 제목(OSC 2)
+// 세션 tty 의 창 제목(OSC 2) — tty 는 세션 파일에서 온 바깥 값이라 tty 이름 꼴(isTtyName, ASCII 영숫자)일 때만 /dev/<tty> 를 연다
+// ("../" 같은 값으로 /dev 밖의 파일에 쓰지 않게). 아니면 지금처럼 조용히 넘어간다
 struct TtyTitles: TerminalTitles {
     func write(tty: String, title: String) {
-        guard let h = FileHandle(forWritingAtPath: "/dev/\(tty)") else { return }
+        guard isTtyName(tty), let h = FileHandle(forWritingAtPath: "/dev/\(tty)") else { return }
         h.write("\u{1b}]2;\(title)\u{07}".data(using: .utf8)!)
         try? h.close()
     }

@@ -2,6 +2,8 @@
 // AppleScript 글자 만들기, Ghostty 터미널 찾기(표지 제목)·키 보내기, iTerm2·Terminal 의 tty 포커스
 // (ClaudeBoard.swift 의 ownerApp·ttyExists·focusByTty·canDrive·canDriveSession·driveSession·ghosttyTerminalId·ghosttySend·focusGhostty·focusSession
 // 에 있던 판단을 옮김, 동작·포트 호출 차례·AppleScript 글자는 바이트까지 그대로). 바깥(다른 터미널 앱·프로세스·tty 제목·보드 탭)은 포트(Ports.swift)로만 부른다.
+// 이슈 #9 3차에 고친 것: 세션을 띄운 앱 기억을 보이는 세션으로 정리(prune), Ghostty 포커스도 빈 터미널 id 를 못 찾은 것으로,
+// AppleScript 글자에 넣는 tty·터미널 id 도 막는다(보통 값은 글자가 바이트까지 그대로), tty 이름 꼴이 아닌 tty 로는 찾지 않는다(isTtyName).
 // 큐(ghosttyQueue·백그라운드·메인)와 타이머는 앱이 쥔다 — 여기 함수는 부른 큐에서 그대로 돈다
 import Foundation
 
@@ -53,7 +55,17 @@ public enum FocusRoute: Equatable, Sendable {
     case ghostty       // Ghostty 이거나 못 찾음 — 표지 제목으로 찾아 포커스(ghosttyQueue, 못 찾으면 기본 터미널만)
 }
 
-// MARK: - AppleScript 글자 (바이트까지 예전 그대로 — 시험이 고정해 둔다)
+// MARK: - tty 이름
+
+/// /dev/ 아래 터미널 이름으로 쓸 수 있는 tty 인가 — 비지 않은 ASCII 영숫자만. 세션 기록의 tty 는 state.py 가 `ps -o tty=` 로 얻은 이름이고
+/// (ttys003, 옛 BSD pty 의 ttyp1, 콘솔 로그인의 console. 터미널이 없는 "??" 는 null 로 남긴다), 보드 탭의 tty 는 엔진이 준 /dev/ttys012 에서
+/// /dev/ 를 뗀 것이라 모두 이 꼴이다. 세션 파일에서 온 바깥 값이므로 /dev/<tty> 경로를 만드는 곳(창 제목 쓰기, iTerm2·Terminal 에서 tty 로
+/// 찾기)은 이것을 먼저 거친다 — "../" 같은 값이면 /dev 밖의 파일에 창 제목(OSC 2)을 쓸 수 있다. 아니면 쓰지 않고 없는 것으로 본다
+public func isTtyName(_ tty: String) -> Bool {
+    !tty.isEmpty && tty.unicodeScalars.allSatisfy { ("a"..."z").contains($0) || ("A"..."Z").contains($0) || ("0"..."9").contains($0) }
+}
+
+// MARK: - AppleScript 글자 (보통 값은 바이트까지 예전 그대로 — 시험이 고정해 둔다)
 
 /// AppleScript 글자 안에 넣을 값 — 역슬래시·큰따옴표만 막는다. 줄바꿈은 그대로 넣는다(지금 동작)
 public func appleScriptEscaped(_ t: String) -> String {
@@ -72,7 +84,7 @@ public let ghosttyTerminalsScript = """
     end tell
     """
 
-/// 그 표지 제목인 Ghostty 터미널의 id(없으면 빈 글자). 표지는 넣는 쪽이 만든 글자라 막지 않는다
+/// 그 표지 제목인 Ghostty 터미널의 id(없으면 빈 글자). 표지는 넣는 쪽이 만든 글자(titleMarker)라 막지 않는다
 public func ghosttyFindScript(marker: String) -> String {
     """
     tell application "Ghostty"
@@ -101,7 +113,7 @@ public func ghosttyFocusScript(marker: String) -> String {
 }
 
 /// Ghostty 터미널 id 에 단계를 보낸다 — 맞는 터미널이 있으면 "ok". key·text 값은 appleScriptEscaped, wait(과 그 밖의 종류)은 값 그대로 delay.
-/// 터미널 id 는 Ghostty 가 준 글자라 막지 않는다
+/// 터미널 id 는 바깥(Ghostty)이 준 글자라 같은 막기를 거친다(UUID 같은 보통 id 는 글자가 그대로다)
 public func ghosttySendScript(terminal id: String, steps: TerminalSteps) -> String {
     let body = steps.map { kind, v in
         switch kind {
@@ -113,7 +125,7 @@ public func ghosttySendScript(terminal id: String, steps: TerminalSteps) -> Stri
     return """
     tell application "Ghostty"
       repeat with t in terminals
-        if (id of t as text) is "\(id)" then
+        if (id of t as text) is "\(appleScriptEscaped(id))" then
           \(body)
           return "ok"
         end if
@@ -123,9 +135,10 @@ public func ghosttySendScript(terminal id: String, steps: TerminalSteps) -> Stri
     """
 }
 
-/// tty 로 iTerm2(그 밖의 앱 id 는 Terminal)의 탭을 찾아 앞으로 가져온다 — 찾으면 "ok". tty 는 state.py 가 기록한 이름(ttys003 등)이라 막지 않는다
+/// tty 로 iTerm2(그 밖의 앱 id 는 Terminal)의 탭을 찾아 앞으로 가져온다 — 찾으면 "ok". tty 는 세션 기록(state.py 가 쓴 파일)에서 온 바깥 값이라
+/// 같은 막기를 거친다(ttys003 같은 보통 이름은 글자가 그대로다)
 public func ttyFocusScript(app bundleId: String, tty: String) -> String {
-    let dev = "/dev/" + tty
+    let dev = appleScriptEscaped("/dev/" + tty)
     if bundleId == TerminalBundle.iterm {
         return """
         tell application id "\(TerminalBundle.iterm)"
@@ -163,9 +176,9 @@ public func ttyFocusScript(app bundleId: String, tty: String) -> String {
     """
 }
 
-/// iTerm2(그 밖의 앱 id 는 Terminal)에서 그 tty 인 세션(탭) 수를 글자로
+/// iTerm2(그 밖의 앱 id 는 Terminal)에서 그 tty 인 세션(탭) 수를 글자로. tty 는 ttyFocusScript 처럼 막는다
 public func ttyCountScript(app bundleId: String, tty: String) -> String {
-    let dev = "/dev/" + tty
+    let dev = appleScriptEscaped("/dev/" + tty)
     return bundleId == TerminalBundle.iterm
         ? "tell application id \"\(TerminalBundle.iterm)\" to return (count of (every session of every tab of every window whose tty is \"\(dev)\")) as text"
         : "tell application id \"\(TerminalBundle.terminal)\" to return (count of (every tab of every window whose tty is \"\(dev)\")) as text"
@@ -200,7 +213,7 @@ public final class TerminalControl: @unchecked Sendable {
     private let processes: ProcessControl
     private let titles: TerminalTitles
     private let tabs: BoardTabs
-    private var owners: [String: String] = [:]   // 세션 id → 찾은 앱 번들 id(찾은 것만)
+    private var owners: [String: String] = [:]   // 세션 id → 찾은 앱 번들 id(찾은 것만). 보드 목록에서 빠진 세션 몫은 prune 이 지운다
     // ghosttyQueue 와 따로 잠근다 — 잠금은 기억을 읽고 쓸 때만 쥐고 포트 호출(AppleScript 포함)은 잠금 밖이다.
     // ghosttyQueue 안(중단 등)에서 owner 를 불러도 같은 큐에 sync 를 걸어 교착하지 않게
     private let lock = NSLock()
@@ -221,14 +234,22 @@ public final class TerminalControl: @unchecked Sendable {
         return found
     }
 
-    /// 그 앱에 그 tty 인 세션(탭)이 있는가 — 결과가 숫자가 아니면 없다
-    public func ttyExists(_ bundleId: String, _ tty: String) -> Bool {
-        (Int(apps.run(ttyCountScript(app: bundleId, tty: tty)) ?? "") ?? 0) > 0
+    /// 기억을 남길 세션 id 몫만 남긴다 — 앱이 세션 판정(scanSessions) 뒤 목록에 남은 세션 id 로 부른다(ContextUsage.prune 과 같은 자리).
+    /// 지우지 않으면 보드를 오래 띄워 둘 때 끝나 지워진 세션 몫이 쌓인다. 지운 세션이 다시 보이면 다음에 다시 찾는다
+    public func prune(keep: Set<String>) {
+        lock.withLock { owners = owners.filter { keep.contains($0.key) } }
     }
 
-    /// tty 로 iTerm2·Terminal 의 탭을 찾아 앞으로 가져온다 — 찾으면 true
+    /// 그 앱에 그 tty 인 세션(탭)이 있는가 — 결과가 숫자가 아니면 없다. tty 이름 꼴(isTtyName)이 아니면 묻지 않고 없다
+    public func ttyExists(_ bundleId: String, _ tty: String) -> Bool {
+        guard isTtyName(tty) else { return false }
+        return (Int(apps.run(ttyCountScript(app: bundleId, tty: tty)) ?? "") ?? 0) > 0
+    }
+
+    /// tty 로 iTerm2·Terminal 의 탭을 찾아 앞으로 가져온다 — 찾으면 true. tty 이름 꼴(isTtyName)이 아니면 찾지 않고 false
     public func focusByTty(_ bundleId: String, _ tty: String) -> Bool {
-        apps.run(ttyFocusScript(app: bundleId, tty: tty)) == "ok"
+        guard isTtyName(tty) else { return false }
+        return apps.run(ttyFocusScript(app: bundleId, tty: tty)) == "ok"
     }
 
     /// Ghostty 에서 도는 터미널 세션인가 — AppleScript 로 키를 보낼 수 있다. 앞 조건이 아니면 앱을 찾지 않는다
@@ -297,7 +318,7 @@ public final class TerminalControl: @unchecked Sendable {
 
     /// 표지 제목으로 Ghostty 터미널을 찾아 포커스한다(ghosttyQueue 에서). 찾아 원래 제목으로 되돌렸으면 true.
     /// 아니면 표지를 폴더 이름으로 바꾸고 false — Ghostty 밖(다른 터미널)에서 도는 세션이라 앱이 기본 터미널만 앞으로 가져온다.
-    /// ghosttyTerminalId 와 달리 찾은 글자가 비었는지는 보지 않는다(지금 동작 — 목록에 id 가 빈 줄이 있으면 그 제목으로 되돌린다)
+    /// ghosttyTerminalId 와 같이 찾은 글자가 비었으면 못 찾은 것이다(목록에 id 가 빈 줄이 있어도 그 제목으로 되돌리지 않는다)
     public func focusGhostty(_ s: Session, marker: String) -> Bool {
         // 표지를 쓰기 전 제목을 기억해 둔다 — 터미널 id 와 제목을 줄 단위로 받는다
         let before = ghosttyTitles(apps.run(ghosttyTerminalsScript))
@@ -308,7 +329,7 @@ public final class TerminalControl: @unchecked Sendable {
             found = apps.run(ghosttyFocusScript(marker: marker))
             if let f = found, !f.isEmpty { break }
         }
-        if let f = found, let old = before[f] {
+        if let f = found, !f.isEmpty, let old = before[f] {
             titles.write(tty: s.tty, title: old)
             return true
         }

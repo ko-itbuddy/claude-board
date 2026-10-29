@@ -1,7 +1,8 @@
 // 계정 전환 규칙 시험 — 키체인·~/.claude.json·accounts.json·쓰기 잠금·시계를 가짜 어댑터로 넣어 실제 키체인·파일 없이 돌린다.
 // 가짜는 이 파일에만 둔다(Sources/BoardRules 에 두지 않는다). 가짜는 부른 것을 한 줄씩 적어 두어 잠금 안팎의 호출 순서까지 확인한다.
 // 기대값은 AccountStore 에 있던 지금 동작 그대로다(버그 의심도 "지금 동작" 으로 적고 고치지 않는다).
-// 옮긴 뒤 고친 것(깨진 accounts.json 을 다음 저장이 덮어쓰던 것)은 고친 동작을 기대값으로 적는다.
+// 옮긴 뒤 고친 것(깨진 accounts.json 을 다음 저장이 덮어쓰던 것, 이슈 #9 3차의 요금제 글자·저장 계정 지우기의 결과·
+// 지금 계정 정보가 모자라 전환을 막을 때의 안내·지금 계정 정보가 아예 없을 때 로그인 토큰을 덮어쓰던 것)은 고친 동작을 기대값으로 적는다.
 // 시험의 토큰·이메일은 가짜 글자다 — 진짜 토큰이 아니고, note·#expect 메시지에 토큰을 넣지 않는다
 import Foundation
 import Testing
@@ -29,6 +30,7 @@ private final class FakeKeychain: KeychainItems, @unchecked Sendable {
     var items: [KeychainItem: Data] = [:]
     var unreadable: Set<KeychainItem> = []      // 항목은 있는데 읽지 못한다
     var failWrite: Set<KeychainItem> = []
+    var failDelete: Set<KeychainItem> = []      // 지우기에 실패한다(항목이 남는다)
     init(log: CallLog) { self.log = log }
     func read(_ item: KeychainItem) -> Data? {
         log.calls.append("read \(itemName(item))")
@@ -47,7 +49,9 @@ private final class FakeKeychain: KeychainItems, @unchecked Sendable {
     }
     func delete(_ item: KeychainItem) {
         log.calls.append("delete \(itemName(item))")
+        guard !failDelete.contains(item) else { return }
         items[item] = nil
+        unreadable.remove(item)
     }
     func json(_ item: KeychainItem) -> [String: Any]? {
         items[item].flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
@@ -134,6 +138,14 @@ private struct TestError: LocalizedError {
 
 // 깨진 저장 계정 목록을 옆으로 치우지 못했을 때의 안내 — 사용자에게 보이는 글자라 긴 줄표 없이
 private let setAsideFailed = "저장 계정 목록(accounts.json)을 읽지 못해 옆으로 옮기려 했지만 옮기지 못했습니다"
+// 지우기의 결과 안내 — 키체인에서 못 지움(던짐, 아무것도 바꾸지 않음), 목록이 깨짐·목록을 못 씀(돌려줌, 토큰은 지웠다)
+private let removeKeychainFailed = "키체인의 로그인 정보를 지우지 못해 목록에 그대로 두었습니다. 잠시 뒤 다시 지워 주세요"
+private let removeListBroken = "로그인 정보는 지웠지만 저장 계정 목록(accounts.json)을 읽지 못해 목록은 그대로 두었습니다"
+private let removeListWriteFailed = "로그인 정보는 지웠지만 저장 계정 목록(accounts.json)을 쓰지 못했습니다: "
+// 지금 로그인된 계정의 정보에 accountUuid 가 없어 전환을 막을 때의 안내(앱이 "전환하지 못했습니다: " 뒤에 붙인다)
+private let currentIncomplete = "지금 로그인된 계정의 정보가 모자라 그 계정을 먼저 저장할 수 없습니다(그대로 바꾸면 그 로그인을 잃습니다). Claude Code 에서 /login 으로 다시 로그인한 뒤 해 주세요"
+// 지금 로그인된 계정의 정보(oauthAccount)가 아예 없어 전환을 막을 때의 안내 — 위와 끝이 같고 까닭만 "없어"
+private let currentMissing = "지금 로그인된 계정의 정보가 없어 그 계정을 먼저 저장할 수 없습니다(그대로 바꾸면 그 로그인을 잃습니다). Claude Code 에서 /login 으로 다시 로그인한 뒤 해 주세요"
 
 // MARK: - 시험 자료 (모두 가짜)
 
@@ -188,8 +200,10 @@ private let accountRows: [AccountRow] = [
     .init(note: "claude_ 가 없는 종류는 첫 글자만 대문자", oauth: #"{"accountUuid":"u","organizationType":"enterprise"}"#, id: "u|", plan: "Enterprise"),
     .init(note: "등급이 글자가 아님 → 붙이지 않는다", oauth: #"{"accountUuid":"u","organizationType":"claude_max","organizationRateLimitTier":5}"#,
           id: "u|", plan: "Max"),
-    .init(note: "지금 동작: 종류 없이 등급만 _5x 면 앞에 빈칸이 붙은 \" 5x\"(화면은 비었는지만 봐 칩에 그대로 보인다, 버그 의심, 고치지 않음)",
-          oauth: #"{"accountUuid":"u","organizationRateLimitTier":"default_claude_max_5x"}"#, id: "u|", plan: " 5x"),
+    .init(note: "종류 없이 등급만 _5x 면 \"5x\"(비지 않은 조각만 빈칸으로 잇는다 — 앞에 빈칸이 붙지 않는다)",
+          oauth: #"{"accountUuid":"u","organizationRateLimitTier":"default_claude_max_5x"}"#, id: "u|", plan: "5x"),
+    .init(note: "종류가 claude_ 뿐(떼면 빈 글자)이고 등급만 있어도 \"20x\"",
+          oauth: #"{"accountUuid":"u","organizationType":"claude_","organizationRateLimitTier":"default_claude_max_20x"}"#, id: "u|", plan: "20x"),
 ]
 
 @Suite("계정 전환: 계정 모델") struct AccountModelTests {
@@ -488,8 +502,8 @@ private func describe(_ a: Account) -> String {
         #expect(w.keychain.json(.savedAccount(id("A"))) != nil)
     }
 
-    @Test("지금 계정 저장 — 지금 계정이 대상 id 면·계정 정보가 없으면 하지 않는다(건너뛸 id 가 없으면 저장)", arguments: [
-        ("A", "B", true), ("A", "A", false), (nil, "A", false), ("A", nil, true),
+    @Test("지금 계정 저장 — 지금 계정이 대상 id 면 하지 않는다(건너뛸 id 가 없으면 저장)", arguments: [
+        ("A", "B", true), ("A", "A", false), ("A", nil, true),
     ] as [(String?, String?, Bool)])
     func 지금_계정_저장(_ current: String?, skip: String?, stored: Bool) throws {
         let w = World()
@@ -500,6 +514,80 @@ private func describe(_ a: Account) -> String {
         if stored { #expect(tokenName(w.keychain.json(.savedAccount(id("A")))) == "cur") }
     }
 
+    @Test("지금 계정 저장 — 계정 정보에 accountUuid 가 없는데 로그인 토큰이 있으면 까닭과 할 일을 담은 안내로 던진다(아무것도 쓰지 않는다)")
+    func 지금_계정_정보_모자람() {
+        let w = World()
+        w.config.json = ["oauthAccount": ["emailAddress": "nouuid@example.com"]]
+        w.keychain.items[loginItem] = data(["claudeAiOauth": token("cur")])
+        #expect(throws: AccountError(currentIncomplete)) { try saveCurrentAccount(except: id("A"), ports: w.ports) }
+        #expect(w.log.calls == ["config read", "read login"])
+        #expect(w.keychain.items.keys.allSatisfy { $0 == loginItem })
+    }
+
+    @Test("지금 계정 저장 — 계정 정보에 accountUuid 가 없어도 로그인 토큰이 없으면 잃을 것이 없어 던지지 않는다") func 지금_계정_정보_모자람_토큰_없음() throws {
+        let w = World()
+        w.config.json = ["oauthAccount": ["emailAddress": "nouuid@example.com"]]
+        w.keychain.items[loginItem] = data(["mcpOAuth": ["x": 1]])
+        try saveCurrentAccount(except: id("A"), ports: w.ports)
+        #expect(w.log.calls == ["config read", "read login"])
+    }
+
+    @Test("지금 계정 저장 — 계정 정보(oauthAccount)가 아예 없는데(설정 파일 없음 포함) 로그인 토큰이 있으면 안내로 던진다(아무것도 쓰지 않는다)",
+          arguments: [true, false])
+    func 지금_계정_정보_없음(_ fileExists: Bool) {
+        let w = World()
+        w.config.json = fileExists ? ["theme": "dark"] : nil
+        w.keychain.items[loginItem] = data(["claudeAiOauth": token("cur")])
+        #expect(throws: AccountError(currentMissing)) { try saveCurrentAccount(except: id("A"), incoming: token("A"), ports: w.ports) }
+        #expect(w.log.calls == ["config read", "read login"])
+        #expect(w.keychain.items.keys.allSatisfy { $0 == loginItem })
+        #expect(w.saved.data == nil)
+    }
+
+    @Test("지금 계정 저장 — 계정 정보가 없어도 로그인 토큰이 없으면(항목 없음·claudeAiOauth 없음) 잃을 것이 없어 던지지 않는다",
+          arguments: [true, false])
+    func 지금_계정_정보_없음_토큰_없음(_ hasItem: Bool) throws {
+        let w = World()
+        w.config.json = [:]
+        if hasItem { w.keychain.items[loginItem] = data(["mcpOAuth": ["x": 1]]) }
+        try saveCurrentAccount(except: id("A"), incoming: token("A"), ports: w.ports)
+        #expect(w.log.calls == ["config read", "read login"])
+    }
+
+    @Test("지금 계정 저장 — 계정 정보가 없거나 모자라도 로그인 토큰이 전환해 넣을 토큰과 같은 로그인(refreshToken 같음)이면 잃을 것이 없어 하지 않는다",
+          arguments: [false, true])
+    func 지금_계정_정보_없음_같은_로그인(_ noUuid: Bool) throws {
+        let w = World()
+        w.config.json = noUuid ? ["oauthAccount": ["emailAddress": "nouuid@example.com"]] : [:]
+        var login = token("A")
+        login["accessToken"] = "fake-access-A-refreshed"   // 액세스 토큰만 새로 받은 것도 같은 로그인
+        w.keychain.items[loginItem] = data(["claudeAiOauth": login])
+        try saveCurrentAccount(except: id("A"), incoming: token("A"), ports: w.ports)
+        #expect(w.log.calls == ["config read", "read login"])
+        #expect(w.keychain.items.keys.allSatisfy { $0 == loginItem })
+        #expect(w.saved.data == nil)
+    }
+
+    @Test("지금 계정 저장 — refreshToken 이 다르거나 어느 한쪽에 없거나 비었으면(둘 다 없어도) 같은 로그인으로 보지 않고 던진다",
+          arguments: ["다름", "넣을 쪽 없음", "지금 쪽 없음", "둘 다 없음", "둘 다 빈 글자", "글자 아님", "넣을 토큰 모름"])
+    func 지금_계정_정보_없음_다른_로그인(_ kind: String) {
+        let w = World()
+        w.config.json = [:]
+        var login = token("cur"), incoming: [String: Any]? = token("A")
+        switch kind {
+        case "넣을 쪽 없음": login["refreshToken"] = "fake-refresh-A"; incoming?["refreshToken"] = nil
+        case "지금 쪽 없음": login["refreshToken"] = nil
+        case "둘 다 없음": login["refreshToken"] = nil; incoming?["refreshToken"] = nil
+        case "둘 다 빈 글자": login["refreshToken"] = ""; incoming?["refreshToken"] = ""
+        case "글자 아님": login["refreshToken"] = 7; incoming?["refreshToken"] = 7
+        case "넣을 토큰 모름": login = token("A"); incoming = nil   // 계정 추가 길(넣을 토큰 없이 부름)
+        default: break
+        }
+        w.keychain.items[loginItem] = data(["claudeAiOauth": login])
+        #expect(throws: AccountError(currentMissing)) { try saveCurrentAccount(except: id("A"), incoming: incoming, ports: w.ports) }
+        #expect(w.keychain.items.keys.allSatisfy { $0 == loginItem })
+    }
+
     @Test("지금 계정 저장 — 로그인 정보에 claudeAiOauth 가 없으면 하지 않는다") func 지금_계정_토큰_없음() throws {
         let w = World()
         w.config.json = ["oauthAccount": oauthAccount("A")]
@@ -508,45 +596,72 @@ private func describe(_ a: Account) -> String {
         #expect(w.log.calls == ["config read", "read login"])
     }
 
-    @Test("지우기 — 보관함 항목을 지우고 목록에서 뺀다(다른 항목·id 없는 항목은 남는다)") func 지우기() {
+    @Test("지우기 — 보관함 항목을 지우고 지워졌는지 본 뒤 목록에서 뺀다(다른 항목·id 없는 항목은 남는다), 안내 없음") func 지우기() throws {
         let w = World()
         w.keychain.items[.savedAccount(id("A"))] = data(["claudeAiOauth": token("A")])
         w.keychain.items[.savedAccount(id("B"))] = data(["claudeAiOauth": token("B")])
         w.saved.data = data(["accounts": [["oauthAccount": oauthAccount("A")], ["savedAt": 1], ["oauthAccount": oauthAccount("B")]]])
-        removeAccount(id("A"), ports: w.ports)
-        #expect(w.log.calls == ["delete vault:A|org", "saved read", "saved write"])
+        #expect(try removeAccount(id("A"), ports: w.ports) == nil)
+        #expect(w.log.calls == ["delete vault:A|org", "exists vault:A|org", "saved read", "saved write"])
         #expect(w.keychain.items[.savedAccount(id("A"))] == nil)
         #expect(w.keychain.items[.savedAccount(id("B"))] != nil)
         #expect(w.savedEntries.count == 2)
         #expect(w.savedEntries.compactMap(savedAccountID) == [id("B")])
     }
 
-    @Test("지우기 — 목록을 못 써도 던지지 않는다(지금 동작)") func 지우기_실패() {
+    @Test("지우기 — 키체인 항목이 원래 없었으면 실패로 보지 않고 목록에서 뺀다") func 지우기_항목_없음() throws {
         let w = World()
-        w.saved.writeError = TestError("목록을 쓰지 못함(시험)")
-        removeAccount(id("A"), ports: w.ports)
-        #expect(w.log.calls == ["delete vault:A|org", "saved read", "saved write"])
+        w.saved.data = data(["accounts": [["oauthAccount": oauthAccount("A")], ["oauthAccount": oauthAccount("B")]]])
+        #expect(try removeAccount(id("A"), ports: w.ports) == nil)
+        #expect(w.log.calls == ["delete vault:A|org", "exists vault:A|org", "saved read", "saved write"])
+        #expect(w.savedEntries.compactMap(savedAccountID) == [id("B")])
     }
 
-    @Test("지우기 — 목록 파일이 깨졌으면 키체인 항목만 지우고 목록 파일은 건드리지 않는다(치우지도 쓰지도 않는다)", arguments: brokenSavedFiles)
-    func 지우기_깨진_목록(_ file: String) {
+    @Test("지우기 — 키체인 항목을 지우지 못하면(지운 뒤에도 남음) 안내로 던지고 목록은 건드리지 않는다(다시 지울 수 있게)") func 지우기_키체인_실패() {
+        let w = World()
+        let item = KeychainItem.savedAccount(id("A"))
+        w.keychain.items[item] = data(["claudeAiOauth": token("A")])
+        w.keychain.failDelete = [item]
+        let list = data(["accounts": [["oauthAccount": oauthAccount("A")]]])
+        w.saved.data = list
+        #expect(throws: AccountError(removeKeychainFailed)) { try removeAccount(id("A"), ports: w.ports) }
+        #expect(w.log.calls == ["delete vault:A|org", "exists vault:A|org"])
+        #expect(w.keychain.items[item] != nil)
+        #expect(w.saved.data == list)
+    }
+
+    @Test("지우기 — 목록을 못 쓰면 토큰은 지웠다는 것과 그 오류를 안내로 돌려준다(던지지 않는다)") func 지우기_실패() throws {
+        let w = World()
+        w.keychain.items[.savedAccount(id("A"))] = data(["claudeAiOauth": token("A")])
+        w.saved.writeError = TestError("목록을 쓰지 못함(시험)")
+        #expect(try removeAccount(id("A"), ports: w.ports) == removeListWriteFailed + "목록을 쓰지 못함(시험)")
+        #expect(w.log.calls == ["delete vault:A|org", "exists vault:A|org", "saved read", "saved write"])
+        #expect(w.keychain.items[.savedAccount(id("A"))] == nil)
+    }
+
+    @Test("지우기 — 목록 파일이 깨졌으면 키체인 항목만 지우고 목록 파일은 건드리지 않으며(치우지도 쓰지도 않는다) 그 안내를 돌려준다", arguments: brokenSavedFiles)
+    func 지우기_깨진_목록(_ file: String) throws {
         let w = World()
         w.keychain.items[.savedAccount(id("A"))] = data(["claudeAiOauth": token("A")])
         w.saved.data = Data(file.utf8)
-        removeAccount(id("A"), ports: w.ports)
-        #expect(w.log.calls == ["delete vault:A|org", "saved read"])
+        #expect(try removeAccount(id("A"), ports: w.ports) == removeListBroken)
+        #expect(w.log.calls == ["delete vault:A|org", "exists vault:A|org", "saved read"])
         #expect(w.keychain.items[.savedAccount(id("A"))] == nil)
         #expect(w.saved.data == Data(file.utf8))
     }
 
-    @Test("지우기 — 목록 파일이 없거나 비었으면 빈 목록으로 쓴다(지금 동작)", arguments: emptySavedFiles)
-    func 지우기_빈_목록(_ file: String?) {
+    @Test("지우기 — 목록 파일이 없거나 비었으면 빈 목록으로 쓴다, 안내 없음", arguments: emptySavedFiles)
+    func 지우기_빈_목록(_ file: String?) throws {
         let w = World()
         w.saved.data = file.map { Data($0.utf8) }
-        removeAccount(id("A"), ports: w.ports)
-        #expect(w.log.calls == ["delete vault:A|org", "saved read", "saved write"])
+        #expect(try removeAccount(id("A"), ports: w.ports) == nil)
+        #expect(w.log.calls == ["delete vault:A|org", "exists vault:A|org", "saved read", "saved write"])
         #expect(w.saved.data != nil)
         #expect(writableSavedAccountEntries(w.saved.data)?.count == 0)
+    }
+
+    @Test("지우기 안내 글자에는 긴 줄표가 없다") func 지우기_안내_글자() {
+        for m in [removeKeychainFailed, removeListBroken, removeListWriteFailed, currentIncomplete, currentMissing] { #expect(!m.contains("—")) }
     }
 }
 
@@ -559,6 +674,7 @@ enum LoginState: Sendable {
     case array         // JSON 이지만 객체가 아님
     case full          // claudeAiOauth(B) + mcpOAuth
     case noToken       // mcpOAuth 만
+    case target        // claudeAiOauth 가 대상 A 의 저장 토큰과 같은 로그인(refreshToken 같음) + mcpOAuth
 }
 
 enum ConfigState: Sendable {
@@ -586,6 +702,7 @@ struct SwitchRow: Row {
     var savedB = false                  // 지금 계정 B 의 토큰을 보관함에 저장했나
     var listB: Bool? = nil              // 목록에도 B 가 들었나, nil 이면 savedB 와 같다
     var cachesCleared: Bool? = nil      // 설정을 고쳤으면 캐시 키를 지웠나, nil 이면 설정 그대로
+    var side = SwitchFailureSide.other  // 던졌으면 그 오류의 쪽(자동 전환이 가른다) — 대상 계정의 저장 토큰이 없을 때만 대상 쪽
 }
 
 private let normal = ["read vault:A|org", "config read", "lock", "read login", "config read", "read login",
@@ -599,9 +716,9 @@ private let switchRows: [SwitchRow] = [
     .init(note: "대상이 지금 계정(A 에서 A) — 지금 계정 저장을 건너뛰고 캐시는 남긴다", config: .account("A"),
           calls: ["read vault:A|org", "config read", "lock", "read login", "config read", "write login", "unlock", "config patch"],
           cachesCleared: false),
-    .init(note: "저장 토큰 없음 → 아무것도 바꾸지 않는다", vault: nil, calls: ["read vault:A|org"], error: noMatch, switched: false),
-    .init(note: "저장 토큰에 claudeAiOauth 없음 → 저장 토큰 없음", vault: #"{"other":1}"#, calls: ["read vault:A|org"], error: noMatch, switched: false),
-    .init(note: "저장 토큰이 JSON 아님 → 저장 토큰 없음", vault: "garbage", calls: ["read vault:A|org"], error: noMatch, switched: false),
+    .init(note: "저장 토큰 없음 → 아무것도 바꾸지 않는다", vault: nil, calls: ["read vault:A|org"], error: noMatch, switched: false, side: .target),
+    .init(note: "저장 토큰에 claudeAiOauth 없음 → 저장 토큰 없음", vault: #"{"other":1}"#, calls: ["read vault:A|org"], error: noMatch, switched: false, side: .target),
+    .init(note: "저장 토큰이 JSON 아님 → 저장 토큰 없음", vault: "garbage", calls: ["read vault:A|org"], error: noMatch, switched: false, side: .target),
     .init(note: "로그인 정보 항목은 있는데 못 읽음 → 잠금 안에서 멈춘다", login: .unreadable,
           calls: ["read vault:A|org", "config read", "lock", "read login", "exists login", "unlock"], error: unreadableLogin, switched: false),
     .init(note: "로그인 정보가 JSON 아님 → 있는지 묻지 않고 멈춘다", login: .garbage,
@@ -614,11 +731,25 @@ private let switchRows: [SwitchRow] = [
     .init(note: "로그인 정보에 claudeAiOauth 없음(mcpOAuth 만) → 지금 계정 저장은 건너뛰고 mcpOAuth 는 남긴다", login: .noToken,
           calls: ["read vault:A|org", "config read", "lock", "read login", "config read", "read login", "write login", "unlock", "config patch"],
           cachesCleared: true),
-    .init(note: "설정에 계정 정보 없음 → 지금 계정 저장 없음, 앞 계정을 몰라 캐시를 지운다", config: .noAccount,
-          calls: ["read vault:A|org", "config read", "lock", "read login", "config read", "write login", "unlock", "config patch"],
+    .init(note: "설정에 계정 정보가 없는데 로그인 토큰(B)이 있으면 그 계정을 저장하지 못해 전환을 막고(토큰을 잃지 않게) 까닭과 할 일을 안내한다",
+          config: .noAccount,
+          calls: ["read vault:A|org", "config read", "lock", "read login", "config read", "read login", "unlock"],
+          error: currentMissing, switched: false),
+    .init(note: "설정 파일이 없는데 로그인 토큰(B)이 있으면 같은 까닭으로 막는다", config: .missing,
+          calls: ["read vault:A|org", "config read", "lock", "read login", "config read", "read login", "unlock"],
+          error: currentMissing, switched: false),
+    .init(note: "설정에 계정 정보 없음 + 로그인 토큰 없음(mcpOAuth 만) → 잃을 것이 없어 전환, 앞 계정을 몰라 캐시를 지운다",
+          login: .noToken, config: .noAccount,
+          calls: ["read vault:A|org", "config read", "lock", "read login", "config read", "read login", "write login", "unlock", "config patch"],
           cachesCleared: true),
-    .init(note: "설정 파일 없음 → 토큰은 바꾸고 설정 고치기 실패 안내", config: .missing,
-          calls: ["read vault:A|org", "config read", "lock", "read login", "config read", "write login", "unlock", "config patch"],
+    .init(note: "설정에 계정 정보 없음 + 로그인 정보 항목 없음 → 전환", login: .none, config: .noAccount,
+          calls: ["read vault:A|org", "config read", "lock", "read login", "exists login", "config read", "read login", "write login", "unlock", "config patch"],
+          cachesCleared: true),
+    .init(note: "설정에 계정 정보 없음 + 로그인 토큰이 대상 A 의 저장 토큰과 같은 로그인 → 잃을 것이 없어 전환", login: .target, config: .noAccount,
+          calls: ["read vault:A|org", "config read", "lock", "read login", "config read", "read login", "write login", "unlock", "config patch"],
+          cachesCleared: true),
+    .init(note: "설정 파일 없음 + 로그인 토큰 없음 → 토큰은 바꾸고 설정 고치기 실패 안내", login: .noToken, config: .missing,
+          calls: ["read vault:A|org", "config read", "lock", "read login", "config read", "read login", "write login", "unlock", "config patch"],
           warning: "토큰은 바꿨지만 계정 정보 파일을 고치지 못했습니다: .claude.json 를 읽지 못했습니다"),
     .init(note: "설정 고치기 실패 → 토큰은 바꾸고 안내를 돌려준다(던지지 않는다)", patchFails: true, calls: normal,
           warning: "토큰은 바꿨지만 계정 정보 파일을 고치지 못했습니다: 설정을 쓰지 못함(시험)", savedB: true),
@@ -640,10 +771,18 @@ private let switchRows: [SwitchRow] = [
           error: setAsideFailed, switched: false, savedB: true, listB: false),
     .init(note: "쓰기 잠금을 못 잡음 → 잠금 안의 일은 하나도 하지 않는다", lockFails: true,
           calls: ["read vault:A|org", "config read", "lock failed"], error: "Claude Code 가 로그인 정보를 쓰는 중입니다(시험)", switched: false),
-    .init(note: "지금 동작: 설정의 계정 정보에 accountUuid 가 없으면 지금 계정 저장이 \"계정 정보가 없습니다\" 로 전환을 막는다(버그 의심, 고치지 않음)",
+    .init(note: "설정의 계정 정보에 accountUuid 가 없으면 지금 계정을 저장하지 못해 전환을 막고(토큰을 잃지 않게), 까닭과 할 일을 안내한다",
           config: .noUuid,
           calls: ["read vault:A|org", "config read", "lock", "read login", "config read", "read login", "unlock"],
-          error: "계정 정보가 없습니다", switched: false),
+          error: currentIncomplete, switched: false),
+    .init(note: "설정의 계정 정보에 accountUuid 가 없어도 로그인 토큰이 없으면(mcpOAuth 만) 잃을 것이 없어 전환한다", login: .noToken,
+          config: .noUuid,
+          calls: ["read vault:A|org", "config read", "lock", "read login", "config read", "read login", "write login", "unlock", "config patch"],
+          cachesCleared: true),
+    .init(note: "설정의 계정 정보에 accountUuid 가 없어도 로그인 토큰이 대상 A 와 같은 로그인이면 잃을 것이 없어 전환한다", login: .target,
+          config: .noUuid,
+          calls: ["read vault:A|org", "config read", "lock", "read login", "config read", "read login", "write login", "unlock", "config patch"],
+          cachesCleared: true),
 ]
 
 @Suite("계정 전환: 전환 유스케이스") struct AccountSwitchTests {
@@ -664,6 +803,10 @@ private let switchRows: [SwitchRow] = [
         case .array: w.keychain.items[loginItem] = Data("[]".utf8)
         case .full: w.keychain.items[loginItem] = data(["claudeAiOauth": token("B"), "mcpOAuth": mcp])
         case .noToken: w.keychain.items[loginItem] = data(["mcpOAuth": mcp])
+        case .target:
+            var t = token("A")
+            t["accessToken"] = "fake-access-A-refreshed"   // 액세스 토큰만 새로 받았어도 refreshToken 이 같으면 같은 로그인
+            w.keychain.items[loginItem] = data(["claudeAiOauth": t, "mcpOAuth": mcp])
         }
         var config: [String: Any] = ["theme": "dark"]
         for k in accountCacheKeys { config[k] = 1 }
@@ -684,16 +827,21 @@ private let switchRows: [SwitchRow] = [
 
         var warning: String?
         var thrown: String?
-        do { warning = try switchAccount(to: account("A"), ports: w.ports) } catch { thrown = error.localizedDescription }
+        var side: SwitchFailureSide?
+        do { warning = try switchAccount(to: account("A"), ports: w.ports) } catch {
+            thrown = error.localizedDescription
+            side = switchFailureSide(error)
+        }
 
         #expect(thrown == row.error)
+        #expect(side == (row.error == nil ? nil : row.side))
         #expect(warning == row.warning)
         #expect(w.log.calls == row.calls)
         // 로그인 정보: 바뀌었으면 claudeAiOauth 만 A 이고 다른 키(mcpOAuth)는 그대로
         if row.switched {
             let after = try #require(w.keychain.json(loginItem))
             #expect(tokenName(after) == "A")
-            let hadMcp = row.login == .full || row.login == .noToken
+            let hadMcp = row.login == .full || row.login == .noToken || row.login == .target
             #expect(Set(after.keys) == (hadMcp ? ["claudeAiOauth", "mcpOAuth"] : ["claudeAiOauth"]))
             if hadMcp { #expect(((after["mcpOAuth"] as? [String: Any])?["server"] as? [String: Any])?["accessToken"] as? String == "fake-mcp") }
         } else {
@@ -714,6 +862,14 @@ private let switchRows: [SwitchRow] = [
         } else {
             #expect(w.config.json.map { data($0) } == configBefore)
         }
+    }
+
+    @Test("전환 실패의 쪽 — AccountError 가 담은 쪽(기본은 그 밖), AccountError 가 아닌 오류(목록 파일 쓰기 등)는 그 밖") func 실패_쪽() {
+        #expect(switchFailureSide(AccountError("x")) == .other)
+        #expect(switchFailureSide(AccountError("x", side: .target)) == .target)
+        #expect(switchFailureSide(AccountError("x", side: .other)) == .other)
+        #expect(switchFailureSide(TestError("목록을 쓰지 못함(시험)")) == .other)
+        #expect(switchFailureSide(CocoaError(.fileWriteNoPermission)) == .other)
     }
 
     @Test("지금 계정 읽기 — 설정의 oauthAccount 로 만든 계정, 없거나 accountUuid 가 없으면 nil") func 지금_계정() {

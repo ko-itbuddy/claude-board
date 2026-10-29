@@ -1,5 +1,7 @@
 // 사용 한도 자동 전환 판단 시험 — 바깥이 없는 순수 함수라 가짜 어댑터 없이 세션·한도·계정 값만 넣는다.
-// 기대값은 AutoSwitcher.tick·switchAway 에 있던 지금 동작 그대로다. 계정·이메일은 가짜다
+// 기대값은 AutoSwitcher.tick·switchAway 에 있던 지금 동작 그대로다. 다만 이슈 #9 3차에 고친 것은 고친 동작이다: 지금 계정의 한도 표시
+// 기간은 떠날 까닭과 같이 5시간·주간(전체)만 보고, 전환 실패는 까닭의 쪽으로 갈라 대상 계정 쪽이면 그 계정만 표시, 그 밖이면 표시 없이
+// 쉰다(쉬는 동안 전환하지 않고 이어 가기는 그대로). 계정·이메일은 가짜다
 import Foundation
 import Testing
 import BoardRules
@@ -67,10 +69,19 @@ struct DecideRow: Row {
     var lastSwitch = longAgo            // 마지막 전환(지금에서 초)
     var pending = false
     var switching = false
+    var pause: PauseSpec? = nil         // 자동 전환을 쉬는 중
     let move: String                    // describe 결과
     var marks: [String: Double]? = nil  // 새 한도 표시(계정 이름 → 지금에서 초), nil 이면 그대로
     var resume: [String] = []           // 이어 갈 세션 id(차례대로)
 }
+
+// 자동 전환을 쉬는 중 — 쉬기 시작한 지금 계정 이름과 끝 시각(지금에서 초)
+struct PauseSpec: Sendable {
+    let account: String
+    let until: Double
+    init(_ account: String, _ until: Double) { self.account = account; self.until = until }
+}
+private func pause(_ p: PauseSpec) -> AutoSwitchPause { AutoSwitchPause(account: id(p.account), until: n0 + p.until) }
 
 private let hitReason = "s1 세션이 한도에 걸림(한도 메시지)"
 
@@ -93,9 +104,18 @@ private let decideRows: [DecideRow] = [
     .init(note: "주간 120% → 전환, 퍼센트는 정수로", limits: [LimitSpec("5h", 10, 1800), LimitSpec("7d", 120.7, 7200)],
           move: "switch A→B [주간 · 전체 한도 120%]", marks: ["A": 7200]),
     .init(note: "모델별 주간만 100% → 전환하지 않는다(5시간·주간 전체만 본다)", limits: [LimitSpec("7d-Fable", 100, 7200)], move: "stay"),
-    .init(note: "표시 풀림 시각은 모델별 주간까지 100% 이상 한도 가운데 가장 늦은 미래 것",
+    .init(note: "표시 풀림 시각은 5시간·주간(전체) 가운데 100% 이상인 것의 가장 늦은 미래 것 — 모델별 주간은 떠날 까닭처럼 보지 않는다",
           sessions: [SessionSpec(id: "s1", limitAt: -5)], limits: [LimitSpec("5h", 100, 1800), LimitSpec("7d-Fable", 100, 7200), LimitSpec("7d", 100, -10), LimitSpec("7d", 50, 99999)],
-          move: "switch A→B [\(hitReason)] stopped", marks: ["A": 7200]),
+          move: "switch A→B [\(hitReason)] stopped", marks: ["A": 1800]),
+    .init(note: "5시간·주간(전체) 둘 다 100% 면 더 늦게 풀리는 것까지",
+          limits: [LimitSpec("5h", 100, 1800), LimitSpec("7d", 100, 50000), LimitSpec("7d-Fable", 100, 90000)],
+          move: "switch A→B [5시간 한도 100%]", marks: ["A": 50000]),
+    .init(note: "세션이 걸려 떠날 때 찬 것이 모델별 주간뿐이면 풀림을 모르는 것과 같이 1시간",
+          sessions: [SessionSpec(id: "s1", limitAt: -5)], limits: [LimitSpec("5h", 40, 1800), LimitSpec("7d-Fable", 100, 7200)],
+          move: "switch A→B [\(hitReason)] stopped", marks: ["A": 3600]),
+    .init(note: "5시간·주간(전체)의 풀림을 모르면 모델별 주간의 풀림이 있어도 1시간",
+          limits: [LimitSpec("5h", 100), LimitSpec("7d-Fable", 100, 7200)],
+          move: "switch A→B [5시간 한도 100%]", marks: ["A": 3600]),
     .init(note: "세션과 한도가 함께면 세션 까닭, 세션이 여럿이면 첫 것",
           sessions: [SessionSpec(id: "s1", limitAt: -5), SessionSpec(id: "s2", limitAt: -3)], limits: [LimitSpec("5h", 100, 1800)],
           move: "switch A→B [\(hitReason)] stopped", marks: ["A": 1800]),
@@ -169,6 +189,22 @@ private let decideRows: [DecideRow] = [
           move: "switch A→B [\(hitReason)] stopped", marks: ["A": 3600], resume: ["old"]),
     .init(note: "이어 가기 — 한 번도 전환하지 않았으면(마지막 전환 1970) 모든 한도 세션이 새로 걸린 것",
           sessions: [SessionSpec(id: "s1", limitAt: -500)], lastSwitch: -3_000_000, move: "switch A→B [\(hitReason)] stopped", marks: ["A": 3600]),
+
+    // 쉬는 중(지금 계정·시스템 쪽 전환 실패 뒤)
+    .init(note: "쉬는 중 — 지금 계정이 쉬기 시작한 계정이고 끝 시각 전이면 한도가 차도 전환하지 않고 표시도 그대로",
+          limits: [LimitSpec("5h", 100, 1800)], pause: PauseSpec("A", 600), move: "stay"),
+    .init(note: "쉬는 중 — 세션이 새로 걸려도 전환하지 않는다", sessions: [SessionSpec(id: "s1", limitAt: -5)], pause: PauseSpec("A", 600), move: "stay"),
+    .init(note: "쉬는 중 — 바꿀 계정이 없어도 알리지 않는다(stay)", limits: [LimitSpec("5h", 100, 1800)], saved: ["A"],
+          pause: PauseSpec("A", 600), move: "stay"),
+    .init(note: "쉬는 중 — 지금 계정이 바뀌었으면 쉬지 않고 다시 판단", limits: [LimitSpec("5h", 100, 1800)], current: "B",
+          pause: PauseSpec("A", 600), move: "switch B→C [5시간 한도 100%]", marks: ["B": 1800]),
+    .init(note: "쉬는 중 — 끝 시각이 꼭 지금이면 끝난 것(다시 판단)", limits: [LimitSpec("5h", 100, 1800)], pause: PauseSpec("A", 0),
+          move: "switch A→B [5시간 한도 100%]", marks: ["A": 1800]),
+    .init(note: "쉬는 중 — 끝 시각이 지났으면 다시 판단", limits: [LimitSpec("5h", 100, 1800)], pause: PauseSpec("A", -1),
+          move: "switch A→B [5시간 한도 100%]", marks: ["A": 1800]),
+    .init(note: "쉬는 중에도 이어 가기는 그대로(이미 전환한 뒤 settle 이 지난 세션)",
+          sessions: [SessionSpec(id: "old", limitAt: -980), SessionSpec(id: "s1", limitAt: -5)], pause: PauseSpec("A", 600),
+          move: "stay", resume: ["old"]),
 ]
 
 @Suite("자동 전환: 판단") struct AutoSwitchDecideTests {
@@ -183,7 +219,7 @@ private let decideRows: [DecideRow] = [
                                  saved: row.saved.map { account($0, expired: row.expired.contains($0)) },
                                  full: Dictionary(uniqueKeysWithValues: row.full.map { (id($0.key), epoch($0.value)) }),
                                  resumed: resumed, lastSwitch: n0 + row.lastSwitch,
-                                 pending: row.pending, switching: row.switching, now: n0)
+                                 pending: row.pending, switching: row.switching, pause: row.pause.map(pause), now: n0)
         #expect(describe(d.move) == row.move)
         #expect(d.full == row.marks.map { Dictionary(uniqueKeysWithValues: $0.map { (id($0.key), epoch($0.value)) }) })
         #expect(d.resume.map(\.session.id) == row.resume)
@@ -195,9 +231,70 @@ private let decideRows: [DecideRow] = [
         #expect(resumeKey(id: "s1", limitAt: Date(timeIntervalSince1970: 1.5)) == "s1@1.5")
     }
 
-    @Test("규칙 값 — settle 40초·최근 6시간·다시 볼 때까지 1시간") func 규칙_값() {
+    @Test("규칙 값 — settle 40초·최근 6시간·다시 볼 때까지(쉬는 동안도) 1시간") func 규칙_값() {
         #expect(AutoSwitchRule.settle == 40)
         #expect(AutoSwitchRule.recent == 6 * 3600)
         #expect(AutoSwitchRule.retryAfter == 3600)
+    }
+}
+
+// MARK: - 전환 실패 뒤
+
+// 판단 한 번 — 세션 없이 한도만, 저장 계정 A·B·C, 지금 계정 cur
+private func decide(current: String = "A", limits: [LimitSpec], full: [String: Double], pause p: AutoSwitchPause?, at t: Double) -> AutoSwitchDecision {
+    decideAutoSwitch(sessions: [], limits: limits.map(limit), current: account(current), saved: ["A", "B", "C"].map { account($0) },
+                     full: full, resumed: [], lastSwitch: n0 + longAgo, pending: false, switching: false, pause: p, now: n0 + t)
+}
+
+@Suite("자동 전환: 전환 실패 뒤") struct AutoSwitchFailureTests {
+    @Test("대상 계정 쪽 실패 — 그 계정만 1시간 고르지 않게 표시하고(다른 표시는 그대로) 쉬지 않는다") func 대상_쪽() {
+        let r = autoSwitchFailed(.target, target: account("B"), from: account("A"), full: [id("A"): epoch(1800), id("C"): epoch(600)], now: n0)
+        #expect(r.full == [id("A"): epoch(1800), id("B"): epoch(3600), id("C"): epoch(600)])
+        #expect(r.pause == nil)
+    }
+
+    @Test("그 밖(지금 계정·시스템 쪽) 실패 — 표시는 그대로 두고 지금 계정이 그대로인 동안 1시간 쉰다") func 그_밖() {
+        let r = autoSwitchFailed(.other, target: account("B"), from: account("A"), full: [id("A"): epoch(1800)], now: n0)
+        #expect(r.full == [id("A"): epoch(1800)])
+        #expect(r.pause == AutoSwitchPause(account: id("A"), until: n0 + 3600))
+    }
+
+    @Test("쓰기 잠금을 잡지 못한 실패(곧 풀림) — 표시는 그대로 두고 30초만 쉰 뒤 같은 후보부터 다시 판단한다") func 잠금_중() {
+        let limits = [LimitSpec("5h", 100, 7200)]
+        let first = decide(limits: limits, full: [:], pause: nil, at: 0)
+        let after = autoSwitchFailed(.busy, target: account("B"), from: account("A"), full: first.full ?? [:], now: n0)
+        #expect(after.full == first.full ?? [:])
+        #expect(after.pause == AutoSwitchPause(account: id("A"), until: n0 + 30))
+        #expect(describe(decide(limits: limits, full: after.full, pause: after.pause, at: 27).move) == "stay")
+        #expect(describe(decide(limits: limits, full: after.full, pause: after.pause, at: 30).move) == "switch A→B [5시간 한도 100%]")
+    }
+
+    @Test("실패 오류의 쪽 — AccountError 가 담은 쪽, 그 밖의 오류는 그 밖") func 오류의_쪽() {
+        #expect(switchFailureSide(AccountError("잠금", side: .busy)) == .busy)
+        #expect(switchFailureSide(AccountError("대상", side: .target)) == .target)
+        #expect(switchFailureSide(AccountError("기본")) == .other)
+        #expect(switchFailureSide(CocoaError(.fileWriteUnknown)) == .other)
+    }
+
+    @Test("대상 쪽 실패 뒤 다음 판단은 다음 후보로 — 그 계정을 건너뛴다") func 대상_쪽_다음_후보() {
+        let limits = [LimitSpec("5h", 100, 7200)]
+        let first = decide(limits: limits, full: [:], pause: nil, at: 0)
+        #expect(describe(first.move) == "switch A→B [5시간 한도 100%]")
+        let after = autoSwitchFailed(.target, target: account("B"), from: account("A"), full: first.full ?? [:], now: n0)
+        #expect(describe(decide(limits: limits, full: after.full, pause: after.pause, at: 3).move) == "switch A→C [5시간 한도 100%]")
+    }
+
+    @Test("그 밖 실패 뒤 — 다음 판단부터 쉬고(후보를 쓰지 않는다), 1시간이 지나거나 지금 계정이 바뀌면 다시 판단해 같은 후보부터") func 그_밖_쉼() {
+        let limits = [LimitSpec("5h", 100, 7200)]
+        let first = decide(limits: limits, full: [:], pause: nil, at: 0)
+        #expect(describe(first.move) == "switch A→B [5시간 한도 100%]")
+        let after = autoSwitchFailed(.other, target: account("B"), from: account("A"), full: first.full ?? [:], now: n0)
+        for t in [3.0, 600, 3599] {
+            let d = decide(limits: limits, full: after.full, pause: after.pause, at: t)
+            #expect(describe(d.move) == "stay", "\(t)초 뒤")
+            #expect(d.full == nil, "\(t)초 뒤")
+        }
+        #expect(describe(decide(limits: limits, full: after.full, pause: after.pause, at: 3600).move) == "switch A→B [5시간 한도 100%]")
+        #expect(describe(decide(current: "C", limits: limits, full: after.full, pause: after.pause, at: 3).move) == "switch C→B [5시간 한도 100%]")
     }
 }

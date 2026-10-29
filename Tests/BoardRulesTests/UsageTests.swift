@@ -1,7 +1,9 @@
 // 사용량 규칙 시험 — 사용량 캐시·로그인 정보·사용량 API·시계를 가짜 어댑터로 넣어 파일·키체인·네트워크 없이 돌린다.
 // 가짜는 이 파일에만 둔다(Sources/BoardRules 에 두지 않는다). 가짜는 부른 것을 적어 두어 캐시를 언제 읽고 쓰는지·API 를 언제 부르는지까지 확인한다.
 // 기대값은 UsageStore 에 있던 지금 동작 그대로다. 다만 캐시 신선도와 빈 한도 응답은 고친 동작이다(이슈 #9 2차): 못 푸는 캐시와
-// 수정 시각이 미래인 캐시는 받고, 푼 한도가 하나도 없는 응답은 실패다. 시험의 토큰은 가짜 글자이고 note·#expect 메시지에 토큰을 넣지 않는다
+// 수정 시각이 미래인 캐시는 받고, 푼 한도가 하나도 없는 응답은 실패다. 모델별 주간의 id 겹침과 limits 에 섞인 객체 아닌 원소도
+// 고친 동작이다(이슈 #9 3차): 겹치는 id 는 뒤의 것에 -2·-3 … 을 붙이고, 객체 아닌 원소만 뺀다.
+// 시험의 토큰은 가짜 글자이고 note·#expect 메시지에 토큰을 넣지 않는다
 import Foundation
 import Testing
 import BoardRules
@@ -93,9 +95,28 @@ private let parseRows: [ParseRow] = [
     .init(note: "display_name null 도 \"모델\"", json: #"""
           {"five_hour":{"utilization":1},"limits":[{"kind":"weekly_scoped","percent":9,"scope":{"model":{"display_name":null}}}]}
           """#, expected: [L("5h", "5시간", 1), L("7d-모델", "주간 · 모델", 9)]),
-    .init(note: "지금 동작: 이름 없는 모델별 주간이 둘이면 id 가 겹친다(버그 의심, 고치지 않음)", json: #"""
+    .init(note: "이름 없는 모델별 주간이 둘이면 뒤의 것 id 에 -2(라벨은 그대로) — 화면 목록의 id 가 겹치지 않게", json: #"""
           {"five_hour":{"utilization":1},"limits":[{"kind":"weekly_scoped","percent":1},{"kind":"weekly_scoped","percent":2}]}
-          """#, expected: [L("5h", "5시간", 1), L("7d-모델", "주간 · 모델", 1), L("7d-모델", "주간 · 모델", 2)]),
+          """#, expected: [L("5h", "5시간", 1), L("7d-모델", "주간 · 모델", 1), L("7d-모델-2", "주간 · 모델", 2)]),
+    .init(note: "같은 이름이 셋이면 -2·-3, 다른 이름 사이에 끼어도 차례대로", json: #"""
+          {"five_hour":{"utilization":1},"limits":[
+           {"kind":"weekly_scoped","percent":10,"scope":{"model":{"display_name":"Opus"}}},
+           {"kind":"weekly_scoped","percent":20,"scope":{"model":{"display_name":"Fable"}}},
+           {"kind":"weekly_scoped","percent":30,"scope":{"model":{"display_name":"Opus"}}},
+           {"kind":"weekly_scoped","percent":40,"scope":{"model":{"display_name":"Opus"}}}]}
+          """#, expected: [L("5h", "5시간", 1), L("7d-Opus", "주간 · Opus", 10), L("7d-Fable", "주간 · Fable", 20),
+                           L("7d-Opus-2", "주간 · Opus", 30), L("7d-Opus-3", "주간 · Opus", 40)]),
+    .init(note: "붙인 id 가 다른 모델 이름과 겹치면 다음 수로(모델-2 라는 이름이 이미 있으면 -3)", json: #"""
+          {"five_hour":{"utilization":1},"limits":[
+           {"kind":"weekly_scoped","percent":1},
+           {"kind":"weekly_scoped","percent":2,"scope":{"model":{"display_name":"모델-2"}}},
+           {"kind":"weekly_scoped","percent":3}]}
+          """#, expected: [L("5h", "5시간", 1), L("7d-모델", "주간 · 모델", 1), L("7d-모델-2", "주간 · 모델-2", 2), L("7d-모델-3", "주간 · 모델", 3)]),
+    .init(note: "빠진(숫자 아님) 항목은 id 를 차지하지 않는다 — 같은 이름의 앞 것이 빠지면 뒤의 것이 -2 없이", json: #"""
+          {"five_hour":{"utilization":1},"limits":[
+           {"kind":"weekly_scoped","percent":"x","scope":{"model":{"display_name":"Opus"}}},
+           {"kind":"weekly_scoped","percent":3,"scope":{"model":{"display_name":"Opus"}}}]}
+          """#, expected: [L("5h", "5시간", 1), L("7d-Opus", "주간 · Opus", 3)]),
     .init(note: "weekly_scoped 의 utilization 은 보지 않는다(percent 만)", json: #"""
           {"five_hour":{"utilization":1},"limits":[{"kind":"weekly_scoped","utilization":50,"scope":{"model":{"display_name":"Opus"}}}]}
           """#, expected: [L("5h", "5시간", 1)]),
@@ -122,7 +143,13 @@ private let parseRows: [ParseRow] = [
     .init(note: "seven_day 가 객체가 아니면 그 항목만 빠짐", json: #"{"five_hour":{"utilization":5},"seven_day":"x"}"#, expected: [L("5h", "5시간", 5)]),
     .init(note: "limits 가 배열이 아니면 모델별 주간 없음", json: #"{"five_hour":{"utilization":5},"limits":{"kind":"weekly_scoped","percent":3}}"#,
           expected: [L("5h", "5시간", 5)]),
-    .init(note: "limits 에 객체 아닌 것이 섞이면 모델별 주간 모두 없음", json: #"{"five_hour":{"utilization":5},"limits":[1,{"kind":"weekly_scoped","percent":3}]}"#,
+    .init(note: "limits 에 객체 아닌 것이 섞이면 그 원소만 빼고 객체인 원소는 본다", json: #"{"five_hour":{"utilization":5},"limits":[1,{"kind":"weekly_scoped","percent":3}]}"#,
+          expected: [L("5h", "5시간", 5), L("7d-모델", "주간 · 모델", 3)]),
+    .init(note: "객체 아닌 원소(null·글자·배열·수)가 여럿 섞여도 객체인 원소는 응답 차례대로", json: #"""
+          {"five_hour":{"utilization":5},"limits":[null,{"kind":"weekly_scoped","percent":3,"scope":{"model":{"display_name":"Opus"}}},"x",[1],
+           {"kind":"weekly_scoped","percent":4,"scope":{"model":{"display_name":"Fable"}}},2.5]}
+          """#, expected: [L("5h", "5시간", 5), L("7d-Opus", "주간 · Opus", 3), L("7d-Fable", "주간 · Fable", 4)]),
+    .init(note: "limits 가 객체 아닌 원소뿐이면 모델별 주간 없음", json: #"{"five_hour":{"utilization":5},"limits":[1,"x",null]}"#,
           expected: [L("5h", "5시간", 5)]),
     .init(note: "resets_at 소수 초 있음·없음·null·없음·깨짐", json: #"""
           {"five_hour":{"utilization":1,"resets_at":"2026-10-28T10:50:00.697299+00:00"},"seven_day":{"utilization":2,"resets_at":"2026-10-29T07:00:00+00:00"},

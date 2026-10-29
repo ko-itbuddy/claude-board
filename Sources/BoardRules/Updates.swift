@@ -1,5 +1,6 @@
 // 업데이트 판단 — 최신 릴리스의 VERSION 본문 검증, 이 앱보다 새 버전인지, 확인하는 빌드인지, 확인 결과
-// (Updater.check 에 있던 판단을 옮김, 동작은 그대로). 바깥(최신 VERSION 받기)은 포트(ReleaseVersions)로만 부른다.
+// (Updater.check 에 있던 판단을 옮김, 동작은 그대로, 이슈 #9 3차에 고친 것: 자릿수가 다른 버전은 모자란 자리를 0 으로 채워 견준다).
+// 바깥(최신 VERSION 받기)은 포트(ReleaseVersions)로만 부른다.
 // 앱(Updater)에 남는 것: 1시간 타이머·설정 autoUpdateCheck 읽기·손으로 누른 확인이 도는 중(checking)·알림 줄 표시와 4초 뒤 숨기기·애니메이션,
 // 업데이트 실행(install.sh·종료 확인·로그 파일)
 import Foundation
@@ -15,9 +16,20 @@ public func releaseVersion(status: Int?, body: Data?) -> String? {
     return s
 }
 
-/// 이 앱보다 새 버전인가 — 자리마다 숫자로 견준다(3.10.0 > 3.9.0). 자릿수가 다르면 짧은 쪽이 작다(3.2.0 > 3.2, 지금 동작)
+/// 이 앱보다 새 버전인가 — 점으로 나눈 자리마다 숫자로 견준다(3.10.0 > 3.9.9). 자릿수가 다르면 모자란 쪽을 0 으로 채운다
+/// (3.2 == 3.2.0, 3.2.1 > 3.2). 자리는 글자 그대로 숫자 견주기(.numeric)라 앞의 0 은 같은 수이고 Int 를 넘는 자리도 견준다
 public func isNewerVersion(_ v: String, than current: String) -> Bool {
-    v.compare(current, options: .numeric) == .orderedDescending
+    let a = v.split(separator: ".", omittingEmptySubsequences: false)
+    let b = current.split(separator: ".", omittingEmptySubsequences: false)
+    for i in 0..<max(a.count, b.count) {
+        let x = i < a.count ? String(a[i]) : "0", y = i < b.count ? String(b[i]) : "0"
+        switch x.compare(y, options: .numeric) {
+        case .orderedDescending: return true
+        case .orderedAscending: return false
+        case .orderedSame: continue
+        }
+    }
+    return false
 }
 
 /// 업데이트 확인 한 번의 결과
