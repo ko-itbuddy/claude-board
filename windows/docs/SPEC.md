@@ -70,7 +70,7 @@ windows/
 |---|---|
 | `%LOCALAPPDATA%\Programs\Claude Board\` | `ClaudeBoard.exe`, `claude-board-hook.exe`(원본), `LICENSE` — install.ps1 로 설치한 경우 |
 | `%LOCALAPPDATA%\Claude Board\` | setup.exe(NSIS, 사용자 단위)로 설치한 경우 — 위 파일과 `uninstall.exe`, `HKCU\Software\claude\Claude Board`·설정 > 앱 항목. install.ps1 업데이트는 `app-path` 를 따라 이 자리를 바꿔 끼운다 |
-| `%USERPROFILE%\.claude\notifier\` | macOS 와 같은 폴더. `claude-board-hook.exe`(hook 이 실행하는 사본), `app-path`(ClaudeBoard.exe 전체 경로 한 줄), `sessions\`, `mute-all`, `notify-position`, `accounts.json`, `accounts\`, `update.log`, `auto-switch.log`, `board.log`, `board-theme`, `context\`(사용자 상태줄이 씀), `context-windows.json`, `plugins\md-render\`(보드가 시작할 때 설치 폴더에서 옮겨 쓴 사본, §5.12.11) |
+| `%USERPROFILE%\.claude\notifier\` | macOS 와 같은 폴더. `claude-board-hook.exe`(hook 이 실행하는 사본), `app-path`(ClaudeBoard.exe 전체 경로 한 줄), `sessions\`, `mute-all`, `notify-position`, `accounts.json`, 깨진 목록을 옮겨 둔 `accounts.json.broken-<yyyyMMdd-HHmmss>` 파일들(이름이 있으면 뒤에 `-2`·`-3`, §5.5), `accounts\`, `update.log`, `auto-switch.log`, `board.log`, `board-theme`, `context\`(사용자 상태줄이 씀), `context-windows.json`, `plugins\md-render\`(보드가 시작할 때 설치 폴더에서 옮겨 쓴 사본, §5.12.11) |
 | `%USERPROFILE%\.local\bin\` | `claude-board.cmd`(보드 열기), `claude-board-tui.cmd`(TUI) — Claude Code 네이티브 설치가 이 폴더를 PATH 에 넣는다 |
 | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 값 `ClaudeBoard` | `"<설치 경로>\ClaudeBoard.exe" --background` — 로그인 자동 실행(macOS LaunchAgent 대응) |
 | Tauri app config dir(`%APPDATA%\com.claude.board\`) | 보드 설정 `board-settings.json`(§5.9) |
@@ -130,14 +130,14 @@ hook 사본을 바꿀 때는 실행 중인 exe 를 덮어쓸 수 없으므로 `c
 | `status` | `idle`·`busy`·`waiting` | §3.9 의 상태 덮기 |
 | `statusUpdatedAt` | `status` 가 바뀐 시각(유닉스 밀리초, 숫자) | §3.9. 읽을 때 1000 으로 나눠 초로 쓴다 |
 | `name` | 세션 이름(`/rename`·`--name`). 비어 있을 수 있다 | 보드의 세션 이름 라벨(§7) |
-| `pid` | Claude Code 프로세스 | macOS 보드: 세션 파일에 `pid` 가 없는 세션의 생사(`sessionId` 로 파일을 찾음, §5.1). **Windows 는 아직 쓰지 않는다** |
+| `pid` | Claude Code 프로세스 | macOS·Windows 보드: 세션 파일에 `pid` 가 없는 끝나지 않은 세션의 생사·상태 덮기(§3.9)·세션 이름을 판정할 때 `sessionId` 로 파일을 찾아 써 본다(§5.1) |
 
 파일이 없거나, JSON 객체가 아니거나, pid 가 0 이면 "정보 없음"으로 본다. 읽기 실패는 오류로 올리지 않는다. 이 파일을 쓰거나 지우지 않는다.
 hook 이 기록하는 `pid`(`proc::find_claude`, §3.4)는 이 파일 이름의 pid 와 같고, 기록의 `pid_ctime`(유닉스 초)은 `procStart`(FILETIME 100ns 틱, 1601년 기준)를 `(procStart − 116444736000000000) / 1e7` 로 바꾼 값과 같다. 실제 Claude Code 2.1.296 세션 안에서 확인했다(§11.1).
 
 ## 3. hook — `claude-board-hook.exe`
 
-hook 규칙(§3.1·§3.2·§3.3·§3.5·§3.6)의 기준 시험은 저장소 맨 위 `hook-table/` 이다. macOS hook 을 끝까지 돌려 만든 표를 `crates/core/tests/hook_table.rs` 가 `state::run`·`notify::prepare`·`hooks::add` 로 견준다(표시·뺀 것·유지 규칙은 그 README).
+hook 규칙(§3.1·§3.2·§3.3·§3.5·§3.6)의 기준 시험은 저장소 맨 위 `hook-table/` 이다. macOS hook 을 끝까지 돌려 만든 표를 `crates/core/tests/hook_table.rs` 가 `state::run`·`notify::prepare`·`hooks::add` 로 견준다(표시·뺀 것·유지 규칙은 그 README). 이와 쌍을 이루는 `rules-table/` 은 disk·프로세스 없이 판단 단계만 순수하게 견주는 가벼운 표이다(`pairing.json`·`session-scan.json`·`autoswitch.json`·`usage.json`·`sessions-group.json`).
 
 ### 3.1 등록 형식 (exec form — 셸을 거치지 않는다)
 
@@ -233,7 +233,7 @@ stdin JSON 하나를 읽는다. 앞의 UTF-8 BOM 은 `main.rs` 의 `read_input` 
 ### 3.7 `setup --app <ClaudeBoard.exe>` / `uninstall` (macOS `user-setup.sh`·`Uninstall.command` 대응)
 
 setup: `notifier\sessions\` 만들기 → 자기 자신을 `notifier\claude-board-hook.exe` 로 복사(§1.2 이름 바꾸기 규칙) → `app-path` 쓰기 → `install-hooks` → `%USERPROFILE%\.local\bin\claude-board.cmd`(`@start "" "<app>" %*`)·`claude-board-tui.cmd`(`@"%USERPROFILE%\.claude\notifier\claude-board-hook.exe" tui %*`) → Run 레지스트리 값.
-uninstall: `uninstall-hooks` → Run 값 삭제 → 실행 중인 ClaudeBoard.exe 종료 → notifier 의 hook exe(들)·`app-path`·`notify-position`·`sessions\`·`accounts.json`·`accounts\`(DPAPI 금고 포함)·`plugins\`(보드가 옮겨 쓴 md-render 사본과 Claude Code 가 그 안에 만든 `tsconfig.json`·`.claude-plugin\types\`) 삭제, 빈 notifier 폴더 삭제.
+uninstall: `uninstall-hooks` → Run 값 삭제 → 실행 중인 ClaudeBoard.exe 종료 → notifier 의 hook exe(들)·`app-path`·`notify-position`·`sessions\`·`accounts.json`·`accounts.json.broken-` 로 시작하는 파일들·`accounts\`(DPAPI 금고 포함)·`plugins\`(보드가 옮겨 쓴 md-render 사본과 Claude Code 가 그 안에 만든 `tsconfig.json`·`.claude-plugin\types\`) 삭제, 빈 notifier 폴더 삭제.
 `plugins\` 가 링크(junction)여도 가리키는 곳은 지우지 않고 링크만 뗀다. 환경변수 `CLAUDE_BOARD_NOTIFIER_DIR` 로 notifier 를 옮겨 둔 실행(시험·격리)에서는 `plugins\` 를 지우지 않는다(그 폴더에 보드가 옮긴 것 밖의 것이 있을 수 있다). `packaging/uninstall.ps1` 이 같은 범위·같은 조건으로 지운다(§8.2). 그다음 `.local\bin` 의 cmd 두 개를 지운다. 지금 Claude Code 로그인(`.credentials.json`)은 건드리지 않는다. 앱 폴더 삭제는 uninstall.ps1 이 한다(실행 중인 자기 exe 는 못 지우므로).
 
 ### 3.8 `tui` — `board-tui.py` 이식
@@ -282,8 +282,8 @@ Claude Code 는 사용자가 Esc 로 응답을 끊으면 `Stop` hook 을 부르�
 1초마다(그리고 표지 파일을 바꾼 직후 바로) `sessions/*.json` 을 읽는다. 파일 수정 시각이 같으면 이전에 푼 값을 쓴다.
 
 - 상태 보정: ended 가 아닌데 pid 가 죽었으면 `ended`.
-  macOS(다음 버전부터): 세션 파일에 `pid` 가 없으면(hook 이 Claude 프로세스를 못 찾음) `~/.claude/sessions/*.json`(§2.3) 가운데 `sessionId` 가 세션 id 와 같은 것(둘이면 가장 최근에 고쳐 쓴 것)의 pid 로 같은 판정을 한다. 그런 파일이 없으면 그대로 둔다(끝났다고 단정하지 않는다 — `claude -p` 처럼 그 파일을 쓰지 않는 세션). 끝난 세션은 찾지 않는다.
-  찾은 pid 는 이 판정의 상태 덮기(§3.9)·세션 이름·백그라운드 셸 수에도 쓰지만, 세션의 `pid` 값(구동·중단·끝나기 기다리기·탭 짝짓기 대상)은 세션 파일 그대로 둔다(`BoardRules.scanSessions`). **Windows 는 아직 옛 동작**이다: `pid` 가 없으면 생사를 보지 않아 SessionEnd 없이 죽은 세션이 2일 prune 까지 마지막 상태로 남는다.
+  세션 파일에 `pid` 가 없으면(hook 이 Claude 프로세스를 못 찾음) 끝나지 않은 세션은 `~/.claude/sessions/*.json`(§2.3) 가운데 `sessionId` 가 세션 id 와 같은 것(둘 이상이면 가장 최근에 고쳐 쓴 것)의 pid 로 같은 판정을 한다. 그런 파일이 없으면 그대로 둔다(끝났다고 단정하지 않는다: `claude -p` 처럼 그 파일을 쓰지 않는 세션). 끝난 세션은 찾지 않는다(mac 규칙과 같다).
+  찾은 pid 는 상태 덮기(§3.9)·세션 이름에도 쓰지만, 세션의 `pid` 값(구동·중단·끝나기 기다리기·탭 짝짓기·백그라운드 셸 수 대상)은 세션 파일 그대로 둔다(`BoardRules.scanSessions`). 그래서 SessionEnd 없이 죽은 세션도 목록에서 끝남으로 보인다. pid 가 없는 살아 있는 세션은 백그라운드 셸 수를 세지 않는다(macOS 은 찾은 pid 로 셈: 다른 한계).
 - `transcript = transcript_path` 또는 `~/.claude/projects/<cwd 의 영숫자 밖 문자를 - 로>/<sid>.jsonl`. ended 이고 (`updated` 가 2일 넘었거나 transcript 파일이 없으면) 세션 파일을 지우고 뺀다.
 - Claude Code 실시간 상태 덮기(§3.9): 위 종료 판정과 prune 뒤, 아래 셸·서브에이전트로 working 을 올리는 단계와 paused 판정 앞에서 적용한다(`Store.reload` 의 순서).
   기록 상태가 working·waiting 일 때만 `live_state` 를 부르고, 덮이면 `state` 와 `since` 가 바뀐다. 세션 id 는 파일 이름으로 대신해도 된다.
@@ -311,11 +311,13 @@ Claude Code 는 사용자가 Esc 로 응답을 끊으면 `Stop` hook 을 부르�
 
 1순위 `context/<sid>.json`: `context_window_size > 0` 이고 transcript 수정 시각이 기록의 `at` 보다 60초 넘게 늦지 않으면 used = 세 입력 토큰 합(0 이면 `used_percentage`). 그 모델의 크기를 `context-windows.json` 에 배워 둔다.
 2순위 transcript 끝 1.5MB 에서 사이드체인이 아닌 마지막 assistant 의 usage 합. 크기 = 배운 값 또는 기본(`[1m]` 이나 `claude-opus-5`·`claude-sonnet-5`·`claude-haiku-5`·`claude-fable-5` 로 시작하면 1,000,000, 그 밖 200,000), used 가 크기보다 크면 1,000,000. pct = min(100, used×100/size).
+reload 가 끝나면 목록에 남은 세션(끝난 것 포함)의 세션 id·transcript 몫만 남기고 세션 하나하나의 `context/<sid>.json` 캐시를 정리한다. 끝난 세션 몫이 쌓이는 것을 막는다(mac PR #12 규칙). 배운 모델별 크기(`context-windows.json`)는 그대로 둔다.
 
 ### 5.4 사용 한도 — `UsageStore` (`ClaudeBoard.swift UsageStore`)
 
-30초마다. 캐시 파일이 120초 안에 쓰였으면 그것만 쓴다. 아니면 `~/.claude/.credentials.json` 의 `claudeAiOauth.accessToken`(없으면 조용히 실패 표시) — `expiresAt`(ms)이 지났으면 "로그인 토큰 갱신 전". `GET https://api.anthropic.com/api/oauth/usage` 헤더 `Authorization: Bearer <토큰>`, `anthropic-beta: oauth-2025-04-20`, 제한 10초.
-응답: `five_hour.utilization`→"5시간", `seven_day.utilization`→"주간 · 전체", `limits[]` 가운데 `kind=="weekly_scoped"` 의 `percent` → "주간 · <scope.model.display_name>", 각 `resets_at`(ISO8601). 성공하면 캐시에 쓴다. 계정을 바꾸면 캐시를 지우고 5초 동안 그 전 캐시는 믿지 않으며 진행 중이던 응답은 버린다.
+30초마다. 캐시 파일을 먼저 본다(mac `checkUsageCache` 규칙): 푼 캐시만 나이를 세어, 나이가 음수(수정 시각이 미래: 시계 어긋남)거나 120초 넘으면 새로 받는다. 푼 캐시는 나이와 상관없이 보이는 데 쓴다. 푸지 못한 캐시(JSON 아님·푼 한도 없음)는 나이를 세지 않고 바로 새로 받는다. 받는 중에는 새로 받지 않는다.
+새로 받을 때는 `~/.claude/.credentials.json` 의 `claudeAiOauth.accessToken`(없으면 조용히 실패 표시). `expiresAt`(ms)이 지났으면 "로그인 토큰 갱신 전". `GET https://api.anthropic.com/api/oauth/usage` 헤더 `Authorization: Bearer <토큰>`, `anthropic-beta: oauth-2025-04-20`, 제한 10초.
+응답: `five_hour.utilization`→"5시간"(id `5h`), `seven_day.utilization`→"주간 · 전체"(id `7d`), `limits[]` 가운데 `kind=="weekly_scoped"` 의 `percent` → "주간 · <scope.model.display_name>"(id `7d-<모델 이름>`), 각 `resets_at`(ISO8601). 모델별 한도의 이름이 같아 id 가 겹치면 뒤에 온 것에 `-2`·`-3` 을 붙인다(라벨은 그대로. id 를 뺀 항목은 차지하지 않고, `5h`·`7d` 는 늘 그대로다). 푼 한도가 하나도 없는 응답은 빈 한도로 본다: 실패로 처리해 보이던 한도를 지우지 않고 캐시에도 쓰지 않는다(지금 보이는 한도가 없으면 "사용량을 불러오지 못했습니다"). 성공(푼 한도가 하나 이상)이면 캐시에 쓴다. 계정을 바꾸면 캐시를 지우고 5초 동안 그 전 캐시는 믿지 않으며 진행 중이던 응답은 버린다.
 토큰은 메모리에만 두고 기록하지 않는다. **(`.credentials.json` 의 필드 이름은 문서에 없다 — 없으면 "사용량을 불러오지 못했습니다" 로 조용히 내려간다)**
 
 ### 5.5 계정 전환 — `AccountStore` (`ClaudeBoard.swift AccountStore`)
@@ -323,8 +325,11 @@ Claude Code 는 사용자가 Esc 로 응답을 끊으면 `Stop` hook 을 부르�
 macOS 키체인 대신:
 - 지금 로그인: `~/.claude/.credentials.json`(JSON, `claudeAiOauth` 와 그 밖의 키 — `mcpOAuth` 등은 그대로 둔다). 계정 정보: `~/.claude.json` 의 `oauthAccount`(3초마다 수정 시각이 바뀌면 다시 읽음).
 - 저장한 계정 토큰: `notifier\accounts\vault\<계정 id 의 sha256 앞 16자>.bin` = DPAPI(`CryptProtectData`, 현재 사용자) 로 암호화한 `{"claudeAiOauth": …}`. 표시 정보는 `notifier\accounts.json`(`{"accounts":[{oauthAccount, savedAt, refreshTokenExpiresAt?}]}`, macOS 와 같은 형식).
-- 계정 id = `accountUuid|organizationUuid`. 이메일·조직·요금제(`organizationType` 의 `claude_` 를 빼고 첫 글자 대문자 + `organizationRateLimitTier` 의 `_<n>x` → " 5x"), `refreshTokenExpiresAt` 지나면 "다시 로그인 필요".
+- 계정 id = `accountUuid|organizationUuid`. 이메일·조직·요금제(`organizationType` 의 `claude_` 를 빼고 첫 글자 대문자 + `organizationRateLimitTier` 의 `_<n>x` → `5x`: 비지 않은 조각만 빈칸으로 이어 `5x`·`Max 5x`·`Pro` 의 꼴이 된다), `refreshTokenExpiresAt` 지나면 "다시 로그인 필요".
+- 저장한 계정 목록이 깨져 있으면(쓰기용 해석 `writable_meta`: 객체 배열이 그대로, JSON 아님·최상위 객체 아님·`accounts` 배열 아님(null 포함)·배열에 객체 아닌 원소 섞임은 깨진 것) `accounts.json` 을 `accounts.json.broken-<지역 yyyyMMdd-HHmmss>`(같은 이름이면 `-2`·`-3`) 로 옆으로 옮긴 뒤 빈 목록에 새 항목을 더해 새로 쓴다. 전환은 막지 않는다. 옮기지 못하면 쓰지 않는다(오류 안내). 표시용 읽기는 깨진 목록을 조용히 빈 목록으로 본다.
 - 전환: `~/.claude/.storage-write.lock` 폴더 잠금(mkdir, 15초 넘은 잠금은 버림, 5초 기다림 — Claude Code 와 같은 방식) 안에서 지금 계정의 최신 토큰을 저장 → 대상 토큰을 `claudeAiOauth` 에 넣어 `.credentials.json` 을 원자적으로 씀. 그다음 `~/.claude.json.lock` 잠금 안에서 `oauthAccount` 를 바꾸고, 다른 계정이면 계정별 캐시 키(`ClaudeBoard.swift AccountStore.accountCaches` 목록)를 지운다.
+- 전환을 막는 규칙(save_current: 실패는 "전환하지 못했습니다: " 가 앞에 붙은 안내로 나온다): 지금 로그인 토큰이 있는데 `~/.claude.json` 의 `oauthAccount` 가 없거나 그 안의 `accountUuid` 가 없거나 정보가 글자 값이 아니면 지금 계정을 먼저 저장하지 않고 전환을 거절한다. 안내: "지금 로그인된 계정의 정보가 없어 그 계정을 먼저 저장할 수 없습니다(그대로 바꾸면 그 로그인을 잃습니다). Claude Code 에서 /login 으로 다시 로그인한 뒤 해 주세요". `accountUuid` 모자람은 "정보가 없어" 가 "정보가 모자라" 로 바뀐 문장이다. 단 바꾸려는 로그인의 `refreshToken` 이 지금 로그인과 같은 글자면 막지 않는다. 막으면 목록·금고·`.credentials.json` 을 모두 그대로 둔다. 로그인 후의 지금 계정 저장도 같은 규칙을 거친다.
+- 계정 지우기(remove): 금고 파일을 지우고(파일이 없는 것은 지난 것으로 본다) 목록에서 뺀다. 금고 지우기가 파일 없음 밖의 오류로 실패하면 목록을 건드리지 않고 끝낸다. 돌려 주는 안내: 성공 "<이메일> 계정을 목록에서 지웠습니다", 목록이 깨져 있으면 "<이메일>: 로그인 정보는 지웠지만 저장 계정 목록(accounts.json)을 읽지 못해 목록은 그대로 두었습니다", 목록 쓰기 실패 "<이메일>: 로그인 정보는 지웠지만 저장 계정 목록(accounts.json)을 쓰지 못했습니다: <오류>", 금고 실패 "<이메일> 계정을 지우지 못했습니다: 저장한 로그인 정보를 지우지 못해 목록에 그대로 두었습니다. 잠시 뒤 다시 지워 주세요" 또는 "<이메일> 계정을 지우지 못했습니다: <오류>". 지우기는 `accounts.json.broken-*` 파일을 건드리지 않는다.
 - 계정 추가: 새 터미널 창에서 `CLAUDE_CONFIG_DIR=<notifier\accounts\login-<8자>>` 로 `claude auth login --claudeai [--email <이메일>]` 실행 후 안내 문구. 3초마다 그 폴더의 `.claude.json` 의 `oauthAccount` 와 `.credentials.json` 의 `claudeAiOauth` 가 생기면 저장하고 지금 계정도 저장한 뒤 폴더를 지운다. 토큰만 있고 계정 정보가 30초 넘게 없으면 실패 안내. 15분 넘으면 그만둔다. 시작할 때 남은 `login-*` 폴더를 치운다.
 - 작업 중·승인 대기 세션이 있으면 전환 전에 확인 대화상자(`ClaudeBoard.swift AccountChip` 의 확인 창 문구).
 - 안내 문구(notice)는 7초 뒤 사라진다. 문구는 macOS 와 같게.
@@ -332,6 +337,10 @@ macOS 키체인 대신:
 ### 5.6 한도 자동 전환 — `AutoSwitcher` (`ClaudeBoard.swift AutoSwitcher`)
 
 같은 규칙(3초 주기, settle 40초, recent 6시간, 찬 계정 기록과 풀리는 시각, 다음 계정 고르기, 이어 가기 요청 문구, `auto-switch.log`). 이어 가기는 Ghostty 대신 §5.7 의 콘솔 입력으로 `Esc → 0.5초 → 문구 → 0.2초 → Enter`. `canDrive` 가 아니면 직접 이어 달라고 안내.
+
+- 떠날 까닭과 찬 계정 기록(autoSwitchFull)은 5시간·주간(전체) 한도만으로 채운다: 모델별 주간 한도(`weekly_scoped`)는 그 모델을 쓰는 세션만 막으므로 계정을 떠나는 까닭·표시 재료에서 뺀다(mac 규칙과 같다). 가득 찼다고 보는 조건은 pct 100 이상인데 아직 풀리지 않은 것(풀리는 시각이 지금 뒤이거나 모름)이다. 풀리는 시각을 모르면 지금에서 1시간 뒤를 적어 둔다. 표시하는 퍼센트는 정수로 자른다.
+- 실패 쪽 셋(mac `autoSwitchFailed`): 골라 들어가는(대상) 계정 쪽 실패는 그 계정에만 1시간 건너뛰는 표지를 적는다(다음 3초 판단이 다음 후보로 다시 시도한다). 지금 계정·시스템 쪽 실패는 지금 계정에 1시간 쉬는 표지를 적고 "사용 한도에 도달해 <이메일> 계정으로 자동 전환하려 했지만 하지 못했습니다: <까닭>. 계정이 바뀌거나 1시간이 지날 때까지 자동 전환을 쉽니다" 를 한 번 보인다. 쓰기 잠금 시간 초과라는 실패는 30초 쉬는 표지만 적고 알리지 않는다.
+- 떠날 까닭이 있는데 지금 계정을 모르면(mac 규칙 unknown-current): 표시를 전혀 바꾸지 않고 "사용 한도에 도달했지만 지금 로그인된 계정의 정보를 읽지 못해 자동 전환을 하지 못했습니다. Claude Code 에서 /login 으로 다시 로그인해 주세요" 를 한 번만 보인다. 지금 계정이 다시 알려지거나 전환이 끝나면 이 표시를 푼다. 전환할 계정이 없을 때도 같은 방식으로 한 번만 알린다. 문구는 "사용 한도에 도달했지만 전환할 다른 계정이 없습니다" 뒤에 "저장한 계정이 모두 한도에 도달했거나 다시 로그인이 필요합니다" 가 뒤따른다.
 
 ### 5.7 터미널 제어 (Windows) — Ghostty AppleScript 대체
 
@@ -355,7 +364,7 @@ macOS 키체인 대신:
   원시 바이트는 Esc = `1b`, Enter = `0d`, 글자는 UTF-8 이다. 글에 제어 문자(`\r`·`\n`·Esc·`\x03` 같은 C0)가 있으면 아무것도 보내지 않고 거부한다. 단계 사이 기다림은 단계마다 5초, 한 요청 합계 10초가 상한이다.
   구동 직전에 세션을 다시 읽어 같은 pid·같은 생성 시각(`pid_ctime`)이 아직 살아 있을 때만 진행한다(`still_same_session`). 끝났거나 pid 가 바뀌었으면 아무것도 하지 않는다.
   claude pid 종료는 `proc::alive(pid, pid_ctime)` 로 생성 시각이 같음을 한 번 더 확인한 뒤 그 pid 하나만 끝낸다. 탭의 셸은 죽이지 않는다.
-- 일시중지 = Esc 를 넣고, 넣는 데 성공한 뒤에만 `<sid>.paused`(`{paused_at, topic}`)를 쓴다. 메뉴에서는 `working`·`waiting` 이고 `canDrive` 일 때만 켜진다. 재개: 살아 있으면 `CARRY_ON_PROMPT` 입력 → 200ms → Enter 후 표지를 지운다. 키를 넣지 못하면 표지를 두고 "키를 넣을 수 없어 재개하지 못했습니다" 를 알린다(같은 세션을 한 번 더 열지 않는다). 이미 꺼졌으면 이어 열기(carryOn).
+- 일시중지 = Esc 를 넣고, 넣는 데 성공한 뒤에만 `<sid>.paused`(`{paused_at, topic}`)를 쓴다. 메뉴에서는 `working`·`waiting` 이고 `canDrive` 일 때만 켜진다. 재개(판정은 같은 파일의 순수 함수 `resume_plan(state, pid, alive)`, 살아 있음 = 끝나지 않았고 pid 가 없거나 pid 가 살아 있음): 살아 있는 세션은 콘솔 입력으로 `CARRY_ON_PROMPT` 입력 → 200ms → Enter 후 표지를 지운다. pid 를 모르는 살아 있는 세션도 이 쪽으로 판정하지만 구동 대상표(위)에서 pid 0 이 대상이 없어 넣기가 실패한다. 키를 넣지 못하면 표지를 그대로 두고 "<폴더>: 세션이 아직 돌고 있지만 그 터미널에 키를 넣지 못했습니다. 그 터미널에서 이어 가 주세요" 를 알린다. 새 탭으로 이어 열지 않는다: 같은 세션이 중복으로 뜨는 것을 막는다(mac 규칙과 같다). 끝났거나 pid 가 죽었으면 이어 열기(carryOn: 열기가 끝나면 `reopen_done` 이 표지를 지운다).
   중단 = 확인 대화상자(`--action stop` 은 확인 없음) → 확인이 떠 있는 동안 바뀌었을 수 있어 세션을 다시 읽음 → 표지 삭제 → `Esc → 400ms → /exit → 200ms → Enter`. 보드 터미널에 쓰지 못하면 claude pid 종료로 잇는다(`run_with_fallback`).
   문구: `CARRY_ON_PROMPT` = "보드에서 일시중지했던 세션을 재개합니다. 중단된 지점부터 직전 작업을 이어서 진행해 주세요."(`drive.rs`·`sessionCommand.ts` 가 같은 문장을 쓴다). 자동 전환 문구 = `ClaudeBoard.swift AutoSwitcher`.
 - 세션 줄 클릭(프론트 `board/openSession.ts` 의 순수 표 하나. 위치 `place` 는 §5.12.7):
@@ -385,7 +394,7 @@ macOS 키체인 대신:
 ### 5.8 업데이트 — `Updater` (`ClaudeBoard.swift Updater`)
 
 - 현재 버전 = 빌드 때 `windows/VERSION`. 개발 빌드(`VERSION` 을 못 읽었거나 환경변수로 dev 표시)는 확인하지 않고 제목 옆에 `dev`.
-- 켤 때와 1시간마다 `GET https://api.github.com/repos/suhojang/claude-board/releases?per_page=30`(헤더 `User-Agent: ClaudeBoard-Windows`, `Accept: application/vnd.github+json`) → draft·prerelease 가 아니고 `tag_name` 이 `windows-v` 로 시작하는 첫 릴리스 → 버전 = 태그에서 `windows-v` 를 뺀 것(숫자 비교). 더 새로우면 알림 줄. **`/releases/latest` 를 쓰지 않는다.**
+- 켤 때와 1시간마다 `GET https://api.github.com/repos/suhojang/claude-board/releases?per_page=30`(헤더 `User-Agent: ClaudeBoard-Windows`, `Accept: application/vnd.github+json`) → draft·prerelease 가 아니고 `tag_name` 이 `windows-v` 로 시작하는 첫 릴리스 → 버전 = 태그에서 `windows-v` 를 뺀 것(숫자 비교: `cmp_version` 은 점 조각마다 앞의 0 을 떼서 길이로, 길이가 같으면 글자 차례로 견준다. 조각이 아무리 길어도(수 자리가 아무리 많아도) 옳게 견준다. 없는 조각은 0 이다). 더 새로우면 알림 줄. **`/releases/latest` 를 쓰지 않는다.**
 - 알림 줄: "새 버전 <v> 이 나왔습니다" · **변경 내용**(`https://github.com/suhojang/claude-board/blob/main/windows/CHANGELOG.md`) · **업데이트**. 손으로 확인했는데 없으면 "최신 버전입니다 (<v>)" 4초, 실패하면 "업데이트를 확인하지 못했습니다".
 - 업데이트 실행: `https://raw.githubusercontent.com/suhojang/claude-board/windows-v<v>/windows/packaging/install.ps1`(태그 기준 원본 — 릴리스 자산과 달리 UTF-8 로 내려와 update.log 의 한글이 깨지지 않는다)로 `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { $s = irm '<url>'; & ([scriptblock]::Create($s)) -Version '<v>' -Update }"` 를 창 없이 분리 실행, 출력은 `notifier\update.log`. 이때 환경변수 `PSModulePath` 를 넘기지 않는다 — PowerShell 7 에서 띄운 보드는 PowerShell 7 의 모듈 경로를 물려받고, 그것을 받은 5.1 은 `Get-FileHash` 를 찾지 못해 install.ps1 이 멈춘다(실기 확인). 성공하면 스크립트가 보드를 끄고 새 보드를 띄우므로 돌아오지 않는다. 프로세스가 끝나 돌아오면 실패 — "업데이트하지 못했습니다 · ~/.claude/notifier/update.log" + 다시 시도.
 - 업데이트 전 확인: `run()` 은 업데이트할 것이 있고(`latest` 가 있다) 이미 도는 중이 아닐 때(`can_start`)만 끌 때 확인(§5.12.10, 이유 `update`)을 건다. 할 일이 없으면 창도 `.paused` 표지도 만들지 않는다. 확인에서 취소하면 업데이트를 시작하지 않는다. 확인을 기다리는 사이 다른 업데이트가 시작됐으면 이 호출이 남긴 표지를 지우고 물러난다. 스크립트가 보드를 끄지 못하고 돌아오면(실패) 확인에서 남긴 표지를 지운다(세션은 그대로 도는 중이므로 일시중지로 남지 않게 한다, mac `Updater.run`).
@@ -540,7 +549,9 @@ ConPTY 마다 자기 콘솔 호스트 프로세스(conhost/OpenConsole `--headle
   - `appName`(보드 밖 터미널 세션만): `WindowsTerminal.exe` → `Windows Terminal`, `Code.exe` → `VS Code`, `mintty.exe` → `Git Bash`, 그 밖 `터미널`.
   - `runsClaude`: 보드 터미널 셸의 자손 가운데 Claude Code 프로세스(`is_claude_exe`)의 콘솔 호스트가 그 터미널의 것인 `TermId` 들. `atPrompt`: 셸에 `conhost.exe`·`OpenConsole.exe` 밖의 살아 있는 자식이 없는 `TermId` 들.
 - 스냅샷에 실리는 필드: `Session.tty`·`tabAncestor`·`mode`·`appName`·`headless`·`canDrive`, `Snapshot.runsClaude`·`atPrompt`(§6.1). `headless` 는 세션 파일 값이되 `tty` 가 있으면 false 다. 탐침은 3초마다 돌아 손으로 친 `claude` 는 3초 안에 짝이 지어지고, 그 전에는 `appName` 이 없어 잘못된 칩을 그리지 않는다.
-- 프론트 `terminal/place.ts`(순수): 살아 있는 세션의 `tty` 가 화면의 `termId` 와 같으면 그 화면 소속이고 화면의 `sessionId` 를 그 세션으로 따라가게 한다(`/clear`·손으로 친 claude). 살아 있는 headless 세션의 `tabAncestor` 가 화면을 가리키면 소속(+ `CB -p` 근거). 명령 없는 셸 화면에 `mode` 없는 주 세션이 짝지어 오면 `command = "claude"`, claude 가 도는 흔적이 없는데 명령이 남아 있으면 비운다. 셸에 claude 명령을 친 지 3초(`TYPED_WINDOW_MS`) 안이면 돌고 있는 것으로 본다. `placeOf`: 짝이 있으면 `tab`, 끝났으면 `ended`(단 `runsClaude` 에 든 화면의 `sessionId` 와 같으면 `tab`), 아니면 headless 는 `background`, 나머지는 `terminal`.
+- 프론트 `terminal/place.ts`(순수): 끝나지 않은 세션의 `tty` 가 화면의 `termId` 와 같으면 그 화면 소속이고 화면의 `sessionId` 를 그 세션으로 따라가게 한다(`/clear`·손으로 친 claude). 같은 `tty` 로 짝지어 온 세션이 여럿이면 `paired` 에는 모두 남지만 주 세션은 하나뿐이다: `(updated, since, 세션 id)` 사전식으로 큰 쪽(hook 기록이 가장 늦은 것, 그마저 같으면 화면에 온 지 가장 오래된 것, 같으면 세션 id 글자 차례가 뒤인 것)이 주인이고, 화면의 `sessionId` 고침은 주인만 낸다(세션 목록 차례와 관계없이 정한다, mac 규칙과 같다). 살아 있는 headless 세션의 `tabAncestor` 가 화면을 가리키면 소속(+ `CB -p` 근거). 명령 없는 셸 화면에 `mode` 없는 주 세션이 짝지어 오면 `command = "claude"`, claude 가 도는 흔적이 없는데 명령이 남아 있으면 비운다. 셸에 claude 명령을 친 지 3초(`TYPED_WINDOW_MS`) 안이면 돌고 있는 것으로 본다.
+- 화면이 기억하는 세션 id로 붙는 길(`placeOf` 의 held): 화면의 `sessionId` 와 세션 id 가 같고 그 화면에서 claude 가 도는 중(`runsClaude`)이거나 3초 안에 명령을 쳤을 때만 그 화면 소속(`tab`)이다. 끝난 세션도 같은 조건으로 붙는다. 그 화면에서 claude 가 안 도는 셸 화면에 남은 옛 id 는 그 세션을 잡지 않으므로, 다른 터미널에서 이어 열어 온 세션이 보드 탭 세션으로 보이지 않는다(mac PR #25 규칙). 그 밖에 끝냈으면 `ended`, 살아 있는 headless 는 `background`, 나머지는 `terminal`.
+- 경로 줄의 상태 점(§7.2)은 그 경로 탭들의 상태 가운데 가장 급한 것 하나다. 순위는 대기 0 · 작업 중 1 · 일시중지 2 · 대기(idle) 3 · 끝남 4 로, 일시중지가 대기보다 앞선다(카드 순위와는 다르다, mac PR #20 P2 규칙).
 - 칩 문구(`board/placeChip.ts`, mac 과 같은 글자):
 
   | 위치 | 칩 | 힌트 |
