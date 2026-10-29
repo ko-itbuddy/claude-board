@@ -54,6 +54,7 @@ curl -fsSL https://github.com/suhojang/claude-board/releases/latest/download/ins
 - 🔐 예전에 dmg 로 설치한 앱을 바꿀 때만 관리자 비밀번호 창이 한 번 뜹니다.
 - 🎉 설치가 끝나면 보드가 열립니다. 이미 실행 중인 Claude Code 세션은 다시 시작해야 hook 이 적용됩니다.
 - 🔁 보드 안 터미널에서 실행하면 그 보드는 끄지 않습니다(탭의 세션이 끊기지 않게). 끝난 뒤 보드를 종료(⌘Q)하고 다시 열면 새 버전이 뜹니다.
+- 🛑 다른 터미널에서 실행하면 떠 있는 보드에 종료를 청합니다. 보드 탭에서 작업 중인 세션이 있으면 ⌘Q 와 같은 확인 창이 뜨고, 취소하면 설치하지 않습니다.
 
 설치하면 `/Applications/Claude Board.app`, `~/.claude/notifier/` 의 알림 패널 · hook 스크립트, 로그인 자동 실행(LaunchAgent),
 `~/.local/bin` 의 `claude-board` · `claude-board-tui` 명령이 생깁니다. Ghostty 가 있으면 Ghostty 를 열 때 보드를 함께 띄우는 줄을 `~/.zshrc` 에 넣습니다.
