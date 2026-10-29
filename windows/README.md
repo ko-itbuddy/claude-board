@@ -48,7 +48,7 @@ irm https://raw.githubusercontent.com/suhojang/claude-board/main/windows/packagi
 
 ### 💿 설치 프로그램(setup.exe)으로 설치
 
-설치 프로그램 [ClaudeBoard-2.12-setup.exe](https://github.com/suhojang/claude-board/releases/download/windows-v2.12/ClaudeBoard-2.12-setup.exe) 를 받아 실행해도 됩니다([windows-v2.12 릴리스](https://github.com/suhojang/claude-board/releases/tag/windows-v2.12)).
+설치 프로그램 [ClaudeBoard-2.14-setup.exe](https://github.com/suhojang/claude-board/releases/download/windows-v2.14/ClaudeBoard-2.14-setup.exe) 를 받아 실행해도 됩니다([windows-v2.14 릴리스](https://github.com/suhojang/claude-board/releases/tag/windows-v2.14)).
 다른 버전은 [릴리스 목록](https://github.com/suhojang/claude-board/releases)에서 `windows-v` 로 시작하는 릴리스를 고르세요. **Latest** 표시가 붙은 것은 macOS 판입니다.
 
 - 🛡️ 코드 서명이 없어 SmartScreen 이 "Windows 의 PC 보호" 창을 띄웁니다. **추가 정보 → 실행** 을 누르면 설치됩니다.
