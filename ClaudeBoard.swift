@@ -5220,6 +5220,13 @@ final class BoardSurface: NSObject, ObservableObject, Identifiable, TerminalSurf
     // 세션 파일의 tty 와 같은 꼴(/dev/ 를 뗀 이름)
     var tty: String { (view.ttyName ?? "").replacingOccurrences(of: "/dev/", with: "") }
 
+    // 짝짓기(BoardRules pairTabs)에 넘길 지금 값 — 맨 위 프로세스는 앞 프로세스의 세션 리더(엔진이 띄운 login), 앞 프로세스가 없거나 못 읽으면 0
+    func screen(in workspace: String) -> TabScreen {
+        var leader: Int32 = 0
+        if let fg = view.foregroundPid, fg > 0 { let sid = getsid(fg); if sid > 0 { leader = sid } }
+        return TabScreen(id: id, workspace: workspace, tty: tty, leader: leader, sessionId: sessionId, command: command, mdRenderOff: mdRenderOff)
+    }
+
     // 셸 통합(엔진 리소스)이 첫 프롬프트에서 경로(OSC 7)·제목을 알린다 — 그때 셸이 입력을 받을 준비가 됐다
     func terminalDidChangeTitle(_ title: String) { self.title = title; shellStarted() }
     func terminalDidChangeWorkingDirectory(_ path: String) { cwd = path; shellStarted() }
@@ -5938,74 +5945,41 @@ final class SplitNode {
         withAnimation(.easeOut(duration: 0.2)) { notice = nil }
     }
 
-    // 세션이 어디서 도는가 — 보드 탭의 화면(그 안에서 시작된 claude -p 포함)·다른 터미널·백그라운드·끝남.
-    // 끝난 세션은 그 화면에서 claude 가 막 뜨는 중일 때만 탭 소속(이어 열기를 넣은 직후) — claude 가 끝나 셸만 남은 화면이면 끝남
+    // 세션이 어디서 도는가 — 보드 탭의 화면(그 안에서 시작된 claude -p 포함)·다른 터미널·백그라운드·끝남. 규칙은 BoardRules 의 sessionPlace
+    // (TabPairing.swift) — 여기서는 짝짓기 결과와 화면의 세션 id 를 넘긴다(화면 목록은 짝이 없을 때만 만든다)
     func place(_ s: Session) -> SessionPlace {
-        if let id = paired[s.id] ?? surfaces.first(where: { $0.sessionId == s.id && (s.state != "ended" || $0.runsClaude) })?.id {
-            return .tab(id, headless: tabOwnedHeadless.contains(s.id))
-        }
-        if s.state == "ended" { return .ended }
-        return s.headless ? .background : .terminal
+        sessionPlace(s, paired: paired, ownedHeadless: tabOwnedHeadless,
+                     screens: surfaces.map { ScreenSession(id: $0.id, sessionId: $0.sessionId) }, probe: tabProbe)
     }
 
     // 보드 탭 claude 가 넘긴 대화를 이어 받은 백그라운드 작업이면 그 화면. 카드가 보이는 자리(터미널 구역·CB 칩)와 누르면 갈 곳만
-    // 이것을 따른다(shownPlace) — 탭에 쳐 넣는 동작은 place 그대로라 그 작업 때문에 탭에 아무것도 넣지 않는다
-    func parkedTab(_ s: Session) -> UUID? { s.state == "ended" ? nil : parkedTabs[s.id] }
-    func shownPlace(_ s: Session) -> SessionPlace { parkedTab(s).map { .tab($0, headless: false) } ?? place(s) }
+    // 이것을 따른다(shownPlace) — 탭에 쳐 넣는 동작은 place 그대로라 그 작업 때문에 탭에 아무것도 넣지 않는다. 규칙은 BoardRules
+    func parkedTab(_ s: Session) -> UUID? { parkedScreen(s, parkedTabs: parkedTabs) }
+    func shownPlace(_ s: Session) -> SessionPlace { shownSessionPlace(parked: parkedTab(s), place: place(s)) }
 
-    // 세션 목록을 다시 읽을 때마다 탭의 화면들과 짝짓는다. tty 가 같으면 그 화면의 세션, headless 세션은 조상에 화면의 claude 가 있으면
-    // 그 화면 소속(화면이 닫히면 함께 끝난다 — Claude 가 Bash 도구로 띄운 claude -p 등). 끝난 세션은 같은 세션 id 로 연 화면만
+    // 세션 목록을 다시 읽을 때마다 탭의 화면들과 짝짓는다 — 규칙(tty·headless 조상·셸만 남은 화면·넘긴 작업 따라가기·경로 상태 점)은
+    // BoardRules 의 pairTabs(TabPairing.swift). 여기서는 화면의 지금 값을 떠서 넘기고 결과를 화면·@Published 에 쓴다(바뀐 것만)
     func pair(_ sessions: [Session]) {
         let all = surfaces
-        var byTty: [String: BoardSurface] = [:]
-        for t in all where !t.tty.isEmpty { byTty[t.tty] = t }
-        var map: [String: UUID] = [:]
-        // 화면의 맨 위 프로세스(엔진이 띄운 login — 그 tty 의 세션 리더). 셸 화면에서 사람이 띄운 claude -p 도 그 아래에 있다
-        var tabPids: [Int32: BoardSurface] = [:]
-        for t in all { if let fg = t.view.foregroundPid, fg > 0, getsid(fg) > 0 { tabPids[getsid(fg)] = t } }
-        var main: [UUID: Session] = [:]
-        for s in sessions where s.state != "ended" && !s.tty.isEmpty {
-            guard let t = byTty[s.tty] else { continue }
-            map[s.id] = t.id
-            main[t.id] = s
-            // /clear 등으로 id 가 바뀌었거나 셸에서 사람이 띄운 claude — 끝난 뒤에도 그 세션이 돌던 화면으로 찾는다(resumeSession)
-            if t.sessionId != s.id { t.sessionId = s.id }
+        let r = pairTabs(sessions, screens: tabs.flatMap { t in t.surfaces.map { $0.screen(in: t.workspace) } },
+                         probe: tabProbe, processes: SystemProcessControl(), live: ClaudeNames.shared)
+        for (t, p) in zip(all, r.screens) {
+            if t.sessionId != p.sessionId { t.sessionId = p.sessionId }
+            if t.command != p.command { t.command = p.command }
+            if t.mdRenderOff != p.mdRenderOff { t.mdRenderOff = p.mdRenderOff }
+            if t.session != p.session { t.session = p.session }
+            rememberMdRenderOff(p.mdRenderOffSession)   // 끈 화면에서 세션 id 가 바뀌어도(/clear 등) 끈 채로 이어 열게
+            if t.parked != p.parked { t.parked = p.parked }
         }
-        var owned: Set<String> = []
-        for s in sessions where s.state != "ended" && s.headless && s.pid > 0 {
-            if let t = tabAncestor(s.pid, tabPids) { map[s.id] = t.id; owned.insert(s.id) }
-        }
-        var parked: [String: UUID] = [:], from: Set<String> = []
-        for t in all {
-            let running = main[t.id] != nil || t.runsClaude
-            // 셸 프롬프트에서 사람이 친 대화형 claude 도 claude 화면으로 — 쥔 목록에 세션이 남아 다시 뜰 때 이어 연다(-p·--bg 는 빼고)
-            if t.command == nil, let s = main[t.id], mode(s) == nil { t.command = "claude" }
-            // 보드가 넣은 claude 가 끝나 셸만 남았다 — 셸 화면으로(쥔 목록·상태 점). 끈 꾸미기는 끈 세션 기억에 이미 남아 있다
-            if !running, t.command != nil { t.command = nil; t.mdRenderOff = false }
-            let s = main[t.id] ?? (running ? t.sessionId.flatMap { id in sessions.first { $0.id == id } } : nil)
-            if t.session != s { t.session = s }
-            if t.mdRenderOff { rememberMdRenderOff(s?.id) }   // 끈 화면에서 세션 id 가 바뀌어도(/clear 등) 끈 채로 이어 열게
-            // 화면의 claude 가 대화를 백그라운드 작업으로 넘겨 그 작업을 붙여 보여 주는 중이면(parkedJobId — 이어 받은 세션 id 앞 8글자)
-            // 그 작업 세션을 따라 보인다. 끝난 작업이나 작업을 풀면(parkedJobId 지움) 화면의 claude 로 돌아간다
-            var p: Session? = nil
-            if let s, s.state != "ended", let job = ClaudeNames.shared.parkedJob(s.pid, session: s.id) {
-                p = sessions.first { $0.id != s.id && $0.id.hasPrefix(job) && $0.state != "ended" }
-                if let p { parked[p.id] = t.id; from.insert(s.id) }
-            }
-            if t.parked != p { t.parked = p }
-        }
-        if map != paired { paired = map }
-        if owned != tabOwnedHeadless { tabOwnedHeadless = owned }
-        if parked != parkedTabs { parkedTabs = parked }
-        parkedFrom = from
-        // 경로 줄의 상태 점 — 그 경로 탭들의 모든 화면에서 승인 대기 > 작업 중 > 그 밖(세션이 없으면 대기). 넘긴 작업을 붙여 보는 화면은 그 작업
-        var states: [String: String] = [:]
-        for ws in workspaces { states[ws] = tabs(in: ws).flatMap(\.surfaces).compactMap { $0.parked ?? $0.session }.min { $0.rank < $1.rank }?.state ?? "idle" }
-        if states != workspaceStates { workspaceStates = states }
+        if r.paired != paired { paired = r.paired }
+        if r.ownedHeadless != tabOwnedHeadless { tabOwnedHeadless = r.ownedHeadless }
+        if r.parkedTabs != parkedTabs { parkedTabs = r.parkedTabs }
+        parkedFrom = r.parkedFrom
+        if r.workspaceStates != workspaceStates { workspaceStates = r.workspaceStates }
         saveTabs()   // 세션 id·resume_cmd·셸 경로·고른 탭이 바뀌었으면 남긴다
         // 다른 터미널 세션의 앱 이름 — 조상 프로세스로만(AppleScript 를 쓰는 TerminalControl.owner 는 부르지 않는다)
         var names = appNames
-        for s in sessions where s.state != "ended" && !s.headless && map[s.id] == nil && names[s.id] == nil && s.pid > 0 {
+        for s in sessions where s.state != "ended" && !s.headless && r.paired[s.id] == nil && names[s.id] == nil && s.pid > 0 {
             if let id = ancestorApp(s.pid) {
                 names[s.id] = terminalApps.first { $0.id == id }?.name
                     ?? NSRunningApplication.runningApplications(withBundleIdentifier: id).first?.localizedName ?? "터미널"
@@ -6299,21 +6273,8 @@ final class SplitNode {
     }
 }
 
-// 세션이 도는 곳(SessionPlace — 칩·클릭 흐름·카드 구역이 쓴다)은 BoardRules/Terminals.swift 에 있다. 정하는 것은 TerminalHub.place
-
-// pid 의 조상 가운데 화면의 맨 위 프로세스가 있으면 그 화면
-func tabAncestor(_ pid: Int32, _ tabPids: [Int32: BoardSurface]) -> BoardSurface? {
-    var p = pid
-    for _ in 0..<12 where p > 1 {
-        var info = kinfo_proc()
-        var size = MemoryLayout<kinfo_proc>.stride
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, p]
-        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return nil }
-        p = info.kp_eproc.e_ppid
-        if let t = tabPids[p] { return t }
-    }
-    return nil
-}
+// 세션이 도는 곳(SessionPlace — 칩·클릭 흐름·카드 구역이 쓴다)은 BoardRules/Terminals.swift 에 있다. 정하는 규칙은 BoardRules/TabPairing.swift
+// (sessionPlace·pairTabs — headless 의 조상 찾기도), 부르는 것은 TerminalHub.place·pair
 
 // 부모 pid — 읽지 못하면 0
 func parentPid(_ pid: Int32) -> Int32 {
@@ -9395,9 +9356,18 @@ struct SystemTerminalApps: TerminalApps {
     func wait(_ seconds: TimeInterval) { Thread.sleep(forTimeInterval: seconds) }
 }
 
-// 프로세스 — 조상 앱 찾기는 아래 ancestorApp(TerminalHub.pair 도 쓴다), 살아 있는지·끝내기는 kill
+// 프로세스 — 조상 앱 찾기는 아래 ancestorApp(TerminalHub.pair 도 쓴다), 부모 pid 는 sysctl(보드 탭 짝짓기의 headless 조상 찾기),
+// 살아 있는지·끝내기는 kill
 struct SystemProcessControl: ProcessControl {
     func ancestorBundleID(_ pid: Int32) -> String? { ancestorApp(pid) }
+
+    func parentPID(_ pid: Int32) -> Int32? {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return nil }
+        return info.kp_eproc.e_ppid
+    }
     func isAlive(_ pid: Int32) -> Bool { kill(pid, 0) == 0 }
     func terminate(_ pid: Int32) { kill(pid, SIGTERM) }
 }
@@ -9455,6 +9425,12 @@ struct HubTabs: BoardTabs {
     func toast(_ text: String) { MainActor.assumeIsolated { TerminalHub.shared.toast(text) } }
 }
 
+// 보드 탭 화면 — TerminalHub(@MainActor). 짝짓기·자리 판정(pairTabs·sessionPlace)이 메인에서만 부른다
+struct HubProbe: TabProbe {
+    func runsClaude(_ screen: UUID) -> Bool { MainActor.assumeIsolated { TerminalHub.shared.surface(screen)?.runsClaude == true } }
+    func mode(_ s: Session) -> String? { MainActor.assumeIsolated { TerminalHub.shared.mode(s) } }
+}
+
 // 세션 표지 — sessions/<sid>.paused·<sid>.mute. 알림 끄기 표지는 세션 기록이 지워질 때 state.py prune 이 함께 치운다
 struct SessionMarkFiles: SessionMarks {
     private func path(_ sid: String, _ ext: String) -> String { (sessionsDir as NSString).appendingPathComponent("\(sid).\(ext)") }
@@ -9485,6 +9461,7 @@ struct AppSessionTerminals: SessionTerminals {
 
 let systemTerminals = SystemTerminalApps()
 let boardTabs = HubTabs()
+let tabProbe = HubProbe()
 // 세션을 띄운 앱의 기억(세션마다)을 쥔다 — 보드가 떠 있는 동안 하나
 let terminalControl = TerminalControl(apps: systemTerminals, processes: SystemProcessControl(), titles: TtyTitles(), tabs: boardTabs)
 let sessionControl = SessionControl(terminals: AppSessionTerminals(), tabs: boardTabs, processes: SystemProcessControl(),

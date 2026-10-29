@@ -67,6 +67,7 @@ private final class FakeProcesses: ProcessControl, @unchecked Sendable {
     var alive = Set<Int32>()
     init(log: CallLog) { self.log = log }
     func ancestorBundleID(_ pid: Int32) -> String? { log.calls.append("ancestor \(pid)"); return ancestors[pid] }
+    func parentPID(_ pid: Int32) -> Int32? { log.calls.append("parent \(pid)"); return nil }   // 다른 터미널·세션 조작은 부르지 않는다(보드 탭 짝짓기 몫)
     func isAlive(_ pid: Int32) -> Bool { log.calls.append("alive \(pid)"); return alive.contains(pid) }
     func terminate(_ pid: Int32) { log.calls.append("terminate \(pid)") }
 }

@@ -90,7 +90,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
   `// MARK: - 내장 터미널` — 창 내용은 `BoardRootView`([터미널 영역 │ `PaneDivider` │ 보드]). `TerminalHub` 가 탭(`BoardTab`)을 쥐고,
   탭(화면)마다 그 폴더의 로그인 셸을 띄우고, claude 명령은 셸의 줄 편집이 시작되면 그 셸에 붙여넣기 + Return 으로 넣는다(`BoardSurface.type`, claude 가 끝나면 셸 프롬프트로 남고 셸을 exit 하면 탭을 닫음.
   새 세션은 `--session-id`, 모든 길에 탭 이름을 `--name` 으로 붙이고 ⇧⌘R 은 `/rename` — `named`·`applyRenames`). `pair` 가 세션 파일의 `tty` = 탭 tty(headless 는 pid 조상이 탭)로 짝짓고
-  `place` 가 보드 탭·다른 터미널·백그라운드·끝남을 가른다 — 세션 파일 약속은 그대로. 쥔 탭 목록은 UserDefaults `terminalTabs` 에 바뀔 때마다 남기고 다시 뜰 때 `restoreTabs` 가 resume_cmd 로 이어 연다.
+  `place` 가 보드 탭·다른 터미널·백그라운드·끝남을 가른다(규칙은 BoardRules 의 `pairTabs`·`sessionPlace`, 여기서는 화면 값을 떠 넘기고 결과를 화면·@Published 에 씀) — 세션 파일 약속은 그대로. 쥔 탭 목록은 UserDefaults `terminalTabs` 에 바뀔 때마다 남기고 다시 뜰 때 `restoreTabs` 가 resume_cmd 로 이어 연다.
   `BoardTerminalView`(한글 조합 중 Return·Esc 고침 — 엔진을 올리면 다시 시험),
   `confirmShutdown`(업데이트·종료 전 확인, 끊기는 탭의 주 세션에 `.paused`), `driveSession`(보드 탭은 탭에 직접, Ghostty 는 AppleScript — 길은 `TerminalControl.driveRoute`),
   `mdRenderDir`·`mdRenderCommand`(md-render 를 `~/.claude/notifier/plugins/` 로 옮기고 `--plugin-dir` 을 한 번만 붙임, 끈 세션은 `mdRenderOff`). 보드 쪽 문제는 `~/.claude/notifier/board.log`.
@@ -103,6 +103,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
   자동 전환 판단(`AutoSwitch.swift`: `decideAutoSwitch` — 한도 세션·전환 까닭·다음 계정과 한도 표시·이어 갈 세션을 값으로 돌려준다),
   다른 터미널 조작(`Terminals.swift`: 세션이 도는 곳 `SessionPlace`, 조상 앱 번들 id → `terminalKind`, AppleScript 글자 `ghosttySendScript`·`ghosttyFindScript`·`ghosttyFocusScript`·`ttyFocusScript`·`ttyCountScript`(바이트까지 시험이 고정),
   `TerminalControl` — 세션을 띄운 앱 `owner`(세션마다 기억)·`canDrive`·조작 길 `driveRoute`(보드 탭 먼저, 다음 Ghostty)·`focusRoute`·Ghostty 표지 제목 찾기 `ghosttyTerminalId`·`focusGhostty`·`focusByTty`),
+  보드 탭 짝짓기·자리(`TabPairing.swift`: 화면 값 `TabScreen` → `pairTabs`(tty 짝·headless 조상·셸만 남은 화면·넘긴 작업 따라가기·경로 상태 점, 결과 `TabPairing`)·자리 `sessionPlace`·`parkedScreen`·`shownSessionPlace`),
   세션 조작 순서(`SessionControl.swift`: 단계 `SessionSteps`·`carryOnPrompt`·일시중지 표지 `pausedMarkData`·끝나기 기다리기 한 번의 판단 `exitWait`, `SessionControl` 의 `pause`·`resumePaused`·`stop`·`moveToBoard`·`reopen`·`open`),
   업데이트 판단(`Updates.swift`: VERSION 본문 검증 `releaseVersion`·새 버전인지 `isNewerVersion`·확인하는 빌드 `updateEligible`·결과 `UpdateCheckResult`(손으로 확인한 안내 `notice`)·유스케이스 `checkForUpdate`),
   단축키 판정(`Shortcuts.swift`: 수정키 `KeyModifiers`(raw 값이 `NSEvent.ModifierFlags` 와 같고 보드 설정 `shortcuts` 에 그대로 남으므로 동작 id 처럼 바꾸지 않는다)·키 `KeyCombo`(`label`·`menuKey`)·
@@ -112,9 +113,10 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
   사용량 규칙도 같은 방식으로 `UsageCache`(`/tmp/.claude-usage-cache.json`, 상태줄과 함께 쓰는 약속)·`LoginCredentials`(키체인 로그인 정보)·`UsageAPI`·`Clock` 포트로만 부른다 — 진짜 어댑터는 `UsageCacheFile`·`KeychainCredentials`·`OAuthUsageAPI`(상태 없는 struct).
   계정 전환 규칙은 `KeychainItems`(키체인 일반 암호 항목, 자리는 `KeychainItem`)·`ClaudeConfig`(`~/.claude.json`)·`SavedAccountList`(`~/.claude/notifier/accounts.json`)·`CredentialsWriteLock`(`~/.claude/.storage-write`)·`Clock` 포트로만 부른다(묶음 `AccountPorts`) —
   진짜 어댑터는 `SystemKeychain`(`Keychain` enum 의 security 명령·16진수·ASCII JSON 그대로)·`ClaudeConfigFile`·`SavedAccountsFile`·`StorageWriteLock`, 로그인 정보 항목 자리는 앱의 `claudeLoginItem()`(서비스 해시·`$USER`).
-  다른 터미널·세션 조작은 `TerminalApps`(떠 있는지·활성화·AppleScript 실행·잠깐 기다리기)·`ProcessControl`(조상 앱·살아 있는지 `kill(pid, 0) == 0`·SIGTERM — EPERM 뜻이 `ProcessProbe.isGone` 과 달라 따로)·`TerminalTitles`(tty 제목)·
+  다른 터미널·세션 조작은 `TerminalApps`(떠 있는지·활성화·AppleScript 실행·잠깐 기다리기)·`ProcessControl`(조상 앱·부모 pid·살아 있는지 `kill(pid, 0) == 0`·SIGTERM — EPERM 뜻이 `ProcessProbe.isGone` 과 달라 따로)·`TerminalTitles`(tty 제목)·
   `BoardTabs`(보드 탭)·`SessionMarks`(`.paused`·`.mute` 쓰기·지우기)·`SessionTerminals`(단계 넣기·끝나기 기다리기·포커스 — 큐·타이머를 쥔 앱 함수)·`Clock` 포트로만 부른다 —
-  진짜 어댑터는 `SystemTerminalApps`·`SystemProcessControl`·`TtyTitles`·`HubTabs`(`TerminalHub` 를 `MainActor.assumeIsolated` 로)·`SessionMarkFiles`·`AppSessionTerminals`. `TerminalHub.pair`·`place` 는 아직 앱에 있다.
+  진짜 어댑터는 `SystemTerminalApps`·`SystemProcessControl`·`TtyTitles`·`HubTabs`(`TerminalHub` 를 `MainActor.assumeIsolated` 로)·`SessionMarkFiles`·`AppSessionTerminals`.
+  보드 탭 짝짓기·자리는 화면 값을 값으로 받고 `TabProbe`(화면의 claude·실행 방식 — 비싸서 그 갈래에서만, 진짜 어댑터 `HubProbe`)·`ProcessControl.parentPID`(headless 조상)·`ClaudeLive.parkedJob`(넘긴 작업 id) 포트로만 부른다.
   업데이트 판단은 `ReleaseVersions`(최신 VERSION, 진짜 어댑터 `GitHubReleaseVersions` — URLSession), 단축키 글자는 `KeyboardLayout`(지금 ASCII 자판, 진짜 어댑터 `SystemKeyboardLayout` — `asciiKeyCharacters`) 포트로만 부른다.
   사용자가 바꾼 키는 포트 없이 값으로 넘긴다(읽고 쓰기는 UserDefaults 한 줄씩이라). Carbon 수정키 `carbonMods`·NSEvent 변환·시스템 단축키 목록 읽기(`systemHotKeys`)는 앱에 둔다.
   규칙에 새 OS 호출(파일·프로세스·시각·홈 폴더)을 넣을 때는 포트를 거친다 — BoardRules 에서 FileManager·kill·`Date()` 를 직접 부르지 않는다(남은 예외: `Group.path` 의 `NSHomeDirectory()`).
