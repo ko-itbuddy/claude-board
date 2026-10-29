@@ -2102,7 +2102,8 @@ struct SessionRow: View {
             row
             // 서브에이전트 줄은 한 묶음으로 그린다 — 세션 줄의 회전·반짝임이 초당 20번 바뀔 때마다 화면 갱신이 서브에이전트 줄을 하나하나 다시 훑지 않게
             // (32개일 때 보드 CPU 약 2%p, 2026-10-26 실측). 펼칠 때 줄마다 전환이 돌도록 접기 조건은 묶음 안에 둔다
-            VStack(alignment: .leading, spacing: 0) {
+            // LazyVStack: 서브에이전트가 많을 때 줄 크기 계산이 CPU 를 거의 다 쓰므로 한 번에 다 재지 않게 한다(200개 평균 87%→45%, 이슈 #21)
+            LazyVStack(alignment: .leading, spacing: 0) {
                 if subOpen {
                     ForEach(Array(s.subagents.enumerated()), id: \.element.id) { i, sub in
                         SubagentRow(sub: sub, last: i == s.subagents.count - 1)
