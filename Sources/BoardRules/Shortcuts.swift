@@ -4,7 +4,8 @@
 // 앱(Shortcuts·ShortcutSettings)에 남는 것: @Published 상태와 UserDefaults 읽고 쓰기, 메뉴 다시 만들기·NSMenuItem 에 키 달기,
 // Carbon 전역 단축키 등록과 Carbon 수정키(carbonMods), NSEvent 와 오가는 변환, 키 감시(handle)의 NSEvent 분기, 시스템 단축키 목록 읽기(CopySymbolicHotKeys).
 // 사용자가 바꾼 키는 값([id: [키 번호, 수정키 raw]])으로 받고 고친 값을 돌려준다 — 앱이 이미 @Published 로 쥐고 저장하므로
-// 읽고 쓰기를 포트로 빼면 결정 없는 UserDefaults 한 줄씩만 감싸게 되고, 해석·고치기 규칙은 값만으로 모두 시험할 수 있다
+// 읽고 쓰기를 포트로 빼면 결정 없는 UserDefaults 한 줄씩만 감싸게 되고, 해석·고치기 규칙은 값만으로 모두 시험할 수 있다.
+// 옮긴 뒤 고친 것(이슈 #9 2차): 저장값은 항목마다 검증해(parseShortcutOverrides) 이상한 항목만 기본값으로 읽고, 범위 밖 숫자에 멈추지 않는다
 import Foundation
 
 // MARK: - 키 하나
@@ -29,9 +30,9 @@ public struct KeyCombo: Hashable, Sendable {
     public var code: UInt16
     public var mods: KeyModifiers
 
-    /// 수정키는 ⌘⌃⌥⇧ 만 남긴다. 키 번호가 UInt16 밖이면 멈춘다(지금 동작)
-    public init(_ code: Int, _ mods: KeyModifiers) {
-        self.code = UInt16(code)
+    /// 수정키는 ⌘⌃⌥⇧ 만 남긴다
+    public init(_ code: UInt16, _ mods: KeyModifiers) {
+        self.code = code
         self.mods = mods.intersection(.keys)
     }
 
@@ -89,7 +90,7 @@ public struct ShortcutTable: Equatable, Sendable {
     /// 표의 차례가 뜻을 가진다 — 같은 키를 쓰는 동작이 여럿이면 앞의 것이 받는다(메뉴도, 키 감시도)
     public static let actions: [ShortcutAction] = {
         var a: [ShortcutAction] = []
-        func add(_ group: String, _ id: String, _ title: String, _ code: Int?, _ mods: KeyModifiers = []) {
+        func add(_ group: String, _ id: String, _ title: String, _ code: UInt16?, _ mods: KeyModifiers = []) {
             a.append(ShortcutAction(id: id, group: group, title: title, initial: code.map { KeyCombo($0, mods) }))
         }
         let co: KeyModifiers = [.control, .option]
@@ -99,7 +100,7 @@ public struct ShortcutTable: Equatable, Sendable {
         add("보드", "terminal", "터미널 펼치기·접기 (어느 앱에서든)", 17, co)
         add("터미널", "newSession", "새 세션…", 17, .command)
         add("터미널", "rename", "탭 이름 바꾸기", 15, [.command, .shift])
-        for (n, code) in zip(1...9, [18, 19, 20, 21, 23, 22, 26, 28, 25]) { add("탭으로 가기", "tab\(n)", "탭 \(n)", code, .command) }
+        for (n, code) in zip(1...9, [18, 19, 20, 21, 23, 22, 26, 28, 25] as [UInt16]) { add("탭으로 가기", "tab\(n)", "탭 \(n)", code, .command) }
         add("탭으로 가기", "prevTab", "이전 탭", 123, co)
         add("탭으로 가기", "nextTab", "다음 탭", 124, co)
         add("탭으로 가기", "prevTab2", "이전 탭 (보조)", 33, [.command, .shift])
@@ -112,7 +113,7 @@ public struct ShortcutTable: Equatable, Sendable {
         add("화면 나누기", "splitDown", "아래로 나누기", 2, [.command, .shift])
         add("화면 나누기", "prevSurface", "이전 화면", 33, .command)
         add("화면 나누기", "nextSurface", "다음 화면", 30, .command)
-        let arrows = [("Up", "위로", 126), ("Down", "아래로", 125), ("Left", "왼쪽으로", 123), ("Right", "오른쪽으로", 124)]
+        let arrows: [(String, String, UInt16)] = [("Up", "위로", 126), ("Down", "아래로", 125), ("Left", "왼쪽으로", 123), ("Right", "오른쪽으로", 124)]
         for (id, name, code) in arrows { add("화면 나누기", "focus\(id)", "\(name) 화면 고르기", code, [.command, .option]) }
         for (id, name, code) in arrows { add("화면 나누기", "resize\(id)", "경계를 \(name) 옮기기", code, [.command, .control]) }
         add("화면 나누기", "equalize", "크기 고르게", 24, [.command, .control])
@@ -129,7 +130,7 @@ public struct ShortcutTable: Equatable, Sendable {
     }()
 
     /// 고를 수 없는 키 — macOS 표준 편집·창 키(⌘Q·⌘H·⌥⌘H·⌘M·⌘W·⌘C·⌘V·⌘X·⌘A·⌘Z·⇧⌘Z)와 설정 화면을 여는 ⌘,
-    public static let reserved = [12, 4, 46, 13, 8, 9, 7, 0, 6, 43].map { KeyCombo($0, .command) }
+    public static let reserved = ([12, 4, 46, 13, 8, 9, 7, 0, 6, 43] as [UInt16]).map { KeyCombo($0, .command) }
         + [KeyCombo(6, [.command, .shift]), KeyCombo(4, [.command, .option])]
     /// 설정 화면 — 표에 없고 바꿀 수 없다(엔진 기본값 open_config 가 먼저 가져가므로 키 감시가 받는다)
     public static let settingsKey = KeyCombo(43, .command)
@@ -142,10 +143,19 @@ public struct ShortcutTable: Equatable, Sendable {
     public init(overrides: [String: [Int]] = [:]) { self.overrides = overrides }
 
     /// 그 동작의 지금 키 — 바꾼 것이 없으면 기본값, [] 이면 비움(nil), [키 번호, 수정키 raw] 면 그 키(⌘⌃⌥⇧ 밖 비트는 버림).
-    /// 그 밖 길이도 비움(nil)이다(지금 동작). 표에 없는 id 도 바꾼 것이 있으면 그대로 읽는다
+    /// 이상한 저장값(길이 1·3 이상, 키 번호 0...65535 밖, 음수 수정키)도 기본값이다 — 검증(parseShortcutOverrides)을 거치지 않고
+    /// 표에 바로 들어와도 멈추지 않는다. 표에 없는 id 도 바꾼 것이 있으면 그대로 읽는다
     public func combo(_ id: String) -> KeyCombo? {
-        guard let v = overrides[id] else { return Self.action(id)?.initial }
-        return v.count == 2 ? KeyCombo(v[0], KeyModifiers(rawValue: UInt(v[1]))) : nil
+        guard let v = overrides[id], let s = Self.decode(v) else { return Self.action(id)?.initial }
+        return s
+    }
+
+    /// 저장값 하나 — [] 은 비움(.some(nil)), [키 번호 0...65535, 수정키 0 이상] 은 그 키, 그 밖은 nil(이상함 → 기본값).
+    /// 키 번호·수정키는 UInt16(exactly:)·UInt(exactly:) 로만 담는다(못 담으면 멈추지 않고 이상함)
+    static func decode(_ v: [Int]) -> KeyCombo?? {
+        if v.isEmpty { return .some(nil) }
+        guard v.count == 2, let code = UInt16(exactly: v[0]), let raw = UInt(exactly: v[1]) else { return nil }
+        return .some(KeyCombo(code, KeyModifiers(rawValue: raw)))
     }
 
     /// 기본값과 같은 키로 돌아오면 남긴 것을 지운다. nil 은 비우기([]) — 다만 기본값이 없는 동작(과 표에 없는 id)은 nil 이 기본값과 같아 지운다
@@ -165,6 +175,23 @@ public struct ShortcutTable: Equatable, Sendable {
     public func actionID(for c: KeyCombo) -> String? {
         Self.actions.first { combo($0.id) == c }?.id
     }
+}
+
+// MARK: - 저장값 검증
+
+/// 보드 설정 shortcuts 원본(UserDefaults.dictionary(forKey:) 그대로) → 사용자가 바꾼 키. 항목마다 따로 본다:
+/// [] (비움)과 [키 번호 0...65535, 수정키 0 이상] 만 남기고, 그 밖(길이 1·3 이상, 음수, 범위 밖, 문자열, 정수가 아닌 원소가 섞인 배열,
+/// 배열 아님)은 그 항목만 버려 기본값으로 읽는다 — 앞에는 사전 전체를 [String: [Int]] 로 바꿔 하나라도 어긋나면 바꾼 키를 모두 잃었고
+/// (다음 저장에서 덮어씀), 범위 밖 숫자는 메뉴를 만들다 멈췄다. 버린 항목은 앱이 다음에 저장할 때 사라진다.
+/// 정수로 보는 것은 Foundation 이 [Int] 로 넘겨 주는 것 그대로다(앞과 같다): 딱 떨어지는 실수 11.0 은 11, 참/거짓은 1·0,
+/// 11.5·Int 밖 수·글자는 넘기지 않는다. 표에 없는 id 의 저장값도 멀쩡하면 남긴다
+public func parseShortcutOverrides(_ raw: [String: Any]?) -> [String: [Int]] {
+    var out: [String: [Int]] = [:]
+    for (id, value) in raw ?? [:] {
+        guard let v = value as? [Int], ShortcutTable.decode(v) != nil else { continue }
+        out[id] = v
+    }
+    return out
 }
 
 // MARK: - 키 받기 판정 (설정 > 단축키)

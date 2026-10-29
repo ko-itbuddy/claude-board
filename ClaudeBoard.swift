@@ -7888,7 +7888,7 @@ extension KeyModifiers {
 }
 
 extension KeyCombo {
-    init(_ e: NSEvent) { self.init(Int(e.keyCode), KeyModifiers(e.modifierFlags)) }
+    init(_ e: NSEvent) { self.init(e.keyCode, KeyModifiers(e.modifierFlags)) }
 
     // 화면에 보이는 키·메뉴 keyEquivalent — 글자는 지금 ASCII 자판에서
     var label: String { label(layout: SystemKeyboardLayout()) }
@@ -7912,7 +7912,8 @@ extension KeyCombo {
 
     static var actions: [ShortcutAction] { ShortcutTable.actions }
 
-    @Published private(set) var table = ShortcutTable(overrides: UserDefaults.standard.dictionary(forKey: "shortcuts") as? [String: [Int]] ?? [:])
+    // 저장값은 항목마다 따로 검증한다 — 이상한 항목은 그 동작만 기본값으로 읽고(다음 저장 때 사라진다) 멀쩡한 항목은 지킨다
+    @Published private(set) var table = ShortcutTable(overrides: parseShortcutOverrides(UserDefaults.standard.dictionary(forKey: "shortcuts")))
     var overrides: [String: [Int]] { table.overrides }
     @Published private(set) var hotKeyFailed: Set<String> = []   // 전역 단축키로 등록하지 못한 동작
     private var items: [String: NSMenuItem] = [:]
