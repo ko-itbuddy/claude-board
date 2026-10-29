@@ -4,9 +4,10 @@
 // 표본은 옮기기 전 TerminalHub.pair·place·parkedTab·shownPlace(0b309cd 의 ClaudeBoard.swift)를 줄 그대로 떼어 가짜 화면·OS 로 돌린 덤프 도구와
 // 같은 것이고, 기대 글(expected)은 그 덤프에서 앱에 남은 몫(다른 터미널 앱 이름·프로세스 인자 캐시·@Published 쓰기 기록)만 뺀 줄 그대로다.
 // 화면의 맨 위 프로세스(leader)는 덤프의 앞 프로세스와 getsid 표에서 앱 어댑터(BoardSurface.screen)가 낼 값을 적었다.
-// 버그 의심(같은 tty 세션 둘의 차례·같은 순위 상태 점의 차례)도 지금 동작으로 적고 고치지 않는다.
+// 버그 의심(같은 순위 상태 점의 차례)도 지금 동작으로 적고 고치지 않는다.
 // 덤프 뒤에 고친 것은 고친 동작으로 적었다: 짝 없는 세션을 세션 id 로 화면에 붙이는 길은 그 화면에서 claude 가 뜨는 중이거나 돌 때만
-// (6 은 다른 터미널, 11 은 그 화면이지만 runsClaude 를 묻는다)
+// (6 은 다른 터미널, 11 은 그 화면이지만 runsClaude 를 묻는다), 같은 tty 인 끝나지 않은 세션이 여럿이면 updated → since → 세션 id 차례로
+// 정해진 하나가 화면의 세션(4a 가 4b 와 같아진다)
 import Foundation
 import Testing
 import BoardRules
@@ -84,6 +85,8 @@ private struct SessSpec: Sendable {
     var tty: String = ""
     var headless = false
     var pid: Int32 = 0
+    var updated: Double = 0   // 마지막 hook 기록 시각 — t0 에서 초
+    var since: Double = 0     // 이 상태가 된 시각 — t0 에서 초
 }
 
 private struct ScreenChange: Sendable {
@@ -107,7 +110,7 @@ private struct PairingCase: Sendable, CustomTestStringConvertible {
 
 private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
 private func session(_ s: SessSpec) -> Session {
-    Session(id: s.id, cwd: "/w", projectDir: "/w", state: s.state, since: t0, updated: t0, headless: s.headless, tty: s.tty,
+    Session(id: s.id, cwd: "/w", projectDir: "/w", state: s.state, since: t0 + s.since, updated: t0 + s.updated, headless: s.headless, tty: s.tty,
             topic: "", message: "", resumeCmd: "", file: "", ctx: nil, brain: nil, pid: s.pid, subagents: [], shells: 0,
             paused: false, muted: false, limitAt: nil, name: nil)
 }
@@ -167,7 +170,8 @@ private let cases: [PairingCase] = [
                     SessSpec(id: "h7", state: "working", headless: true, pid: 6000),
                     SessSpec(id: "h8", state: "idle", headless: true, pid: 3401),
                 ])]),
-    // 버그 의심(고치지 않음): 같은 tty 인 세션이 둘이면 세션 목록 차례의 뒤 것이 화면의 세션·세션 id 가 된다(4a·4b 가 차례만 다르다)
+    // 고침: 같은 tty 인 끝나지 않은 세션이 둘이면 updated 가 늦은 것, 같으면 since 가 늦은 것, 그것도 같으면 세션 id 글자 차례의 뒤 것이
+    // 화면의 세션·세션 id 다(여기는 셋 다 같아 s1). 4a·4b 는 목록 차례만 달라 결과가 같다(고치기 전에는 목록 차례의 뒤 것). paired 에는 둘 다 넣는다
     PairingCase(name: "4a 같은 tty 두 세션(대화형 먼저)",
                 screens: [ScreenSpec(name: "A1", tty: "ttys001", leader: 1000)],
                 world: World(parents: [3001: 1002, 1002: 1000], modes: ["h1": "-p"]),
@@ -414,7 +418,52 @@ private let placeCases: [PlaceCase] = [
               place: "tab A2 headless=false", calls: ["runsClaude A1", "runsClaude A2"]),
 ]
 
+// MARK: - 같은 tty 세션 고르기 — 같은 tty 에 끝나지 않은 세션이 여럿이면 화면의 세션은 updated(마지막 hook 기록)가 가장 늦은 것,
+// 같으면 since 가 늦은 것, 그것도 같으면 세션 id 글자 차례의 뒤 것. 표마다 목록 차례를 뒤집어 두 번 돌린다
+
+private struct TtyPick: Sendable, CustomTestStringConvertible {
+    var name: String
+    var sessions: [SessSpec]   // 모두 ttys001
+    var winner: String
+    var testDescription: String { name }
+}
+
+private let ttyPicks: [TtyPick] = [
+    TtyPick(name: "updated 가 늦은 것(세션 id 차례와 반대여도)",
+            sessions: [SessSpec(id: "a", state: "idle", tty: "ttys001", pid: 2001, updated: 10),
+                       SessSpec(id: "b", state: "working", tty: "ttys001", pid: 2002, updated: 0, since: 20)],
+            winner: "a"),
+    TtyPick(name: "updated 가 같으면 since 가 늦은 것",
+            sessions: [SessSpec(id: "a", state: "idle", tty: "ttys001", pid: 2001, updated: 5, since: 3),
+                       SessSpec(id: "b", state: "idle", tty: "ttys001", pid: 2002, updated: 5, since: 1)],
+            winner: "a"),
+    TtyPick(name: "updated·since 가 같으면 세션 id 글자 차례의 뒤 것",
+            sessions: [SessSpec(id: "a", state: "working", tty: "ttys001", pid: 2001),
+                       SessSpec(id: "b", state: "idle", tty: "ttys001", pid: 2002)],
+            winner: "b"),
+    TtyPick(name: "끝난 세션은 견주지 않는다(updated 가 늦어도)",
+            sessions: [SessSpec(id: "a", state: "idle", tty: "ttys001", pid: 2001),
+                       SessSpec(id: "z", state: "ended", tty: "ttys001", pid: 2002, updated: 100)],
+            winner: "a"),
+]
+
 @Suite("보드 탭 짝짓기·자리") struct TabPairingTests {
+    @Test("짝짓기: 같은 tty 의 끝나지 않은 세션이 여럿이면 updated → since → 세션 id 차례로 하나, 목록 차례와 관계없고 paired 에는 모두", arguments: ttyPicks)
+    fileprivate func sameTtyPick(_ c: TtyPick) {
+        let screen = UUID()
+        for order in [c.sessions, Array(c.sessions.reversed())] {
+            let log = Log()
+            let label = order.map(\.id).joined(separator: ",")
+            let r = pairTabs(order.map(session),
+                             screens: [TabScreen(id: screen, workspace: "/w/a", tty: "ttys001", leader: 1000, sessionId: nil, command: nil, mdRenderOff: false)],
+                             probe: FakeProbe(log: log, names: [screen: "A1"], running: [], modes: [:]),
+                             processes: FakeProcesses(log: log, parents: [:]), live: FakeLive(log: log, jobs: [:]))
+            #expect(r.screens.first?.session?.id == c.winner, "\(label)")
+            #expect(r.screens.first?.sessionId == c.winner, "\(label)")
+            #expect(r.paired == Dictionary(uniqueKeysWithValues: c.sessions.filter { $0.state != "ended" }.map { ($0.id, screen) }), "\(label)")
+        }
+    }
+
     @Test("자리: 짝 없는 세션은 같은 세션 id 화면에서 claude 가 뜨는 중이거나 돌 때만 그 화면", arguments: placeCases)
     fileprivate func placeBySessionId(_ c: PlaceCase) {
         var ids: [String: UUID] = [:], names: [UUID: String] = [:]
@@ -546,14 +595,14 @@ private let expected: [String: String] = [
     """,
     "4a 같은 tty 두 세션(대화형 먼저)": """
     === 4a 같은 tty 두 세션(대화형 먼저) / 판 1
-    pair 조회: parent 3001 | parent 1002 | mode h1 | parkedJob 3001 h1
+    pair 조회: parent 3001 | parent 1002 | mode s1 | parkedJob 2001 s1
     끈 세션:
     paired: h1→A1 s1→A1
     owned: h1
     parkedTabs:
     parkedFrom:
     states: /w/a→working
-    화면 A1: sid=h1 cmd=nil off=false session=h1 parked=nil
+    화면 A1: sid=s1 cmd=claude off=false session=s1 parked=nil
     자리 s1[working]: place=tab A1 headless=false shown=tab A1 headless=false parkedTab=nil 조회:
     자리 h1[working]: place=tab A1 headless=true shown=tab A1 headless=true parkedTab=nil 조회:
     """,

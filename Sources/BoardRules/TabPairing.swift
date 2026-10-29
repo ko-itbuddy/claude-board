@@ -1,6 +1,7 @@
 // 보드 탭(내장 터미널) 짝짓기·자리 규칙 — 세션을 보드 탭의 화면과 짝짓고(pairTabs), 세션이 도는 곳을 가른다(sessionPlace·parkedScreen·shownSessionPlace).
 // ClaudeBoard.swift 의 TerminalHub.pair·place·parkedTab·shownPlace 와 tabAncestor 에 있던 판단을 옮김(이슈 #9 마지막 칸) — 결과·포트 호출 차례는 그대로다.
-// 옮긴 뒤 고친 것: 짝 없는 세션을 세션 id 로 화면에 붙이는 길은 그 화면에서 claude 가 뜨는 중이거나 돌 때만(sessionPlace).
+// 옮긴 뒤 고친 것: 짝 없는 세션을 세션 id 로 화면에 붙이는 길은 그 화면에서 claude 가 뜨는 중이거나 돌 때만(sessionPlace),
+// 같은 tty 인 끝나지 않은 세션이 여럿이면 정해진 차례(ttyWinner)로 화면의 세션을 고른다(pairTabs).
 // 화면의 지금 값(tty·맨 위 프로세스·세션 id·명령)은 앱이 떠서 값(TabScreen·ScreenSession)으로 넘긴다. 비싸서 그 갈래에서만 묻던 것은 포트로 부른다:
 // 화면의 claude·세션 실행 방식은 TabProbe, 부모 pid 는 ProcessControl, 넘긴 작업 id 는 ClaudeLive.
 // 결과는 값(TabPairing)으로 돌려주고 앱(TerminalHub)이 화면(BoardSurface)·@Published 에 쓴다. 다른 터미널 세션의 앱 이름(appNames)·쥔 탭 목록 남기기·
@@ -70,7 +71,8 @@ public struct ScreenSession: Equatable, Sendable {
 
 /// 세션 목록을 다시 읽을 때마다 탭의 화면들과 짝짓는다. tty 가 같으면 그 화면의 세션, headless 세션은 조상에 화면의 맨 위 프로세스가 있으면
 /// 그 화면 소속(화면이 닫히면 함께 끝난다 — Claude 가 Bash 도구로 띄운 claude -p 등). 끝난 세션은 같은 세션 id 로 연 화면에서 claude 가 뜨는 중일 때만.
-/// 같은 tty·같은 맨 위 프로세스인 화면이 여럿이면 뒤의 것, 같은 tty 인 세션이 여럿이면 뒤의 것이 화면의 세션이다(지금 동작)
+/// 같은 tty·같은 맨 위 프로세스인 화면이 여럿이면 뒤의 것(지금 동작). 같은 tty 인 끝나지 않은 세션이 여럿이면 ttyWinner 로 고른 하나가
+/// 화면의 세션·세션 id 이고(전에는 세션 목록 — 파일 목록 — 차례의 뒤 것이라 정해져 있지 않았다), paired 에는 지금처럼 모두 그 화면으로 넣는다
 public func pairTabs(_ sessions: [Session], screens: [TabScreen], probe: TabProbe, processes: ProcessControl, live: ClaudeLive) -> TabPairing {
     var byTty: [String: Int] = [:]
     for (i, t) in screens.enumerated() where !t.tty.isEmpty { byTty[t.tty] = i }
@@ -83,6 +85,7 @@ public func pairTabs(_ sessions: [Session], screens: [TabScreen], probe: TabProb
     for s in sessions where s.state != "ended" && !s.tty.isEmpty {
         guard let i = byTty[s.tty] else { continue }
         map[s.id] = screens[i].id
+        if let held = main[screens[i].id], !ttyWinner(s, over: held) { continue }
         main[screens[i].id] = s
         // /clear 등으로 id 가 바뀌었거나 셸에서 사람이 띄운 claude — 끝난 뒤에도 그 세션이 돌던 화면으로 찾는다(resumeSession)
         sessionIds[i] = s.id
@@ -117,6 +120,12 @@ public func pairTabs(_ sessions: [Session], screens: [TabScreen], probe: TabProb
             .min { $0.rank < $1.rank }?.state ?? "idle"
     }
     return TabPairing(screens: out, paired: map, ownedHeadless: owned, parkedTabs: parked, parkedFrom: from, workspaceStates: states)
+}
+
+/// 같은 tty 인 끝나지 않은 세션 둘 가운데 a 가 화면의 세션인가 — 마지막 hook 기록(updated)이 늦은 것, 같으면 이 상태가 된 시각(since)이
+/// 늦은 것, 그것도 같으면 세션 id 글자 차례의 뒤 것. 세션 목록 차례와 관계없이 정해진다
+func ttyWinner(_ a: Session, over b: Session) -> Bool {
+    (a.updated, a.since, a.id) > (b.updated, b.since, b.id)
 }
 
 /// pid 의 조상 가운데 화면의 맨 위 프로세스가 있으면 그 화면 — 부모로 한 칸 올라간 뒤 견주기를 12번까지(1 이하 pid 에서는 더 올라가지 않는다).
