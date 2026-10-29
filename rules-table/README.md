@@ -3,7 +3,7 @@
 이 폴더는 macOS 보드와 Windows 판이 **같은 JSON 줄을 읽고 같은 판정을 하는지** 견주는 공유 시험 표다.
 줄 하나가 "입력(input) 이 이렇게 들어오면 기대(expect) 가 이렇게 돼야 한다" 는 하나의 규칙이다.
 새 표 파일을 넣지 않는 동안에도 이 문서가 꼴의 소유자고, 양쪽 돌리는 쪽(`windows/app/src-tauri/src/rules_table.rs`,
-`windows/app/src/lib/rulesTable.ts`)이 로더 시험으로 이 꼴을 지킨다. 같은 성격의 앞 예는 `hook-table/` 이다.
+`windows/app/src/lib/rulesTable.ts`, macOS `Tests/BoardRulesTests/RulesTableTests.swift`)이 로더 시험으로 이 꼴을 지킨다. 같은 성격의 앞 예는 `hook-table/` 이다.
 
 ## 파일과 rule
 
@@ -41,6 +41,7 @@
 - `input`·`expect`: 키는 rule 마다 아래 표가 고정한다. **모르는 키가 있으면 돌리는 쪽이 실패한다.**
 - `only`: `"mac"` 또는 `"windows"`. 한 판에만 해당하는 줄에만 붙인다. 붙인 까닭은 같은 줄의 `why` 에 함께 적는다. 없으면 둘 다 돌리는 줄이다.
 - 시각: **지금 = 0 기준 초**(음수 = 과거). 한도 `resets` 도 초(Windows 는 ms 로 바꿔 넣는다).
+  단 `parse` 의 expect `resets` 는 응답의 `resets_at` 을 푼 **1970 기준 ms**(지금과 관계없는 절대 시각)다.
 - 계정: 이름 `"A"` 는 id `"A|org"`, 이메일은 `"a@example.com"` 처럼 쓴다.
 - JSON 이 아닌 몸체는 `"body_raw": "<글자>"` 로 준다.
 
