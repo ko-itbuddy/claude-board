@@ -1021,16 +1021,22 @@ mod tests {
 
     // ── 깨진 저장 계정 목록(§plan 행 #3) ──
 
-    /// board.log 등 전역 notifier 폴더를 시험용 폴더로 바꿨다가 되돌린다(단일 스레드 시험).
+    /// 환경변수는 프로세스 전체가 하나라, 바꾸는 시험이 동시에 둘 돌면 서로의 폴더를 덮어쓴다. 쓰는 동안 이 잠금을 쥐어 한 번에 하나만 돈다.
+    static NOTIFIER_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// board.log 등 전역 notifier 폴더를 시험용 폴더로 바꿨다가 되돌린다. 살아 있는 동안 `NOTIFIER_ENV_LOCK` 을 쥔다.
     struct NotifierEnv {
         old: Option<std::ffi::OsString>,
+        _guard: std::sync::MutexGuard<'static, ()>,
     }
 
     impl NotifierEnv {
         fn for_test(dir: &Path) -> Self {
+            // 앞 시험이 panic 해 잠금이 오염돼도 환경은 Drop 이 되돌렸으니 이어서 쓴다
+            let guard = NOTIFIER_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let old = std::env::var_os(paths::NOTIFIER_ENV);
             std::env::set_var(paths::NOTIFIER_ENV, dir);
-            NotifierEnv { old }
+            NotifierEnv { old, _guard: guard }
         }
     }
 
