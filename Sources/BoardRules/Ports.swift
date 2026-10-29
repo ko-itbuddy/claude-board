@@ -210,7 +210,7 @@ public protocol ProcessControl: Sendable {
     func terminate(_ pid: Int32)
 }
 
-// 세션 tty 의 창 제목 — Ghostty 터미널을 표지 제목으로 찾을 때 쓴다(OSC 2 를 /dev/<tty> 에 쓴다)
+// 세션 tty 의 창 제목 — Ghostty 터미널을 표지 제목으로 찾을 때 쓴다(OSC 2 를 /dev/<tty> 에 쓴다). 어댑터는 tty 이름 꼴(isTtyName)이 아니면 쓰지 않는다
 public protocol TerminalTitles: Sendable {
     func write(tty: String, title: String)
 }

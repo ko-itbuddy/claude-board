@@ -3,7 +3,7 @@
 // 가짜는 부른 것을 한 줄씩 적고 done 을 그 자리에서 부른다 — 사슬(넣기 → 표지·신호·기다리기 → 이어 열기)이 바로 풀려 부른 차례를 그대로 견준다.
 // 기대값은 ClaudeBoard.swift 에 있던 지금 동작 그대로다(버그 의심도 "지금 동작" 으로 적고 고치지 않는다).
 // 옮긴 뒤 고친 것(끝난 세션 중단의 SIGTERM, 키를 못 넣는 살아 있는 세션의 재개, 이슈 #9 3차의 세션을 띄운 앱 기억 정리·
-// Ghostty 포커스의 빈 id·AppleScript 글자에 넣는 tty 와 터미널 id 막기)은 고친 동작을 기대값으로 적는다.
+// Ghostty 포커스의 빈 id·AppleScript 글자에 넣는 tty 와 터미널 id 막기·tty 이름 확인)은 고친 동작을 기대값으로 적는다.
 // 보통 값(ttys003·영숫자 id)의 AppleScript 글자는 막기 전과 바이트까지 같다(아래 고정 글자 그대로).
 // AppleScript 글자의 기대값은 옮기기 전 코드(8904f1f 의 focusByTty·ttyExists·ghosttyTerminalId·ghosttySend·focusGhostty)를 그대로 떼어 돌린 출력이다
 import Foundation
@@ -216,6 +216,9 @@ private let ownerRows: [OwnerRow] = [
           calls: ["ancestor 42", "running iterm", "run count iterm", "running terminal"]),
     .init(note: "AppleScript 오류(nil)는 없음", running: [TerminalBundle.iterm, TerminalBundle.terminal], owner: nil,
           calls: ["ancestor 42", "running iterm", "run count iterm", "running terminal", "run count terminal"]),
+    .init(note: "tty 가 tty 이름 꼴이 아니면(경로) 있는지 묻지 않고 없음 — AppleScript 를 보내지 않는다", pid: 0, tty: "../etc/x",
+          running: [TerminalBundle.iterm, TerminalBundle.terminal], counts: ["count iterm": "1", "count terminal": "1"], owner: nil,
+          calls: ["running iterm", "running terminal"]),
 ]
 
 @Suite("다른 터미널: 세션을 띄운 앱 찾기") struct OwnerTests {
@@ -659,6 +662,17 @@ private let sendRows: [SendRow] = [
         #expect(appleScriptEscaped(input) == out)
     }
 
+    @Test("tty 이름 확인 — 비지 않은 ASCII 영숫자만(/dev/ 아래 터미널 이름). 경로·공백·따옴표·한글·전각은 아니다", arguments: [
+        ("ttys003", true), ("ttyp1", true), ("ttys012", true), ("ttyqa", true), ("console", true), ("TTYS003", true),
+        ("", false), ("../etc/x", false), ("ttys003/../x", false), ("/dev/ttys003", false), ("tty/s003", false),
+        ("..", false), (".", false), ("ttys.003", false), ("ttys 003", false), (" ttys003", false), ("ttys003\n", false),
+        ("tt\"y", false), ("tt'y", false), (#"tty\s"#, false), ("ttys-003", false), ("ttys_003", false), ("ttys003\u{0}", false),
+        ("한글", false), ("ttys003한", false), ("ttys００３", false), ("ｔｔｙｓ003", false),
+    ])
+    func tty_이름(_ tty: String, _ ok: Bool) {
+        #expect(isTtyName(tty) == ok)
+    }
+
     @Test("표지 제목 — 앞말-UUID 앞 8글자") func 표지() {
         let u = UUID(uuidString: "1A2B3C4D-0000-0000-0000-000000000000")!
         #expect(titleMarker("CBFIND", u) == "CBFIND-1A2B3C4D")
@@ -775,6 +789,17 @@ private let marker = "CBFIND-TEST0001"
         w.apps.replies = ["tty iterm": [reply]]
         #expect(w.control.focusByTty(TerminalBundle.iterm, "ttys003") == ok)
         #expect(w.apps.scripts == [goldenITermFocus])
+    }
+
+    @Test("focusByTty·ttyExists — tty 가 tty 이름 꼴이 아니면 AppleScript 를 보내지 않고 못 찾음·없음",
+          arguments: ["", "../etc/x", "ttys003/../x", "tt\"y", "ttys003 "])
+    func tty_이름_아님(_ tty: String) {
+        let w = World()
+        w.apps.fallback = ["tty iterm": "ok", "count terminal": "1"]
+        #expect(!w.control.focusByTty(TerminalBundle.iterm, tty))
+        #expect(!w.control.ttyExists(TerminalBundle.terminal, tty))
+        #expect(w.apps.scripts.isEmpty)
+        #expect(w.log.calls.isEmpty)
     }
 
     @Test("ttyExists — 수가 0 보다 크면", arguments: [

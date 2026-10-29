@@ -9399,10 +9399,11 @@ struct SystemProcessControl: ProcessControl {
     func terminate(_ pid: Int32) { kill(pid, SIGTERM) }
 }
 
-// 세션 tty 의 창 제목(OSC 2)
+// 세션 tty 의 창 제목(OSC 2) — tty 는 세션 파일에서 온 바깥 값이라 tty 이름 꼴(isTtyName, ASCII 영숫자)일 때만 /dev/<tty> 를 연다
+// ("../" 같은 값으로 /dev 밖의 파일에 쓰지 않게). 아니면 지금처럼 조용히 넘어간다
 struct TtyTitles: TerminalTitles {
     func write(tty: String, title: String) {
-        guard let h = FileHandle(forWritingAtPath: "/dev/\(tty)") else { return }
+        guard isTtyName(tty), let h = FileHandle(forWritingAtPath: "/dev/\(tty)") else { return }
         h.write("\u{1b}]2;\(title)\u{07}".data(using: .utf8)!)
         try? h.close()
     }

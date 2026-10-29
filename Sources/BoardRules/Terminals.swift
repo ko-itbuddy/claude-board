@@ -3,7 +3,7 @@
 // (ClaudeBoard.swift 의 ownerApp·ttyExists·focusByTty·canDrive·canDriveSession·driveSession·ghosttyTerminalId·ghosttySend·focusGhostty·focusSession
 // 에 있던 판단을 옮김, 동작·포트 호출 차례·AppleScript 글자는 바이트까지 그대로). 바깥(다른 터미널 앱·프로세스·tty 제목·보드 탭)은 포트(Ports.swift)로만 부른다.
 // 이슈 #9 3차에 고친 것: 세션을 띄운 앱 기억을 보이는 세션으로 정리(prune), Ghostty 포커스도 빈 터미널 id 를 못 찾은 것으로,
-// AppleScript 글자에 넣는 tty·터미널 id 도 막는다(보통 값은 글자가 바이트까지 그대로).
+// AppleScript 글자에 넣는 tty·터미널 id 도 막는다(보통 값은 글자가 바이트까지 그대로), tty 이름 꼴이 아닌 tty 로는 찾지 않는다(isTtyName).
 // 큐(ghosttyQueue·백그라운드·메인)와 타이머는 앱이 쥔다 — 여기 함수는 부른 큐에서 그대로 돈다
 import Foundation
 
@@ -53,6 +53,16 @@ public enum FocusRoute: Equatable, Sendable {
     case tty(String)   // iTerm2·Terminal — tty 로 탭을 찾아 앞으로(못 찾으면 그 앱만 앞으로)
     case app(String)   // 그 밖의 앱 — 앱만 앞으로
     case ghostty       // Ghostty 이거나 못 찾음 — 표지 제목으로 찾아 포커스(ghosttyQueue, 못 찾으면 기본 터미널만)
+}
+
+// MARK: - tty 이름
+
+/// /dev/ 아래 터미널 이름으로 쓸 수 있는 tty 인가 — 비지 않은 ASCII 영숫자만. 세션 기록의 tty 는 state.py 가 `ps -o tty=` 로 얻은 이름이고
+/// (ttys003, 옛 BSD pty 의 ttyp1, 콘솔 로그인의 console. 터미널이 없는 "??" 는 null 로 남긴다), 보드 탭의 tty 는 엔진이 준 /dev/ttys012 에서
+/// /dev/ 를 뗀 것이라 모두 이 꼴이다. 세션 파일에서 온 바깥 값이므로 /dev/<tty> 경로를 만드는 곳(창 제목 쓰기, iTerm2·Terminal 에서 tty 로
+/// 찾기)은 이것을 먼저 거친다 — "../" 같은 값이면 /dev 밖의 파일에 창 제목(OSC 2)을 쓸 수 있다. 아니면 쓰지 않고 없는 것으로 본다
+public func isTtyName(_ tty: String) -> Bool {
+    !tty.isEmpty && tty.unicodeScalars.allSatisfy { ("a"..."z").contains($0) || ("A"..."Z").contains($0) || ("0"..."9").contains($0) }
 }
 
 // MARK: - AppleScript 글자 (보통 값은 바이트까지 예전 그대로 — 시험이 고정해 둔다)
@@ -230,14 +240,16 @@ public final class TerminalControl: @unchecked Sendable {
         lock.withLock { owners = owners.filter { keep.contains($0.key) } }
     }
 
-    /// 그 앱에 그 tty 인 세션(탭)이 있는가 — 결과가 숫자가 아니면 없다
+    /// 그 앱에 그 tty 인 세션(탭)이 있는가 — 결과가 숫자가 아니면 없다. tty 이름 꼴(isTtyName)이 아니면 묻지 않고 없다
     public func ttyExists(_ bundleId: String, _ tty: String) -> Bool {
-        (Int(apps.run(ttyCountScript(app: bundleId, tty: tty)) ?? "") ?? 0) > 0
+        guard isTtyName(tty) else { return false }
+        return (Int(apps.run(ttyCountScript(app: bundleId, tty: tty)) ?? "") ?? 0) > 0
     }
 
-    /// tty 로 iTerm2·Terminal 의 탭을 찾아 앞으로 가져온다 — 찾으면 true
+    /// tty 로 iTerm2·Terminal 의 탭을 찾아 앞으로 가져온다 — 찾으면 true. tty 이름 꼴(isTtyName)이 아니면 찾지 않고 false
     public func focusByTty(_ bundleId: String, _ tty: String) -> Bool {
-        apps.run(ttyFocusScript(app: bundleId, tty: tty)) == "ok"
+        guard isTtyName(tty) else { return false }
+        return apps.run(ttyFocusScript(app: bundleId, tty: tty)) == "ok"
     }
 
     /// Ghostty 에서 도는 터미널 세션인가 — AppleScript 로 키를 보낼 수 있다. 앞 조건이 아니면 앱을 찾지 않는다
