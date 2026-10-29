@@ -37,7 +37,9 @@ public protocol SessionRecords: Sendable {
 
 // 프로세스 — 세션 기록의 pid 가 아직 있는지, 그 claude 에 붙어 도는 백그라운드 셸 수
 public protocol ProcessProbe: Sendable {
-    /// 확실히 없는 pid 만 true(kill(pid, 0) 이 ESRCH). 권한이 없어 못 보는 pid(EPERM)는 false — 살아 있다고 본다
+    /// 확실히 없는 pid 만 true(kill(pid, 0) 이 ESRCH). 권한이 없어 못 보는 pid(EPERM)는 false — 살아 있다고 본다.
+    /// 판정은 끝남을 잘못 단정하지 않는 쪽으로 기운다: sudo 등 다른 사용자로 도는 claude 는 EPERM 이라, 그것을 끝남으로 보면 도는 세션 카드가
+    /// "종료" 로 바뀐다. 세션 조작의 ProcessControl.isAlive 는 반대로 EPERM 을 끝남으로 본다(아래 까닭)
     func isGone(_ pid: Int32) -> Bool
     /// 그 claude 의 자식으로 도는 백그라운드 셸 수. 진짜 어댑터는 Store 가 3초마다 뒤에서 센 ps 결과를 그대로 준다
     func backgroundShells(_ pid: Int32) -> Int
@@ -195,8 +197,10 @@ public protocol TerminalApps: Sendable {
 
 // 프로세스 조작 — 세션 claude 의 조상 앱, 살아 있는지, 끝내라는 신호.
 // ProcessProbe(세션 상태 판정)를 넓히지 않고 따로 둔다: ProcessProbe.isGone 은 권한이 없어 못 보는 pid(EPERM)를 살아 있다고 보지만
-// 여기 isAlive 는 지금 동작(kill(pid, 0) == 0)대로 EPERM 을 끝난 것으로 본다. 두 뜻을 한 포트에 두면 헷갈리고,
-// 신호 보내기를 1초마다 도는 판정 쪽에 열지 않는다. 셸 수(backgroundShells)도 이쪽에는 필요 없다
+// 여기 isAlive 는 지금 동작(kill(pid, 0) == 0)대로 EPERM 을 끝난 것으로 본다. 두 갈래는 의도다(이슈 #9 3차에 확인, 고치지 않음):
+// 판정은 sudo 등 다른 사용자로 도는 claude 를 끝남으로 잘못 보지 않으려고 EPERM 을 살아 있음으로, 조작은 신호를 보낼 수 없는 pid 에
+// SIGTERM 을 보내지 않으려고(보내도 EPERM 으로 실패한다) EPERM 을 끝남으로 본다.
+// 두 뜻을 한 포트에 두면 헷갈리고, 신호 보내기를 1초마다 도는 판정 쪽에 열지 않는다. 셸 수(backgroundShells)도 이쪽에는 필요 없다
 public protocol ProcessControl: Sendable {
     /// pid 의 조상을 따라 올라가 찾은 앱의 번들 id(iTerm2 셸 서버·앱 안 보조 프로세스 포함). 못 찾으면 nil
     func ancestorBundleID(_ pid: Int32) -> String?

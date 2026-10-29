@@ -1339,6 +1339,8 @@ final class Store: ObservableObject {
         SecondTicker.shared.now = now
         refreshShells()
         let sessions = scan.sessions
+        // 세션을 띄운 앱 기억도 판정의 캐시 정리(contexts.prune)처럼 목록에 남은 세션 몫만 남긴다
+        terminalControl.prune(keep: Set(sessions.map(\.id)))
         // 탭 짝짓기는 넘긴 세션까지 모두 본다 — 보드 탭에서 넘긴 원래 claude 가 그 탭에 남아 있을 수 있고(탭 줄 이름·쥔 목록),
         // 카드 목록에서만 뺀다
         // 1초 타이머·알림 관찰자 모두 메인 스레드. 탭 claude 가 넘긴 작업을 붙여 보는 중이면 탭은 그 작업 세션을 따라간다(parkedFrom = 넘긴 쪽)

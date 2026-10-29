@@ -2,7 +2,9 @@
 // 가짜 어댑터로 넣어 진짜 터미널·프로세스·파일 없이 돌린다. 가짜는 이 파일에만 둔다(Sources/BoardRules 에 두지 않는다).
 // 가짜는 부른 것을 한 줄씩 적고 done 을 그 자리에서 부른다 — 사슬(넣기 → 표지·신호·기다리기 → 이어 열기)이 바로 풀려 부른 차례를 그대로 견준다.
 // 기대값은 ClaudeBoard.swift 에 있던 지금 동작 그대로다(버그 의심도 "지금 동작" 으로 적고 고치지 않는다).
-// 옮긴 뒤 고친 것(끝난 세션 중단의 SIGTERM, 키를 못 넣는 살아 있는 세션의 재개)은 고친 동작을 기대값으로 적는다.
+// 옮긴 뒤 고친 것(끝난 세션 중단의 SIGTERM, 키를 못 넣는 살아 있는 세션의 재개, 이슈 #9 3차의 세션을 띄운 앱 기억 정리·
+// Ghostty 포커스의 빈 id·AppleScript 글자에 넣는 tty 와 터미널 id 막기)은 고친 동작을 기대값으로 적는다.
+// 보통 값(ttys003·영숫자 id)의 AppleScript 글자는 막기 전과 바이트까지 같다(아래 고정 글자 그대로).
 // AppleScript 글자의 기대값은 옮기기 전 코드(8904f1f 의 focusByTty·ttyExists·ghosttyTerminalId·ghosttySend·focusGhostty)를 그대로 떼어 돌린 출력이다
 import Foundation
 import Testing
@@ -238,6 +240,21 @@ private let ownerRows: [OwnerRow] = [
         #expect(w.control.owner(session("s2")) == vscode)
     }
 
+    @Test("기억 정리 — 남길 세션 id 에 없는 세션의 기억은 지워 다음에 다시 찾고, 남긴 세션은 묻지 않는다") func 기억_정리() {
+        let w = World()
+        w.processes.ancestors = [42: TerminalBundle.ghostty]
+        #expect(w.control.owner(session("s1")) == TerminalBundle.ghostty)
+        #expect(w.control.owner(session("s2")) == TerminalBundle.ghostty)
+        w.control.prune(keep: ["s1"])
+        w.processes.ancestors = [42: vscode]
+        #expect(w.control.owner(session("s1")) == TerminalBundle.ghostty)
+        #expect(w.control.owner(session("s2")) == vscode)
+        #expect(w.log.calls == ["ancestor 42", "ancestor 42", "ancestor 42"])
+        w.control.prune(keep: [])
+        #expect(w.control.owner(session("s1")) == vscode)
+        #expect(w.log.calls.count == 4)
+    }
+
     @Test("못 찾으면 기억하지 않는다 — 다음에 다시 찾는다") func 못_찾음() {
         let w = World()
         #expect(w.control.owner(session(tty: "")) == nil)
@@ -409,13 +426,13 @@ tell application id "com.apple.Terminal"
 end tell
 """#
 
-// 지금 동작: tty 를 막지 않는다(state.py 가 기록한 ttys003 같은 이름만 온다)
+// tty 도 AppleScript 글자 막기를 거친다 — 따옴표가 든 이상한 tty 가 와도 스크립트 글자가 깨지지 않는다
 private let goldenITermFocusQuote = #"""
 tell application id "com.googlecode.iterm2"
   repeat with w in windows
     repeat with t in tabs of w
       repeat with s in sessions of t
-        if tty of s is "/dev/tt"y" then
+        if tty of s is "/dev/tt\"y" then
           select w
           tell t to select
           tell s to select
@@ -599,12 +616,21 @@ private let sendRows: [SendRow] = [
         #expect(ttyFocusScript(app: TerminalBundle.terminal, tty: "ttys004") == goldenTerminalFocus)
         #expect(ttyFocusScript(app: "com.other", tty: "ttys004") == goldenTerminalFocus)
         #expect(ttyFocusScript(app: TerminalBundle.iterm, tty: "tt\"y") == goldenITermFocusQuote)
+        #expect(ttyFocusScript(app: TerminalBundle.terminal, tty: #"a\b"#)
+                == goldenTerminalFocus.replacingOccurrences(of: #""/dev/ttys004""#, with: #""/dev/a\\b""#))
     }
 
     @Test("iTerm2·Terminal 의 tty 세기 — 그 밖의 앱 id 는 Terminal 것") func tty_세기() {
         #expect(ttyCountScript(app: TerminalBundle.iterm, tty: "ttys003") == goldenITermCount)
         #expect(ttyCountScript(app: TerminalBundle.terminal, tty: "ttys004") == goldenTerminalCount)
         #expect(ttyCountScript(app: "com.other", tty: "ttys005") == goldenOtherCount)
+    }
+
+    @Test("tty 세기 — 따옴표·역슬래시가 든 tty 는 막아 넣는다") func tty_세기_막기() {
+        #expect(ttyCountScript(app: TerminalBundle.iterm, tty: #"t"t"#)
+                == #"tell application id "com.googlecode.iterm2" to return (count of (every session of every tab of every window whose tty is "/dev/t\"t")) as text"#)
+        #expect(ttyCountScript(app: TerminalBundle.terminal, tty: #"t\t"#)
+                == #"tell application id "com.apple.Terminal" to return (count of (every tab of every window whose tty is "/dev/t\\t")) as text"#)
     }
 
     @Test("Ghostty 목록·표지 찾기·표지 포커스") func ghostty() {
@@ -616,6 +642,13 @@ private let sendRows: [SendRow] = [
     @Test("Ghostty 에 단계 보내기", arguments: sendRows)
     func 보내기(_ row: SendRow) {
         #expect(ghosttySendScript(terminal: "ID-1", steps: row.parsed) == row.golden)
+    }
+
+    @Test("Ghostty 에 단계 보내기 — 따옴표·역슬래시가 든 터미널 id 는 막아 넣는다(보통 id 는 그대로)") func 보내기_id_막기() {
+        #expect(ghosttySendScript(terminal: #"I"D\1"#, steps: SessionSteps.exit)
+                == goldenSendExit.replacingOccurrences(of: #"is "ID-1" then"#, with: #"is "I\"D\\1" then"#))
+        #expect(ghosttySendScript(terminal: "6A1F2B3C-0000-4D5E-8F90-ABCDEF012345", steps: SessionSteps.exit)
+                == goldenSendExit.replacingOccurrences(of: "ID-1", with: "6A1F2B3C-0000-4D5E-8F90-ABCDEF012345"))
     }
 
     @Test("AppleScript 글자 막기 — 역슬래시를 먼저, 다음 큰따옴표. 줄바꿈·작은따옴표·한글은 그대로", arguments: [
@@ -719,13 +752,14 @@ private let marker = "CBFIND-TEST0001"
         #expect(w.log.calls.last == "title ttys009=proj")
     }
 
-    @Test("지금 동작: focusGhostty 는 찾은 글자가 비었는지 보지 않는다 — 목록에 id 가 빈 줄이 있으면 그 제목으로 되돌리고 true(ghosttyTerminalId 는 nil)")
+    @Test("focusGhostty 도 찾은 글자가 비었으면 못 찾은 것 — 목록에 id 가 빈 줄이 있어도 표지를 폴더 이름으로 바꾸고 false(ghosttyTerminalId 와 같다)")
     func 빈_id() {
         let w = World()
         w.apps.replies = ["list": ["\tempty\n"]]
         w.apps.fallback = ["focus": ""]
-        #expect(w.control.focusGhostty(session(tty: "ttys009"), marker: "CBFOCUS-1"))
-        #expect(w.log.calls.last == "title ttys009=empty")
+        #expect(!w.control.focusGhostty(session(tty: "ttys009", cwd: "/w/proj"), marker: "CBFOCUS-1"))
+        #expect(w.log.calls.filter { $0 == "run focus" }.count == 10)
+        #expect(w.log.calls.last == "title ttys009=proj")
         let v = World()
         v.apps.replies = ["list": ["\tempty\n"]]
         v.apps.fallback = ["find": ""]
