@@ -1,7 +1,7 @@
 // 보드 탭(내장 터미널) 짝짓기·자리 규칙 — 세션을 보드 탭의 화면과 짝짓고(pairTabs), 세션이 도는 곳을 가른다(sessionPlace·parkedScreen·shownSessionPlace).
 // ClaudeBoard.swift 의 TerminalHub.pair·place·parkedTab·shownPlace 와 tabAncestor 에 있던 판단을 옮김(이슈 #9 마지막 칸) — 결과·포트 호출 차례는 그대로다.
 // 옮긴 뒤 고친 것: 짝 없는 세션을 세션 id 로 화면에 붙이는 길은 그 화면에서 claude 가 뜨는 중이거나 돌 때만(sessionPlace),
-// 같은 tty 인 끝나지 않은 세션이 여럿이면 정해진 차례(ttyWinner)로 화면의 세션을 고른다(pairTabs).
+// 같은 tty 인 끝나지 않은 세션이 여럿이면 정해진 차례(ttyWinner)로 화면의 세션을 고르고, 경로 상태 점은 일시중지를 대기보다 먼저 본다(pairTabs).
 // 화면의 지금 값(tty·맨 위 프로세스·세션 id·명령)은 앱이 떠서 값(TabScreen·ScreenSession)으로 넘긴다. 비싸서 그 갈래에서만 묻던 것은 포트로 부른다:
 // 화면의 claude·세션 실행 방식은 TabProbe, 부모 pid 는 ProcessControl, 넘긴 작업 id 는 ClaudeLive.
 // 결과는 값(TabPairing)으로 돌려주고 앱(TerminalHub)이 화면(BoardSurface)·@Published 에 쓴다. 다른 터미널 세션의 앱 이름(appNames)·쥔 탭 목록 남기기·
@@ -112,15 +112,19 @@ public func pairTabs(_ sessions: [Session], screens: [TabScreen], probe: TabProb
         }
         out.append(ScreenPairing(id: t.id, sessionId: sessionIds[i], command: command, mdRenderOff: off, session: s, parked: p))
     }
-    // 경로 줄의 상태 점 — 그 경로 탭들의 모든 화면에서 승인 대기 > 작업 중 > 그 밖(세션이 없으면 대기). 넘긴 작업을 붙여 보는 화면은 그 작업.
-    // 같은 순위(일시중지·대기)면 화면 차례의 앞 것
+    // 경로 줄의 상태 점 — 그 경로 탭들의 모든 화면에서 승인 대기 > 작업 중 > 일시중지 > 대기 > 끝남(세션이 없으면 대기, workspaceDotRank).
+    // 넘긴 작업을 붙여 보는 화면은 그 작업. 같은 상태끼리는 화면 차례의 앞 것
     var states: [String: String] = [:]
     for ws in screens.map(\.workspace) where states[ws] == nil {
         states[ws] = zip(screens, out).filter { $0.0.workspace == ws }.compactMap { $0.1.parked ?? $0.1.session }
-            .min { $0.rank < $1.rank }?.state ?? "idle"
+            .min { workspaceDotRank($0.state) < workspaceDotRank($1.state) }?.state ?? "idle"
     }
     return TabPairing(screens: out, paired: map, ownedHeadless: owned, parkedTabs: parked, parkedFrom: from, workspaceStates: states)
 }
+
+/// 경로 줄 상태 점의 순위 — 승인 대기 > 작업 중 > 일시중지 > 대기 > 끝남. Session.rank 는 카드 정렬에도 쓰여 일시중지·대기가 같은 순위인데,
+/// 이 점에서는 일시중지를 대기보다 먼저 보인다(사람이 재개해야 한다). 전에는 Session.rank 로 골라 같은 순위면 화면 차례의 앞 것이었다
+func workspaceDotRank(_ state: String) -> Int { ["waiting": 0, "working": 1, "paused": 2, "idle": 3, "ended": 4][state] ?? 9 }
 
 /// 같은 tty 인 끝나지 않은 세션 둘 가운데 a 가 화면의 세션인가 — 마지막 hook 기록(updated)이 늦은 것, 같으면 이 상태가 된 시각(since)이
 /// 늦은 것, 그것도 같으면 세션 id 글자 차례의 뒤 것. 세션 목록 차례와 관계없이 정해진다

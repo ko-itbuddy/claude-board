@@ -4,10 +4,9 @@
 // 표본은 옮기기 전 TerminalHub.pair·place·parkedTab·shownPlace(0b309cd 의 ClaudeBoard.swift)를 줄 그대로 떼어 가짜 화면·OS 로 돌린 덤프 도구와
 // 같은 것이고, 기대 글(expected)은 그 덤프에서 앱에 남은 몫(다른 터미널 앱 이름·프로세스 인자 캐시·@Published 쓰기 기록)만 뺀 줄 그대로다.
 // 화면의 맨 위 프로세스(leader)는 덤프의 앞 프로세스와 getsid 표에서 앱 어댑터(BoardSurface.screen)가 낼 값을 적었다.
-// 버그 의심(같은 순위 상태 점의 차례)도 지금 동작으로 적고 고치지 않는다.
 // 덤프 뒤에 고친 것은 고친 동작으로 적었다: 짝 없는 세션을 세션 id 로 화면에 붙이는 길은 그 화면에서 claude 가 뜨는 중이거나 돌 때만
 // (6 은 다른 터미널, 11 은 그 화면이지만 runsClaude 를 묻는다), 같은 tty 인 끝나지 않은 세션이 여럿이면 updated → since → 세션 id 차례로
-// 정해진 하나가 화면의 세션(4a 가 4b 와 같아진다)
+// 정해진 하나가 화면의 세션(4a 가 4b 와 같아진다), 경로 상태 점은 일시중지를 대기보다 먼저(9 의 /w/d)
 import Foundation
 import Testing
 import BoardRules
@@ -244,7 +243,7 @@ private let cases: [PairingCase] = [
                     SessSpec(id: "abcd1234-job1", state: "ended", headless: true, pid: 7001),
                     SessSpec(id: "s2", state: "idle", tty: "ttys002", pid: 2002),
                 ])]),
-    // 버그 의심(고치지 않음): 같은 순위(일시중지·대기)면 화면 차례의 앞 것이 경로 점이 된다 — /w/c 는 일시중지, /w/d 는 대기
+    // 고침: 경로 점은 승인 대기 > 작업 중 > 일시중지 > 대기 — /w/c·/w/d 모두 일시중지(고치기 전에는 같은 순위라 화면 차례의 앞 것, /w/d 는 대기)
     PairingCase(name: "9 탭 여러 개·화면 나눔·경로 상태 점",
                 screens: [ScreenSpec(name: "A1", tty: "ttys101", leader: 2100, sessionId: "a-wait", command: "claude", runs: true),
                           ScreenSpec(name: "A2", tty: "ttys102", leader: 2200, sessionId: "a-work", command: "claude", runs: true),
@@ -447,7 +446,44 @@ private let ttyPicks: [TtyPick] = [
             winner: "a"),
 ]
 
+// MARK: - 경로 줄 상태 점 — 승인 대기 > 작업 중 > 일시중지 > 대기 > 끝남, 같은 상태끼리는 화면 차례의 앞 것.
+// Session.rank(카드 정렬)는 일시중지·대기가 같은 순위라 이 점에서만 따로 본다
+
+private struct DotCase: Sendable, CustomTestStringConvertible {
+    var name: String
+    var states: [String]   // 같은 경로의 화면 차례대로 그 화면의 세션 상태
+    var dot: String
+    var testDescription: String { name }
+}
+
+private let dotCases: [DotCase] = [
+    DotCase(name: "대기 화면이 앞·일시중지 화면이 뒤 → 일시중지", states: ["idle", "paused"], dot: "paused"),
+    DotCase(name: "일시중지 화면이 앞·대기 화면이 뒤 → 일시중지", states: ["paused", "idle"], dot: "paused"),
+    DotCase(name: "승인 대기가 가장 먼저", states: ["paused", "working", "waiting", "idle"], dot: "waiting"),
+    DotCase(name: "작업 중은 일시중지보다 먼저", states: ["paused", "working"], dot: "working"),
+    DotCase(name: "작업 중은 일시중지보다 먼저(차례 반대)", states: ["working", "paused"], dot: "working"),
+    DotCase(name: "대기는 끝남(claude 가 뜨는 중인 화면의 끝난 세션)보다 먼저", states: ["ended", "idle"], dot: "idle"),
+    DotCase(name: "끝난 세션뿐이면 끝남", states: ["ended"], dot: "ended"),
+]
+
 @Suite("보드 탭 짝짓기·자리") struct TabPairingTests {
+    @Test("경로 상태 점: 승인 대기 > 작업 중 > 일시중지 > 대기 > 끝남", arguments: dotCases)
+    fileprivate func workspaceDot(_ c: DotCase) {
+        let log = Log()
+        var names: [UUID: String] = [:], screens: [TabScreen] = [], sessions: [SessSpec] = []
+        for (i, state) in c.states.enumerated() {
+            let id = UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", i + 1))!
+            names[id] = "A\(i + 1)"
+            // 끝난 세션은 tty 로 짝짓지 않으므로 같은 세션 id 로 연 화면에서 claude 가 뜨는 중이어야 화면의 세션이 된다
+            screens.append(TabScreen(id: id, workspace: "/w/a", tty: "ttys10\(i)", leader: Int32(1000 + i), sessionId: "s\(i)",
+                                     command: "claude", mdRenderOff: false))
+            sessions.append(SessSpec(id: "s\(i)", state: state, tty: "ttys10\(i)", pid: Int32(2000 + i)))
+        }
+        let r = pairTabs(sessions.map(session), screens: screens, probe: FakeProbe(log: log, names: names, running: Set(names.keys), modes: [:]),
+                         processes: FakeProcesses(log: log, parents: [:]), live: FakeLive(log: log, jobs: [:]))
+        #expect(r.workspaceStates == ["/w/a": c.dot])
+    }
+
     @Test("짝짓기: 같은 tty 의 끝나지 않은 세션이 여럿이면 updated → since → 세션 id 차례로 하나, 목록 차례와 관계없고 paired 에는 모두", arguments: ttyPicks)
     fileprivate func sameTtyPick(_ c: TtyPick) {
         let screen = UUID()
@@ -731,7 +767,7 @@ private let expected: [String: String] = [
     owned: fh
     parkedTabs:
     parkedFrom:
-    states: /w/a→waiting /w/c→paused /w/d→idle /w/e→idle /w/f→idle
+    states: /w/a→waiting /w/c→paused /w/d→paused /w/e→idle /w/f→idle
     화면 A1: sid=a-wait cmd=claude off=false session=a-wait parked=nil
     화면 A2: sid=a-work cmd=claude off=false session=a-work parked=nil
     화면 B1: sid=b-idle cmd=claude off=false session=b-idle parked=nil
