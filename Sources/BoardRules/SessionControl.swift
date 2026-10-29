@@ -62,6 +62,10 @@ public func exitWait(pid: Int32, timeout: Double, processes: ProcessControl) -> 
     return .poll(after: 0.2, remaining: timeout - 0.2)
 }
 
+/// 일시중지할 응답이 있는가 — 대기·이미 일시중지·끝난 세션은 아니다(메뉴의 일시중지 단추와 `--action pause` 가 함께 쓴다).
+/// 대기 세션에 Esc 와 표지를 남기면 멈춘 것이 없는데 일시중지 카드가 되고, 재개가 이어서 진행 요청을 넣어 지난 작업을 다시 시작하게 한다
+public func isPausable(_ s: Session) -> Bool { !["idle", "paused", "ended"].contains(s.state) }
+
 /// 세션 조작 유스케이스 — 앱의 @MainActor 함수가 메인에서 부른다(포트의 done 도 메인에서 온다)
 public struct SessionControl: Sendable {
     private let terminals: SessionTerminals
@@ -74,8 +78,12 @@ public struct SessionControl: Sendable {
         self.terminals = terminals; self.tabs = tabs; self.processes = processes; self.marks = marks; self.clock = clock
     }
 
-    /// 일시중지 — Esc 를 넣고, 넣었으면 표지를 남긴다(시각은 넣은 뒤). 못 넣으면 아무것도 하지 않는다
+    /// 일시중지 — Esc 를 넣고, 넣었으면 표지를 남긴다(시각은 넣은 뒤). 못 넣으면 아무것도 하지 않는다.
+    /// 멈출 응답이 없는 세션(isPausable 이 아님)은 넣지 않고 알리기만 한다 — 메뉴는 단추를 끄지만 --action pause <id> 는 그대로 여기로 온다
     public func pause(_ s: Session) {
+        guard isPausable(s) else {
+            return tabs.toast("\((s.cwd as NSString).lastPathComponent): 지금 멈출 응답이 없어 일시중지하지 않았습니다")
+        }
         terminals.drive(s, SessionSteps.pause) { ok in
             guard ok else { return }
             if let data = pausedMarkData(topic: s.topic, at: clock.now) { marks.writePaused(s.id, data) }

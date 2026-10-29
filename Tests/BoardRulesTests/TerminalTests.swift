@@ -819,6 +819,7 @@ private let marker = "CBFIND-TEST0001"
 private let exitSteps = "key:escape wait:0.4 text:/exit wait:0.2 key:enter"
 private let carrySteps = "text:\(carryOnPrompt) wait:0.2 key:enter"
 private let carried = "claude --resume s1 +md '\(carryOnPrompt)'"
+private let noResponse = "toast proj: 지금 멈출 응답이 없어 일시중지하지 않았습니다"
 
 @Suite("세션 조작: 일시중지·재개") struct PauseResumeTests {
     @Test("일시중지 — Esc 를 넣고, 넣었으면 그 뒤 시각과 주제로 표지") func 일시중지() throws {
@@ -836,6 +837,22 @@ private let carried = "claude --resume s1 +md '\(carryOnPrompt)'"
         w.terminals.driveOK = false
         w.sessions.pause(session())
         #expect(w.log.calls == ["drive s1 key:escape"])
+    }
+
+    // 대기 세션에 Esc 와 표지를 남기면 멈춘 것이 없는데 일시중지 카드가 되고, 재개가 이어서 진행 요청을 넣어 지난 작업을 다시 시작하게 한다
+    @Test("일시중지 — 멈출 응답이 있는 세션(작업 중·승인 대기)에만, 메뉴와 같은 판정(--action pause 도 여기로 온다)", arguments: [
+        ("working", ["drive s1 key:escape", "paused-write s1"]),
+        ("waiting", ["drive s1 key:escape", "paused-write s1"]),
+        ("idle", [noResponse]),
+        ("paused", [noResponse]),
+        ("ended", [noResponse]),
+    ])
+    func 일시중지_상태(_ state: String, _ calls: [String]) {
+        let w = World()
+        let s = session(state: state, paused: state == "paused")
+        w.sessions.pause(s)
+        #expect(w.log.calls == calls)
+        #expect(isPausable(s) == (calls.count == 2))
     }
 
     @Test("재개", arguments: resumeRows)
