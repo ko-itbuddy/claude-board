@@ -2,7 +2,7 @@
 // 가짜 어댑터로 넣어 진짜 터미널·프로세스·파일 없이 돌린다. 가짜는 이 파일에만 둔다(Sources/BoardRules 에 두지 않는다).
 // 가짜는 부른 것을 한 줄씩 적고 done 을 그 자리에서 부른다 — 사슬(넣기 → 표지·신호·기다리기 → 이어 열기)이 바로 풀려 부른 차례를 그대로 견준다.
 // 기대값은 ClaudeBoard.swift 에 있던 지금 동작 그대로다(버그 의심도 "지금 동작" 으로 적고 고치지 않는다).
-// 옮긴 뒤 고친 것(끝난 세션 중단의 SIGTERM)은 고친 동작을 기대값으로 적는다.
+// 옮긴 뒤 고친 것(끝난 세션 중단의 SIGTERM, 키를 못 넣는 살아 있는 세션의 재개)은 고친 동작을 기대값으로 적는다.
 // AppleScript 글자의 기대값은 옮기기 전 코드(8904f1f 의 focusByTty·ttyExists·ghosttyTerminalId·ghosttySend·focusGhostty)를 그대로 떼어 돌린 출력이다
 import Foundation
 import Testing
@@ -783,13 +783,14 @@ private let carried = "claude --resume s1 +md '\(carryOnPrompt)'"
         let w = World()
         if row.alive { w.processes.alive = [42] }
         w.terminals.driveOK = row.driveOK
-        w.sessions.resumePaused(session(state: "paused", pid: row.pid, paused: true))
+        w.sessions.resumePaused(session(state: row.state, pid: row.pid, paused: true))
         #expect(w.log.calls == row.calls)
     }
 }
 
 struct ResumeRow: Row {
     let note: String
+    var state = "paused"
     var pid: Int32 = 42
     var alive = true
     var driveOK = true
@@ -797,12 +798,20 @@ struct ResumeRow: Row {
 }
 
 private let reopenCarry = ["command s1 claude --resume s1", "paused-clear s1", "prompt s1 /w/proj", "launch /w/proj s1 off=false \(carried)"]
+private let stillRunning = "toast proj: 세션이 아직 돌고 있지만 그 터미널에 키를 넣지 못했습니다. 그 터미널에서 이어 가 주세요"
 
 private let resumeRows: [ResumeRow] = [
     .init(note: "살아 있고 넣으면 표지만 지운다", calls: ["alive 42", "drive s1 \(carrySteps)", "paused-clear s1"]),
-    .init(note: "살아 있지만 못 넣으면 보드 새 탭에서 이어서 진행", driveOK: false, calls: ["alive 42", "drive s1 \(carrySteps)"] + reopenCarry),
-    .init(note: "꺼졌으면 넣지 않고 이어 연다", alive: false, calls: ["alive 42"] + reopenCarry),
-    .init(note: "pid 0 이면 살아 있는지도 보지 않고 이어 연다", pid: 0, calls: reopenCarry),
+    .init(note: "살아 있지만 못 넣으면 이어 열지 않고(claude 가 둘이 된다) 안내만, 표지는 그대로", driveOK: false,
+          calls: ["alive 42", "drive s1 \(carrySteps)", stillRunning]),
+    .init(note: "pid 가 있고 꺼졌으면 넣지 않고 이어 연다(보드가 다시 뜬 직후 판정이 아직 끝남으로 바꾸지 못한 때)", alive: false,
+          calls: ["alive 42"] + reopenCarry),
+    .init(note: "끝난 세션은 살아 있는지 보지 않고 이어 연다", state: "ended", calls: reopenCarry),
+    .init(note: "끝난 세션은 pid 0 이어도 이어 연다", state: "ended", pid: 0, calls: reopenCarry),
+    .init(note: "pid 0 이고 끝나지 않았으면(판정이 Claude Code 세션 파일로 생사를 본 세션) 살아 있다고 보고 요청을 넣는다", pid: 0,
+          calls: ["drive s1 \(carrySteps)", "paused-clear s1"]),
+    .init(note: "pid 0 이고 끝나지 않았는데 못 넣으면 안내만, 표지는 그대로", pid: 0, driveOK: false,
+          calls: ["drive s1 \(carrySteps)", stillRunning]),
 ]
 
 struct StopRow: Row {

@@ -9578,7 +9578,8 @@ func pausedMark(_ s: Session) -> String { (sessionsDir as NSString).appendingPat
 // 일시중지: Esc 로 지금 응답을 멈추고 표지를 남긴다(BoardRules.SessionControl.pause)
 @MainActor func pauseSession(_ s: Session) { sessionControl.pause(s) }
 
-// 재개: 살아 있는 세션은 그 터미널에 이어서 진행하라는 요청을 넣고, 꺼진 세션은 보드 새 탭에서 이어 연다(SessionControl.resumePaused)
+// 재개: 살아 있는 세션(끝나지 않았고 pid 가 없거나 살아 있음)은 그 터미널에 이어서 진행하라는 요청을 넣고, 꺼진 세션은 보드 새 탭에서 이어 연다.
+// 살아 있는데 키를 넣지 못하면 이어 열지 않고(claude 가 둘이 된다) 그 터미널에서 이어 가라고 알린다(SessionControl.resumePaused)
 @MainActor func resumePaused(_ s: Session) { sessionControl.resumePaused(s) }
 
 // 중단: 확인을 받은 뒤 세션을 끝낸다. 터미널 세션(보드 탭·Ghostty)은 Esc → /exit, 그 밖의 터미널 세션과 보드 탭 안의

@@ -1,6 +1,7 @@
 // 세션 조작의 순서와 판단 — 일시중지·재개·중단·보드로 옮기기·이어 열기·한 번 누르기의 갈래, 끝나기 기다리기
 // (ClaudeBoard.swift 의 pauseSession·resumePaused·stopSession·moveToBoard·resumeSession·openSession·waitExit 에 있던 것을 옮김,
-// 동작·포트 호출 차례·안내 글자는 그대로, 옮긴 뒤 고친 것: 중단은 끝난 세션·이미 없는 pid 에 신호를 보내지 않는다).
+// 동작·포트 호출 차례·안내 글자는 그대로, 옮긴 뒤 고친 것: 중단은 끝난 세션·이미 없는 pid 에 신호를 보내지 않는다,
+// 재개는 살아 있는 세션에 키를 넣지 못해도 이어 열지 않고 알린다).
 // 확인 창·애니메이션 기다리기(whenPaneSettled)·큐·타이머는 앱이 쥐고, 확인을 받은 뒤 여기를 부른다.
 // 바깥은 포트로만 부른다: 세션 터미널(단계 넣기·끝나기 기다리기·포커스), 보드 탭, 프로세스, 세션 표지, 시계.
 //
@@ -81,11 +82,17 @@ public struct SessionControl: Sendable {
         }
     }
 
-    /// 재개 — 살아 있는 세션은 그 터미널에 이어서 진행하라는 요청을 넣고(넣으면 표지를 지운다), 꺼졌거나(pid 0 포함) 넣지 못하면 보드 새 탭에서 이어 연다
+    /// 재개 — 살아 있는 세션은 그 터미널에 이어서 진행하라는 요청을 넣고(넣으면 표지를 지운다), 꺼진 세션은 보드 새 탭에서 이어 연다.
+    /// 살아 있음 = 끝나지 않았고 (pid 가 없거나 pid 가 살아 있음). pid 없는 세션은 판정(scanSessions)이 Claude Code 세션 파일로 생사를 보고
+    /// 끝나지 않았다고 둔 것이라 살아 있다고 본다. pid 확인을 남기는 까닭: 보드가 다시 뜬 직후 판정이 아직 끝남으로 바꾸지 못한 1초 사이에는
+    /// 죽은 pid 의 세션을 이어 열어야 한다.
+    /// 살아 있는데 넣지 못하면 이어 열지 않고(같은 대화의 claude 가 둘이 된다) 그 터미널에서 이어 가라고 알리기만 하고 표지는 그대로 둔다
     public func resumePaused(_ s: Session) {
-        guard s.pid > 0, processes.isAlive(s.pid) else { return reopen(s, carryOn: true) }
+        let alive = s.state != "ended" && (s.pid <= 0 || processes.isAlive(s.pid))
+        guard alive else { return reopen(s, carryOn: true) }
+        let name = (s.cwd as NSString).lastPathComponent
         terminals.drive(s, SessionSteps.prompt(carryOnPrompt)) { ok in
-            if ok { marks.clearPaused(s.id) } else { reopen(s, carryOn: true) }
+            if ok { marks.clearPaused(s.id) } else { tabs.toast("\(name): 세션이 아직 돌고 있지만 그 터미널에 키를 넣지 못했습니다. 그 터미널에서 이어 가 주세요") }
         }
     }
 
