@@ -110,7 +110,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
   `Updater`(1시간 타이머·설정 읽기·알림 줄·`install.sh` 실행, 새 버전 판단은 BoardRules), 다른 터미널 포커스·조작과 세션 조작(`focusSession`·`activateOwner`·`driveSession`·`waitExit`·`pauseSession`·`stopSession`·`moveToBoard`·`resumeSession`·`reopenEnded`·`openSession` —
   확인 창·`ghosttyQueue`·백그라운드·메인 큐·0.2초 타이머만 쥐고 판단은 BoardRules 의 `terminalControl`·`sessionControl`).
   창 크기에 따라 `BoardTier`(full·medium·mini)로 그린다. `$TMPDIR/claude-board.lock` 을 `flock` 해 한 번만 뜨고, 두 번째 실행은 `claude-board.show` 분산 알림만 보내고 끝난다.
-  `--action pause|resume|stop|reopen|focus <세션 id>` 는 떠 있는 보드에 `claude-board.action` 분산 알림으로 넘긴다(메뉴와 같은 함수 — reopen 은 `reopenEnded`: 끝난 세션만, 이어서 진행 요청은 일시중지했던 세션에만).
+  `--action pause|resume|stop|reopen|focus <세션 id>` 는 떠 있는 보드에 `claude-board.action` 분산 알림으로 넘긴다(메뉴와 같은 함수 — reopen 은 `reopenEnded`: 끝난 세션만, 이어서 진행 요청은 일시중지했던 세션에만. pause 는 메뉴 단추와 같은 `isPausable`: 작업 중·승인 대기만).
   `EmbeddedTerminal.swift`(내장 터미널) — 창 내용은 `BoardRootView`([터미널 영역 │ `PaneDivider` │ 보드]). `TerminalHub` 가 탭(`BoardTab`)을 쥐고,
   탭(화면)마다 그 폴더의 로그인 셸을 띄우고, claude 명령은 셸의 줄 편집이 시작되면 그 셸에 붙여넣기 + Return 으로 넣는다(`BoardSurface.type`, claude 가 끝나면 셸 프롬프트로 남고 셸을 exit 하면 탭을 닫음.
   새 세션은 `--session-id`, 모든 길에 탭 이름을 `--name` 으로 붙이고 ⇧⌘R 은 `/rename` — `named`·`applyRenames`). `pair` 가 세션 파일의 `tty` = 탭 tty(headless 는 pid 조상이 탭)로 짝짓고
@@ -128,7 +128,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
   다른 터미널 조작(`Terminals.swift`: 세션이 도는 곳 `SessionPlace`, 조상 앱 번들 id → `terminalKind`, AppleScript 글자 `ghosttySendScript`·`ghosttyFindScript`·`ghosttyFocusScript`·`ttyFocusScript`·`ttyCountScript`(바이트까지 시험이 고정),
   `TerminalControl` — 세션을 띄운 앱 `owner`(세션마다 기억)·`canDrive`·조작 길 `driveRoute`(보드 탭 먼저, 다음 Ghostty)·`focusRoute`·Ghostty 표지 제목 찾기 `ghosttyTerminalId`·`focusGhostty`·`focusByTty`),
   보드 탭 짝짓기·자리(`TabPairing.swift`: 화면 값 `TabScreen` → `pairTabs`(tty 짝·headless 조상·셸만 남은 화면·넘긴 작업 따라가기·경로 상태 점, 결과 `TabPairing`)·자리 `sessionPlace`·`parkedScreen`·`shownSessionPlace`),
-  세션 조작 순서(`SessionControl.swift`: 단계 `SessionSteps`·`carryOnPrompt`·일시중지 표지 `pausedMarkData`·끝나기 기다리기 한 번의 판단 `exitWait`, `SessionControl` 의 `pause`·`resumePaused`·`stop`·`moveToBoard`·`reopen`·`reopenEnded`·`open`),
+  세션 조작 순서(`SessionControl.swift`: 단계 `SessionSteps`·`carryOnPrompt`·일시중지할 응답이 있는가 `isPausable`·일시중지 표지 `pausedMarkData`·끝나기 기다리기 한 번의 판단 `exitWait`, `SessionControl` 의 `pause`·`resumePaused`·`stop`·`moveToBoard`·`reopen`·`reopenEnded`·`open`),
   업데이트 판단(`Updates.swift`: VERSION 본문 검증 `releaseVersion`·새 버전인지 `isNewerVersion`·확인하는 빌드 `updateEligible`·결과 `UpdateCheckResult`(손으로 확인한 안내 `notice`)·유스케이스 `checkForUpdate`),
   단축키 판정(`Shortcuts.swift`: 수정키 `KeyModifiers`(raw 값이 `NSEvent.ModifierFlags` 와 같고 보드 설정 `shortcuts` 에 그대로 남으므로 동작 id 처럼 바꾸지 않는다)·키 `KeyCombo`(`label`·`menuKey`)·
   동작 표와 사용자가 바꾼 키 `ShortcutTable`(`combo`·`set`·`conflicts`·`actionID`)·키 받기 판정 `recordShortcut`·시스템 단축키와 겹침 `systemShortcutTaken`).
