@@ -31,7 +31,7 @@ macOS 의 `packaging/release.sh` 는 최상위 `CHANGELOG.md` 를 `## <버전>` 
 
 ```
 windows/
-  VERSION                     2.12 — 버전의 단일 출처
+  VERSION                     버전의 단일 출처
   CHANGELOG.md                Windows 판 변경 내역. "## <버전> — <날짜>" 항목이 릴리스 설명이 된다
   README.md                   Windows 판 소개·설치·사용법(사용자용)
   docs/SPEC.md                이 문서
