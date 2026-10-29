@@ -702,6 +702,7 @@ struct SwitchRow: Row {
     var savedB = false                  // 지금 계정 B 의 토큰을 보관함에 저장했나
     var listB: Bool? = nil              // 목록에도 B 가 들었나, nil 이면 savedB 와 같다
     var cachesCleared: Bool? = nil      // 설정을 고쳤으면 캐시 키를 지웠나, nil 이면 설정 그대로
+    var side = SwitchFailureSide.other  // 던졌으면 그 오류의 쪽(자동 전환이 가른다) — 대상 계정의 저장 토큰이 없을 때만 대상 쪽
 }
 
 private let normal = ["read vault:A|org", "config read", "lock", "read login", "config read", "read login",
@@ -715,9 +716,9 @@ private let switchRows: [SwitchRow] = [
     .init(note: "대상이 지금 계정(A 에서 A) — 지금 계정 저장을 건너뛰고 캐시는 남긴다", config: .account("A"),
           calls: ["read vault:A|org", "config read", "lock", "read login", "config read", "write login", "unlock", "config patch"],
           cachesCleared: false),
-    .init(note: "저장 토큰 없음 → 아무것도 바꾸지 않는다", vault: nil, calls: ["read vault:A|org"], error: noMatch, switched: false),
-    .init(note: "저장 토큰에 claudeAiOauth 없음 → 저장 토큰 없음", vault: #"{"other":1}"#, calls: ["read vault:A|org"], error: noMatch, switched: false),
-    .init(note: "저장 토큰이 JSON 아님 → 저장 토큰 없음", vault: "garbage", calls: ["read vault:A|org"], error: noMatch, switched: false),
+    .init(note: "저장 토큰 없음 → 아무것도 바꾸지 않는다", vault: nil, calls: ["read vault:A|org"], error: noMatch, switched: false, side: .target),
+    .init(note: "저장 토큰에 claudeAiOauth 없음 → 저장 토큰 없음", vault: #"{"other":1}"#, calls: ["read vault:A|org"], error: noMatch, switched: false, side: .target),
+    .init(note: "저장 토큰이 JSON 아님 → 저장 토큰 없음", vault: "garbage", calls: ["read vault:A|org"], error: noMatch, switched: false, side: .target),
     .init(note: "로그인 정보 항목은 있는데 못 읽음 → 잠금 안에서 멈춘다", login: .unreadable,
           calls: ["read vault:A|org", "config read", "lock", "read login", "exists login", "unlock"], error: unreadableLogin, switched: false),
     .init(note: "로그인 정보가 JSON 아님 → 있는지 묻지 않고 멈춘다", login: .garbage,
@@ -826,9 +827,14 @@ private let switchRows: [SwitchRow] = [
 
         var warning: String?
         var thrown: String?
-        do { warning = try switchAccount(to: account("A"), ports: w.ports) } catch { thrown = error.localizedDescription }
+        var side: SwitchFailureSide?
+        do { warning = try switchAccount(to: account("A"), ports: w.ports) } catch {
+            thrown = error.localizedDescription
+            side = switchFailureSide(error)
+        }
 
         #expect(thrown == row.error)
+        #expect(side == (row.error == nil ? nil : row.side))
         #expect(warning == row.warning)
         #expect(w.log.calls == row.calls)
         // 로그인 정보: 바뀌었으면 claudeAiOauth 만 A 이고 다른 키(mcpOAuth)는 그대로
@@ -856,6 +862,14 @@ private let switchRows: [SwitchRow] = [
         } else {
             #expect(w.config.json.map { data($0) } == configBefore)
         }
+    }
+
+    @Test("전환 실패의 쪽 — AccountError 가 담은 쪽(기본은 그 밖), AccountError 가 아닌 오류(목록 파일 쓰기 등)는 그 밖") func 실패_쪽() {
+        #expect(switchFailureSide(AccountError("x")) == .other)
+        #expect(switchFailureSide(AccountError("x", side: .target)) == .target)
+        #expect(switchFailureSide(AccountError("x", side: .other)) == .other)
+        #expect(switchFailureSide(TestError("목록을 쓰지 못함(시험)")) == .other)
+        #expect(switchFailureSide(CocoaError(.fileWriteNoPermission)) == .other)
     }
 
     @Test("지금 계정 읽기 — 설정의 oauthAccount 로 만든 계정, 없거나 accountUuid 가 없으면 nil") func 지금_계정() {

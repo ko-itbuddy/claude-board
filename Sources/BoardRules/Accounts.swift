@@ -1,7 +1,7 @@
 // 계정 전환 규칙 — 저장 계정 모델, 저장 계정 목록(accounts.json) 해석·고치기, 전환할 때의 JSON 변환, 저장·전환·지우기 유스케이스
 // (AccountStore 에 있던 것을 옮김, 동작·호출 순서·오류 글자는 그대로, 옮긴 뒤 고친 것: 깨진 accounts.json 은 쓰기 전에 옆으로 치운다,
 // 이슈 #9 3차: 요금제 글자의 앞 빈칸, 지우기의 결과 안내, 지금 계정 정보가 모자라 전환을 막을 때의 안내,
-// 지금 계정 정보가 아예 없어도 로그인 토큰이 있으면 전환을 막음).
+// 지금 계정 정보가 아예 없어도 로그인 토큰이 있으면 전환을 막음, 전환 실패의 쪽(자동 전환이 가른다)).
 // 바깥(키체인·~/.claude.json·accounts.json·쓰기 잠금·시계)은 포트(Ports.swift)로만 부른다.
 //
 // 계정 전환: 계정마다 브라우저 로그인을 한 번 받아 토큰을 저장해 두고, 고르면 Claude Code 로그인 항목의 토큰만 바꿔 넣는다.
@@ -47,10 +47,23 @@ public struct Account: Identifiable, Equatable {
 }
 
 /// 계정 전환·저장의 오류 — 글자가 그대로 안내(flash)에 나온다
+/// 계정 전환 실패의 쪽 — 자동 전환이 다음에 할 일을 가른다(AutoSwitch.swift 의 autoSwitchFailed)
+public enum SwitchFailureSide: Equatable, Sendable {
+    /// 대상 계정 쪽 — 그 계정의 저장된 로그인 정보가 없거나 읽지 못함. 그 계정만 한동안 고르지 않으면 된다
+    case target
+    /// 그 밖 — 지금 계정(저장할 수 없음·지금 로그인 정보를 읽지 못함)이나 시스템(키체인·목록을 쓰지 못함·쓰기 잠금) 쪽. 다른 계정으로 해도 같다
+    case other
+}
+
+/// 계정 저장·전환·지우기의 오류 — 글자가 그대로 안내(flash)에 나온다. side 는 전환 실패의 쪽(기본은 그 밖)
 public struct AccountError: LocalizedError, Equatable {
     public let errorDescription: String?
-    public init(_ m: String) { errorDescription = m }
+    public let side: SwitchFailureSide
+    public init(_ m: String, side: SwitchFailureSide = .other) { errorDescription = m; self.side = side }
 }
+
+/// 전환이 던진 오류의 쪽 — AccountError 는 담은 쪽, 그 밖의 오류(목록 파일 쓰기 등 포트가 던진 것)는 그 밖
+public func switchFailureSide(_ error: Error) -> SwitchFailureSide { (error as? AccountError)?.side ?? .other }
 
 // MARK: - 저장 계정 목록 (accounts.json)
 // {"accounts": [{"oauthAccount": {…}, "savedAt": 초, "refreshTokenExpiresAt": 밀리초}, …]}
@@ -224,11 +237,12 @@ private func sameLogin(_ a: [String: Any], _ b: [String: Any]) -> Bool {
 }
 
 /// 저장한 계정으로 바꾼다. 고칠 수 없었던 부분이 있으면 그 안내를 돌려준다(토큰은 바꿨다). 실패하면 던진다(바꾸지 않았다).
+/// 던진 오류의 쪽(switchFailureSide)은 대상 계정의 저장 토큰이 없거나 못 읽을 때만 대상 쪽이고, 나머지는 모두 그 밖이다.
 /// 차례: 저장한 토큰 읽기 → 앞 계정 id 읽기 → [쓰기 잠금: 지금 로그인 정보 읽기 → 지금 계정 토큰 저장(대상이면 건너뜀, 로그인 토큰이 있는데
 /// 그 계정을 저장할 수 없으면 막음) → claudeAiOauth 만 바꿔 쓰기] → 잠금 밖에서 ~/.claude.json 고치기
 public func switchAccount(to target: Account, ports: AccountPorts) throws -> String? {
     guard let oauth = credentialsJSON(ports.keychain.read(.savedAccount(target.id)))?["claudeAiOauth"] as? [String: Any] else {
-        throw AccountError("저장된 로그인 정보가 없습니다. 계정을 다시 추가해 주세요")
+        throw AccountError("저장된 로그인 정보가 없습니다. 계정을 다시 추가해 주세요", side: .target)
     }
     // CLAUDE_CONFIG_DIR 을 따로 정해 띄운 세션은 이름 뒤에 경로 해시가 붙은 다른 항목을 쓴다 — 그 항목은 건드리지 않는다(앱이 login 으로 주 항목만 넘긴다).
     // 같은 토큰을 두 항목에 넣으면 한쪽이 갱신(회전)할 때 다른 쪽 토큰이 무효가 되기 때문

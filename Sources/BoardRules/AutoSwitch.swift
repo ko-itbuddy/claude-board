@@ -1,6 +1,6 @@
 // 사용 한도 자동 전환의 판단 — 한도에 걸린 세션 고르기, 전환할지와 그 까닭, 다음 계정과 한도 표시(full), 이어 갈 세션
 // (AutoSwitcher.tick·switchAway 에 있던 판단을 옮김, 동작은 그대로, 이슈 #9 3차에 고친 것: 지금 계정의 한도 표시 기간도 떠날 까닭처럼
-// 5시간·주간(전체)만 본다). 바깥을 부르지 않는 순수 함수이고 시각은 받는다.
+// 5시간·주간(전체)만 본다, 전환 실패를 까닭의 쪽으로 갈라 지금 계정·시스템 쪽이면 후보를 쓰지 않고 쉰다). 바깥을 부르지 않는 순수 함수이고 시각은 받는다.
 //
 // 지금 계정의 5시간·주간 한도가 차거나 세션이 한도에 걸려 멈추면 저장한 다른 계정으로 바꾸고, 한도로 멈췄던 세션에 이어서 진행하라는 요청을 넣는다.
 // 다른 계정의 남은 한도는 미리 알 수 없어(저장한 토큰은 그 계정으로 전환해야 갱신된다) 그 계정이 지금 계정이었을 때 한도가 찼던 기록(full)으로 고른다.
@@ -12,7 +12,7 @@ public enum AutoSwitchRule {
     public static let settle: TimeInterval = 40
     /// 이보다 오래된 한도 기록은 보지 않는다 — 오래전에 멈춘 세션을 계정을 바꿀 때마다 깨우지 않게
     public static let recent: TimeInterval = 6 * 3600
-    /// 찬 한도가 풀리는 시각을 모를 때, 전환에 실패한 계정을 다시 고르기까지
+    /// 찬 한도가 풀리는 시각을 모를 때, 전환에 실패한 계정을 다시 고르기까지. 지금 계정·시스템 쪽 실패로 자동 전환을 쉬는 기간도 이것
     public static let retryAfter: TimeInterval = 3600
 }
 
@@ -95,17 +95,45 @@ public struct AutoSwitchDecision: Equatable {
     }
 }
 
-/// 3초마다 한 번의 판단. 전환은 settle 이 지났고, 전환 대기(pending)·전환 중(switching)이 아니고, 지금 계정이 있을 때만 본다.
-/// sessions 는 보드 카드의 세션 모두, limits 는 지금 계정의 사용량, lastSwitch 는 마지막으로 계정을 바꾼 시각(손으로 바꾼 것 포함)
+/// 자동 전환을 쉬는 동안 — 지금 계정이 쉬기 시작한 계정(account)이고 until 전이면 전환을 판단하지 않는다(이어 가기는 그대로).
+/// 지금 계정이 바뀌거나 until 이 되면 끝난다
+public struct AutoSwitchPause: Equatable, Sendable {
+    public let account: String
+    public let until: Date
+    public init(account: String, until: Date) { self.account = account; self.until = until }
+    /// 지금 쉬는 중인가
+    public func holds(current: String?, now: Date) -> Bool { current == account && now < until }
+}
+
+/// 자동 전환 요청이 실패한 뒤의 한도 표시와 쉼. 대상 계정 쪽이면 그 계정만 retryAfter 동안 고르지 않게 표시하고 쉬지 않는다
+/// (다음 판단이 다음 후보를 고른다). 그 밖(지금 계정·시스템 쪽)이면 다른 계정으로 해도 같은 까닭으로 실패하므로 표시는 그대로 두고
+/// 지금 계정이 바뀌거나 retryAfter 가 지날 때까지 쉰다 — 대상 쪽처럼 표시하면 3초마다 다음 후보를 하나씩 표시해 모두 쓰고, 그 사이
+/// 실패 안내가 거듭 뜬다
+public func autoSwitchFailed(_ side: SwitchFailureSide, target: Account, from current: Account, full: [String: Double],
+                             now: Date) -> (full: [String: Double], pause: AutoSwitchPause?) {
+    let until = now.addingTimeInterval(AutoSwitchRule.retryAfter)
+    switch side {
+    case .target:
+        var marks = full
+        marks[target.id] = until.timeIntervalSince1970
+        return (marks, nil)
+    case .other:
+        return (full, AutoSwitchPause(account: current.id, until: until))
+    }
+}
+
+/// 3초마다 한 번의 판단. 전환은 settle 이 지났고, 전환 대기(pending)·전환 중(switching)·쉬는 중(pause)이 아니고, 지금 계정이 있을 때만 본다.
+/// sessions 는 보드 카드의 세션 모두, limits 는 지금 계정의 사용량, lastSwitch 는 마지막으로 계정을 바꾼 시각(손으로 바꾼 것 포함),
+/// pause 는 지난 전환 실패(autoSwitchFailed)로 쉬는 것 — 쉬는 동안은 표시도 바꾸지 않고, 이어 가기는 그대로 본다
 public func decideAutoSwitch(sessions: [Session], limits: [Limit], current: Account?, saved: [Account],
                              full: [String: Double], resumed: Set<String>, lastSwitch: Date,
-                             pending: Bool, switching: Bool, now: Date) -> AutoSwitchDecision {
+                             pending: Bool, switching: Bool, pause: AutoSwitchPause?, now: Date) -> AutoSwitchDecision {
     let settled = lastSwitch.addingTimeInterval(AutoSwitchRule.settle)
     let limited = limitedSessions(sessions, now: now)
     var move = AutoSwitchMove.stay
     var marks: [String: Double]?
     // 1) 전환 — 지금 계정으로 새로 한도에 걸린 세션이 있거나, 지금 계정의 5시간·주간 한도가 찼다
-    if !pending, !switching, now > settled, let cur = current,
+    if !pending, !switching, !(pause?.holds(current: current?.id, now: now) ?? false), now > settled, let cur = current,
        let reason = autoSwitchReason(limited: limited, limits: limits, settled: settled, now: now) {
         let picked = nextAccount(from: cur, saved: saved, limits: limits, full: full, now: now)
         marks = picked.full
