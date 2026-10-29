@@ -1,5 +1,6 @@
 // 계정 전환 규칙 — 저장 계정 모델, 저장 계정 목록(accounts.json) 해석·고치기, 전환할 때의 JSON 변환, 저장·전환·지우기 유스케이스
-// (AccountStore 에 있던 것을 옮김, 동작·호출 순서·오류 글자는 그대로). 바깥(키체인·~/.claude.json·accounts.json·쓰기 잠금·시계)은 포트(Ports.swift)로만 부른다.
+// (AccountStore 에 있던 것을 옮김, 동작·호출 순서·오류 글자는 그대로, 옮긴 뒤 고친 것: 깨진 accounts.json 은 쓰기 전에 옆으로 치운다).
+// 바깥(키체인·~/.claude.json·accounts.json·쓰기 잠금·시계)은 포트(Ports.swift)로만 부른다.
 //
 // 계정 전환: 계정마다 브라우저 로그인을 한 번 받아 토큰을 저장해 두고, 고르면 Claude Code 로그인 항목의 토큰만 바꿔 넣는다.
 // 실행 중인 세션은 요청을 보낼 때마다 키체인을 다시 읽으므로(최대 30초 캐시) 모든 세션이 다음 요청부터 새 계정으로 이어 간다.
@@ -52,10 +53,23 @@ public struct AccountError: LocalizedError, Equatable {
 // MARK: - 저장 계정 목록 (accounts.json)
 // {"accounts": [{"oauthAccount": {…}, "savedAt": 초, "refreshTokenExpiresAt": 밀리초}, …]}
 
-/// 저장 계정 목록 파일의 항목들. 없거나 JSON 객체가 아니거나 accounts 가 객체 배열이 아니면 빈 목록
+/// 저장 계정 목록 파일의 항목들(표시용). 없거나 JSON 객체가 아니거나 accounts 가 객체 배열이 아니면 빈 목록 — 쓰기 길은 writableSavedAccountEntries
 public func savedAccountEntries(_ data: Data?) -> [[String: Any]] {
     guard let data, let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
     return j["accounts"] as? [[String: Any]] ?? []
+}
+
+/// 쓰기 길(저장·지우기)에서 읽는 항목들 — 표시용 savedAccountEntries 는 깨진 파일도 빈 목록으로 읽어, 그 빈 목록에 더해 쓰면
+/// 다른 저장 계정의 표시 정보를 덮어쓴다. 그래서 쓰기 전에는 깨짐을 가른다:
+/// 없음·빈 바이트·JSON 공백만·accounts 키 없음({} 포함) → 빈 목록, 객체 배열 → 그대로,
+/// 그 밖(JSON 아님·최상위가 객체 아님·accounts 가 배열 아님(null 포함)·객체 아닌 항목이 섞임) → nil(깨짐). 섞인 것도 일부 살리지 않고 깨짐으로 본다
+public func writableSavedAccountEntries(_ data: Data?) -> [[String: Any]]? {
+    guard let data, !data.allSatisfy({ [0x20, 0x09, 0x0A, 0x0D].contains($0) }) else { return [] }
+    guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+    guard let raw = j["accounts"] else { return [] }
+    guard let items = raw as? [Any] else { return nil }
+    let list = items.compactMap { $0 as? [String: Any] }
+    return list.count == items.count ? list : nil
 }
 
 /// 항목의 계정 id — oauthAccount 가 없거나 accountUuid 가 없으면 nil
@@ -147,16 +161,28 @@ public func loadSavedAccounts(_ saved: SavedAccountList) -> [Account] {
     savedAccounts(savedAccountEntries(saved.read()))
 }
 
+/// 깨진 저장 계정 목록을 옆으로 치우지 못했을 때의 안내 — 글자가 그대로 안내(flash)에 나온다
+let savedAccountsSetAsideFailed = "저장 계정 목록(accounts.json)을 읽지 못해 옆으로 옮기려 했지만 옮기지 못했습니다"
+
 /// 계정 토큰(claudeAiOauth)은 키체인에, 보일 정보는 accounts.json 에 넣는다 — 같은 계정은 제자리에서 바꾼다.
-/// 차례: 키체인 쓰기 → 목록 읽기 → 목록 쓰기. 키체인에 못 쓰면 목록은 건드리지 않는다
+/// 차례: 키체인 쓰기 → 목록 읽기 → (깨졌으면 옆으로 치우기) → 목록 쓰기. 키체인에 못 쓰면 목록은 건드리지 않는다.
+/// 목록이 깨졌으면 던지지 않고 옆으로 치운 뒤 빈 목록에서 새 항목 하나로 쓴다 — switchAccount 가 새 토큰을 쓰기 전에 여기를 부르므로,
+/// 던지면 파일이 깨진 동안 모든 계정 전환이 막힌다. 다른 계정의 토큰은 키체인에 남아 있어 치운 파일에서 항목을 되살리면 된다.
+/// 치우지 못하면 그때만 안내로 던지고 쓰지 않는다
 public func storeAccount(_ oa: [String: Any], credentials oauth: [String: Any], ports: AccountPorts) throws {
     guard let a = Account(oauth: oa) else { throw AccountError("계정 정보가 없습니다") }
     guard try ports.keychain.write(.savedAccount(a.id), json: ["claudeAiOauth": oauth]) else {
         throw AccountError("키체인에 저장하지 못했습니다")
     }
     let e = savedAccountEntry(oauthAccount: oa, credentials: oauth, savedAt: ports.clock.now)
-    let list = upsertingSavedAccount(savedAccountEntries(ports.saved.read()), e, id: a.id)
-    try ports.saved.write(savedAccountsData(list))
+    let entries: [[String: Any]]
+    if let read = writableSavedAccountEntries(ports.saved.read()) {
+        entries = read
+    } else {
+        do { try ports.saved.setAside(at: ports.clock.now) } catch { throw AccountError(savedAccountsSetAsideFailed) }
+        entries = []
+    }
+    try ports.saved.write(savedAccountsData(upsertingSavedAccount(entries, e, id: a.id)))
 }
 
 /// 지금 로그인된 계정의 최신 토큰을 저장한다 — 쓰는 동안 갱신되며 바뀐 토큰이라, 처음 저장했던 것은 이미 못 쓸 수 있다.
@@ -201,10 +227,12 @@ public func switchAccount(to target: Account, ports: AccountPorts) throws -> Str
     return nil
 }
 
-/// 저장한 계정을 지운다 — 키체인의 토큰을 지우고 목록에서 뺀다. 목록을 못 써도 알리지 않는다(지금 동작)
+/// 저장한 계정을 지운다 — 키체인의 토큰을 지우고 목록에서 뺀다. 목록을 못 써도 알리지 않는다(지금 동작).
+/// 목록이 깨졌으면 목록 파일은 건드리지 않는다(빈 목록으로 덮어쓰면 다른 계정의 표시 정보를 잃는다)
 public func removeAccount(_ id: String, ports: AccountPorts) {
     ports.keychain.delete(.savedAccount(id))
-    try? ports.saved.write(savedAccountsData(removingSavedAccount(savedAccountEntries(ports.saved.read()), id: id)))
+    guard let entries = writableSavedAccountEntries(ports.saved.read()) else { return }
+    try? ports.saved.write(savedAccountsData(removingSavedAccount(entries, id: id)))
 }
 
 // 키체인 항목 내용(JSON 객체) — 없거나 JSON 객체가 아니면 nil

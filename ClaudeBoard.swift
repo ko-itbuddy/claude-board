@@ -651,6 +651,24 @@ struct SavedAccountsFile: SavedAccountList {
         try data.write(to: URL(fileURLWithPath: path), options: .atomic)
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
     }
+    // 깨진 목록을 accounts.json.broken-<지역 시각 yyyyMMdd-HHmmss> 로 옮긴다(파일 이름에 쓰려고 쌍점 없이). 같은 이름이 있으면 -2, -3 … 을 붙인다.
+    // 다른 계정의 로그인 정보는 키체인에 그대로 있으므로 사용자가 이 파일에서 항목을 되살리면 된다
+    func setAside(at date: Date) throws {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyyMMdd-HHmmss"
+        let base = path + ".broken-" + f.string(from: date)
+        var target = base, n = 2
+        while FileManager.default.fileExists(atPath: target) { target = "\(base)-\(n)"; n += 1 }
+        do {
+            try FileManager.default.moveItem(atPath: path, toPath: target)
+        } catch {
+            boardLog("저장 계정 목록(accounts.json)을 읽지 못해 옆으로 옮기려 했지만 옮기지 못함: \(error.localizedDescription)")
+            throw error
+        }
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target)
+        boardLog("저장 계정 목록(accounts.json)을 읽지 못해 \((target as NSString).lastPathComponent) 로 옮김")
+    }
 }
 
 // Claude Code 가 토큰을 갱신해 쓸 때 잡는 잠금

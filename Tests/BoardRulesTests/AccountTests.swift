@@ -1,6 +1,7 @@
 // 계정 전환 규칙 시험 — 키체인·~/.claude.json·accounts.json·쓰기 잠금·시계를 가짜 어댑터로 넣어 실제 키체인·파일 없이 돌린다.
 // 가짜는 이 파일에만 둔다(Sources/BoardRules 에 두지 않는다). 가짜는 부른 것을 한 줄씩 적어 두어 잠금 안팎의 호출 순서까지 확인한다.
 // 기대값은 AccountStore 에 있던 지금 동작 그대로다(버그 의심도 "지금 동작" 으로 적고 고치지 않는다).
+// 옮긴 뒤 고친 것(깨진 accounts.json 을 다음 저장이 덮어쓰던 것)은 고친 동작을 기대값으로 적는다.
 // 시험의 토큰·이메일은 가짜 글자다 — 진짜 토큰이 아니고, note·#expect 메시지에 토큰을 넣지 않는다
 import Foundation
 import Testing
@@ -75,12 +76,21 @@ private final class FakeSaved: SavedAccountList, @unchecked Sendable {
     let log: CallLog
     var data: Data?
     var writeError: Error?
+    var setAsideError: Error?
+    private(set) var aside: [Data?] = []        // 옆으로 치운 내용(차례대로)
     init(log: CallLog) { self.log = log }
     func read() -> Data? { log.calls.append("saved read"); return data }
     func write(_ data: Data) throws {
         log.calls.append("saved write")
         if let writeError { throw writeError }
         self.data = data
+    }
+    // 진짜 어댑터처럼 파일을 옮긴다 — 옮긴 뒤에는 파일이 없다. 시각은 기록에 1970 기준 초로 남긴다
+    func setAside(at: Date) throws {
+        log.calls.append("saved set-aside \(at.timeIntervalSince1970)")
+        if let setAsideError { throw setAsideError }
+        aside.append(data)
+        data = nil
     }
 }
 
@@ -121,6 +131,9 @@ private struct TestError: LocalizedError {
     let errorDescription: String?
     init(_ m: String) { errorDescription = m }
 }
+
+// 깨진 저장 계정 목록을 옆으로 치우지 못했을 때의 안내 — 사용자에게 보이는 글자라 긴 줄표 없이
+private let setAsideFailed = "저장 계정 목록(accounts.json)을 읽지 못해 옆으로 옮기려 했지만 옮기지 못했습니다"
 
 // MARK: - 시험 자료 (모두 가짜)
 
@@ -241,8 +254,49 @@ private let savedParseRows: [SavedParseRow] = [
     .init(note: "만료가 숫자가 아니면 없음, 소수 밀리초도 숫자", file: #"""
           {"accounts":[{"oauthAccount":{"accountUuid":"A"},"refreshTokenExpiresAt":"2100000000000"},{"oauthAccount":{"accountUuid":"B"},"refreshTokenExpiresAt":1500.5}]}
           """#, expected: ["A|", "B|@1500.5"]),
-    .init(note: "지금 동작: 객체가 아닌 항목이 하나라도 섞이면 목록 전체가 빈다 — 다음 저장이 목록을 새 항목 하나로 덮어쓴다(버그 의심, 고치지 않음)",
+    .init(note: "객체가 아닌 항목이 하나라도 섞이면 표시는 빈 목록(쓰기 길은 깨짐으로 보고 옆으로 치운다 — 아래 쓰기 해석)",
           file: #"{"accounts":[{"oauthAccount":{"accountUuid":"A"}},1]}"#, expected: []),
+]
+
+// 쓰기 길(저장·지우기)의 해석 — 비었으면 빈 목록에서 시작, 객체 배열은 그대로, 그 밖은 깨짐(nil)
+struct WritableParseRow: Row {
+    let note: String
+    let file: String?            // 파일 내용, nil 이면 파일 없음
+    let count: Int?              // 항목 수, nil 이면 깨짐
+}
+
+// 깨진 꼴 — 저장은 옆으로 치우고 새 목록으로, 지우기는 목록 파일을 건드리지 않는다
+private let brokenSavedFiles: [String] = [
+    "not json",
+    #"{"accounts":[{"oauthAccount":{"accountUuid":"B","organizationUuid":"org"}}"#,
+    "[]",
+    #"{"accounts":{"oauthAccount":{"accountUuid":"B","organizationUuid":"org"}}}"#,
+    #"{"accounts":null}"#,
+    #"{"accounts":[{"oauthAccount":{"accountUuid":"B","organizationUuid":"org"}},"broken"]}"#,
+]
+
+// 빈 꼴 — 옆으로 치우지 않고 빈 목록에서 쓴다
+private let emptySavedFiles: [String?] = [nil, "", " \n\t\r ", "{}", #"{"other":1}"#]
+
+private let writableParseRows: [WritableParseRow] = [
+    .init(note: "파일 없음 → 빈 목록", file: nil, count: 0),
+    .init(note: "빈 바이트 → 빈 목록", file: "", count: 0),
+    .init(note: "JSON 공백만 → 빈 목록", file: " \n\t\r ", count: 0),
+    .init(note: "{} → 빈 목록", file: "{}", count: 0),
+    .init(note: "accounts 키 없음 → 빈 목록(다른 키는 다음 쓰기에서 빠진다)", file: #"{"other":1}"#, count: 0),
+    .init(note: "빈 accounts → 빈 목록", file: #"{"accounts":[]}"#, count: 0),
+    .init(note: "객체 배열은 그대로 — id 를 못 만드는 객체도 남긴다", file: #"""
+          {"accounts":[{"oauthAccount":{"accountUuid":"A","organizationUuid":"org"}},{"savedAt":1},{}]}
+          """#, count: 3),
+    .init(note: "JSON 아님 → 깨짐", file: "not json", count: nil),
+    .init(note: "중간에 잘린 JSON → 깨짐", file: #"{"accounts":[{"oauthAccount":{"accountUuid":"B"}}"#, count: nil),
+    .init(note: "최상위가 배열 → 깨짐", file: "[]", count: nil),
+    .init(note: "최상위가 글자 → 깨짐", file: #""accounts""#, count: nil),
+    .init(note: "accounts 가 객체 → 깨짐", file: #"{"accounts":{"oauthAccount":{"accountUuid":"B"}}}"#, count: nil),
+    .init(note: "accounts 가 글자 → 깨짐", file: #"{"accounts":"x"}"#, count: nil),
+    .init(note: "accounts 가 null → 깨짐(있지만 배열이 아님)", file: #"{"accounts":null}"#, count: nil),
+    .init(note: "객체가 아닌 항목이 섞임 → 일부 살리기가 아니라 깨짐", file: #"{"accounts":[{"oauthAccount":{"accountUuid":"A"}},1]}"#, count: nil),
+    .init(note: "배열 항목이 섞임 → 깨짐", file: #"{"accounts":[[]]}"#, count: nil),
 ]
 
 private func describe(_ a: Account) -> String {
@@ -258,6 +312,15 @@ private func describe(_ a: Account) -> String {
         let saved = FakeSaved(log: CallLog())
         saved.data = row.file.map { Data($0.utf8) }
         #expect(loadSavedAccounts(saved).map(describe) == row.expected)
+    }
+
+    @Test("쓰기 길의 해석 — 비었으면 빈 목록, 객체 배열은 그대로, 그 밖은 깨짐", arguments: writableParseRows)
+    func 쓰기_해석(_ row: WritableParseRow) {
+        #expect(writableSavedAccountEntries(row.file.map { Data($0.utf8) })?.count == row.count)
+    }
+
+    @Test("쓰기 길의 해석 — UTF-8 이 아닌 바이트는 깨짐") func 쓰기_해석_바이트() {
+        #expect(writableSavedAccountEntries(Data([0xFF, 0xFE, 0x00])) == nil)
     }
 
     @Test("항목의 계정 id") func 항목_id() {
@@ -391,11 +454,38 @@ private func describe(_ a: Account) -> String {
         #expect(w.keychain.json(.savedAccount(id("A"))) != nil)
     }
 
-    @Test("지금 동작: 목록 파일이 깨졌으면 새 항목 하나로 덮어쓴다(버그 의심, 고치지 않음)") func 깨진_목록() throws {
+    @Test("목록 파일이 깨졌으면 옆으로 한 번 치우고(시각은 시계) 새 항목 하나만 든 목록을 쓴다 — 던지지 않는다", arguments: brokenSavedFiles)
+    func 깨진_목록(_ file: String) throws {
         let w = World()
-        w.saved.data = Data(#"{"accounts":[{"oauthAccount":{"accountUuid":"B","organizationUuid":"org"}},"broken"]}"#.utf8)
+        w.saved.data = Data(file.utf8)
         try storeAccount(oauthAccount("A"), credentials: token("A"), ports: w.ports)
+        #expect(w.log.calls == ["write vault:A|org", "saved read", "saved set-aside \(a0.timeIntervalSince1970)", "saved write"])
+        #expect(w.saved.aside == [Data(file.utf8)])
         #expect(w.savedEntries.compactMap(savedAccountID) == [id("A")])
+        #expect(w.savedEntries.count == 1)
+    }
+
+    @Test("목록 파일이 없거나 비었으면(공백·{}·accounts 없음) 치우지 않고 새 항목 하나로 쓴다", arguments: emptySavedFiles)
+    func 빈_목록(_ file: String?) throws {
+        let w = World()
+        w.saved.data = file.map { Data($0.utf8) }
+        try storeAccount(oauthAccount("A"), credentials: token("A"), ports: w.ports)
+        #expect(w.log.calls == ["write vault:A|org", "saved read", "saved write"])
+        #expect(w.saved.aside.isEmpty)
+        #expect(w.savedEntries.compactMap(savedAccountID) == [id("A")])
+    }
+
+    @Test("깨진 목록을 치우지 못하면 안내로 던지고 목록은 쓰지 않는다(보관함에는 이미 썼다)") func 깨진_목록_치우기_실패() {
+        let w = World()
+        let broken = Data("not json".utf8)
+        w.saved.data = broken
+        w.saved.setAsideError = TestError("옮기지 못함(시험)")
+        #expect(throws: AccountError(setAsideFailed)) {
+            try storeAccount(oauthAccount("A"), credentials: token("A"), ports: w.ports)
+        }
+        #expect(w.log.calls == ["write vault:A|org", "saved read", "saved set-aside \(a0.timeIntervalSince1970)"])
+        #expect(w.saved.data == broken)
+        #expect(w.keychain.json(.savedAccount(id("A"))) != nil)
     }
 
     @Test("지금 계정 저장 — 지금 계정이 대상 id 면·계정 정보가 없으면 하지 않는다(건너뛸 id 가 없으면 저장)", arguments: [
@@ -437,6 +527,27 @@ private func describe(_ a: Account) -> String {
         removeAccount(id("A"), ports: w.ports)
         #expect(w.log.calls == ["delete vault:A|org", "saved read", "saved write"])
     }
+
+    @Test("지우기 — 목록 파일이 깨졌으면 키체인 항목만 지우고 목록 파일은 건드리지 않는다(치우지도 쓰지도 않는다)", arguments: brokenSavedFiles)
+    func 지우기_깨진_목록(_ file: String) {
+        let w = World()
+        w.keychain.items[.savedAccount(id("A"))] = data(["claudeAiOauth": token("A")])
+        w.saved.data = Data(file.utf8)
+        removeAccount(id("A"), ports: w.ports)
+        #expect(w.log.calls == ["delete vault:A|org", "saved read"])
+        #expect(w.keychain.items[.savedAccount(id("A"))] == nil)
+        #expect(w.saved.data == Data(file.utf8))
+    }
+
+    @Test("지우기 — 목록 파일이 없거나 비었으면 빈 목록으로 쓴다(지금 동작)", arguments: emptySavedFiles)
+    func 지우기_빈_목록(_ file: String?) {
+        let w = World()
+        w.saved.data = file.map { Data($0.utf8) }
+        removeAccount(id("A"), ports: w.ports)
+        #expect(w.log.calls == ["delete vault:A|org", "saved read", "saved write"])
+        #expect(w.saved.data != nil)
+        #expect(writableSavedAccountEntries(w.saved.data)?.count == 0)
+    }
 }
 
 // MARK: - 유스케이스: 전환
@@ -464,6 +575,8 @@ struct SwitchRow: Row {
     var config = ConfigState.account("B")
     var failWrite: [String] = []        // "login" · "vault:B"
     var savedWriteFails = false
+    var savedBroken = false             // 저장 계정 목록 파일이 깨졌다
+    var setAsideFails = false           // 깨진 목록을 옆으로 치우지 못한다
     var patchFails = false
     var lockFails = false
     let calls: [String]
@@ -517,6 +630,14 @@ private let switchRows: [SwitchRow] = [
     .init(note: "저장 계정 목록을 못 씀 → 그 오류로 멈추고 로그인 정보는 그대로", savedWriteFails: true,
           calls: ["read vault:A|org", "config read", "lock", "read login", "config read", "read login", "write vault:B|org", "saved read", "saved write", "unlock"],
           error: "목록을 쓰지 못함(시험)", switched: false, savedB: true, listB: false),
+    .init(note: "저장 계정 목록이 깨졌으면 옆으로 치우고 지금 계정(B)만 든 새 목록을 써서 전환을 마친다", savedBroken: true,
+          calls: ["read vault:A|org", "config read", "lock", "read login", "config read", "read login", "write vault:B|org", "saved read",
+                  "saved set-aside \(a0.timeIntervalSince1970)", "saved write", "write login", "unlock", "config patch"],
+          savedB: true, cachesCleared: true),
+    .init(note: "깨진 목록을 치우지 못하면 그 안내로 멈추고 로그인 정보는 그대로", savedBroken: true, setAsideFails: true,
+          calls: ["read vault:A|org", "config read", "lock", "read login", "config read", "read login", "write vault:B|org", "saved read",
+                  "saved set-aside \(a0.timeIntervalSince1970)", "unlock"],
+          error: setAsideFailed, switched: false, savedB: true, listB: false),
     .init(note: "쓰기 잠금을 못 잡음 → 잠금 안의 일은 하나도 하지 않는다", lockFails: true,
           calls: ["read vault:A|org", "config read", "lock failed"], error: "Claude Code 가 로그인 정보를 쓰는 중입니다(시험)", switched: false),
     .init(note: "지금 동작: 설정의 계정 정보에 accountUuid 가 없으면 지금 계정 저장이 \"계정 정보가 없습니다\" 로 전환을 막는다(버그 의심, 고치지 않음)",
@@ -555,6 +676,8 @@ private let switchRows: [SwitchRow] = [
         let configBefore = w.config.json.map { data($0) }
         w.keychain.failWrite = Set(row.failWrite.map { $0 == "login" ? loginItem : .savedAccount(id(String($0.dropFirst(6)))) })
         if row.savedWriteFails { w.saved.writeError = TestError("목록을 쓰지 못함(시험)") }
+        if row.savedBroken { w.saved.data = Data(#"{"accounts":[{"oauthAccount":{"accountUuid":"C","organizationUuid":"org"}},"broken"]}"#.utf8) }
+        if row.setAsideFails { w.saved.setAsideError = TestError("옮기지 못함(시험)") }
         if row.patchFails { w.config.patchError = TestError("설정을 쓰지 못함(시험)") }
         if row.lockFails { w.lock.error = AccountError("Claude Code 가 로그인 정보를 쓰는 중입니다(시험)") }
         let loginBefore = w.keychain.items[loginItem]
