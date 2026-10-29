@@ -1,7 +1,8 @@
 // 사용 한도 자동 전환 판단 시험 — 바깥이 없는 순수 함수라 가짜 어댑터 없이 세션·한도·계정 값만 넣는다.
 // 기대값은 AutoSwitcher.tick·switchAway 에 있던 지금 동작 그대로다. 다만 이슈 #9 3차에 고친 것은 고친 동작이다: 지금 계정의 한도 표시
 // 기간은 떠날 까닭과 같이 5시간·주간(전체)만 보고, 전환 실패는 까닭의 쪽으로 갈라 대상 계정 쪽이면 그 계정만 표시, 그 밖이면 표시 없이
-// 쉰다(쉬는 동안 전환하지 않고 이어 가기는 그대로). 계정·이메일은 가짜다
+// 쉰다(쉬는 동안 전환하지 않고 이어 가기는 그대로). 그 뒤에 고친 것: 지금 계정을 모르는데 떠날 까닭이 있으면 조용히 그대로 두지 않고
+// unknownCurrent 로 알린다(표시는 그대로, 전환 대기·전환 중·쉬는 중·settle 안이면 그대로). 계정·이메일은 가짜다
 import Foundation
 import Testing
 import BoardRules
@@ -52,6 +53,7 @@ private func describe(_ move: AutoSwitchMove) -> String {
     case let .switchTo(next, from, reason, stopped):
         return "switch \(from.id.prefix(1))→\(next.id.prefix(1)) [\(reason)]" + (stopped ? " stopped" : "")
     case .noCandidate(let reason): return "none [\(reason)]"
+    case .unknownCurrent(let reason): return "unknown [\(reason)]"
     }
 }
 
@@ -124,7 +126,22 @@ private let decideRows: [DecideRow] = [
           move: "switch A→B [claude-board 세션이 한도에 걸림(rate limit)] stopped", marks: ["A": 3600]),
     .init(note: "전환 대기 중이면 전환하지 않는다", sessions: [SessionSpec(id: "s1", limitAt: -5)], pending: true, move: "stay"),
     .init(note: "전환 중이면 전환하지 않는다", limits: [LimitSpec("5h", 100, 1800)], switching: true, move: "stay"),
-    .init(note: "지금 계정이 없으면 전환하지 않는다", sessions: [SessionSpec(id: "s1", limitAt: -5)], current: nil, move: "stay"),
+    // 지금 계정을 모를 때 — 바꾸지 않고(다음 계정을 고를 수 없다) 떠날 까닭이 있으면 알린다. 표시는 그대로(marks nil)
+    .init(note: "지금 계정을 모르는데 세션이 새로 한도에 걸림 → 알림, 표시는 그대로", sessions: [SessionSpec(id: "s1", limitAt: -5)], current: nil,
+          move: "unknown [\(hitReason)]"),
+    .init(note: "지금 계정을 모르는데 5시간 100% → 알림", limits: [LimitSpec("5h", 100, 1800)], current: nil, move: "unknown [5시간 한도 100%]"),
+    .init(note: "지금 계정을 몰라도 떠날 까닭이 없으면 그대로", sessions: [SessionSpec(id: "s1")], limits: [LimitSpec("5h", 50, 1800)], current: nil,
+          move: "stay"),
+    .init(note: "지금 계정을 모를 때 전환 대기 중이면 그대로", limits: [LimitSpec("5h", 100, 1800)], current: nil, pending: true, move: "stay"),
+    .init(note: "지금 계정을 모를 때 전환 중이면 그대로", limits: [LimitSpec("5h", 100, 1800)], current: nil, switching: true, move: "stay"),
+    .init(note: "지금 계정을 모를 때 settle 안이면 그대로", sessions: [SessionSpec(id: "s1", limitAt: -5)], current: nil, lastSwitch: -10, move: "stay"),
+    .init(note: "지금 계정을 모를 때 쉬는 중(끝 시각 전)이면 그대로 — 쉬기 시작한 계정과 견줄 수 없어 끝 시각만 본다",
+          limits: [LimitSpec("5h", 100, 1800)], current: nil, pause: PauseSpec("A", 600), move: "stay"),
+    .init(note: "지금 계정을 모를 때 쉬는 기간이 끝났으면 알림", limits: [LimitSpec("5h", 100, 1800)], current: nil, pause: PauseSpec("A", 0),
+          move: "unknown [5시간 한도 100%]"),
+    .init(note: "지금 계정을 몰라도 이어 가기는 그대로, 알림과 함께 나온다",
+          sessions: [SessionSpec(id: "old", limitAt: -980), SessionSpec(id: "s1", limitAt: -5)], current: nil,
+          move: "unknown [\(hitReason)]", resume: ["old"]),
     .init(note: "끝남·일시중지·승인 대기 세션의 한도는 보지 않는다",
           sessions: [SessionSpec(id: "s1", state: "ended", limitAt: -5), SessionSpec(id: "s2", state: "paused", limitAt: -5), SessionSpec(id: "s3", state: "waiting", limitAt: -5)],
           move: "stay"),

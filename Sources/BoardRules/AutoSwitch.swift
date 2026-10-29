@@ -1,6 +1,7 @@
 // 사용 한도 자동 전환의 판단 — 한도에 걸린 세션 고르기, 전환할지와 그 까닭, 다음 계정과 한도 표시(full), 이어 갈 세션
 // (AutoSwitcher.tick·switchAway 에 있던 판단을 옮김, 동작은 그대로, 이슈 #9 3차에 고친 것: 지금 계정의 한도 표시 기간도 떠날 까닭처럼
-// 5시간·주간(전체)만 본다, 전환 실패를 까닭의 쪽으로 갈라 지금 계정·시스템 쪽이면 후보를 쓰지 않고 쉰다). 바깥을 부르지 않는 순수 함수이고 시각은 받는다.
+// 5시간·주간(전체)만 본다, 전환 실패를 까닭의 쪽으로 갈라 지금 계정·시스템 쪽이면 후보를 쓰지 않고 쉰다. 그 뒤에 고친 것: 지금 계정을 모르는데
+// 떠날 까닭이 있으면 조용히 그대로 두지 않고 unknownCurrent 로 알린다). 바깥을 부르지 않는 순수 함수이고 시각은 받는다.
 //
 // 지금 계정의 5시간·주간 한도가 차거나 세션이 한도에 걸려 멈추면 저장한 다른 계정으로 바꾸고, 한도로 멈췄던 세션에 이어서 진행하라는 요청을 넣는다.
 // 다른 계정의 남은 한도는 미리 알 수 없어(저장한 토큰은 그 계정으로 전환해야 갱신된다) 그 계정이 지금 계정이었을 때 한도가 찼던 기록(full)으로 고른다.
@@ -86,6 +87,8 @@ public enum AutoSwitchMove: Equatable {
     case switchTo(next: Account, from: Account, reason: String, stopped: Bool)
     /// 떠나야 하는데 바꿀 계정이 없다
     case noCandidate(reason: String)
+    /// 떠나야 하는데 지금 로그인된 계정을 모른다(계정 정보가 없거나 계정 id 가 빠짐) — 다음 계정을 고를 수 없어 바꾸지 않는다. 한도 표시는 그대로
+    case unknownCurrent(reason: String)
 }
 
 public struct AutoSwitchDecision: Equatable {
@@ -126,7 +129,9 @@ public func autoSwitchFailed(_ side: SwitchFailureSide, target: Account, from cu
     }
 }
 
-/// 3초마다 한 번의 판단. 전환은 settle 이 지났고, 전환 대기(pending)·전환 중(switching)·쉬는 중(pause)이 아니고, 지금 계정이 있을 때만 본다.
+/// 3초마다 한 번의 판단. 전환은 settle 이 지났고, 전환 대기(pending)·전환 중(switching)·쉬는 중(pause)이 아닐 때만 본다.
+/// 지금 계정을 모르면(nil — 계정 정보가 없거나 계정 id 가 빠짐) 다음 계정을 고를 수 없어 바꾸지 않고, 떠날 까닭이 있으면 unknownCurrent 로
+/// 알린다(표시는 그대로 — 전에는 조용히 그대로 두어 한도가 차도 아무 일이 없었다). 그때는 쉬기 시작한 계정과 견줄 수 없어 쉬는 중을 끝 시각으로만 본다.
 /// sessions 는 보드 카드의 세션 모두, limits 는 지금 계정의 사용량, lastSwitch 는 마지막으로 계정을 바꾼 시각(손으로 바꾼 것 포함),
 /// pause 는 지난 전환 실패(autoSwitchFailed)로 쉬는 것 — 쉬는 동안은 표시도 바꾸지 않고, 이어 가기는 그대로 본다
 public func decideAutoSwitch(sessions: [Session], limits: [Limit], current: Account?, saved: [Account],
@@ -136,16 +141,21 @@ public func decideAutoSwitch(sessions: [Session], limits: [Limit], current: Acco
     let limited = limitedSessions(sessions, now: now)
     var move = AutoSwitchMove.stay
     var marks: [String: Double]?
+    let resting = current.map { pause?.holds(current: $0.id, now: now) ?? false } ?? (pause.map { now < $0.until } ?? false)
     // 1) 전환 — 지금 계정으로 새로 한도에 걸린 세션이 있거나, 지금 계정의 5시간·주간 한도가 찼다
-    if !pending, !switching, !(pause?.holds(current: current?.id, now: now) ?? false), now > settled, let cur = current,
+    if !pending, !switching, !resting, now > settled,
        let reason = autoSwitchReason(limited: limited, limits: limits, settled: settled, now: now) {
-        let picked = nextAccount(from: cur, saved: saved, limits: limits, full: full, now: now)
-        marks = picked.full
-        if let next = picked.next {
-            let stopped = sessions.contains { $0.limitAt != nil && $0.state != "ended" }
-            move = .switchTo(next: next, from: cur, reason: reason, stopped: stopped)
+        if let cur = current {
+            let picked = nextAccount(from: cur, saved: saved, limits: limits, full: full, now: now)
+            marks = picked.full
+            if let next = picked.next {
+                let stopped = sessions.contains { $0.limitAt != nil && $0.state != "ended" }
+                move = .switchTo(next: next, from: cur, reason: reason, stopped: stopped)
+            } else {
+                move = .noCandidate(reason: reason)
+            }
         } else {
-            move = .noCandidate(reason: reason)
+            move = .unknownCurrent(reason: reason)
         }
     }
     // 2) 이어 가기
