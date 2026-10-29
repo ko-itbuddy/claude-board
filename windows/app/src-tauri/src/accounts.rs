@@ -218,6 +218,9 @@ pub fn save_current(p: &AccountPaths, except: Option<&str>) -> Result<(), String
     store(p, &oa, &co).map(|_| ())
 }
 
+/// Claude Code 가 로그인 정보를 쓰고 있어 잠금을 못 잡았을 때의 실패 글자 — 시험 Busy 판정 기준(§plan 3.3).
+pub const LOCK_BUSY: &str = "Claude Code 가 로그인 정보를 쓰는 중입니다 — 잠시 뒤 다시 시도해 주세요";
+
 /// Claude Code 와 같은 잠금 — proper-lockfile 처럼 `<파일>.lock` 폴더를 만들어 잡는다.
 /// 15초 넘게 갱신되지 않은 잠금은 버려진 것으로 보고, 5초까지 기다린다.
 pub fn with_file_lock<T>(file: &Path, body: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
@@ -234,7 +237,7 @@ pub fn with_file_lock<T>(file: &Path, body: impl FnOnce() -> Result<T, String>) 
                     continue;
                 }
                 if Instant::now() >= deadline {
-                    return Err("Claude Code 가 로그인 정보를 쓰는 중입니다 — 잠시 뒤 다시 시도해 주세요".into());
+                    return Err(LOCK_BUSY.into());
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
@@ -264,11 +267,39 @@ pub fn patch_json(path: &Path, change: impl FnOnce(&mut Record)) -> Result<(), S
     })
 }
 
+/// 전환 실패의 쪽 — 다음에 어떻게 다룰지가 달라진다(§plan 3.3).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SwitchSide {
+    /// 바꾸려던 대상 계정 쪽 탓 — 그 계정을 건너뛴다
+    Target,
+    /// 지금 계정·시스템 쪽 탓 — 잠시 쉬고 다시 본다
+    Other,
+    /// Claude Code 가 로그인 정보를 쓰고 있어 잠금을 못 잡았다 — 잠깐 기다린다
+    Busy,
+}
+
+/// 전환 실패 — 실패 안내 글자와 어느 쪽 탓인지를 실어 나른다.
+#[derive(Debug, Clone)]
+pub struct SwitchError {
+    pub message: String,
+    pub side: SwitchSide,
+}
+
+impl SwitchError {
+    fn new(side: SwitchSide, message: impl Into<String>) -> Self {
+        SwitchError { message: message.into(), side }
+    }
+}
+
+/// 전환 결과를 받는 콜백 — 성공이면 빈 값, 실패면 어느 쪽 탓인지를 돌려준다.
+pub type SwitchDone = Box<dyn FnOnce(Result<(), SwitchError>) + Send>;
+
 /// 저장한 계정으로 바꿔 넣는다. 고칠 수 없었던 부분이 있으면 그 안내를 돌려준다.
-pub fn perform_switch(p: &AccountPaths, target: &Account) -> Result<Option<String>, String> {
+/// 실패는 `SwitchError` 로 — 어느 쪽 탓인지(`side`)와 안내 글자(`message`)를 실어 나른다.
+pub fn perform_switch(p: &AccountPaths, target: &Account) -> Result<Option<String>, SwitchError> {
     let oauth = vault_read(p, &target.id)
         .and_then(|j| obj(j.get("claudeAiOauth")).cloned())
-        .ok_or("저장된 로그인 정보가 없습니다 — 계정을 다시 추가해 주세요")?;
+        .ok_or_else(|| SwitchError::new(SwitchSide::Target, "저장된 로그인 정보가 없습니다. 계정을 다시 추가해 주세요"))?;
     let previous = oauth_account(&p.claude_json).and_then(|oa| Account::new(&oa, None)).map(|a| a.id);
     // Claude Code 가 토큰을 갱신해 쓸 때 잡는 잠금 — 그 사이에 끼어 앞 계정 토큰으로 덮이지 않게 한다
     with_file_lock(&p.claude_dir.join(".storage-write"), || {
@@ -281,6 +312,13 @@ pub fn perform_switch(p: &AccountPaths, target: &Account) -> Result<Option<Strin
         cur.insert("claudeAiOauth".into(), Value::Object(oauth));
         let bytes = serde_json::to_vec(&Value::Object(cur)).map_err(|e| e.to_string())?;
         write_private(&p.credentials, ".credentials", &bytes).map_err(|e| format!("로그인 정보 파일에 쓰지 못했습니다 — {e}"))
+    })
+    .map_err(|e| {
+        if e == LOCK_BUSY {
+            SwitchError::new(SwitchSide::Busy, e)
+        } else {
+            SwitchError::new(SwitchSide::Other, e)
+        }
     })?;
     // 계정 정보 — /status·보드 계정 표시가 새 계정으로 보이게. 다른 계정이면 앞 계정의 캐시도 비운다
     let changed = previous.as_deref() != Some(target.id.as_str());
@@ -387,13 +425,14 @@ impl Accounts {
 // ── 동작 (보드) ──────────────────────────────────────────────
 
 /// 저장한 계정으로 전환한다. `note` = 전환했을 때 띄울 안내(자동 전환), `done` = 결과를 받는다.
-pub fn switch_to(board: &Arc<Board>, target: Account, note: Option<String>, done: Option<Box<dyn FnOnce(bool) + Send>>) {
+/// 결과는 성공 여부만이 아니라 실패의 쪽(`SwitchError.side`)까지 넘긴다.
+pub fn switch_to(board: &Arc<Board>, target: Account, note: Option<String>, done: Option<SwitchDone>) {
     {
         let mut acc = board.accounts.lock().unwrap();
         if acc.switching {
             drop(acc);
             if let Some(done) = done {
-                done(false);
+                done(Err(SwitchError::new(SwitchSide::Other, "이미 전환 중입니다")));
             }
             return;
         }
@@ -412,22 +451,27 @@ pub fn switch_to(board: &Arc<Board>, target: Account, note: Option<String>, done
             acc.switching = false;
             acc.load_current(&board.account_paths, true);
             acc.load_saved(&board.account_paths);
-            match r {
+            match &r {
                 Ok(warning) => {
                     let error = warning.is_some();
-                    let text = warning.or(note).unwrap_or_else(|| {
+                    let text = warning.clone().or(note).unwrap_or_else(|| {
                         format!("{} 계정으로 전환했습니다 — 실행 중인 세션도 다음 요청부터 이 계정을 씁니다", target.email())
                     });
                     acc.flash(text, error);
                 }
-                Err(e) => acc.flash(format!("전환하지 못했습니다 — {e}"), true),
+                Err(e) => {
+                    // 자동 전환(note 있음)은 실패 안내를 done 에 맡긴다 — 여기서 또 알리지 않는다
+                    if note.is_none() {
+                        acc.flash(format!("전환하지 못했습니다: {}", e.message), true);
+                    }
+                }
             }
         }
         if ok {
             board.on_account_switched();
         }
         if let Some(done) = done {
-            done(ok);
+            done(r.map(|_| ()));
         }
         board.publish();
     });
@@ -658,11 +702,46 @@ mod tests {
 
         // 금고가 없는 계정은 전환하지 않는다
         let ghost = Account::new(&oa("ghost", "g@x.com"), None).unwrap();
-        assert!(perform_switch(p, &ghost).unwrap_err().contains("저장된 로그인 정보가 없습니다"));
+        assert!(perform_switch(p, &ghost).unwrap_err().message.contains("저장된 로그인 정보가 없습니다"));
 
         remove(p, &b.id);
         assert!(!p.vault(&b.id).exists());
         assert_eq!(load_saved(p).iter().map(Account::email).collect::<Vec<_>>(), ["a@x.com"]);
+    }
+
+    #[test]
+    fn switch_error_target_side() {
+        let f = Fake::new();
+        let p = &f.p;
+        // 금고가 없는 계정은 대상 계정 쪽 실패다
+        let ghost = Account::new(&oa("ghost", "g@x.com"), None).unwrap();
+        let e = perform_switch(p, &ghost).unwrap_err();
+        assert_eq!(e.side, SwitchSide::Target);
+        assert!(e.message.contains("저장된 로그인 정보가 없습니다"));
+    }
+
+    #[test]
+    fn switch_error_other_side() {
+        let f = Fake::new();
+        let p = &f.p;
+        // 지금 로그인 정보 파일이 깨졌으면 그 밖(지금 계정·시스템) 쪽 실패다
+        let b = store(p, &oa("ub", "b@x.com"), &token("B1")).unwrap();
+        fs::write(&p.credentials, b"{oops").unwrap();
+        let e = perform_switch(p, &b).unwrap_err();
+        assert_eq!(e.side, SwitchSide::Other);
+        assert!(e.message.contains("지금 로그인 정보를 읽지 못했습니다"));
+    }
+
+    #[test]
+    fn switch_error_busy_side() {
+        let f = Fake::new();
+        let p = &f.p;
+        let b = store(p, &oa("ub", "b@x.com"), &token("B1")).unwrap();
+        // Claude Code 가 로그인 정보를 쓰고 있으면(잠금 시간 초과) 바쁨이다
+        fs::create_dir(p.claude_dir.join(".storage-write.lock")).unwrap();
+        let e = perform_switch(p, &b).unwrap_err();
+        assert_eq!(e.side, SwitchSide::Busy);
+        assert_eq!(e.message, LOCK_BUSY);
     }
 
     #[test]

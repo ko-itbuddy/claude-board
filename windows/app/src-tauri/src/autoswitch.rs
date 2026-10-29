@@ -11,7 +11,7 @@ use std::time::Duration;
 use claude_board_core::console::{self, Input};
 use claude_board_core::{clock, paths};
 
-use crate::accounts::{self, Account};
+use crate::accounts::{self, Account, SwitchSide};
 use crate::board::Board;
 use crate::model::{Limit, Session};
 use crate::util::append_log;
@@ -30,6 +30,11 @@ pub struct AutoSwitch {
     resumed: HashSet<String>,
     /// 전환할 계정이 없다고 이미 알렸다 — 계정이 바뀌기 전에는 다시 알리지 않는다
     no_candidate: bool,
+    /// 전환 실패로 잠시 쉬는 계정·시각 — S2 가 채운다(K1 에서는 자리만, decide 로 넘겨만 본다)
+    pause: Option<Pause>,
+    /// 지금 계정을 알 수 없다고 봤다 — S2 가 한 번만 알리는 데 쓴다(K1 에서는 자리만)
+    #[allow(dead_code)]
+    unknown_current: bool,
 }
 
 impl AutoSwitch {
@@ -67,6 +72,107 @@ fn key(s: &Session) -> String {
     format!("{}@{}", s.id, s.limit_s.unwrap_or(0.0))
 }
 
+/// 자동 전환 실패 뒤 잠시 쉬는 표시 — 그 계정을 `until` 유닉스 초까지 고르지 않는다(§plan 3.3).
+/// K1 에서는 자리만 — S2 가 채워 읽는다.
+#[allow(dead_code)]
+pub struct Pause {
+    pub account: String,
+    pub until: f64,
+}
+
+/// 자동 전환의 판단 하나 — `decide` 가 내리는 결정 (§plan 3.3).
+/// SwitchTo 가 Account 쌍을 통째로 옮겨 눈 하나에 256바이트를 넘긴다 — 계약이 정한 꼴을 그대로 두기 위해 허용한다.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub enum Move {
+    /// 지금 그대로 — 바꿀 까닭이 없다
+    Stay,
+    /// `from` 계정에서 `next` 계정으로 전환한다
+    SwitchTo { next: Account, from: Account, reason: String, stopped: bool },
+    /// 전환할 계정이 없다 — 이유는 이미 알렸다
+    NoCandidate(String),
+    /// 지금 계정을 알 수 없다 — K1 에서는 만들지 않는다(S2 가 채운다)
+    #[allow(dead_code)]
+    UnknownCurrent(String),
+}
+
+/// `decide` 의 결과 — 전환 결정과 한도 표시 갱신·이어 가기 목록.
+pub struct Decision {
+    /// 전환할 것인가
+    pub mv: Move,
+    /// 지금 계정의 찬 한도 표시를 갱신한 목록 — None 이면 건드리지 않는다
+    pub full: Option<BTreeMap<String, f64>>,
+    /// 이어 가기를 넣을 세션들
+    pub resume: Vec<Session>,
+}
+
+/// 지금 상태에서 자동 전환 결정을 내린다 — 파일·프로세스를 만지지 않는 순수 판단(§plan 3.3).
+/// 지금 계정을 모르면 전환하지 않는다 — 지금 동작처럼 조용히 건너뛰고 이어 가기만 내놓는다.
+#[allow(clippy::too_many_arguments)]
+pub fn decide(
+    sessions: &[Session],
+    limits: &[Limit],
+    current: Option<&Account>,
+    saved: &[Account],
+    full: &BTreeMap<String, f64>,
+    resumed: &HashSet<String>,
+    last_switch: f64,
+    pending: bool,
+    switching: bool,
+    _pause: Option<&Pause>,
+    now: f64,
+) -> Decision {
+    let settled = last_switch + SETTLE;
+    let limited = limited(sessions, now);
+    // 이어 가기 — settle 이 지났으면 그 전(이전 계정)에 한도로 멈춘 세션, 아직 요청을 넣지 않은 것
+    let resume = if now > settled {
+        limited
+            .iter()
+            .filter(|s| s.limit_s.is_some_and(|at| at <= settled) && !resumed.contains(&key(s)))
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let Some(cur) = current else {
+        return Decision { mv: Move::Stay, full: None, resume };
+    };
+    // 대기·전환 중·전환 직후(settle 안)에는 보지 않는다
+    let reason = if pending || switching || now <= settled {
+        None
+    } else if let Some(hit) = limited.iter().find(|s| s.limit_s.is_some_and(|at| at > settled)) {
+        Some(format!("{} 세션이 한도에 걸림({})", hit.project(), hit.message))
+    } else {
+        full_limit(limits, now).map(|l| format!("{} 한도 {}%", l.label, l.pct as i64))
+    };
+    let Some(reason) = reason else {
+        return Decision { mv: Move::Stay, full: None, resume };
+    };
+    // 표시 갱신 — 지금 계정의 찬 한도 풀림 시각(모르면 1시간 뒤)을 적고 만료된 표시는 지운다
+    let resets = limits
+        .iter()
+        .filter(|l| l.pct >= 100.0)
+        .filter_map(|l| l.resets.map(|r| r as f64 / 1000.0))
+        .filter(|r| *r > now)
+        .fold(None, |m: Option<f64>, r| Some(m.map_or(r, |m| m.max(r))));
+    let mut marks = full.clone();
+    marks.retain(|_, v| *v > now);
+    marks.insert(cur.id.clone(), resets.unwrap_or(now + 3600.0));
+    let stopped = sessions.iter().any(|s| s.limit_s.is_some() && s.state != "ended");
+    let mv = match pick_next(saved, &cur.id, &marks, now).cloned() {
+        Some(next) => Move::SwitchTo { next, from: cur.clone(), reason, stopped },
+        None => Move::NoCandidate(reason),
+    };
+    Decision { mv, full: Some(marks), resume }
+}
+
+/// 전환이 실패했을 때의 표시·쉼 — 실패의 쪽을 본다(§plan 3.3). K1 지금 동작: 늘 전환하려던 대상 계정을 1시간 뒤까지 건너뛴다.
+pub fn failed(_side: SwitchSide, target: &Account, _current: &Account, full: &BTreeMap<String, f64>, now: f64) -> (BTreeMap<String, f64>, Option<Pause>) {
+    let mut marks = full.clone();
+    marks.insert(target.id.clone(), now + 3600.0);
+    (marks, None)
+}
+
 /// 3초마다.
 pub fn tick(board: &Arc<Board>) {
     let (on, last) = {
@@ -77,37 +183,77 @@ pub fn tick(board: &Arc<Board>) {
         return;
     }
     let now = clock::now();
-    let settled = last + SETTLE;
     let sessions: Vec<Session> = board.sessions();
-    let limited = limited(&sessions, now);
     let limits = board.usage.lock().unwrap().limits.clone();
-
-    // 1) 전환 — 지금 계정으로 새로 한도에 걸린 세션이 있거나, 지금 계정의 5시간·주간 한도가 찼다
-    let (switching, current) = {
+    let (switching, current, saved) = {
         let acc = board.accounts.lock().unwrap();
-        (acc.switching, acc.current.clone())
+        (acc.switching, acc.current.clone(), acc.saved.clone())
     };
-    let pending = board.auto.lock().unwrap().pending;
-    if let (false, false, true, Some(cur)) = (pending, switching, now > settled, current) {
-        if let Some(hit) = limited.iter().find(|s| s.limit_s.is_some_and(|at| at > settled)) {
-            switch_away(board, &cur, format!("{} 세션이 한도에 걸림({})", hit.project(), hit.message), &limits, now);
-        } else if let Some(l) = full_limit(&limits, now) {
-            switch_away(board, &cur, format!("{} 한도 {}%", l.label, l.pct as i64), &limits, now);
+    let marks = board.settings.lock().unwrap().auto_switch_full.clone();
+    let decision = {
+        let auto = board.auto.lock().unwrap();
+        decide(&sessions, &limits, current.as_ref(), &saved, &marks, &auto.resumed, last, auto.pending, switching, auto.pause.as_ref(), now)
+    };
+
+    // 1) 전환 — 결정을 옮긴다
+    if let Some(full) = decision.full {
+        board.update_settings(|st| st.auto_switch_full = full);
+    }
+    match decision.mv {
+        Move::Stay => {}
+        Move::UnknownCurrent(_) => {
+            // K1 에서는 만들지 않는다 — S2 가 지금 계정을 모를 때의 알림을 채운다
+        }
+        Move::NoCandidate(reason) => {
+            let mut notified = false;
+            {
+                let mut auto = board.auto.lock().unwrap();
+                if !auto.no_candidate {
+                    auto.no_candidate = true;
+                    notified = true;
+                }
+            }
+            if notified {
+                log(&format!("{reason} — 전환할 계정 없음"));
+                board.flash("사용 한도에 도달했지만 전환할 다른 계정이 없습니다 — 저장한 계정이 모두 한도에 도달했거나 다시 로그인이 필요합니다", true);
+            }
+        }
+        Move::SwitchTo { next, from, reason, stopped } => {
+            board.auto.lock().unwrap().pending = true;
+            log(&format!("{reason} — {} 에서 {} 로 전환", from.email(), next.email()));
+            let mut note = format!("사용 한도에 도달해 {} 계정으로 자동 전환했습니다", next.email());
+            if stopped {
+                note += &format!(" — 한도로 멈춘 세션은 {}초 뒤 이어서 진행합니다", SETTLE as i64);
+            }
+            let b = board.clone();
+            let failed_next = next.clone();
+            accounts::switch_to(
+                board,
+                next,
+                Some(note),
+                Some(Box::new(move |r| {
+                    b.auto.lock().unwrap().pending = false;
+                    let Err(e) = r else { return };
+                    log(&format!("{} 로 전환하지 못함 — 1시간 동안 고르지 않음", failed_next.email()));
+                    let (marks, pause) = {
+                        let full = b.update_settings(|st| st.auto_switch_full.clone());
+                        failed(e.side, &failed_next, &from, &full, now)
+                    };
+                    b.update_settings(|st| st.auto_switch_full = marks);
+                    b.auto.lock().unwrap().pause = pause; // K1 에서는 늘 None — S2 가 채워 쓴다
+                })),
+            );
         }
     }
 
-    // 2) 이어 가기 — 전환하고 settle 이 지났으면, 그 전(이전 계정)에 한도로 멈춘 세션에 이어서 진행하라는 요청을 넣는다
-    if now <= settled {
-        return;
-    }
-    let todo: Vec<Session> = {
-        let mut auto = board.auto.lock().unwrap();
-        let todo: Vec<Session> = limited.into_iter().filter(|s| s.limit_s.is_some_and(|at| at <= settled) && !auto.resumed.contains(&key(s))).collect();
-        auto.resumed.extend(todo.iter().map(key));
-        todo
-    };
+    // 2) 이어 가기 — 결정의 세션에 이어서 진행하라는 요청을 넣는다
+    let todo = decision.resume;
     if todo.is_empty() {
         return;
+    }
+    {
+        let mut auto = board.auto.lock().unwrap();
+        auto.resumed.extend(todo.iter().map(key));
     }
     let mut manual = Vec::new();
     for s in &todo {
@@ -133,55 +279,9 @@ pub fn tick(board: &Arc<Board>) {
     board.flash(text, !manual.is_empty());
 }
 
-/// 지금 계정은 한도가 풀릴 때까지 고르지 않게 적어 두고, 저장한 계정 가운데 다음으로 쓸 수 있는 계정으로 바꾼다.
-fn switch_away(board: &Arc<Board>, cur: &Account, reason: String, limits: &[Limit], now: f64) {
-    // 풀리는 시각은 지금 계정의 찬 한도에서 읽는다 — 모르면 1시간 뒤 다시 본다
-    let resets = limits
-        .iter()
-        .filter(|l| l.pct >= 100.0)
-        .filter_map(|l| l.resets.map(|r| r as f64 / 1000.0))
-        .filter(|r| *r > now)
-        .fold(None, |m: Option<f64>, r| Some(m.map_or(r, |m| m.max(r))));
-    let marks = board.update_settings(|st| {
-        st.auto_switch_full.retain(|_, v| *v > now);
-        st.auto_switch_full.insert(cur.id.clone(), resets.unwrap_or(now + 3600.0));
-        st.auto_switch_full.clone()
-    });
-    let saved = board.accounts.lock().unwrap().saved.clone();
-    let Some(next) = pick_next(&saved, &cur.id, &marks, now).cloned() else {
-        let mut auto = board.auto.lock().unwrap();
-        if !auto.no_candidate {
-            auto.no_candidate = true;
-            drop(auto);
-            log(&format!("{reason} — 전환할 계정 없음"));
-            board.flash("사용 한도에 도달했지만 전환할 다른 계정이 없습니다 — 저장한 계정이 모두 한도에 도달했거나 다시 로그인이 필요합니다", true);
-        }
-        return;
-    };
-    board.auto.lock().unwrap().pending = true;
-    log(&format!("{reason} — {} 에서 {} 로 전환", cur.email(), next.email()));
-    let stopped = board.sessions().iter().any(|s| s.limit_s.is_some() && s.state != "ended");
-    let mut note = format!("사용 한도에 도달해 {} 계정으로 자동 전환했습니다", next.email());
-    if stopped {
-        note += &format!(" — 한도로 멈춘 세션은 {}초 뒤 이어서 진행합니다", SETTLE as i64);
-    }
-    let b = board.clone();
-    let failed_next = next.clone();
-    accounts::switch_to(
-        board,
-        next,
-        Some(note),
-        Some(Box::new(move |ok| {
-            b.auto.lock().unwrap().pending = false;
-            if !ok {
-                log(&format!("{} 로 전환하지 못함 — 1시간 동안 고르지 않음", failed_next.email()));
-                b.update_settings(|st| {
-                    st.auto_switch_full.insert(failed_next.id.clone(), now + 3600.0);
-                });
-            }
-        })),
-    );
-}
+// 시험 표 — T2 가 표 한 장으로 옮길 자리(§plan 3.3 C2). 지금은 비어 있다.
+#[cfg(test)]
+mod table;
 
 #[cfg(test)]
 mod tests {
@@ -223,5 +323,102 @@ mod tests {
         // 이미 풀린 한도는 보지 않는다
         assert!(full_limit(&[limit("7d", 100.0, Some(500_000))], now).is_none());
         assert_eq!(full_limit(&[limit("7d", 120.0, None)], now).unwrap().id, "7d");
+    }
+
+    fn limited_session(id: &str, limit_s: f64) -> Session {
+        use std::path::PathBuf;
+        Session {
+            id: id.into(),
+            cwd: "C:/일".into(),
+            state: "working".into(),
+            since: 0,
+            updated: 0,
+            headless: false,
+            title: String::new(),
+            topic: String::new(),
+            message: "작업 중".into(),
+            name: None,
+            ctx: None,
+            brain: None,
+            subagents: Vec::new(),
+            shells: 0,
+            paused: false,
+            muted: false,
+            limit_at: None,
+            can_drive: true,
+            place: crate::model::PidPlace::default(),
+            pid: 7,
+            pid_ctime: None,
+            file: PathBuf::new(),
+            project_dir: "일".into(),
+            resume_args: Vec::new(),
+            since_s: 0.0,
+            updated_s: 0.0,
+            limit_s: Some(limit_s),
+        }
+    }
+
+    #[test]
+    fn decide_ignores_unknown_current() {
+        // 지금 계정을 모르면 전환 결정 없이 지금 동작 그대로 건너뛴다 — 이어 가기는 settle 뒤 내놓는다
+        let s = limited_session("w1", 30.0);
+        let d = decide(std::slice::from_ref(&s), &[], None, &[], &BTreeMap::new(), &HashSet::new(), 0.0, false, false, None, 50.0);
+        assert!(matches!(d.mv, Move::Stay));
+        assert!(d.full.is_none());
+        assert_eq!(d.resume.len(), 1);
+        assert_eq!(d.resume[0].id, "w1");
+
+        // settle(40) 안이면 이어 가기도 없다
+        let d = decide(&[limited_session("w1", 30.0)], &[], None, &[], &BTreeMap::new(), &HashSet::new(), 0.0, false, false, None, 10.0);
+        assert!(d.resume.is_empty());
+    }
+
+    #[test]
+    fn decide_switches_with_marks() {
+        // 5h 한도가 찼다 — 지금 계정에서 다음 계정으로 전환을 내놓고 지금 계정의 한도 표시를 채운다
+        let limits = vec![limit("5h", 100.0, None)];
+        let cur = acc("cur", None);
+        let saved = vec![cur.clone(), acc("next", None)];
+        let d = decide(&[], &limits, Some(&cur), &saved, &BTreeMap::new(), &HashSet::new(), -100.0, false, false, None, 1000.0);
+        let Move::SwitchTo { next, from, reason, stopped } = &d.mv else { panic!("전환 결정이 아니다: {:?}", d.mv) };
+        assert_eq!(next.id, "next|");
+        assert_eq!(from.id, "cur|");
+        assert_eq!(reason, "5h 한도 100%");
+        assert!(!stopped);
+        let marks = d.full.clone().unwrap();
+        assert_eq!(marks.get("cur|"), Some(&(1000.0 + 3600.0))); // 풀리는 시각을 모르면 1시간 뒤
+
+        // 전환할 계정이 없으면 없다고 본다
+        let only = vec![cur.clone()];
+        let d = decide(&[], &limits, Some(&cur), &only, &BTreeMap::new(), &HashSet::new(), -100.0, false, false, None, 1000.0);
+        let Move::NoCandidate(reason) = &d.mv else { panic!("없음 결정이 아니다: {:?}", d.mv) };
+        assert_eq!(reason, "5h 한도 100%");
+        assert!(d.full.is_some());
+    }
+
+    #[test]
+    fn decide_switches_when_session_hits_limit() {
+        // settle 뒤에 새로 걸린 세션이 있다 — 멈춘 세션이 있으니 전환 안내에 이어 진행 표시도 붙는다
+        let cur = acc("cur", None);
+        let saved = vec![cur.clone(), acc("next", None)];
+        let hit = limited_session("w1", 50.0);
+        let d = decide(&[hit], &[], Some(&cur), &saved, &BTreeMap::new(), &HashSet::new(), 0.0, false, false, None, 100.0);
+        let Move::SwitchTo { reason, stopped, .. } = &d.mv else { panic!("전환 결정이 아니다: {:?}", d.mv) };
+        assert!(reason.contains("세션이 한도에 걸림(작업 중)"), "{reason}");
+        assert!(stopped);
+    }
+
+    #[test]
+    fn failed_always_marks_target() {
+        // K1 지금 동작 — 실패의 쪽과 관계없이 전환하려던 대상 계정을 1시간 뒤까지 건너뛰고 쉬지는 않는다
+        let target = acc("t", None);
+        let cur = acc("cur", None);
+        let full = BTreeMap::from([("cur|".to_string(), 500.0)]);
+        for side in [SwitchSide::Target, SwitchSide::Other, SwitchSide::Busy] {
+            let (marks, pause) = failed(side, &target, &cur, &full, 1000.0);
+            assert_eq!(marks.get("t|"), Some(&(1000.0 + 3600.0)), "쪽 {side:?}");
+            assert_eq!(marks.get("cur|"), Some(&500.0), "쪽 {side:?}");
+            assert!(pause.is_none(), "쪽 {side:?}");
+        }
     }
 }
