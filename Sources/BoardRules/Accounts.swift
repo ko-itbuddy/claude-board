@@ -1,6 +1,7 @@
 // 계정 전환 규칙 — 저장 계정 모델, 저장 계정 목록(accounts.json) 해석·고치기, 전환할 때의 JSON 변환, 저장·전환·지우기 유스케이스
 // (AccountStore 에 있던 것을 옮김, 동작·호출 순서·오류 글자는 그대로, 옮긴 뒤 고친 것: 깨진 accounts.json 은 쓰기 전에 옆으로 치운다,
-// 이슈 #9 3차: 요금제 글자의 앞 빈칸, 지우기의 결과 안내, 지금 계정 정보가 모자라 전환을 막을 때의 안내).
+// 이슈 #9 3차: 요금제 글자의 앞 빈칸, 지우기의 결과 안내, 지금 계정 정보가 모자라 전환을 막을 때의 안내,
+// 지금 계정 정보가 아예 없어도 로그인 토큰이 있으면 전환을 막음).
 // 바깥(키체인·~/.claude.json·accounts.json·쓰기 잠금·시계)은 포트(Ports.swift)로만 부른다.
 //
 // 계정 전환: 계정마다 브라우저 로그인을 한 번 받아 토큰을 저장해 두고, 고르면 Claude Code 로그인 항목의 토큰만 바꿔 넣는다.
@@ -166,6 +167,8 @@ public func loadSavedAccounts(_ saved: SavedAccountList) -> [Account] {
 let savedAccountsSetAsideFailed = "저장 계정 목록(accounts.json)을 읽지 못해 옆으로 옮기려 했지만 옮기지 못했습니다"
 /// 지금 로그인된 계정의 정보(~/.claude.json 의 oauthAccount)에 accountUuid 가 없어 그 계정을 저장하지 못할 때 — 전환 실패 안내 뒤에 붙는다
 let currentAccountIncomplete = "지금 로그인된 계정의 정보가 모자라 그 계정을 먼저 저장할 수 없습니다(그대로 바꾸면 그 로그인을 잃습니다). Claude Code 에서 /login 으로 다시 로그인한 뒤 해 주세요"
+/// 지금 로그인된 계정의 정보(oauthAccount)가 아예 없어(~/.claude.json 이 없을 때 포함) 그 계정을 저장하지 못할 때 — 위와 끝이 같고 까닭만 다르다
+let currentAccountMissing = "지금 로그인된 계정의 정보가 없어 그 계정을 먼저 저장할 수 없습니다(그대로 바꾸면 그 로그인을 잃습니다). Claude Code 에서 /login 으로 다시 로그인한 뒤 해 주세요"
 /// 저장 계정 지우기의 안내 — 키체인에서 못 지움(던짐), 목록이 깨짐·목록을 못 씀(돌려줌, 앞에 오류 글자가 붙는다)
 let removeKeychainFailed = "키체인의 로그인 정보를 지우지 못해 목록에 그대로 두었습니다. 잠시 뒤 다시 지워 주세요"
 let removeListBroken = "로그인 정보는 지웠지만 저장 계정 목록(accounts.json)을 읽지 못해 목록은 그대로 두었습니다"
@@ -193,22 +196,36 @@ public func storeAccount(_ oa: [String: Any], credentials oauth: [String: Any], 
 }
 
 /// 지금 로그인된 계정의 최신 토큰을 저장한다 — 쓰는 동안 갱신되며 바뀐 토큰이라, 처음 저장했던 것은 이미 못 쓸 수 있다.
-/// 지금 계정이 skip 이거나, 계정 정보·로그인 토큰이 없으면 하지 않는다. 쓰기 잠금 안에서 부른다.
-/// 계정 정보는 있는데 accountUuid 가 없어 계정을 만들지 못하고 로그인 토큰은 있으면 던진다(currentAccountIncomplete) —
-/// 저장하지 못한 채 전환이 그 토큰을 덮어쓰면 그 계정을 잃으므로 전환을 막고, 까닭과 할 일을 알린다.
-/// storeAccount 의 "계정 정보가 없습니다" 와 따로 둔다(계정 추가는 계정을 만든 뒤 storeAccount 를 부르고, 여기는 try? 로 부른다)
-public func saveCurrentAccount(except skip: String?, ports: AccountPorts) throws {
-    guard let oa = ports.config.oauthAccount() else { return }
-    let cur = Account(oauth: oa)
+/// 지금 계정이 skip 이거나 로그인 토큰이 없으면 하지 않는다. 쓰기 잠금 안에서 부른다.
+/// 로그인 토큰은 있는데 그 계정을 저장할 수 없으면 — 계정 정보(oauthAccount)가 아예 없거나(currentAccountMissing) accountUuid 가 없어
+/// 계정을 만들지 못하면(currentAccountIncomplete) — 던진다. 저장하지 못한 채 전환이 그 토큰을 덮어쓰면 그 계정을 잃으므로 전환을 막고,
+/// 까닭과 할 일을 알린다. 다만 그 토큰이 incoming(전환이 로그인 항목에 넣을 대상 계정의 저장 토큰)과 같은 로그인이면 잃을 것이 없어
+/// 막지 않는다(sameLogin). 계정 추가는 incoming 없이 try? 로 불러 던져도 저장만 건너뛴다.
+/// storeAccount 의 "계정 정보가 없습니다" 와 따로 둔다(계정 추가는 계정을 만든 뒤 storeAccount 를 부른다)
+public func saveCurrentAccount(except skip: String?, incoming: [String: Any]? = nil, ports: AccountPorts) throws {
+    let oa = ports.config.oauthAccount()
+    let cur = oa.flatMap { Account(oauth: $0) }
     if let cur, cur.id == skip { return }
     guard let co = credentialsJSON(ports.keychain.read(ports.login))?["claudeAiOauth"] as? [String: Any] else { return }
-    guard cur != nil else { throw AccountError(currentAccountIncomplete) }
+    guard let oa, cur != nil else {
+        if let incoming, sameLogin(co, incoming) { return }
+        throw AccountError(oa == nil ? currentAccountMissing : currentAccountIncomplete)
+    }
     try storeAccount(oa, credentials: co, ports: ports)
 }
 
+/// 두 토큰 묶음(claudeAiOauth)이 같은 로그인인가 — refreshToken 이 둘 다 비지 않은 글자이고 같을 때만.
+/// 토큰 묶음에는 계정 id 가 없고, accessToken 은 몇 시간마다 새로 받으며 refreshToken 도 갱신 때 바뀐다. 그래서 같은 계정인지는 알 수 없고,
+/// refreshToken 이 같다는 것은 지금 로그인 토큰이 보드가 저장해 둔(그리고 전환으로 넣은) 그 로그인이라는 뜻이다 — 그 로그인은 저장 토큰에
+/// 그대로 남으므로 덮어써도 잃지 않는다. 한쪽이라도 없거나 다르면 같지 않다고 본다(모르면 막는 쪽)
+private func sameLogin(_ a: [String: Any], _ b: [String: Any]) -> Bool {
+    guard let x = a["refreshToken"] as? String, !x.isEmpty, let y = b["refreshToken"] as? String else { return false }
+    return x == y
+}
+
 /// 저장한 계정으로 바꾼다. 고칠 수 없었던 부분이 있으면 그 안내를 돌려준다(토큰은 바꿨다). 실패하면 던진다(바꾸지 않았다).
-/// 차례: 저장한 토큰 읽기 → 앞 계정 id 읽기 → [쓰기 잠금: 지금 로그인 정보 읽기 → 지금 계정 토큰 저장(대상이면 건너뜀) → claudeAiOauth 만 바꿔 쓰기]
-/// → 잠금 밖에서 ~/.claude.json 고치기
+/// 차례: 저장한 토큰 읽기 → 앞 계정 id 읽기 → [쓰기 잠금: 지금 로그인 정보 읽기 → 지금 계정 토큰 저장(대상이면 건너뜀, 로그인 토큰이 있는데
+/// 그 계정을 저장할 수 없으면 막음) → claudeAiOauth 만 바꿔 쓰기] → 잠금 밖에서 ~/.claude.json 고치기
 public func switchAccount(to target: Account, ports: AccountPorts) throws -> String? {
     guard let oauth = credentialsJSON(ports.keychain.read(.savedAccount(target.id)))?["claudeAiOauth"] as? [String: Any] else {
         throw AccountError("저장된 로그인 정보가 없습니다. 계정을 다시 추가해 주세요")
@@ -225,7 +242,7 @@ public func switchAccount(to target: Account, ports: AccountPorts) throws -> Str
         } else if ports.keychain.exists(ports.login) {
             throw AccountError("지금 로그인 정보를 읽지 못했습니다")
         }
-        try saveCurrentAccount(except: target.id, ports: ports)
+        try saveCurrentAccount(except: target.id, incoming: oauth, ports: ports)
         // 계정 토큰만 바꿔 넣는다 — MCP 서버 로그인(mcpOAuth) 같은 다른 값은 그대로 둔다
         guard try ports.keychain.write(ports.login, json: replacingAccountToken(cur, with: oauth)) else {
             throw AccountError("키체인에 쓰지 못했습니다")
