@@ -14,6 +14,8 @@ public enum AutoSwitchRule {
     public static let recent: TimeInterval = 6 * 3600
     /// 찬 한도가 풀리는 시각을 모를 때, 전환에 실패한 계정을 다시 고르기까지. 지금 계정·시스템 쪽 실패로 자동 전환을 쉬는 기간도 이것
     public static let retryAfter: TimeInterval = 3600
+    /// 쓰기 잠금을 잡지 못해 전환에 실패했을 때 자동 전환을 쉬는 기간 — Claude Code 가 로그인 정보를 쓰는 잠깐이라 짧게
+    public static let busyRetry: TimeInterval = 30
 }
 
 /// 한도에 걸린 세션 — limitAt 이 있고, 끝남·일시중지·승인 대기가 아니고(승인 대기는 Esc 가 승인을 거절하므로 건드리지 않는다), 6시간 안. 차례는 그대로
@@ -108,7 +110,7 @@ public struct AutoSwitchPause: Equatable, Sendable {
 /// 자동 전환 요청이 실패한 뒤의 한도 표시와 쉼. 대상 계정 쪽이면 그 계정만 retryAfter 동안 고르지 않게 표시하고 쉬지 않는다
 /// (다음 판단이 다음 후보를 고른다). 그 밖(지금 계정·시스템 쪽)이면 다른 계정으로 해도 같은 까닭으로 실패하므로 표시는 그대로 두고
 /// 지금 계정이 바뀌거나 retryAfter 가 지날 때까지 쉰다 — 대상 쪽처럼 표시하면 3초마다 다음 후보를 하나씩 표시해 모두 쓰고, 그 사이
-/// 실패 안내가 거듭 뜬다
+/// 실패 안내가 거듭 뜬다. 쓰기 잠금을 잡지 못했으면(busy) 곧 풀리므로 표시는 그대로 두고 busyRetry 만 쉰 뒤 같은 후보부터 다시 판단한다
 public func autoSwitchFailed(_ side: SwitchFailureSide, target: Account, from current: Account, full: [String: Double],
                              now: Date) -> (full: [String: Double], pause: AutoSwitchPause?) {
     let until = now.addingTimeInterval(AutoSwitchRule.retryAfter)
@@ -119,6 +121,8 @@ public func autoSwitchFailed(_ side: SwitchFailureSide, target: Account, from cu
         return (marks, nil)
     case .other:
         return (full, AutoSwitchPause(account: current.id, until: until))
+    case .busy:
+        return (full, AutoSwitchPause(account: current.id, until: now.addingTimeInterval(AutoSwitchRule.busyRetry)))
     }
 }
 

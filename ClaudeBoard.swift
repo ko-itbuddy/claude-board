@@ -604,7 +604,7 @@ func withFileLock<T>(_ file: String, _ body: () throws -> T) throws -> T {
     while mkdir(lock, 0o755) != 0 {
         guard errno == EEXIST else { throw AccountError("잠금을 만들지 못했습니다: \(lock)") }
         if let m = mtime(lock), Date().timeIntervalSince(m) > 15 { rmdir(lock); continue }
-        guard Date() < deadline else { throw AccountError("Claude Code 가 로그인 정보를 쓰는 중입니다. 잠시 뒤 다시 시도해 주세요") }
+        guard Date() < deadline else { throw AccountError("Claude Code 가 로그인 정보를 쓰는 중입니다. 잠시 뒤 다시 시도해 주세요", side: .busy) }
         Thread.sleep(forTimeInterval: 0.1)
     }
     defer { rmdir(lock) }
@@ -1137,6 +1137,9 @@ final class AutoSwitcher {
                 switch side {
                 case .target:
                     self.log("\(next.email) 로 전환하지 못함 (1시간 동안 고르지 않음): \(e.localizedDescription)")
+                case .busy:
+                    // 쓰기 잠금은 곧 풀린다 — 알리지 않고 잠깐 쉰 뒤 같은 후보로 다시 해 본다
+                    self.log("\(next.email) 로 전환하지 못함, \(Int(AutoSwitchRule.busyRetry))초 뒤 다시: \(e.localizedDescription)")
                 case .other:
                     self.log("\(next.email) 로 전환하지 못함, 지금 계정이 바뀌거나 1시간이 지날 때까지 자동 전환을 쉼: \(e.localizedDescription)")
                     self.accounts.flash("사용 한도에 도달해 \(next.email) 계정으로 자동 전환하려 했지만 하지 못했습니다: \(e.localizedDescription). "

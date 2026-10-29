@@ -259,6 +259,23 @@ private func decide(current: String = "A", limits: [LimitSpec], full: [String: D
         #expect(r.pause == AutoSwitchPause(account: id("A"), until: n0 + 3600))
     }
 
+    @Test("쓰기 잠금을 잡지 못한 실패(곧 풀림) — 표시는 그대로 두고 30초만 쉰 뒤 같은 후보부터 다시 판단한다") func 잠금_중() {
+        let limits = [LimitSpec("5h", 100, 7200)]
+        let first = decide(limits: limits, full: [:], pause: nil, at: 0)
+        let after = autoSwitchFailed(.busy, target: account("B"), from: account("A"), full: first.full ?? [:], now: n0)
+        #expect(after.full == first.full ?? [:])
+        #expect(after.pause == AutoSwitchPause(account: id("A"), until: n0 + 30))
+        #expect(describe(decide(limits: limits, full: after.full, pause: after.pause, at: 27).move) == "stay")
+        #expect(describe(decide(limits: limits, full: after.full, pause: after.pause, at: 30).move) == "switch A→B [5시간 한도 100%]")
+    }
+
+    @Test("실패 오류의 쪽 — AccountError 가 담은 쪽, 그 밖의 오류는 그 밖") func 오류의_쪽() {
+        #expect(switchFailureSide(AccountError("잠금", side: .busy)) == .busy)
+        #expect(switchFailureSide(AccountError("대상", side: .target)) == .target)
+        #expect(switchFailureSide(AccountError("기본")) == .other)
+        #expect(switchFailureSide(CocoaError(.fileWriteUnknown)) == .other)
+    }
+
     @Test("대상 쪽 실패 뒤 다음 판단은 다음 후보로 — 그 계정을 건너뛴다") func 대상_쪽_다음_후보() {
         let limits = [LimitSpec("5h", 100, 7200)]
         let first = decide(limits: limits, full: [:], pause: nil, at: 0)
