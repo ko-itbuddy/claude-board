@@ -1277,7 +1277,7 @@ struct SystemTerminalApps: TerminalApps {
         // 권한 거부 같은 AppleScript 오류는 board.log 에 남긴다 — 보드 화면에는 드러나지 않기 때문
         if let err {
             let line = "\(Date()) \(err[NSAppleScript.errorNumber] ?? "") \(err[NSAppleScript.errorMessage] ?? "")\n"
-            let log = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/notifier/board.log")
+            let log = boardLogPath(home: NSHomeDirectory())   // boardLog 와 같은 자리(BoardRules). 이쪽은 파일이 없으면 만든다
             if let h = FileHandle(forWritingAtPath: log) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
             else { FileManager.default.createFile(atPath: log, contents: Data(line.utf8)) }
         }

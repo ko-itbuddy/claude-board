@@ -237,9 +237,10 @@ func terminalFontConfiguration() -> TerminalConfiguration {
     return TerminalConfiguration().fontSize(Float(size))
 }
 
-// ~/.claude/notifier/board.log 에 한 줄 남긴다 — 보드는 그대로 동작해야 하는 문제(단축키 등록 실패 등)를 적는다
+// ~/.claude/notifier/board.log 에 한 줄 남긴다 — 보드는 그대로 동작해야 하는 문제(단축키 등록 실패 등)를 적는다.
+// 자리는 BoardRules 의 boardLogPath(AppleScript 오류 기록과 같은 자리). 파일이 없으면 쓰지 않는다
 func boardLog(_ message: String) {
-    if let h = FileHandle(forWritingAtPath: NSHomeDirectory() + "/.claude/notifier/board.log") {
+    if let h = FileHandle(forWritingAtPath: boardLogPath(home: NSHomeDirectory())) {
         h.seekToEndOfFile(); h.write("\(Date()) \(message)\n".data(using: .utf8)!); h.closeFile()
     }
 }
