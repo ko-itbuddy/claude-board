@@ -53,7 +53,7 @@ struct L: Equatable, Sendable, CustomStringConvertible {
     var description: String { "\(id)|\(label)|\(pct)|\(resets.map(String.init) ?? "nil")" }
 }
 
-// 응답 예 — 실제 응답(2026-10, 아직 five_hour 가 오던 때)에서 쓰는 필드만 남긴 것. resets_at 은 마이크로초까지 온다
+// 응답 예 — 실제 응답(2026-10)에서 쓰는 필드만 남긴 것. resets_at 은 마이크로초까지 온다
 private let msFive: Int64 = 1_793_184_600_697           // 2026-10-28T10:50:00.697299+00:00
 private let msWeek: Int64 = 1_793_257_200_697           // 2026-10-29T07:00:00.697320+00:00
 private let msFable: Int64 = 1_793_257_199_697          // 2026-10-29T06:59:59.697480+00:00
@@ -67,8 +67,11 @@ private let realistic = #"""
   {"kind":"weekly_scoped","percent":0,"resets_at":"2026-10-29T06:59:59.697480+00:00","scope":{"model":{"id":null,"display_name":"Fable"},"surface":null}}
  ]}
 """#
-// 2026-11 실제 응답 모양 — Claude 에서 5시간 한도가 없어져 five_hour 가 null, limits 에 session 이 없다(장난감 값, 쓰는 필드만)
-private let realisticNov = #"""
+private let fiveOnly = #"{"five_hour":{"utilization":42,"resets_at":"2026-10-28T10:50:00Z"}}"#
+private let fiveOnlyLimits = [L("5h", "5시간", 42, 1_793_184_600_000)]
+private let realisticLimits = [L("5h", "5시간", 5, msFive), L("7d", "주간 · 전체", 13, msWeek), L("7d-Fable", "주간 · Fable", 0, msFable)]
+// 2026-11 실제 응답 모양(5시간 한도가 없는 요금제, Ultra) — five_hour 가 null, limits 에 session 이 없다(장난감 값, 쓰는 필드만)
+private let realisticNoFive = #"""
 {"five_hour":null,
  "seven_day":{"utilization":25.0,"resets_at":"2026-11-05T07:00:00.191505+00:00"},
  "seven_day_opus":null,
@@ -77,12 +80,7 @@ private let realisticNov = #"""
   {"kind":"weekly_scoped","percent":0,"resets_at":"2026-11-05T07:00:00+00:00","scope":{"model":{"id":null,"display_name":"Fable"},"surface":null},"is_active":false}
  ]}
 """#
-private let msNovWeek: Int64 = 1_793_862_000_191       // 2026-11-05T07:00:00.191505+00:00
-private let msNovFable: Int64 = 1_793_862_000_000      // 2026-11-05T07:00:00+00:00
-private let realisticNovLimits = [L("7d", "주간 · 전체", 25, msNovWeek), L("7d-Fable", "주간 · Fable", 0, msNovFable)]
-private let weekOnly = #"{"seven_day":{"utilization":42,"resets_at":"2026-10-28T10:50:00Z"}}"#
-private let weekOnlyLimits = [L("7d", "주간 · 전체", 42, 1_793_184_600_000)]
-private let realisticLimits = [L("7d", "주간 · 전체", 13, msWeek), L("7d-Fable", "주간 · Fable", 0, msFable)]
+private let realisticNoFiveLimits = [L("7d", "주간 · 전체", 25, 1_793_862_000_191), L("7d-Fable", "주간 · Fable", 0, 1_793_862_000_000)]
 
 // MARK: - 사용량 API 응답 해석
 
@@ -93,62 +91,62 @@ struct ParseRow: Row {
 }
 
 private let parseRows: [ParseRow] = [
-    .init(note: "2026-11 실제 응답 모양 — five_hour 가 null 이어도 주간 전체·모델별 주간을 보인다", json: realisticNov, expected: realisticNovLimits),
-    .init(note: "주간만", json: weekOnly, expected: weekOnlyLimits),
-    .init(note: "5시간만 → 5시간은 보지 않아 푼 한도가 없음 → 실패", json: #"{"five_hour":{"utilization":42,"resets_at":"2026-10-28T10:50:00Z"}}"#, expected: nil),
-    .init(note: "5시간 + 주간 → 5시간은 보지 않고 주간만", json: #"{"five_hour":{"utilization":5,"resets_at":"2026-10-28T10:50:00Z"},"seven_day":{"utilization":13.5,"resets_at":"2026-10-29T07:00:00Z"}}"#,
-          expected: [L("7d", "주간 · 전체", 13.5, 1_793_257_200_000)]),
-    .init(note: "2026-10 실제 응답 모양 — five_hour 는 보지 않고, limits 의 session·weekly_all 도 보지 않고 weekly_scoped 만", json: realistic, expected: realisticLimits),
+    .init(note: "5시간만", json: fiveOnly, expected: fiveOnlyLimits),
+    .init(note: "5시간 + 주간", json: #"{"five_hour":{"utilization":5,"resets_at":"2026-10-28T10:50:00Z"},"seven_day":{"utilization":13.5,"resets_at":"2026-10-29T07:00:00Z"}}"#,
+          expected: [L("5h", "5시간", 5, 1_793_184_600_000), L("7d", "주간 · 전체", 13.5, 1_793_257_200_000)]),
+    .init(note: "실제 응답 모양 — limits 의 session·weekly_all 은 보지 않고 weekly_scoped 만", json: realistic, expected: realisticLimits),
     .init(note: "모델별 주간 여러 개 — 응답 차례대로, 값은 percent", json: #"""
           {"five_hour":{"utilization":1},"limits":[
            {"kind":"weekly_scoped","percent":30,"scope":{"model":{"display_name":"Opus"}}},
            {"kind":"weekly_scoped","percent":70.5,"scope":{"model":{"display_name":"Fable"}}}]}
-          """#, expected: [L("7d-Opus", "주간 · Opus", 30), L("7d-Fable", "주간 · Fable", 70.5)]),
+          """#, expected: [L("5h", "5시간", 1), L("7d-Opus", "주간 · Opus", 30), L("7d-Fable", "주간 · Fable", 70.5)]),
     .init(note: "모델 이름이 없으면(scope null·model 없음·display_name null) \"모델\"", json: #"""
           {"five_hour":{"utilization":1},"limits":[{"kind":"weekly_scoped","percent":9,"scope":null}]}
-          """#, expected: [L("7d-모델", "주간 · 모델", 9)]),
+          """#, expected: [L("5h", "5시간", 1), L("7d-모델", "주간 · 모델", 9)]),
     .init(note: "display_name null 도 \"모델\"", json: #"""
           {"five_hour":{"utilization":1},"limits":[{"kind":"weekly_scoped","percent":9,"scope":{"model":{"display_name":null}}}]}
-          """#, expected: [L("7d-모델", "주간 · 모델", 9)]),
+          """#, expected: [L("5h", "5시간", 1), L("7d-모델", "주간 · 모델", 9)]),
     .init(note: "이름 없는 모델별 주간이 둘이면 뒤의 것 id 에 -2(라벨은 그대로) — 화면 목록의 id 가 겹치지 않게", json: #"""
           {"five_hour":{"utilization":1},"limits":[{"kind":"weekly_scoped","percent":1},{"kind":"weekly_scoped","percent":2}]}
-          """#, expected: [L("7d-모델", "주간 · 모델", 1), L("7d-모델-2", "주간 · 모델", 2)]),
+          """#, expected: [L("5h", "5시간", 1), L("7d-모델", "주간 · 모델", 1), L("7d-모델-2", "주간 · 모델", 2)]),
     .init(note: "같은 이름이 셋이면 -2·-3, 다른 이름 사이에 끼어도 차례대로", json: #"""
           {"five_hour":{"utilization":1},"limits":[
            {"kind":"weekly_scoped","percent":10,"scope":{"model":{"display_name":"Opus"}}},
            {"kind":"weekly_scoped","percent":20,"scope":{"model":{"display_name":"Fable"}}},
            {"kind":"weekly_scoped","percent":30,"scope":{"model":{"display_name":"Opus"}}},
            {"kind":"weekly_scoped","percent":40,"scope":{"model":{"display_name":"Opus"}}}]}
-          """#, expected: [L("7d-Opus", "주간 · Opus", 10), L("7d-Fable", "주간 · Fable", 20),
+          """#, expected: [L("5h", "5시간", 1), L("7d-Opus", "주간 · Opus", 10), L("7d-Fable", "주간 · Fable", 20),
                            L("7d-Opus-2", "주간 · Opus", 30), L("7d-Opus-3", "주간 · Opus", 40)]),
     .init(note: "붙인 id 가 다른 모델 이름과 겹치면 다음 수로(모델-2 라는 이름이 이미 있으면 -3)", json: #"""
           {"five_hour":{"utilization":1},"limits":[
            {"kind":"weekly_scoped","percent":1},
            {"kind":"weekly_scoped","percent":2,"scope":{"model":{"display_name":"모델-2"}}},
            {"kind":"weekly_scoped","percent":3}]}
-          """#, expected: [L("7d-모델", "주간 · 모델", 1), L("7d-모델-2", "주간 · 모델-2", 2), L("7d-모델-3", "주간 · 모델", 3)]),
+          """#, expected: [L("5h", "5시간", 1), L("7d-모델", "주간 · 모델", 1), L("7d-모델-2", "주간 · 모델-2", 2), L("7d-모델-3", "주간 · 모델", 3)]),
     .init(note: "빠진(숫자 아님) 항목은 id 를 차지하지 않는다 — 같은 이름의 앞 것이 빠지면 뒤의 것이 -2 없이", json: #"""
           {"five_hour":{"utilization":1},"limits":[
            {"kind":"weekly_scoped","percent":"x","scope":{"model":{"display_name":"Opus"}}},
            {"kind":"weekly_scoped","percent":3,"scope":{"model":{"display_name":"Opus"}}}]}
-          """#, expected: [L("7d-Opus", "주간 · Opus", 3)]),
+          """#, expected: [L("5h", "5시간", 1), L("7d-Opus", "주간 · Opus", 3)]),
     .init(note: "weekly_scoped 의 utilization 은 보지 않는다(percent 만)", json: #"""
-          {"seven_day":{"utilization":1},"limits":[{"kind":"weekly_scoped","utilization":50,"scope":{"model":{"display_name":"Opus"}}}]}
-          """#, expected: [L("7d", "주간 · 전체", 1)]),
-    .init(note: "five_hour 없음 → 주간만으로 성공(2026-11 전에는 실패)", json: #"{"seven_day":{"utilization":13}}"#, expected: [L("7d", "주간 · 전체", 13)]),
-    .init(note: "five_hour 가 null(2026-11 실제 응답) → 주간만으로 성공(전에는 실패)", json: #"{"five_hour":null,"seven_day":{"utilization":13}}"#, expected: [L("7d", "주간 · 전체", 13)]),
-    .init(note: "five_hour 만 있고 객체가 아님 → 푼 한도가 없어 실패", json: #"{"five_hour":5}"#, expected: nil),
+          {"five_hour":{"utilization":1},"limits":[{"kind":"weekly_scoped","utilization":50,"scope":{"model":{"display_name":"Opus"}}}]}
+          """#, expected: [L("5h", "5시간", 1)]),
+    .init(note: "2026-11 실제 응답 모양(Ultra, five_hour null) — 5시간 없이 주간 전체·모델별 주간", json: realisticNoFive, expected: realisticNoFiveLimits),
+    .init(note: "five_hour 없음 → 5시간 없이 주간만으로 성공(3.2.5 까지는 실패)", json: #"{"seven_day":{"utilization":13}}"#, expected: [L("7d", "주간 · 전체", 13)]),
+    .init(note: "five_hour 가 null(5시간 한도가 없는 요금제) → 주간만으로 성공(3.2.5 까지는 실패)", json: #"{"five_hour":null,"seven_day":{"utilization":13}}"#,
+          expected: [L("7d", "주간 · 전체", 13)]),
+    .init(note: "five_hour 가 객체가 아니면 5시간만 빠짐 — 다른 한도가 없으면 푼 한도가 없어 실패", json: #"{"five_hour":5}"#, expected: nil),
     .init(note: "five_hour 가 객체가 아니어도 주간이 풀리면 성공", json: #"{"five_hour":5,"seven_day":{"utilization":13}}"#, expected: [L("7d", "주간 · 전체", 13)]),
     .init(note: "JSON 아님 → 실패", json: "not json", expected: nil),
     .init(note: "JSON 배열 → 실패", json: "[]", expected: nil),
     .init(note: "빈 글자 → 실패", json: "", expected: nil),
-    .init(note: "five_hour 값은 무엇이든 보지 않는다(글자)", json: #"{"five_hour":{"utilization":"5"},"seven_day":{"utilization":13}}"#,
+    .init(note: "숫자 아님은 그 항목만 빠짐(5시간 값이 글자)", json: #"{"five_hour":{"utilization":"5"},"seven_day":{"utilization":13}}"#,
           expected: [L("7d", "주간 · 전체", 13)]),
     .init(note: "숫자 아님은 그 항목만 빠짐(주간 null·모델별 percent 글자)", json: #"""
           {"five_hour":{"utilization":5},"seven_day":{"utilization":null},"limits":[{"kind":"weekly_scoped","percent":"x"},{"kind":"weekly_scoped","percent":3,"scope":{"model":{"display_name":"Opus"}}}]}
-          """#, expected: [L("7d-Opus", "주간 · Opus", 3)]),
-    .init(note: "five_hour 만 있으면(값이 숫자가 아님) 푼 한도가 없음 → 실패", json: #"{"five_hour":{"utilization":null}}"#, expected: nil),
-    .init(note: "five_hour 만 있으면(빈 객체) 푼 한도가 없음 → 실패", json: #"{"five_hour":{}}"#, expected: nil),
+          """#, expected: [L("5h", "5시간", 5), L("7d-Opus", "주간 · Opus", 3)]),
+    .init(note: "five_hour 는 있으나 값이 숫자가 아니어서 푼 한도가 없음 → 실패", json: #"{"five_hour":{"utilization":null}}"#, expected: nil),
+    .init(note: "five_hour 가 빈 객체라 푼 한도가 없음 → 실패", json: #"{"five_hour":{}}"#, expected: nil),
     .init(note: "푼 한도가 없음(주간도 숫자 아님·모델별 percent 없음) → 실패", json: #"""
           {"five_hour":{"utilization":null},"seven_day":{"utilization":"13"},"limits":[{"kind":"weekly_scoped","scope":{"model":{"display_name":"Opus"}}}]}
           """#, expected: nil),
@@ -156,34 +154,34 @@ private let parseRows: [ParseRow] = [
     .init(note: "5시간은 못 풀어도 모델별 주간이 풀리면 그대로 성공", json: #"""
           {"five_hour":{"utilization":null},"limits":[{"kind":"weekly_scoped","percent":3,"scope":{"model":{"display_name":"Opus"}}}]}
           """#, expected: [L("7d-Opus", "주간 · Opus", 3)]),
-    .init(note: "seven_day 가 객체가 아니면 그 항목만 빠짐", json: #"{"seven_day":"x","limits":[{"kind":"weekly_scoped","percent":3}]}"#, expected: [L("7d-모델", "주간 · 모델", 3)]),
-    .init(note: "limits 가 배열이 아니면 모델별 주간 없음", json: #"{"seven_day":{"utilization":5},"limits":{"kind":"weekly_scoped","percent":3}}"#,
-          expected: [L("7d", "주간 · 전체", 5)]),
+    .init(note: "seven_day 가 객체가 아니면 그 항목만 빠짐", json: #"{"five_hour":{"utilization":5},"seven_day":"x"}"#, expected: [L("5h", "5시간", 5)]),
+    .init(note: "limits 가 배열이 아니면 모델별 주간 없음", json: #"{"five_hour":{"utilization":5},"limits":{"kind":"weekly_scoped","percent":3}}"#,
+          expected: [L("5h", "5시간", 5)]),
     .init(note: "limits 에 객체 아닌 것이 섞이면 그 원소만 빼고 객체인 원소는 본다", json: #"{"five_hour":{"utilization":5},"limits":[1,{"kind":"weekly_scoped","percent":3}]}"#,
-          expected: [L("7d-모델", "주간 · 모델", 3)]),
+          expected: [L("5h", "5시간", 5), L("7d-모델", "주간 · 모델", 3)]),
     .init(note: "객체 아닌 원소(null·글자·배열·수)가 여럿 섞여도 객체인 원소는 응답 차례대로", json: #"""
           {"five_hour":{"utilization":5},"limits":[null,{"kind":"weekly_scoped","percent":3,"scope":{"model":{"display_name":"Opus"}}},"x",[1],
            {"kind":"weekly_scoped","percent":4,"scope":{"model":{"display_name":"Fable"}}},2.5]}
-          """#, expected: [L("7d-Opus", "주간 · Opus", 3), L("7d-Fable", "주간 · Fable", 4)]),
-    .init(note: "limits 가 객체 아닌 원소뿐이면 모델별 주간 없음", json: #"{"seven_day":{"utilization":5},"limits":[1,"x",null]}"#,
-          expected: [L("7d", "주간 · 전체", 5)]),
+          """#, expected: [L("5h", "5시간", 5), L("7d-Opus", "주간 · Opus", 3), L("7d-Fable", "주간 · Fable", 4)]),
+    .init(note: "limits 가 객체 아닌 원소뿐이면 모델별 주간 없음", json: #"{"five_hour":{"utilization":5},"limits":[1,"x",null]}"#,
+          expected: [L("5h", "5시간", 5)]),
     .init(note: "resets_at 소수 초 있음·없음·null·없음·깨짐", json: #"""
           {"five_hour":{"utilization":1,"resets_at":"2026-10-28T10:50:00.697299+00:00"},"seven_day":{"utilization":2,"resets_at":"2026-10-29T07:00:00+00:00"},
            "limits":[{"kind":"weekly_scoped","percent":3,"resets_at":null,"scope":{"model":{"display_name":"A"}}},
                      {"kind":"weekly_scoped","percent":4,"scope":{"model":{"display_name":"B"}}},
                      {"kind":"weekly_scoped","percent":5,"resets_at":"내일","scope":{"model":{"display_name":"C"}}}]}
-          """#, expected: [L("7d", "주간 · 전체", 2, 1_793_257_200_000),
+          """#, expected: [L("5h", "5시간", 1, msFive), L("7d", "주간 · 전체", 2, 1_793_257_200_000),
                            L("7d-A", "주간 · A", 3), L("7d-B", "주간 · B", 4), L("7d-C", "주간 · C", 5)]),
 ]
 
 @Suite("사용량: 응답 해석") struct UsageParseTests {
-    @Test("five_hour 는 보지 않고, 푼 한도가 하나 이상이어야 성공, 항목마다 숫자가 아니면 그 항목만 뺀다", arguments: parseRows)
+    @Test("five_hour 는 있을 때만 5시간으로 보이고, 푼 한도가 하나 이상이어야 성공, 항목마다 숫자가 아니면 그 항목만 뺀다", arguments: parseRows)
     func 표(_ row: ParseRow) {
         #expect(parseUsage(Data(row.json.utf8))?.map(L.init) == row.expected)
     }
 
     @Test("간략 이름 short·tiny", arguments: [
-        ("5h", "5시간", "5시간", "5"),            // 5시간 갈래는 없앴다(2026-11) — 다른 이름과 같게 첫 글자
+        ("5h", "5시간", "5시간", "5h"),
         ("7d", "주간 · 전체", "주간", "7d"),
         ("7d-Fable", "주간 · Fable", "Fable", "F"),
         ("7d-모델", "주간 · 모델", "모델", "모"),
@@ -283,28 +281,29 @@ struct CacheRow: Row {
 private let cacheRows: [CacheRow] = [
     .init(note: "캐시 없음 → 받는다", modified: nil, content: nil, cached: nil, fetch: true, read: false),
     .init(note: "30초 전 캐시 → 적용만 하고 받지 않는다", modified: -30, content: realistic, cached: realisticLimits, fetch: false, read: true),
-    .init(note: "꼭 120초 → 받지 않는다(넘어야 받는다)", modified: -120, content: weekOnly, cached: weekOnlyLimits, fetch: false, read: true),
-    .init(note: "120초 넘음 → 적용하고 받는다", modified: -120.5, content: weekOnly, cached: weekOnlyLimits, fetch: true, read: true),
-    .init(note: "한참 지난 캐시 → 적용하고 받는다", modified: -86400, content: weekOnly, cached: weekOnlyLimits, fetch: true, read: true),
+    .init(note: "꼭 120초 → 받지 않는다(넘어야 받는다)", modified: -120, content: fiveOnly, cached: fiveOnlyLimits, fetch: false, read: true),
+    .init(note: "120초 넘음 → 적용하고 받는다", modified: -120.5, content: fiveOnly, cached: fiveOnlyLimits, fetch: true, read: true),
+    .init(note: "한참 지난 캐시 → 적용하고 받는다", modified: -86400, content: fiveOnly, cached: fiveOnlyLimits, fetch: true, read: true),
     .init(note: "계정 전환 뒤 trustAfter 전에 쓰인 캐시(상태줄이 늦게 씀) → 읽지도 않고 받는다",
-          modified: -1, content: weekOnly, trustAfter: 2, cached: nil, fetch: true, read: false),
-    .init(note: "trustAfter 와 같은 시각 → 믿지 않는다", modified: 2, content: weekOnly, trustAfter: 2, cached: nil, fetch: true, read: false),
-    .init(note: "trustAfter 뒤에 쓰인 캐시 → 믿는다", modified: -5, content: weekOnly, trustAfter: -10, cached: weekOnlyLimits, fetch: false, read: true),
-    .init(note: "받는 중 + 오래된 캐시 → 적용은 하되 받지 않는다", modified: -300, content: weekOnly, fetching: true, cached: weekOnlyLimits, fetch: false, read: true),
+          modified: -1, content: fiveOnly, trustAfter: 2, cached: nil, fetch: true, read: false),
+    .init(note: "trustAfter 와 같은 시각 → 믿지 않는다", modified: 2, content: fiveOnly, trustAfter: 2, cached: nil, fetch: true, read: false),
+    .init(note: "trustAfter 뒤에 쓰인 캐시 → 믿는다", modified: -5, content: fiveOnly, trustAfter: -10, cached: fiveOnlyLimits, fetch: false, read: true),
+    .init(note: "받는 중 + 오래된 캐시 → 적용은 하되 받지 않는다", modified: -300, content: fiveOnly, fetching: true, cached: fiveOnlyLimits, fetch: false, read: true),
     .init(note: "받는 중 + 캐시 없음 → 받지 않는다", modified: nil, content: nil, fetching: true, cached: nil, fetch: false, read: false),
     .init(note: "깨진 캐시 + 10초 전 → 적용하지 않고, 믿을 캐시가 없는 것과 같게 받는다", modified: -10, content: "{\"five_", cached: nil, fetch: true, read: true),
     .init(note: "깨진 캐시 + 120초 넘음 → 받는다", modified: -200, content: "garbage", cached: nil, fetch: true, read: true),
     .init(note: "깨진 캐시 + 받는 중 → 받지 않는다", modified: -10, content: "garbage", fetching: true, cached: nil, fetch: false, read: true),
-    .init(note: "five_hour 없는 캐시(주간만) → 적용하고 받지 않는다(2026-11 전에는 적용하지 않고 받았다)", modified: -30, content: #"{"seven_day":{"utilization":1}}"#,
+    .init(note: "five_hour 없는 캐시(주간만) → 적용하고 받지 않는다(3.2.5 까지는 적용하지 않고 받았다)", modified: -30, content: #"{"seven_day":{"utilization":1}}"#,
           cached: [L("7d", "주간 · 전체", 1)], fetch: false, read: true),
-    .init(note: "five_hour 가 null 인 캐시(2026-11 실제 꼴) → 적용하고 받지 않는다", modified: -30, content: realisticNov, cached: realisticNovLimits, fetch: false, read: true),
+    .init(note: "five_hour 가 null 인 캐시(2026-11 Ultra 실제 꼴) → 적용하고 받지 않는다", modified: -30, content: realisticNoFive, cached: realisticNoFiveLimits,
+          fetch: false, read: true),
     .init(note: "빈 한도 캐시(푼 한도 없음) + 10초 전 → 깨진 캐시와 같게 받는다", modified: -10, content: #"{"five_hour":{"utilization":null}}"#,
           cached: nil, fetch: true, read: true),
     .init(note: "수정 시각은 있으나 내용을 못 읽음(그 사이 지워짐) → 적용 없이 받는다", modified: -30, content: nil, cached: nil, fetch: true, read: true),
-    .init(note: "수정 시각이 미래(시계 어긋남) + 풀리는 내용 → 적용하고 받는다", modified: 60, content: weekOnly, cached: weekOnlyLimits, fetch: true, read: true),
-    .init(note: "수정 시각이 0.5초 미래 → 적용하고 받는다", modified: 0.5, content: weekOnly, cached: weekOnlyLimits, fetch: true, read: true),
-    .init(note: "지금 막 쓰인 캐시(나이 0) → 적용만 하고 받지 않는다", modified: 0, content: weekOnly, cached: weekOnlyLimits, fetch: false, read: true),
-    .init(note: "수정 시각이 미래 + 받는 중 → 적용하되 받지 않는다", modified: 60, content: weekOnly, fetching: true, cached: weekOnlyLimits, fetch: false, read: true),
+    .init(note: "수정 시각이 미래(시계 어긋남) + 풀리는 내용 → 적용하고 받는다", modified: 60, content: fiveOnly, cached: fiveOnlyLimits, fetch: true, read: true),
+    .init(note: "수정 시각이 0.5초 미래 → 적용하고 받는다", modified: 0.5, content: fiveOnly, cached: fiveOnlyLimits, fetch: true, read: true),
+    .init(note: "지금 막 쓰인 캐시(나이 0) → 적용만 하고 받지 않는다", modified: 0, content: fiveOnly, cached: fiveOnlyLimits, fetch: false, read: true),
+    .init(note: "수정 시각이 미래 + 받는 중 → 적용하되 받지 않는다", modified: 60, content: fiveOnly, fetching: true, cached: fiveOnlyLimits, fetch: false, read: true),
     .init(note: "수정 시각이 미래 + 깨진 내용 → 받는다", modified: 60, content: "garbage", cached: nil, fetch: true, read: true),
 ]
 
@@ -336,13 +335,13 @@ struct FetchRow: Row {
 private let validLogin = #"{"claudeAiOauth":{"accessToken":"TOKEN","expiresAt":2000000000000}}"#
 
 private let fetchRows: [FetchRow] = [
-    .init(note: "로그인 정보 없음 → 부르지 않는다", credentials: nil, reply: weekOnly, called: false, expired: false),
-    .init(note: "JSON 아님 → 부르지 않는다", credentials: "garbage", reply: weekOnly, called: false, expired: false),
-    .init(note: "accessToken 없음 → 부르지 않는다", credentials: #"{"claudeAiOauth":{}}"#, reply: weekOnly, called: false, expired: false),
+    .init(note: "로그인 정보 없음 → 부르지 않는다", credentials: nil, reply: fiveOnly, called: false, expired: false),
+    .init(note: "JSON 아님 → 부르지 않는다", credentials: "garbage", reply: fiveOnly, called: false, expired: false),
+    .init(note: "accessToken 없음 → 부르지 않는다", credentials: #"{"claudeAiOauth":{}}"#, reply: fiveOnly, called: false, expired: false),
     .init(note: "만료 → 부르지 않고 tokenExpired", credentials: #"{"claudeAiOauth":{"accessToken":"TOKEN","expiresAt":999999999}}"#,
-          reply: weekOnly, called: false, expired: true),
+          reply: fiveOnly, called: false, expired: true),
     .init(note: "만료 경계(같은 밀리초) → 부른다", credentials: #"{"claudeAiOauth":{"accessToken":"TOKEN","expiresAt":1000000000}}"#,
-          reply: weekOnly, called: true, expired: false),
+          reply: fiveOnly, called: true, expired: false),
     .init(note: "유효 + 200 → 받은 본문 그대로(여기서 풀지 않는다)", credentials: validLogin, reply: "not usage json", called: true, expired: false),
     .init(note: "유효 + 200 아님 → 본문 없음", credentials: validLogin, reply: nil, called: true, expired: false),
 ]
@@ -376,7 +375,7 @@ struct SettleRow: Row {
 private let settleRows: [SettleRow] = [
     .init(note: "200 + 풀림 → 적용·캐시에 그대로 쓰기·trustAfter 풀기·failed 풀기", data: realistic, shown: false,
           limits: realisticLimits, failed: false, written: true),
-    .init(note: "200 + 풀림, 앞서 보이던 한도 있음 → 같다", data: weekOnly, shown: true, limits: weekOnlyLimits, failed: false, written: true),
+    .init(note: "200 + 풀림, 앞서 보이던 한도 있음 → 같다", data: fiveOnly, shown: true, limits: fiveOnlyLimits, failed: false, written: true),
     .init(note: "200 아님 + 한도 비었음 → failed", data: nil, shown: false, limits: nil, failed: true, written: false),
     .init(note: "200 아님 + 한도 있음 → failed 그대로", data: nil, shown: true, limits: nil, failed: nil, written: false),
     .init(note: "200 이지만 해석 실패 + 한도 비었음 → failed, 캐시에 쓰지 않는다", data: #"{"error":"x"}"#, shown: false, limits: nil, failed: true, written: false),
@@ -400,7 +399,7 @@ private let settleRows: [SettleRow] = [
     func 표(_ row: SettleRow) {
         let cache = FakeUsageCache()
         let trustAfter = u0 + 5                       // 계정을 막 바꾼 뒤
-        let current = row.shown ? [Limit(id: "7d", label: "주간 · 전체", pct: 1, resets: nil)] : []
+        let current = row.shown ? [Limit(id: "5h", label: "5시간", pct: 1, resets: nil)] : []
         let body = data(row.data)
         let settled = settleUsage(UsageFetch(data: body, tokenExpired: row.expired), current: current, trustAfter: trustAfter, cache: cache)
         #expect(settled.limits?.map(L.init) == row.limits)
@@ -423,7 +422,7 @@ private let settleRows: [SettleRow] = [
         cache.remove()
         // 상태줄이 앞 계정 토큰으로 받던 값을 1초 뒤에 늦게 써 넣는다
         cache.modified = u0 + 1
-        cache.content = data(weekOnly)
+        cache.content = data(fiveOnly)
         // 2초 뒤 확인: 그 캐시는 믿지 않고 받는다
         var check = checkUsageCache(cache: cache, clock: FixedClock(now: u0 + 2), trustAfter: trustAfter, fetching: false)
         #expect(check.cached == nil)
@@ -457,12 +456,12 @@ private let settleRows: [SettleRow] = [
             cache.modified = u0 + t + 1          // 받는 동안 상태줄이 또 깨진 내용을 쓴다
         }
         // 받은 응답이 풀리면 캐시에 그대로 쓰고, 다음 확인부터는 그 캐시를 믿어 받지 않는다
-        api.reply = data(weekOnly)
+        api.reply = data(fiveOnly)
         cache.writeAt = u0 + 62
         let settled = settleUsage(fetchUsage(credentials: login, api: api, clock: FixedClock(now: u0 + 61)), current: [], trustAfter: .distantPast, cache: cache)
-        #expect(settled.limits?.map(L.init) == weekOnlyLimits)
+        #expect(settled.limits?.map(L.init) == fiveOnlyLimits)
         let check = checkUsageCache(cache: cache, clock: FixedClock(now: u0 + 90), trustAfter: .distantPast, fetching: false)
-        #expect(check.cached?.map(L.init) == weekOnlyLimits)
+        #expect(check.cached?.map(L.init) == fiveOnlyLimits)
         #expect(!check.fetch)
     }
 }
@@ -481,11 +480,11 @@ func runCacheRow(modified: Double?, body: Data?, trustAfter: Double?, fetching: 
     return (check.cached?.map(\.id), check.fetch)
 }
 
-/// settle 한 번 — body 는 200 으로 받은 본문(nil 이면 200 아님·받지 않음), currentEmpty 는 앞서 보이던 한도가 없는가(있으면 주간 1% 하나).
+/// settle 한 번 — body 는 200 으로 받은 본문(nil 이면 200 아님·받지 않음), currentEmpty 는 앞서 보이던 한도가 없는가(있으면 5시간 1% 하나).
 /// 결과는 받은 한도를 적용하는가, 캐시에 썼는가, 실패 표시(nil 이면 건드리지 않음)
 func runSettleRow(body: Data?, currentEmpty: Bool) -> (applied: Bool, cacheWritten: Bool, failed: Bool?) {
     let cache = FakeUsageCache()
-    let current = currentEmpty ? [] : [Limit(id: "7d", label: "주간 · 전체", pct: 1, resets: nil)]
+    let current = currentEmpty ? [] : [Limit(id: "5h", label: "5시간", pct: 1, resets: nil)]
     let settled = settleUsage(UsageFetch(data: body, tokenExpired: false), current: current, trustAfter: u0 + 5, cache: cache)
     return (settled.limits != nil, !cache.written.isEmpty, settled.failed)
 }

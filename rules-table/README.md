@@ -24,13 +24,12 @@
   "schema": 1,
   "cases": [
     {
-      "id": "usage.parse.no-name-twice-week",
+      "id": "usage.parse.same-model-name-three",
       "rule": "parse",
-      "why": "이름 없는 모델별 주간이 둘이면 id 가 겹친다. 처음 것은 그대로, 뒤의 것은 -2 를 붙인다. 라벨은 그대로",
-      "source": "PR #20",
-      "only": "mac",
-      "input": {"body": {"limits": [{"kind": "weekly_scoped", "percent": 1}, {"kind": "weekly_scoped", "percent": 2}]}},
-      "expect": {"limits": [{"id": "7d-모델", "label": "주간 · 모델", "pct": 1}, {"id": "7d-모델-2", "label": "주간 · 모델", "pct": 2}]}
+      "why": "모델별 주간 한도의 이름이 같으면 id 가 겹친다. 처음 것은 그대로, 뒤의 것은 -2·-3 을 붙인다. 라벨은 그대로",
+      "source": "PR #20 U1",
+      "input": {"body": {"five_hour": {"utilization": 10}}},
+      "expect": {"limits": [{"id": "5h", "label": "5시간", "pct": 10}]}
     }
   ]
 }
@@ -41,6 +40,7 @@
 - `source`: 근거(PR·주인 문장). 선택.
 - `input`·`expect`: 키는 rule 마다 아래 표가 고정한다. **모르는 키가 있으면 돌리는 쪽이 실패한다.**
 - `only`: `"mac"` 또는 `"windows"`. 한 판에만 해당하는 줄에만 붙인다. 붙인 까닭은 같은 줄의 `why` 에 함께 적는다. 없으면 둘 다 돌리는 줄이다.
+- 없앤 줄의 id(다시 쓰지 않는다): `usage.parse.five-hour-ignored-sample` 과 끝이 `-week` 인 usage 줄 열넷(3.2.6 에서 5시간을 모든 요금제에서 뺐다가 3.2.7 에서 되돌림).
 - 시각: **지금 = 0 기준 초**(음수 = 과거). 한도 `resets` 도 초(Windows 는 ms 로 바꿔 넣는다).
   단 `parse` 의 expect `resets` 는 응답의 `resets_at` 을 푼 **1970 기준 ms**(지금과 관계없는 절대 시각)다.
 - 계정: 이름 `"A"` 는 id `"A|org"`, 이메일은 `"a@example.com"` 처럼 쓴다.
