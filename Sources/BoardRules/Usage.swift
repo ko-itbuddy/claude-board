@@ -2,6 +2,7 @@
 // (UsageStore 에 있던 것을 옮김, 동작은 그대로). 바깥(사용량 캐시·로그인 정보·사용량 API·시계)은 포트(Ports.swift)로만 부른다.
 // 옮긴 뒤 고친 것(이슈 #9 2차): 못 푸는 캐시와 수정 시각이 미래인 캐시는 받고, 푼 한도가 하나도 없는 응답은 실패로 본다.
 // (3차): 모델별 주간의 id 가 겹치면 뒤의 것에 -2·-3 … 을 붙이고, limits 에 섞인 객체 아닌 원소는 그것만 뺀다.
+// (2026-11): Claude 에서 5시간 한도가 없어져 API 가 five_hour 를 null 로 준다 — five_hour 를 요구하지도 읽지도 않는다.
 //
 // 모양: 유스케이스 셋 — 캐시 확인(checkUsageCache, 메인) → 받기(fetchUsage, 백그라운드) → 받은 결과 처리(settleUsage, 메인).
 // 받기와 처리 사이에 앱의 계정 전환 세대 확인이 낀다: 받는 사이 계정을 바꿨으면 받은 값은 앞 계정 것이라 캐시에 쓰지도 않고 버린다.
@@ -11,7 +12,7 @@
 // @Published 를 다시 쓰는 때(화면이 다시 그려지는 때)가 달라진다
 import Foundation
 
-// 요금제 사용 한도: 5시간·주간(전체)·주간(모델별 — 예: Fable)
+// 요금제 사용 한도: 주간(전체)·주간(모델별 — 예: Fable). 5시간 한도는 2026-11 에 Claude 에서 없어져 읽지 않는다
 public struct Limit: Equatable, Identifiable, Sendable {
     public let id: String
     public let label: String
@@ -22,24 +23,24 @@ public struct Limit: Equatable, Identifiable, Sendable {
         self.id = id; self.label = label; self.pct = pct; self.resets = resets
     }
 
-    // 간략 모드 이름 — 5시간 · 주간 · 모델 이름(Fable). 더 좁으면 5h · 7d · 첫 글자
+    // 간략 모드 이름 — 주간 · 모델 이름(Fable). 더 좁으면 7d · 첫 글자
     public var short: String {
-        id == "5h" ? "5시간" : id == "7d" ? "주간" : (label.components(separatedBy: "·").last ?? label).trimmingCharacters(in: .whitespaces)
+        id == "7d" ? "주간" : (label.components(separatedBy: "·").last ?? label).trimmingCharacters(in: .whitespaces)
     }
-    public var tiny: String { id == "5h" ? "5h" : id == "7d" ? "7d" : String(short.prefix(1)) }
+    public var tiny: String { id == "7d" ? "7d" : String(short.prefix(1)) }
 }
 
 // MARK: - 사용량 API 응답 해석
 
-/// 사용량 API 응답(캐시 파일도 같은 형식)을 한도 목록으로 푼다. JSON 이 아니거나 five_hour 가 없으면 nil(실패).
+/// 사용량 API 응답(캐시 파일도 같은 형식)을 한도 목록으로 푼다. JSON 객체가 아니면 nil(실패).
+/// five_hour 는 있든 없든·null 이든 보지 않는다(2026-11 에 Claude 에서 5시간 한도가 없어져 API 가 null 로 준다 — 전에는 없으면 실패였다).
 /// 항목마다 값이 숫자가 아니면 그 항목만 뺀다. 푼 한도가 하나도 없어도 nil(실패) — 빈 "성공" 을 적용하고 캐시에 쓰면
-/// 보이던 한도가 사라지고 상태줄도 그 빈 캐시를 믿는다. 5시간을 못 풀어도 다른 한도가 풀리면 성공이다.
-/// 차례: 5시간 → 주간 전체 → limits 의 weekly_scoped(모델별, 응답 차례). limits 는 객체인 원소만 본다(다른 원소가 섞여도 그것만 뺀다).
+/// 보이던 한도가 사라지고 상태줄도 그 빈 캐시를 믿는다.
+/// 차례: 주간 전체 → limits 의 weekly_scoped(모델별, 응답 차례). limits 는 객체인 원소만 본다(다른 원소가 섞여도 그것만 뺀다).
 /// id 는 화면 목록(ForEach)의 id 라 유일해야 한다 — 모델별 주간의 이름이 같거나 이름이 없어 둘 다 "모델" 이면 7d-<이름> 이 겹치므로,
 /// 뺀 항목을 빼고 앞에서부터 처음 것은 그대로, 뒤의 것은 -2·-3 … 을 붙여 아직 없는 id 로 한다. 라벨은 그대로 둔다
 public func parseUsage(_ data: Data) -> [Limit]? {
-    guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let five = j["five_hour"] as? [String: Any] else { return nil }
+    guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
     var out: [Limit] = []
     var ids = Set<String>()
     func add(_ id: String, _ label: String, _ o: [String: Any]?, _ key: String) {
@@ -49,7 +50,6 @@ public func parseUsage(_ data: Data) -> [Limit]? {
         ids.insert(unique)
         out.append(Limit(id: unique, label: label, pct: v, resets: isoDate(o["resets_at"] as? String)))
     }
-    add("5h", "5시간", five, "utilization")
     add("7d", "주간 · 전체", j["seven_day"] as? [String: Any], "utilization")
     let scoped = (j["limits"] as? [Any] ?? []).compactMap { $0 as? [String: Any] }
     for l in scoped where l["kind"] as? String == "weekly_scoped" {

@@ -545,7 +545,7 @@ struct SettingsView: View {
                                         minus: { fontScale.change(-1) }, plus: { fontScale.change(1) }, reset: { fontScale.change(nil) }))
             },
             SettingsItem(id: "usageCompact", section: .board, card: "보드", title: "사용 한도 간략히 보기",
-                         detail: "5시간·주간 한도 칸을 한 줄로 줄입니다", keywords: "사용량 한도") {
+                         detail: "주간 한도 칸을 한 줄로 줄입니다", keywords: "사용량 한도") {
                 AnyView(SettingsSwitch(isOn: $usageCompact))
             },
         ]
@@ -562,7 +562,7 @@ struct SettingsView: View {
                 }))
             },
             SettingsItem(id: "autoSwitch", section: .account, card: "자동 전환", title: "한도가 차면 다른 계정으로 자동 전환",
-                         detail: "5시간·주간 한도가 차거나 세션이 한도에 걸려 멈추면 저장한 다른 계정으로 바꾸고, 멈춘 세션을 이어서 진행합니다") {
+                         detail: "주간 한도가 차거나 세션이 한도에 걸려 멈추면 저장한 다른 계정으로 바꾸고, 멈춘 세션을 이어서 진행합니다") {
                 AnyView(AccountAutoSwitch(accounts: app.accounts))
             },
         ]

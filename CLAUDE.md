@@ -267,7 +267,8 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
 - 설치 경로는 두 가지다: `packaging/install.sh`(curl 설치·업데이트, 보드의 업데이트 단추도 이것을 실행)와 dmg 안의 pkg(`pkg/scripts/postinstall` → `user-setup.sh`). 둘 다 사용자 설정은 앱 안의 `user-setup.sh` 가 맡는다.
   `install.sh` 차례: 받기·서명 확인 → 보드와의 관계 `board_relation`(조상의 설치된 보드 바로 아래가 탭의 `login` 이면 `tab`, 아니면 `updater`(보드 → `bash -c`), 조상에 없으면 `outside`) → `outside` 이고 보드가 떠 있으면 바꿔 끼우기 전에 지금 깔린 앱으로 `--action quit -` 을 보내 정상 종료를 청한다(`ask_board_quit`: 5초 안에 `asking` 이 없으면 요청을 모르는 옛 보드라 3단계에서 `pkill`, 있으면 꺼질 때까지 10분까지 기다리고 `cancel` 이면 아무것도 바꾸지 않고 멈춤) → 바꿔 끼우기 → `updater` 는 `pkill -a`(보드가 이미 확인 창을 거침), `outside` 는 남은 것 `pkill -x` → `user-setup.sh` 가 LaunchAgent 를 `bootout`·`bootstrap` 해 새 앱을 띄운다. `tab` 이면 보드를 끄지 않고 `CLAUDE_BOARD_KEEP_RUNNING` 으로 `user-setup.sh` 의 `launchctl`·`open` 도 건너뛴다(LaunchAgent 로 뜬 보드는 `bootout` 이 확인 없이 끄고, 그 안에서 돌던 설치도 함께 끊긴다).
 - 저장소 `suhojang/claude-board` 와 릴리스 파일 이름 `ClaudeBoard.zip`·`install.sh`·`VERSION` 은 `release.sh`·`install.sh`·`Sources/ClaudeBoard/AppUpdate.swift`(`releaseRepo`) 가 함께 쓴다 — 이름을 바꾸면 이미 설치된 앱의 업데이트가 깨진다.
-- `install.sh` 는 서명 인증서의 SHA1(`CERT_SHA1`)을 고정해 확인한다. 인증서를 바꾸면 기존 사용자의 업데이트가 거부되고 Ghostty 제어 권한을 다시 묻는다.
+- `install.sh` 는 서명 인증서의 SHA1(`CERT_SHA1`)을 고정해 확인한다. 업데이트 단추는 새 릴리스의 install.sh 를 받으므로 인증서를 바꾸면 같은 릴리스에서 `CERT_SHA1` 도 새 지문으로 바꾼다(옛 지문이 남으면 업데이트가 거부된다). 사용자 Mac 은 Ghostty 제어 권한을 다시 묻는다.
+  3.2.6(2026-11-03)에서 배포 Mac 포맷으로 개인 키를 잃어 한 번 바꿨다 — 개인 키는 로그인 키체인에만 있으니 포맷 전에 p12 로 내보내 둔다.
 
 ## 저장소 관례
 

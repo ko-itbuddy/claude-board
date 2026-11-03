@@ -197,7 +197,7 @@ private func record(_ json: String) throws -> [String: Any] {
         ([("/a", "waiting", 0.0), ("/b", "working", 50.0)], [], ["/a", "/b"]),           // 급한 것이 최근 것보다 먼저
         ([("/a", "paused", 1.0), ("/b", "idle", 2.0)], [], ["/b", "/a"]),                // paused·idle 은 같은 급
         ([("/a", "idle", 1.0)], ["/없는 카드"], ["/a"]),
-    ])
+    ] as [([(String, String, Double)], [String], [String])])   // 형을 적지 않으면 Swift 6.4 가 형 검사 시간 한도를 넘는다
     func 순서(cards: [(String, String, Double)], pinned: [String], expected: [String]) {
         let groups = groupSessions(cards.map { session($0.0 + "-s", dir: $0.0, state: $0.1, updated: $0.2) })
         #expect(sortGroups(groups, pinned: pinned).map(\.id) == expected)
