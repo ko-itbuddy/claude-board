@@ -185,7 +185,7 @@ func resetText(_ d: Date?, _ now: Date) -> String {
     return "\(left) 뒤 · \((s >= 86400 ? dayHourMinute : hourMinute).string(from: d))"
 }
 
-// 사용 한도 카드: 주간 전체·주간 모델별 막대(5시간 한도는 2026-11 에 Claude 에서 없어져 보이지 않는다). 머리에 로그인 계정(눌러서 전환), 오른쪽 위 단추로 간략(한 줄)·상세를 바꾼다
+// 사용 한도 카드: 5시간·주간 전체·주간 모델별 막대. 머리에 로그인 계정(눌러서 전환), 오른쪽 위 단추로 간략(한 줄)·상세를 바꾼다
 struct UsagePanel: View {
     @ObservedObject var usage: UsageStore
     @ObservedObject var accounts: AccountStore
@@ -426,7 +426,7 @@ struct AccountChip: View {
         menu.addItem(.separator())
         let auto = ActionItem("한도가 차면 다른 계정으로 자동 전환") { accounts.autoSwitch.toggle() }
         auto.state = accounts.autoSwitch ? .on : .off
-        auto.toolTip = "주간 한도가 차거나 세션이 한도에 걸려 멈추면 저장한 다른 계정으로 바꾸고, 멈춘 세션(Ghostty)을 이어서 진행합니다"
+        auto.toolTip = "5시간·주간 한도가 차거나 세션이 한도에 걸려 멈추면 저장한 다른 계정으로 바꾸고, 멈춘 세션(Ghostty)을 이어서 진행합니다"
         menu.addItem(auto)
         menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
     }

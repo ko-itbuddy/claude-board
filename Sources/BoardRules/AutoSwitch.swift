@@ -3,7 +3,7 @@
 // 5시간·주간(전체)만 본다, 전환 실패를 까닭의 쪽으로 갈라 지금 계정·시스템 쪽이면 후보를 쓰지 않고 쉰다. 그 뒤에 고친 것: 지금 계정을 모르는데
 // 떠날 까닭이 있으면 조용히 그대로 두지 않고 unknownCurrent 로 알린다). 바깥을 부르지 않는 순수 함수이고 시각은 받는다.
 //
-// 지금 계정의 주간 한도가 차거나 세션이 한도에 걸려 멈추면 저장한 다른 계정으로 바꾸고, 한도로 멈췄던 세션에 이어서 진행하라는 요청을 넣는다.
+// 지금 계정의 5시간·주간 한도가 차거나 세션이 한도에 걸려 멈추면 저장한 다른 계정으로 바꾸고, 한도로 멈췄던 세션에 이어서 진행하라는 요청을 넣는다.
 // 다른 계정의 남은 한도는 미리 알 수 없어(저장한 토큰은 그 계정으로 전환해야 갱신된다) 그 계정이 지금 계정이었을 때 한도가 찼던 기록(full)으로 고른다.
 // 판단은 바꿀 값과 할 일만 돌려준다 — 타이머·UserDefaults(autoSwitchLast·autoSwitchFull)·로그·터미널 조작·안내·전환 실행은 앱(AutoSwitcher)이 한다
 import Foundation
@@ -30,8 +30,7 @@ public func limitedSessions(_ sessions: [Session], now: Date) -> [Session] {
 /// 이어 가기 표지 — "세션 id@한도 시각(1970 기준 초)". 같은 한도에는 한 번만 넣는다
 public func resumeKey(id: String, limitAt: Date) -> String { "\(id)@\(limitAt.timeIntervalSince1970)" }
 
-/// 계정에서 떠나게 하는 찬 한도 — 5시간·주간(전체)이 100% 이상. 모델별 주간은 그 모델을 쓰는 세션만 막아 보지 않는다.
-/// 2026-11 부터 parseUsage 가 5시간(5h)을 만들지 않아 실제로는 주간(전체)만 걸린다 — 5h 갈래는 Windows 판과 함께 쓰는 표(rules-table/autoswitch.json) 때문에 그대로 둔다
+/// 계정에서 떠나게 하는 찬 한도 — 5시간·주간(전체)이 100% 이상. 모델별 주간은 그 모델을 쓰는 세션만 막아 보지 않는다
 /// (그 모델에 걸린 세션은 세션 쪽 까닭으로 떠난다). 떠날 까닭과 한도 표시 기간이 같은 판정을 쓴다
 private func blocksAccount(_ l: Limit) -> Bool { (l.id == "5h" || l.id == "7d") && l.pct >= 100 }
 
@@ -143,7 +142,7 @@ public func decideAutoSwitch(sessions: [Session], limits: [Limit], current: Acco
     var move = AutoSwitchMove.stay
     var marks: [String: Double]?
     let resting = current.map { pause?.holds(current: $0.id, now: now) ?? false } ?? (pause.map { now < $0.until } ?? false)
-    // 1) 전환 — 지금 계정으로 새로 한도에 걸린 세션이 있거나, 지금 계정의 주간 한도가 찼다(5h 는 blocksAccount 주석)
+    // 1) 전환 — 지금 계정으로 새로 한도에 걸린 세션이 있거나, 지금 계정의 5시간·주간 한도가 찼다
     if !pending, !switching, !resting, now > settled,
        let reason = autoSwitchReason(limited: limited, limits: limits, settled: settled, now: now) {
         if let cur = current {
