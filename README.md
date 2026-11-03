@@ -199,7 +199,7 @@ curl -fsSL https://raw.githubusercontent.com/suhojang/claude-board/main/packagin
 1. [CHANGELOG.md](CHANGELOG.md) 맨 위에 새 버전 항목을 쓰고 commit · push 합니다.
 2. `packaging/release.sh <버전>` 을 실행하면 앱을 빌드 · 서명하고 GitHub 릴리스를 만듭니다. 릴리스 설명은 CHANGELOG 의 그 버전 항목입니다.
 
-서명에는 `packaging/make-cert.sh` 로 만든 개인 인증서(Claude Board Signing)가 필요합니다. 인증서를 바꾸면 사용자 Mac 에서 Ghostty 제어 권한을 다시 묻고, `install.sh` 가 설치를 거부합니다.
+서명에는 `packaging/make-cert.sh` 로 만든 개인 인증서(Claude Board Signing)가 필요합니다. 인증서를 바꾸면 `packaging/install.sh` 의 `CERT_SHA1` 도 새 지문으로 바꿔 같은 릴리스에 실어야 합니다(옛 지문이면 `install.sh` 가 설치를 거부합니다). 사용자 Mac 에서는 Ghostty 제어 권한을 다시 묻습니다. 3.2.6 에서 한 번 바꿨습니다.
 
 ## 🤝 기여
 

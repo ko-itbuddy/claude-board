@@ -6,7 +6,7 @@
 set -e
 REPO="suhojang/claude-board"
 # 앱 서명 인증서(Claude Board Signing) — 인증서가 바뀌면 Ghostty 제어 권한을 다시 물어야 하므로 다른 인증서로 서명된 앱은 설치하지 않는다
-CERT_SHA1="a4ad1a544ebf9e6662c18b2cec24a9fe3f828eff"
+CERT_SHA1="a2400f36a8ea66f3fb82b73475cb19bd4d761519"
 APP="/Applications/Claude Board.app"
 
 # 설치된 보드와 이 스크립트의 관계 — tab(보드 안 터미널) · updater(보드의 업데이트 단추) · outside(보드 밖)를 찍는다.
