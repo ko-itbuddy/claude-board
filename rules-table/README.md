@@ -24,12 +24,13 @@
   "schema": 1,
   "cases": [
     {
-      "id": "usage.parse.same-model-name-three",
+      "id": "usage.parse.no-name-twice-week",
       "rule": "parse",
-      "why": "모델별 주간 한도의 이름이 같으면 id 가 겹친다. 처음 것은 그대로, 뒤의 것은 -2·-3 을 붙인다. 라벨은 그대로",
-      "source": "PR #20 U1",
-      "input": {"body": {"five_hour": {"utilization": 10}}},
-      "expect": {"limits": [{"id": "5h", "label": "5시간", "pct": 10}]}
+      "why": "이름 없는 모델별 주간이 둘이면 id 가 겹친다. 처음 것은 그대로, 뒤의 것은 -2 를 붙인다. 라벨은 그대로",
+      "source": "PR #20",
+      "only": "mac",
+      "input": {"body": {"limits": [{"kind": "weekly_scoped", "percent": 1}, {"kind": "weekly_scoped", "percent": 2}]}},
+      "expect": {"limits": [{"id": "7d-모델", "label": "주간 · 모델", "pct": 1}, {"id": "7d-모델-2", "label": "주간 · 모델", "pct": 2}]}
     }
   ]
 }
