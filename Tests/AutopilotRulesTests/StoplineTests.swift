@@ -35,6 +35,24 @@ private let stopWaitRows: [StopWaitRow] = [
           want: "\(T + 720) 계정 주간 사용률 90% 가 멈출 선 80% 에 닿아 새 단위를 시작하지 않고 10월 26일 07:45 까지 기다립니다."),
     .init(note: "5시간 창이 초기화됐으면 0", usage: ["five_hour": 0.97, "five_hour_resets": T - 5], line: [:], want: "go"),
     .init(note: "멈출 선 100% 는 사용률 100% 에서만", usage: ["seven_day": 0.99], line: ["seven_day": 1.0, "five_hour": 1.0], want: "go"),
+    .init(note: "5시간 칸이 없는 계정(Ultra)은 주간 선만 본다: 선 아래면 지나간다(2026-11)", usage: ["seven_day": 0.26, "seven_day_resets": T + 86_400],
+          line: ["seven_day": 0.8, "five_hour": 0.95], want: "go"),
+    .init(note: "5시간 칸이 없는 계정(Ultra)도 주간 선에 닿으면 기다린다(2026-11)", usage: ["seven_day": 0.85, "seven_day_resets": T + 86_400],
+          line: ["seven_day": 0.8, "five_hour": 0.95],
+          want: "\(T + 86_400 + 120) 계정 주간 사용률 85% 가 멈출 선 80% 에 닿아 새 단위를 시작하지 않고 10월 27일 07:35 까지 기다립니다."),
+]
+
+struct ShowFiveRow: Row {
+    let note: String
+    let usage: [String: Double]?
+    let want: Bool
+}
+private let showFiveRows: [ShowFiveRow] = [
+    .init(note: "아직 사용률을 읽지 못했으면 보인다(모름)", usage: nil, want: true),
+    .init(note: "시각만 있는 빈 사용량도 모름이라 보인다", usage: ["at": T], want: true),
+    .init(note: "5시간 값이 있으면 보인다", usage: ["five_hour": 0.1, "seven_day": 0.3], want: true),
+    .init(note: "5시간만 읽었어도 보인다", usage: ["five_hour": 0], want: true),
+    .init(note: "주간은 읽었는데 5시간 값이 없으면(5시간 한도가 없는 요금제) 숨긴다", usage: ["seven_day": 0.26, "seven_day_resets": T + 30], want: false),
 ]
 
 struct PercentRow: Row {
@@ -43,8 +61,16 @@ struct PercentRow: Row {
     let want: String
 }
 private let percentRows: [PercentRow] = [
-    .init(note: "five_hour 가 없으면 풀지 않는다", json: #"{"seven_day":{"utilization":50}}"#, want: "nil"),
-    .init(note: "빈 five_hour 는 시각과 출처만", json: #"{"five_hour":{}}"#, want: #"{"at":1793000000,"from":"cache"}"#),
+    .init(note: "five_hour 가 없으면 주간만 푼다(2026-11 5시간은 있을 때만, 그 전에는 nil)", json: #"{"seven_day":{"utilization":50}}"#,
+          want: #"{"at":1793000000,"from":"cache","seven_day":0.5}"#),
+    .init(note: "5시간 한도가 없는 요금제(Ultra) 꼴: five_hour null, 5시간 칸은 넣지 않는다(2026-11)",
+          json: #"{"five_hour":null,"seven_day":{"utilization":26,"resets_at":"2026-11-05T06:59:59.717902+00:00"},"seven_day_opus":null,"limits":[{"kind":"weekly_all","percent":26}]}"#,
+          want: #"{"at":1793000000,"from":"cache","seven_day":0.26000000000000001,"seven_day_resets":1793861999}"#),
+    .init(note: "두 창 모두 null 이면 사용률을 모른다(2026-11)", json: #"{"five_hour":null,"seven_day":null}"#, want: "nil"),
+    .init(note: "빈 five_hour 만 있으면 사용률을 모른다(2026-11, 그 전에는 시각과 출처만이라 0 으로 지나갔다)", json: #"{"five_hour":{}}"#, want: "nil"),
+    .init(note: "사용률 없이 시각만 있는 창도 모른다(2026-11)", json: #"{"seven_day":{"resets_at":"2026-11-02T00:00:00Z"}}"#, want: "nil"),
+    .init(note: "주간 사용률이 null 이고 5시간만 있으면 5시간만(2026-11)", json: #"{"five_hour":{"utilization":40},"seven_day":{"utilization":null}}"#,
+          want: #"{"at":1793000000,"five_hour":0.40000000000000002,"from":"cache"}"#),
     .init(note: "퍼센트를 비율로, 소수 초가 긴 시각도 읽는다", json: #"{"five_hour":{"utilization":84.0,"resets_at":"2026-10-30T15:00:00.318890+00:00"}}"#,
           want: #"{"at":1793000000,"five_hour":0.83999999999999997,"five_hour_resets":1793372400,"from":"cache"}"#),
     .init(note: "글자 퍼센트·주간 창", json: #"{"five_hour":{"utilization":"12"},"seven_day":{"utilization":29,"resets_at":"2026-11-02T00:00:00Z"}}"#,
@@ -68,5 +94,17 @@ private func text(_ o: Any?) -> String {
     func 퍼센트(_ r: PercentRow) {
         let j = (try? JSONSerialization.jsonObject(with: Data(r.json.utf8))) as? [String: Any] ?? [:]
         #expect(text(apUsageFromPercent(j, from: "cache", at: T)) == r.want)
+    }
+
+    @Test("5시간 칸을 보일까(2026-11 5시간은 있을 때만)", arguments: showFiveRows)
+    func 오시간칸(_ r: ShowFiveRow) {
+        #expect(apShowFiveHour(usage: r.usage) == r.want)
+    }
+
+    @Test("5시간 칸: 보드 출발 확인의 한도 목록 꼴(목록이 비면 모름)")
+    func 오시간칸_한도목록() {
+        #expect(apShowFiveHour(known: false, hasFive: false))
+        #expect(apShowFiveHour(known: true, hasFive: true))
+        #expect(!apShowFiveHour(known: true, hasFive: false))
     }
 }
