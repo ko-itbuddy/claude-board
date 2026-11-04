@@ -56,7 +56,7 @@ macOS CI `.github/workflows/rules.yml` 이 hook·보드 규칙 파일이 바뀐 
 
 ```
 Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_id>.json ──> ClaudeBoard (1초마다 읽음), board-tui.py
-                 └─> notify.py ──> claude-notifier 패널을 분리 프로세스로 띄움 (Stop·Notification 때)
+                 └─> notify.py ──> claude-notifier 패널을 분리 프로세스로 띄움 (Stop·Notification 때, 보드가 떠 있을 때만 — 패널이 확인)
 ```
 
 - `hooks.py` 의 `HOOKS` 표가 이벤트 11개를 `state.py <working|waiting|idle|ended|subagent>` / `notify.py <stop|notification>` 에 연결해 `~/.claude/settings.json` 에 넣는다.
@@ -250,7 +250,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
   도는 엔진은 단위 판정 뒤·건너뛴 뒤·끝 정리 때 실행 폴더에 보고서(`report.html`·`units/<n>/report.html`)를 AutopilotRules 틀로 직접 그린다(보드 창이 꺼져 있어도, 모델 0). SwiftPM 실행 타깃 `ClaudeAutopilot`(언어 모드 5, `AutopilotRules` 에 기댐)이고 한 파일이라 최상위 실행문이 있다.
   보드 앱 밖에서 LaunchAgent(KeepAlive)로 돌고, 출발 때 실행 폴더 `pinned/` 에 고정한 자기 사본과 설정(`frozen.json`, 해시는 LaunchAgent 인자)으로 돈다. 모델 세션은 Claude Code 샌드박스(`--settings`)·고른 환경 변수·`--setting-sources project,local` 로 띄운다.
   build-board.sh 는 보드와 같은 `swift build` 결과의 `ClaudeAutopilot` 을, make-dmg.sh 는 두 아키텍처 결과를 `lipo` 로 합쳐 앱 `Contents/MacOS/claude-autopilot` 에 싣는다(앱보다 먼저 서명). 설계·실측은 `docs/자율주행/설계.md`·`진행 상황.md`.
-- `ClaudeNotifier.swift` — 알림 패널. 인자는 파일 머리 주석 참고. 여러 패널이 동시에 뜨면 슬롯 파일로 자리를 나눈다. `--session` 을 받으면 누를 때 보드에 `focus` 동작을 알린다.
+- `ClaudeNotifier.swift` — 알림 패널. 인자는 파일 머리 주석 참고. `--activate` 의 앱(notify.py 는 설치판 `com.claude.board`)이 떠 있지 않으면 창·슬롯 없이 바로 끝난다(이슈 #48 — 보드를 끈 동안은 알림 없음, 판단이 패널에 있어 hook 공유 표 `hook-table/` 밖). 여러 패널이 동시에 뜨면 슬롯 파일로 자리를 나눈다. `--session` 을 받으면 누를 때 보드에 `focus` 동작을 알린다.
 - `board-tui.py` — 터미널판 보드(`claude-board-tui`).
 - `AppIcon.swift` — 앱 아이콘 PNG(iconset 이름 규칙)를 인자로 준 폴더에 그린다. 결과 `AppIcon.icns` 는 저장소에 커밋되어 있다.
 - `ClaudeStatus.swift` — 예전 메뉴 막대 앱. 어떤 빌드 스크립트도 빌드하지 않는다.
