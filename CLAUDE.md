@@ -53,7 +53,7 @@ macOS CI `.github/workflows/rules.yml` 이 hook·보드 규칙 파일이 바뀐 
 
 ```
 Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_id>.json ──> ClaudeBoard (1초마다 읽음), board-tui.py
-                 └─> notify.py ──> claude-notifier 패널을 분리 프로세스로 띄움 (Stop·Notification 때)
+                 └─> notify.py ──> claude-notifier 패널을 분리 프로세스로 띄움 (Stop·Notification 때, 보드가 떠 있을 때만 — 패널이 확인)
 ```
 
 - `hooks.py` 의 `HOOKS` 표가 이벤트 11개를 `state.py <working|waiting|idle|ended|subagent>` / `notify.py <stop|notification>` 에 연결해 `~/.claude/settings.json` 에 넣는다.
@@ -146,7 +146,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
   사용자가 바꾼 키는 포트 없이 값으로 넘긴다(읽고 쓰기는 UserDefaults 한 줄씩이라). Carbon 수정키 `carbonMods`·NSEvent 변환·시스템 단축키 목록 읽기(`systemHotKeys`)는 앱에 둔다.
   규칙에 새 OS 호출(파일·프로세스·시각·홈 폴더)을 넣을 때는 포트를 거친다 — BoardRules 에서 FileManager·kill·`Date()` 를 직접 부르지 않는다(남은 예외: `Group.path` 의 `NSHomeDirectory()`).
   새 기능(다음은 자율주행)도 같은 꼴로 쓴다: 판정은 Foundation 만 쓰는 규칙 라이브러리(BoardRules 또는 따로 타깃, 예: `Sources/AutopilotRules`)에, 바깥(git·프로세스·HTTP·SQLite 등)은 포트로, 가짜 어댑터 표 시험을 붙인다. 이미 있는 코드는 한꺼번에 옮기지 않고 손대는 부분부터 옮기며, 옮길 때는 옮기기 전 출력과 견주는 덤프·시험으로 동작이 그대로인지 확인한다.
-- `ClaudeNotifier.swift` — 알림 패널. 인자는 파일 머리 주석 참고. 여러 패널이 동시에 뜨면 슬롯 파일로 자리를 나눈다. `--session` 을 받으면 누를 때 보드에 `focus` 동작을 알린다.
+- `ClaudeNotifier.swift` — 알림 패널. 인자는 파일 머리 주석 참고. `--activate` 의 앱(notify.py 는 설치판 `com.claude.board`)이 떠 있지 않으면 창·슬롯 없이 바로 끝난다(이슈 #48 — 보드를 끈 동안은 알림 없음, 판단이 패널에 있어 hook 공유 표 `hook-table/` 밖). 여러 패널이 동시에 뜨면 슬롯 파일로 자리를 나눈다. `--session` 을 받으면 누를 때 보드에 `focus` 동작을 알린다.
 - `board-tui.py` — 터미널판 보드(`claude-board-tui`).
 - `AppIcon.swift` — 앱 아이콘 PNG(iconset 이름 규칙)를 인자로 준 폴더에 그린다. 결과 `AppIcon.icns` 는 저장소에 커밋되어 있다.
 - `ClaudeStatus.swift` — 예전 메뉴 막대 앱. 어떤 빌드 스크립트도 빌드하지 않는다.
