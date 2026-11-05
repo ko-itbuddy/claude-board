@@ -6,6 +6,10 @@
 //!
 //! 정직한 한계: 이 규칙은 파일 도구(Edit·Write·Read)만 막는다. 네이티브 Windows 의 Bash 는 규칙 밖 경로로도 쓸 수 있다(샌드박스 없음).
 //! 그래서 `git push` 는 명령 규칙으로 막지만 `cmd /c git push` 같은 우회는 막지 못한다.
+//!
+//! 같은 까닭으로 허용 도구 기본값도 환경에 따른다(`turn.rs` 의 `allowed_tools_base`): 고정 설정에 `allowed_tools` 가 없으면
+//! 샌드박스가 있는 WSL 은 원본 기본 목록(맨 `Bash` 포함), 네이티브 Windows 는 맨 `Bash` 를 뺀 목록이다.
+//! 네이티브에서 셸을 쓰려면 고정 설정이 `Bash(<접두> *)` 꼴 규칙을 명시해야 한다. 명시한 목록은 어느 환경에서나 그대로 쓴다.
 
 use std::path::{Path, PathBuf};
 

@@ -1002,3 +1002,52 @@ fn session_policy_carries_the_always_on_deny_list() {
     let mut seen = std::collections::HashSet::new();
     assert!(policy.disallowed_tools.iter().all(|t| seen.insert(t.clone())));
 }
+
+// ── 허용 도구 기본값: 환경이 정한다 ──
+
+/// 시나리오를 한 턴 돌려 모델 세션에 넘어간 허용 도구를 받는다
+fn allowed_tools_of(mut s: Scenario, sandbox: Option<bool>, frozen_allowed: Option<Value>) -> Vec<String> {
+    if let Some(b) = sandbox {
+        s.frozen["exec_env"] = json!({"key": "x", "kind": if b { "wsl" } else { "pwsh" }, "sandbox": b});
+    }
+    if let Some(a) = frozen_allowed {
+        s.frozen["allowed_tools"] = a;
+    }
+    let w = s.build();
+    w.env.push_spawn(ChildScript::ok_turn(0.5));
+    assert_eq!(w.run(), RunExit::Finished(RunState::Done));
+    let policy = w.env.policies.lock().unwrap()[0].clone();
+    policy.allowed_tools
+}
+
+#[test]
+fn native_default_allowed_tools_has_no_bare_bash() {
+    for sandbox in [Some(false), None] {
+        let tools = allowed_tools_of(Scenario::new(1), sandbox, None);
+        for t in ["Read", "Glob", "Grep", "Task", "TaskStop", "SendMessage", "Skill", "ToolSearch", "Monitor", "TodoWrite"] {
+            assert!(tools.contains(&t.to_string()), "{t} 가 기본 목록에 없다: {tools:?}");
+        }
+        assert!(!tools.contains(&"Bash".to_string()), "{sandbox:?}: {tools:?}");
+        assert!(!tools.iter().any(|t| t.starts_with("Write") || t == "Edit"), "{tools:?}");
+    }
+}
+
+#[test]
+fn sandboxed_default_allowed_tools_has_bash() {
+    let tools = allowed_tools_of(Scenario::new(1), Some(true), None);
+    assert_eq!(tools, ["Read", "Glob", "Grep", "Bash", "Task", "TaskStop", "SendMessage", "Skill", "ToolSearch", "Monitor", "TodoWrite"]);
+}
+
+#[test]
+fn frozen_allowed_tools_always_win_in_both_envs() {
+    // 네이티브: 명시한 접두 규칙만 그대로 넘어가고 맨 Bash 는 생기지 않는다
+    for sandbox in [Some(false), None] {
+        let tools = allowed_tools_of(Scenario::new(1), sandbox, Some(json!(["Bash(npm test *)"])));
+        assert_eq!(tools, ["Bash(npm test *)"], "{sandbox:?}");
+    }
+    // 샌드박스 WSL: 목록이 기본값을 대신하고, 파일 쓰기 도구는 여전히 걸러진다
+    let tools = allowed_tools_of(Scenario::new(1), Some(true), Some(json!(["Read", "Write", "Bash(npm test *)"])));
+    assert_eq!(tools, ["Read", "Bash(npm test *)"]);
+    // 빈 목록도 명시한 것이다 — 기본값으로 되돌아가지 않는다
+    assert!(allowed_tools_of(Scenario::new(1), Some(true), Some(json!([]))).is_empty());
+}

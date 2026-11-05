@@ -5,6 +5,7 @@ Windows 판 개발자(사람·에이전트)는 이 문서를 단일 기준으로
 2.13 에서 더한 규칙(Claude Code 실시간 상태 덮기·세션 이름·since·인자 중복 제거)은 그 뒤 macOS 3.0~3.1.8 의 `state.py`·`notify.py`·`board-tui.py`·`ClaudeBoard.swift` 에서 왔고, 줄 번호 대신 함수 이름으로 가리킨다.
 다음 판(초안)이 더한 규칙(탭 저장·복원, 끌 때 확인, 앱 쪽 답변 꾸미기, 보드로 옮기기, 알림에서 세션으로 이동, 경로 줄 밀기, 맨 위 고정·투명도, 서브에이전트 시작 표지)은 macOS 3.1.8~3.2.0 의 같은 이름 함수(`saveTabs`·`restoreTabs`·`resumeHeld`·`confirmShutdown`·`mdRenderDir`·`mdRenderCommand`·`moveToBoard`·`Sub.parse`)에서 왔다.
 2단계(설정 화면, 단축키 바꾸기, 새 세션 기본값, 로그인할 때 열기, 설정 안 계정 추가)는 macOS 3.2.0 의 `SettingsScreen`·`SettingsItem`·`Shortcuts`·`KeyCombo`·`ShortcutSettings`·`LoginItem`·`NotifyPositionPicker`·`LoginWebWindow`·`loginURL`·`loginNote`·`confirmRemove` 에서 왔고 §5.14 가 소유한다.
+새 탭 셸 고르기(WSL·Git Bash)는 §5.12.14 가, 자율주행(미리 보기)은 macOS 의 `Sources/ClaudeAutopilot`·`Sources/AutopilotRules`·`docs/자율주행/설계.md` 에서 와서 §12 가 소유한다.
 
 ## 0. 결정 사항
 
@@ -14,7 +15,7 @@ Windows 판 개발자(사람·에이전트)는 이 문서를 단일 기준으로
 | 기술 | Rust. 보드·알림 패널은 Tauri 2(프론트엔드 Svelte 5 + TypeScript + Vite), hook·명령줄 도구는 순수 Rust 실행 파일 |
 | 버전 | macOS 와 같은 번호를 쓴다. 첫 판은 `2.12`. 버전은 `windows/VERSION` 한 곳에 두고 빌드가 읽는다 |
 | 릴리스 | 태그 `windows-v<버전>`, GitHub 릴리스는 **절대 Latest 로 표시하지 않는다**(`--latest=false`, API `make_latest: "false"`) |
-| 범위 | 보드·알림 패널·hook·사용 한도·업데이트·트레이 + 세션 터미널 제어 + 계정 전환·자동 전환 + 캐릭터 8종 전체 + TUI + 내장 터미널(탭·탭 저장과 복원·끌 때 확인·세션 짝짓기·구동·보드로 옮기기·답변 꾸미기·크기 바꾸기 장벽, 화면 나누기는 구조만, §5.12) + 설정 화면·단축키 바꾸기·새 세션 기본값·로그인할 때 열기·설정 안 계정 추가(§5.14) |
+| 범위 | 보드·알림 패널·hook·사용 한도·업데이트·트레이 + 세션 터미널 제어 + 계정 전환·자동 전환 + 캐릭터 8종 전체 + TUI + 내장 터미널(탭·탭 저장과 복원·끌 때 확인·세션 짝짓기·구동·보드로 옮기기·답변 꾸미기·크기 바꾸기 장벽, 화면 나누기는 구조만, §5.12) + 설정 화면·단축키 바꾸기·새 세션 기본값·로그인할 때 열기·설정 안 계정 추가(§5.14) + 새 탭 셸 고르기(WSL·Git Bash, §5.12.14) + 자율주행 미리 보기(§12) |
 | 터미널 화면 | xterm.js 6.0.0 + `@xterm/addon-webgl` 0.19.0 + `@xterm/addon-fit` 0.11.0 + `@xterm/addon-unicode11` 0.9.0. 네 개 모두 정확한 버전으로 고정한다(`package-lock.json` 포함). 소스를 패치하지 않고 6.1 베타로도 올리지 않는다 |
 | 터미널 셸 연결 | 자체 ConPTY 래퍼(`windows-sys` 로 쓴 얇은 층). 지금은 시스템 ConPTY(kernel32)를 쓰고 sideload `conpty.dll` 은 쓰지 않는다. 나중에 갈아 끼울 수 있게 `ConptyApi { create, resize, close }` 함수 표 한 곳에서만 ConPTY 를 부른다 |
 | 터미널 수명 | Job 객체를 쓰지 않는다. 보드가 꺼지면 콘솔 끊김에 맡긴다(보드 쪽 파이프 끝은 상속 불가, §5.12) |
@@ -36,9 +37,10 @@ windows/
   README.md                   Windows 판 소개·설치·사용법(사용자용)
   docs/SPEC.md                이 문서
   docs/설치 가이드.md          packaging/README.txt 에 해당 — 모든 기능의 자세한 설명
-  Cargo.toml                  워크스페이스: crates/core, crates/hook (Cargo.lock 은 windows/ 에)
+  Cargo.toml                  워크스페이스: crates/core, crates/hook, crates/autopilot (Cargo.lock 은 windows/ 에)
   crates/core/                claude-board-core — 파일 약속·hook 상태 규칙·hook 등록·경로·Windows 프로세스 도구(라이브러리)
   crates/hook/                claude-board-hook — hook·설치·TUI 명령줄 실행 파일
+  crates/autopilot/           claude-board-autopilot — 자율주행 엔진·명령줄(claude-autopilot.exe, 창 없는 엔진 claude-autopilot-engine.exe, §12)
   app/                        Tauri 앱(프론트엔드 package.json·src/ 는 여기)
   app/src-tauri/              Tauri 백엔드(별도 Cargo.lock) — 보드 상태 읽기·사용 한도·계정·업데이트·터미널 제어·트레이·창
                               내장 터미널: src/pty/(ConPTY 래퍼·환경 블록)·src/ring.rs(출력 링 버퍼)·src/terms.rs(명령·`TermHub`)·src/terms/pairing.rs(세션 짝짓기 어댑터)
@@ -52,6 +54,7 @@ windows/
   ci/gui/                     격리한 보드로 GUI 를 시험하는 도구(launch-board.ps1·tripwire.ps1·cdp.mjs, §5.13)
   ci/jev/                     Jev 시험 협업 도구(§5.13)
   ci/fake-claude-tty.cjs      키를 받아 적는 가짜 claude. fake-claude-login.cjs 는 가짜 로그인
+  ci/fake-claude-stream.cjs   claude -p stream-json 을 흉내 내는 가짜(자율주행 엔진 시험, §12.8)
   crates/core/src/place.rs    세션과 보드 터미널 짝짓기 순수 규칙(`Host`·`ProcessView`·`place`)
   packaging/install.ps1       설치·업데이트 스크립트(업데이트 단추도 이것을 실행)
   packaging/uninstall.ps1     제거 스크립트
@@ -406,7 +409,7 @@ macOS 키체인 대신:
 ### 5.9 보드 설정 저장 (macOS UserDefaults 대응)
 
 `board-settings.json`(Tauri app config dir) 한 파일, 백엔드가 단일 출처. 키: `collapsed[]`, `endedOpen[]`, `pinnedGroups[]`, `hiddenGroups{그룹 id:시각}`, `autoFolded{그룹 id:시각}`, `kindCollapsed[]`("<그룹 id>|term"·"<그룹 id>|bg"), `subCollapsed[]`(세션 id), `usageCompact`, `pinned`(항상 위, 기본 true), `mascot`(기본 `tralalero`), `opacity`(0.3~1, 기본 1), `autoSwitch`(기본 false), `autoSwitchLast`, `autoSwitchFull{id:시각}`, `boardMini`, `boardRestoreFrame{x,y,w,h}`, `windowFrame`.
-내장 터미널 키(이름은 macOS UserDefaults 와 같다): `terminalExpanded`(bool, 기본 true), `boardPaneWidth`(f64, 논리 px, 기본 454), `boardSide`(`"right"`\|`"left"`, 기본 `"right"`), `miniFromExpanded`(bool, 펼친 채 미니로 들어갔는지의 표지),
+내장 터미널 키(이름은 macOS UserDefaults 와 같다): `terminalExpanded`(bool, 기본 true), `boardPaneWidth`(f64, 논리 px, 기본 454), `boardSide`(`"right"`\|`"left"`, 기본 `"right"`), `miniFromExpanded`(bool, 펼친 채 미니로 들어갔는지의 표지), 새 탭 셸 키 `terminalShell`(문자열 또는 null, 기본 null = 자동, 스냅샷의 `settings.terminalShell` 로도 실린다, §5.12.14).
 `terminalTabs`(탭 목록, 항목 모양은 §5.12.9, 기본 빈 목록), `mdRenderOff`(답변 꾸미기를 끄고 띄운 세션 id 목록, §5.12.11, 기본 빈 목록).
 설정 화면 키(§5.14): `shortcuts`(`{동작 id: [키 코드, 수정키 비트]}`, 비운 동작은 `[]`, 기본 키면 항목 없음, 기본 `{}`, §5.14.3), `settingsTransition`(`"slide"`\|`"fade"`\|`"none"`, 기본 `"slide"`, 모르는 값은 `"slide"` 로 읽는다), `newSessionCommand`(문자열, 기본 빈 값, §5.14.4), `newSessionMdRender`(bool, 기본 true), `autoUpdateCheck`(bool, 기본 true, §5.14.5).
 `shortcuts` 는 읽을 때 항목마다 모양을 거른다(객체가 아니면 그 키만 버리고, 배열이 아니거나 모양이 틀린 항목은 그 항목만 버린다. 항목 하나 때문에 파일 전체를 기본값으로 읽지 않는다).
@@ -440,14 +443,14 @@ macOS 키체인 대신:
 
 ### 5.11 터미널 독 (`EdgeDock`, `ClaudeBoard.swift EdgeDock`)
 
-창 오른쪽 아래 끝 탭에 마우스를 대면 나오는 실행 단추 묶음. Windows 목록: Windows Terminal(`wt.exe`), PowerShell 7(`pwsh.exe`), Windows PowerShell(`powershell.exe`), 명령 프롬프트(`cmd.exe`), Git Bash(`git-bash.exe` — `%ProgramFiles%\Git`). 설치 여부(PATH·알려진 위치), 실행 중 점, 힌트 문구("<이름> 창으로 이동"/"<이름> 실행"/"<이름> · 설치되지 않음"). 아이콘은 직접 그린 SVG.
+창 오른쪽 아래 끝 탭에 마우스를 대면 나오는 실행 단추 묶음. Windows 목록: Windows Terminal(`wt.exe`), PowerShell 7(`pwsh.exe`), Windows PowerShell(`powershell.exe`), 명령 프롬프트(`cmd.exe`), Git Bash(`git-bash.exe` — `%ProgramFiles%\Git`). 설치 여부(PATH·알려진 위치), 실행 중 점, 힌트 문구("<이름> 창으로 이동"/"<이름> 실행"/"<이름> · 설치되지 않음"). 아이콘은 직접 그린 SVG. WSL 배포판이 있으면 배포판마다 `WSL · <이름>` 단추가 더해진다(§5.12.14).
 
 ### 5.12 내장 터미널
 
 보드 창 안에 터미널 영역을 두고 거기서 셸을 돌린다(macOS 판 `BoardRootView`·`TerminalHub` 대응). 이 절이 백엔드 ↔ 프론트엔드 터미널 계약을 소유한다. 확인된 동작은 §11.2~§11.5 의 표만 확인으로 읽는다. 나머지는 미확인이다.
 
 범위. 있는 것: 펼침·접힘(제목 막대 단추·Ctrl+Alt+T·트레이), 경계 끌기와 폭 기억, 보드 위치(오른쪽 기본·왼쪽), 숨겨진 동안 출력 유지, 한글 IME,
-경로 줄·탭 줄·빈 상태(둘 다 넘치면 가로로 밀기, §5.12.13), 새 세션 창(Ctrl+T·카드의 +, 키는 §5.14.3 에서 바꾼다), 탭마다 셸 하나와 그 셸에 쳐 넣는 claude(`--session-id`·`--name`), 탭 이름 바꾸기와 `/rename`, 닫기 확인, Ctrl+Alt+1~9 번호 배지,
+경로 줄·탭 줄·빈 상태(둘 다 넘치면 가로로 밀기, §5.12.13), 새 세션 창(Ctrl+T·카드의 +, 키는 §5.14.3 에서 바꾼다), 탭마다 셸 하나(고르는 법은 새 탭 셸·WSL·Git Bash, §5.12.14)와 그 셸에 쳐 넣는 claude(`--session-id`·`--name`), 탭 이름 바꾸기와 `/rename`, 닫기 확인, Ctrl+Alt+1~9 번호 배지,
 세션과 탭의 짝짓기와 위치 칩(§5.12.7), 세션 줄 클릭 흐름과 일시중지·재개·중단·이어 열기(§5.7), 크기 바꾸기 장벽(§5.12.8),
 탭 목록 저장과 복원(§5.12.9), 보드를 끌 때 확인 창(§5.12.10), 앱 쪽 답변 꾸미기(md-render, §5.12.11), 다른 터미널 세션을 보드 탭으로 옮기기와 알림 패널에서 세션으로 이동(§5.12.12).
 미구현(각각 한 줄): 화면 나누기(자료구조 `SplitNode` 만 있고 탭마다 잎 하나만 그린다) · 터미널 글꼴 크기·테마·애니메이션 설정 · 보드 글자 크기 배율 ·
@@ -462,7 +465,7 @@ macOS 키체인 대신:
 
 ```ts
 interface TermInfo {
-  id: string; pid: number; shell: "pwsh" | "powershell" | "cmd"; cwd: string; cols: number; rows: number;
+  id: string; pid: number; shell: string /* 실제로 뜬 셸 키: pwsh·powershell·cmd·git-bash·wsl·wsl:<배포판> */; cwd: string; cols: number; rows: number;
   status: "running" | "exited"; exitCode: number | null; windowsBuild: number | null;
   oldestSeq: number; nextSeq: number;   // 링 버퍼가 아직 갖고 있는 출력 오프셋 범위
 }
@@ -470,7 +473,7 @@ interface TermInfo {
 
 | 명령 | 인자 → 결과 | 동작 |
 |---|---|---|
-| `term_spawn` | `spec: { cwd?, cols, rows }` → `TermInfo` | 셸을 pwsh → powershell → `%ComSpec%` 순으로 고른다. pwsh·powershell 은 `-NoLogo`(프로필은 읽는다), cmd 는 인자 없음. 프론트가 맞춘 크기로 만든다. 시작 폴더는 `spec.cwd`, 없거나 폴더가 아니면 홈 폴더다. 프론트는 탭의 작업 경로가 홈(`~`)이 아닐 때만 `cwd` 를 보낸다 |
+| `term_spawn` | `spec: { cwd?, cols, rows, shell?, typesClaude? }` → `TermInfo` | 셸은 `spec.shell`, 없으면 설정의 `terminalShell`, 그것도 없으면 pwsh → powershell → `%ComSpec%` 순으로 고른다(§5.12.14). pwsh·powershell 은 `-NoLogo`(프로필은 읽는다), cmd 는 인자 없음. 프론트가 맞춘 크기로 만든다. 시작 폴더는 `spec.cwd`, 없거나 폴더가 아니면 홈 폴더다. 프론트는 탭의 작업 경로가 홈(`~`)이 아닐 때만 `cwd` 를 보낸다 |
 | `term_list` | → `TermInfo[]` | 지금 있는 터미널 목록 |
 | `term_attach` | `id, fromSeq, onData: Channel<InvokeResponseBody>` → `TermInfo` | 그 id 의 이전 채널을 대체한다(보는 쪽은 하나, 크레딧 초기화). 링 버퍼를 `max(fromSeq, oldestSeq)` 부터 다시 보낸다 |
 | `term_ack` | `id, seq` | xterm 이 파싱을 끝낸 끝 오프셋. 프론트가 16ms 또는 64KiB 마다 최대 한 번 보낸다 |
@@ -526,7 +529,7 @@ interface TermInfo {
 
 #### 5.12.6 탭·새 세션 (`hub.svelte.ts`, `launch.ts`)
 
-- 탭은 늘 셸이다(pwsh → powershell → cmd 순). claude 명령은 새로 띄운 셸에 붙은 뒤 `typeCommand` 가 친다: 셸의 첫 출력을 기다리고, 출력이 300ms 조용해지면(상한 5초, 컨트롤러의 `lastOutputAt`) `term_write` 로 명령을 쓰고 100ms 뒤 `
+- 탭은 늘 셸이다(기본 pwsh → powershell → cmd 순, 고르는 법은 §5.12.14). claude 명령은 새로 띄운 셸에 붙은 뒤 `typeCommand` 가 친다: 셸의 첫 출력을 기다리고, 출력이 300ms 조용해지면(상한 5초, 컨트롤러의 `lastOutputAt`) `term_write` 로 명령을 쓰고 100ms 뒤 `
 ` 을 따로 쓴다. 기다리는 사이 탭이 닫히거나 칸의 셸이 바뀌면 치지 않는다. 셸 없이 바로 띄우지 않는다.
   시작 중(`ctl.open()`·`term_spawn`·`bind` 뒤)에 탭이 닫혔으면 새로 띄운 셸을 `term_kill` 로 끝내고 컨트롤러를 버린 채 명령을 치지 않는다.
   `/exit` 하면 같은 탭이 셸 프롬프트로 돌아오고, 셸이 끝나면(exit 이벤트) 그 탭이 닫힌다. 닫으면 선택은 같은 경로의 이웃 탭 → 이웃 경로 → 빈 상태 순으로 간다.
@@ -666,6 +669,21 @@ mac 3.1.7(탭 줄)·3.1.8(경로 줄)의 가로 밀기다. 두 줄이 같은 규
 - 경로 줄: 이름을 줄이지 않고 전체를 보이며 넘치면 가로로 민다. 지금 경로가 바뀔 때, 경로 개수가 바뀔 때, 칸 폭이 바뀔 때 지금 경로를 보이게 맞춘다. 경로 목록 배열이 아니라 개수만 의존한다. 배열은 상태 묶음마다(약 1초) 새로 만들어지므로 그 자체를 보면 손으로 민 스크롤을 지금 경로로 되돌려 버린다.
 - 탭 줄: 탭 폭 120~250. 다 안 들어가면 가로로 밀고 고른 탭이 보이게 따라간다. **+ Ctrl+T** 단추는 밀리는 칸 밖이라 늘 오른쪽 끝에 보인다.
 - 확인 결과와 남은 한계는 §11.2.1 이다(경로 줄이 손으로 민 스크롤을 되돌리던 것을 고친 뒤의 GUI 재확인은 아직 없다).
+
+#### 5.12.14 새 탭 셸: WSL · Git Bash (`core::envs`, `terminal.rs`, `pty/mod.rs`, `terms.rs`, `terminal/shellRules.ts`, `settings/groups/Terminal.svelte`, `TerminalTabBar.svelte`)
+
+- 목록: `core::envs::detect()` 가 이 PC 의 실행 환경을 준다(자율주행 실행 환경과 같은 목록, §12.4). WSL 은 `wsl.exe -l -q`(UTF-16)가 5초 안에 종료 코드 0 과 배포판을 하나 이상 줄 때만 넣고 배포판마다 한 줄이다(`docker-desktop*`·이름 규칙 `[A-Za-z0-9._-]{1,64}` 밖은 뺀다). 기능이 꺼진 PC 의 `wsl.exe` 는 안내문만 내므로 파일이 있다는 것만으로는 넣지 않는다. 배포판을 띄우지 않으며, 독의 WSL 목록은 보드가 스레드에서 채운다.
+- 키: `pwsh` · `powershell` · `cmd` · `git-bash` · `wsl`(기본 배포판) · `wsl:<배포판>`. 모양이 틀린 키는 `set_terminal_shell` 이 받지 않고(거짓), 설정 파일에 틀린 값이 있으면 그 키만 null(기본)로 읽고 나머지 설정은 남긴다.
+- 설정: `terminalShell`(문자열 또는 null, 기본 null = 자동, §5.9). 명령 `set_terminal_shell(shell?)` · `list_envs()`(`[{key, label}]`). 설정 > 터미널 > **새 탭 셸**: 맨 앞이 "자동(기본)"(pwsh → powershell → `%ComSpec%` 순)이고 뒤는 이 PC 의 환경, 저장된 키가 이 PC 에 없으면 "(이 PC 에 없음)" 줄을 더해 칸이 비지 않게 한다.
+  탭 줄 **+** 오른쪽의 **▾** 와 **+** 오른쪽 클릭: 같은 목록의 메뉴를 열고(열 때마다 목록을 다시 읽는다, 설정의 셸에 체크), 고르면 지금 경로에 그 셸의 빈 탭을 연다(`openShell(워크스페이스, {shell})`).
+- `term_spawn` 의 `spec.shell` 이 없으면 설정의 `terminalShell` 을 쓰고, 찾지 못하면 board.log 에 한 줄 남기고 기본 셸로 뜬다. `TermInfo.shell` 은 실제로 뜬 키다. 인자는 셸 문자열을 거치지 않고 배열로 넘긴다.
+- 띄우기: Git Bash 는 `bash.exe --login -i`. WSL 은 `wsl.exe [-d <배포판>] --cd <폴더>`. 폴더가 `\\wsl.localhost\<배포판>\…` · `\\wsl$\<배포판>\…`(대소문자 무시, `/` 꼴과 `\\?\UNC\` 꼴 포함)이면 그 배포판과 리눅스 경로(`/a/b`)로 바꾸고(고른 배포판은 덮어쓴다), 배포판 이름이 규칙에 어긋나면 그 배포판을 쓰지 않고 `--cd` 도 뺀다.
+  그 밖의 Windows 경로는 그대로 주면 `wsl.exe` 가 자동 마운트 경로로 바꿔 읽는다. 프로세스의 작업 폴더는 WSL UNC 폴더면 홈으로 둔다(`\\wsl.localhost` 를 프로세스 작업 폴더로 받지 못할 수 있다, `process_cwd`).
+- claude 쳐 넣기: WSL 탭은 세션 파일의 tty · pid 로 탭을 짝지을 수 없어 보드가 `claude` 를 쳐 넣지 않는다(`canTypeClaude`). 새 세션 · 이어 열기 화면(`typesClaude`)이 WSL 키를 받으면 프론트가 셸 지정을 버리고, 백엔드도 기본 셸로 바꿔 띄운다. 쓰는 셸 키가 없으면 설정의 셸을 따르되 같은 규칙이다.
+  WSL 탭에서 손으로 친 `claude` 는 보드에 카드가 생기지 않는다(알려진 한계).
+- 저장 · 복원(§5.12.9): 저장 항목에 `shell` 키를 싣는다(없으면 필드 자체를 두지 않아 옛 항목과 같은 모양, 읽을 때 `normalizeShellKey` 로 거른다). WSL 화면은 명령이 있어도 `restoresClaude` 가 거짓이라 늘 빈 셸로 돌아오고, 이어 열 세션 id · 폴더 계산에서도 빠진다.
+- 독(§5.11): WSL 배포판마다 `WSL · <이름>` 단추. 눌러서 `wsl.exe -d <배포판> --cd ~` 를 새 콘솔로 연다. 있는 것만 보이므로 늘 설치됨이고 실행 중 점은 없다.
+- 시험: `terminal.rs`(UNC 변환 · `wsl_launch` 인자 · 환경 목록에서 셸 만들기 · 틀린 키), `settings.rs`(`terminalShell` 규칙), `terms/real.rs`(claude 칠 탭이 WSL 을 받으면 기본 셸로 뜸), 프론트 `shellRules.test.ts` · `restore.test.ts`. 실제 배포판 시험 `wsl_tab_starts_in_the_given_folder_and_exits` 는 VM 을 띄우므로 `#[ignore]` 이고(`cargo test wsl_tab -- --ignored`) 이 문서는 돌렸다고 적지 않는다(§11.7).
 
 ### 5.13 GUI 시험 장치 (`windows/ci/gui`·`windows/ci/jev`·가짜 claude)
 
@@ -820,6 +838,7 @@ interface Snapshot {
   terminals: { id: string; name: string; installed: boolean; running: boolean }[];   // §5.11 터미널 독(외부 터미널 앱) 목록. 내장 터미널(§5.12)의 `TermInfo` 와 다르며 스냅샷에 내장 터미널은 없다
   runsClaude: string[];          // 지금 claude 가 도는 보드 터미널 TermId (§5.12.7)
   atPrompt: string[];            // 셸이 프롬프트에 있는 보드 터미널 TermId (§5.12.7)
+  autopilot: AutopilotRun[];     // 자율주행 실행(§12.7). 모양은 app/src/lib/types.ts 의 AutopilotRun
 }
 interface Group { id: string /* project_dir, 없으면 cwd */; name: string; path: string /* 홈을 ~ 로 */; sessions: Session[] }
 interface Session {
@@ -855,6 +874,7 @@ interface Account { id: string; email: string; org: string; plan: string; expire
 이벤트 `board://confirm-shutdown` `{reason: "quit"|"update"|"cancel", items}`(`cancel` 이면 떠 있는 확인 창을 닫는다).
 이벤트 `board://open-session` `{id, action: "reopen"|"focus", carryOn, projectDir, resumeArgs}`(Rust → 허브, §5.7). 알림 패널 클릭이 거는 `--action focus <id>` 도 이 이벤트로 온다(§5.12.12).
 내장 터미널 명령(`terms.rs`, 모양은 §5.12.1): `term_spawn` · `term_list` · `term_attach` · `term_ack` · `term_write` · `term_write_bin` · `term_resize` · `term_kill`.
+새 탭 셸 명령(§5.12.14): `set_terminal_shell(shell?)` · `list_envs()`(`[{key, label}]`). 자율주행 명령(§12.7): `autopilot_control(id, action: "pause"|"resume"|"stop")`.
 그룹을 가리키는 명령 인자 `cwd` 는 그룹 id(§5.1 의 묶음 열쇠)다.
 확인 대화상자(계정 전환·세션 중단)는 백엔드가 네이티브 대화상자(`tauri-plugin-dialog`)로 띄운다.
 
@@ -982,13 +1002,14 @@ setup.exe 메모(실기 확인): `/S` 로 같은 버전을 다시 설치하면 T
 - 사용자에게 보이는 기능이 바뀌면 `windows/CHANGELOG.md`·`windows/README.md`·`windows/docs/설치 가이드.md` 를 함께 고친다. 사용자에게 보이는 글자(앱 문자열·README·CHANGELOG·설치 가이드)에는 긴 줄표(—)를 쓰지 않는다.
 - 설정 화면·단축키 바꾸기·로그인할 때 열기·설정 안 계정 추가를 다루는 사용자용 문서는 단축키를 바꾸면 전역 단축키(Ctrl+Alt+B·T)도 따라 바뀌고 다른 앱이 쓰는 키면 등록하지 못한다는 점, 로그인 창이 Google 로그인을 막을 수 있어 다른 브라우저에서 여는 길이 있다는 점을 싣는다.
 - 내장 터미널을 다루는 사용자용 문서(README·설치 가이드)에는 Ctrl+Alt+T 가 JetBrains IDE 의 같은 단축키를 가져가고 AltGr 배열에서는 그 글자를 칠 수 없다는 점, 한국어 키보드에서는 왼쪽 Ctrl+Alt 로 누른다는 점을 싣는다.
+- 자율주행(미리 보기)을 다루는 사용자용 문서는 명령줄로만 시작한다는 점, 엔진 실행 파일이 릴리스 묶음에 없다는 점, WSL 이 아닌 환경에는 샌드박스가 없어 출발할 때 동의가 필요하다는 점, 확인하지 못한 목록(§12.9)을 싣는다.
 
 ## 10. 이 Mac 에서 확인할 수 있는 것과 없는 것
 
 확인 가능: core·hook 단위 테스트(macOS 에서 `cargo test` — 중단 시각·status 변화·상태 덮기·인자 중복 제거·since 규칙 포함), Windows 대상 `cargo check`(링크 전까지), 프론트엔드 빌드, Tauri 앱을 macOS 에서 띄워 가짜 세션 파일로 화면 확인.
 Windows CI 러너에서 실기로 확인: `#[cfg(windows)]` 시험(콘솔 제목·입력·터미널 창 찾기·headless, 프로세스 표·생성 시각·명령줄·종료, hook 이 `claude.exe` 를 조상으로 찾기, DPAPI, 새 콘솔 실행의 인자 전달)과 smoke 작업(§8.3)의 설치·화면 확인.
 내장 터미널(§5.12)은 §11.2 의 "확인" 행과 §11.3~§11.6 에 적은 측정만 실기로 확인했다. 나머지 계획: ring 단위 시험은 어디서나, ConPTY 시험(`#[cfg(windows)]`)과 창 프레임 시험은 Windows 에서, 화면·IME·경계 끌기는 dev 보드를 원격 디버깅 포트로 띄워 DevTools 프로토콜로 조작해 본다(§11.2).
-사람이 Windows 에서 확인해야 함: 실제 Windows 10(§11.3 의 순서), 탐색기가 보드에 트레이 아이콘 이벤트를 넘기는 동작과 트레이 메뉴 항목(이 PC 는 쓸 수 있는 트레이 아이콘이 없다, §11.2.1), Windows Terminal 탭 고르기, 세션 창 앞으로 가져오기, 트레이·전역 단축키·Mica, 소리, 실제 Claude Code 의 `.credentials.json` 형식·계정 전환, 실제 Claude Code 세션의 일시중지·재개·중단, 실제 세션에서 Esc 로 끊은 뒤 보드·TUI 가 대기로 바꾸는지와 승인 뒤 바로 작업 중으로 바꾸는지, 세션 이름 라벨, 진짜 Run 값을 쓰고 지우는 로그인할 때 열기, 배율이 큰 모니터의 패널 위치, 진짜 `claude auth login` 의 출력 모양과 `BROWSER` 준수, 로그인 창(Google 로그인 포함). 2단계 목록은 §11.2.2.
+사람이 Windows 에서 확인해야 함: 실제 Windows 10(§11.3 의 순서), 탐색기가 보드에 트레이 아이콘 이벤트를 넘기는 동작과 트레이 메뉴 항목(이 PC 는 쓸 수 있는 트레이 아이콘이 없다, §11.2.1), Windows Terminal 탭 고르기, 세션 창 앞으로 가져오기, 트레이·전역 단축키·Mica, 소리, 실제 Claude Code 의 `.credentials.json` 형식·계정 전환, 실제 Claude Code 세션의 일시중지·재개·중단, 실제 세션에서 Esc 로 끊은 뒤 보드·TUI 가 대기로 바꾸는지와 승인 뒤 바로 작업 중으로 바꾸는지, 세션 이름 라벨, 진짜 Run 값을 쓰고 지우는 로그인할 때 열기, 배율이 큰 모니터의 패널 위치, 진짜 `claude auth login` 의 출력 모양과 `BROWSER` 준수, 로그인 창(Google 로그인 포함). 2단계 목록은 §11.2.2. 자율주행(§12)의 확인 결과와 미확인 목록은 §12.8·§12.9.
 
 ## 11. 재구현 의무 대응표
 
@@ -1331,6 +1352,8 @@ G7 결과(Windows 11 빌드 26300, 격리한 보드와 키를 받아 적는 가�
 | 로그인 창 | 시험 모드는 창을 열지 않아 보드 소유 로그인 창(Google 로그인 포함)을 한 번도 열어 보지 못했다 |
 | 진짜 Run 값 | 로그인할 때 열기가 진짜 `HKCU\…\Run` 값을 쓰고 지우는 것을 확인하지 못했다(격리 표지 파일과 가짜 Run 키만) |
 | 전역 단축키 | 보드가 보이는데 포커스가 다른 창에 있는 상태에서는 확인하지 못했다(숨긴 보드만) |
+| 새 탭 셸의 WSL | 인자 만들기 · UNC 변환 · 설정 규칙 · 저장 항목은 단위 시험으로 봤고, 실제 배포판에서 탭을 띄워 보지 않았다(`#[ignore]` 시험 `wsl_tab_starts_in_the_given_folder_and_exits` 가 있다, §5.12.14) |
+| 자율주행 | 시작 준비 화면 · 합치기 / 승격 · Jira · Notion · Figma · 보고서 · 터미널로 이어받기 · 여러 실행 자리가 없고, 실제 WSL · Windows 10 · 재부팅 뒤 재시작 · 진짜 claude 로 단위 통과는 확인하지 못했다(§12.9) |
 | 계정 지우기 | 확인 대화상자의 취소만 시험했고 실제로 지우는 것은 시험하지 않았다 |
 | 보드 왼쪽의 설정 화면 전환 | 단위 시험뿐이고 GUI 로 보지 않았다 |
 | 단축키를 바꾼 뒤 안내 글자 | 탭 줄 **+** 와 터미널 토글 글자만 읽었다. 제목 막대·메뉴·트레이는 코드로만 확인했다 |
@@ -1348,3 +1371,118 @@ G7 결과(Windows 11 빌드 26300, 격리한 보드와 키를 받아 적는 가�
 | 폴더를 바꿔 띄운 `uninstall` | 격리 여부와 무관하게 실행 중인 `ClaudeBoard.exe` 를 모두 끝낸다(설치된 보드 포함, 코드 읽기) |
 | 로그인 중 보드 끄기 | 도는 로그인 프로세스가 끝나는지 확인하지 못했다 |
 | Jev | 키가 없어 모든 판정이 `UNVERIFIED` 이고 질문 가족이 보정 전이다 |
+
+## 12. 자율주행 (미리 보기)
+
+macOS 판 자율주행(`Sources/ClaudeAutopilot`, 설계 `docs/자율주행/설계.md`)의 Windows 판 첫 구현이다. 이 장이 Windows 자율주행의 단일 기준이다. 코드는 `windows/crates/autopilot`(워크스페이스 멤버 `claude-board-autopilot`)와 보드 쪽 읽기 줄(`app/src-tauri/src/autopilot.rs`, `app/src/lib/board/AutopilotLine.svelte`·`autopilotView.ts`)이다.
+범위는 엔진(출발·루프·판정·기록)과 명령줄, 보드의 읽기 전용 줄과 일시정지·재개·중단이다. 시작 준비 화면 등은 없다(§12.9). 설계 원본을 바꾸면 이 장을 먼저 고친다.
+
+### 12.1 층과 포트 (헥사고날)
+
+`src/lib.rs` 머리말이 층을 소유한다: `rules` · `engine::decide` · `stream`(순수) → `ports`(트레이트) → `adapters`(바깥) → `engine::run` · `cli`(앱 서비스). 순수 층은 포트를 부르지 않고, 바깥과는 `engine::run` 과 `cli` 만 말한다. 시각은 모두 `Clock` 포트(유닉스 초 f64)다.
+
+| 층 | 파일 | 내용 |
+|---|---|---|
+| 규칙(순수) | `rules/control` · `stopline` · `records` · `checks` · `evidence` | macOS `AutopilotRules` 를 손으로 옮긴 것. 옮긴 원본마다 지문이 `PORTED.json` 에 있다(§12.8) |
+| 규칙(Windows 전용) | `rules/env_policy` | 실행 환경에서 파생되는 동의 · 출발 문턱 · 판정 명령 호출 꼴 · 세션 설정의 `sandbox` 덩어리. `PORTED.json` 의 `windows_only` 에 둔다 |
+| 상태 기계(순수) | `engine/decide` | `decide(state, event) → actions`. 실행 · 단위 상태, 멈출 선, 시간 · 비용 상한, 판정 재시도 |
+| 해석(순수) | `stream`(claude stream-json 한 줄 파서) · `model`(실행 폴더 파일 모델, 키 순서를 지키는 `Ordered`/`Slot` 로 macOS 가 쓴 파일을 그대로 읽고 쓴다) | |
+| 포트 | `ports.rs` | `Clock` · `RunFiles` · `ExecEnv` · `ChildProcess` · `Git` · `Records` · `Usage` · `Http` · `Supervisor` · `Secrets`. 경로 인자는 늘 Windows 경로이고 실행 환경 쪽 경로로 바꾸는 일은 `ExecEnv` 만 한다 |
+| 어댑터 | `adapters/` `files`(원자적 쓰기 · 잠금) · `git`(`git.exe` 프로세스) · `records_sqlite`(rusqlite bundled) · `usage` · `http`(ureq + 운영체제 인증서 저장소) · `supervisor`(작업 스케줄러) · `winproc`(Job Object 프로세스) · `native_env` · `wsl_env` | `secrets` 는 구현 전(파일 한 줄) |
+| 앱 서비스 | `engine/run`(`load` · `perform` · `turn` · `guard` · `prompt` · `rows`) · `cli`(`start` · `run` · `inspect` · `roots`) | `engine::run::Engine` 이 포트 묶음(`Ports`)을 받아 1초 걸음으로 돈다 |
+| 실행 파일 | `claude-autopilot.exe`(콘솔, `cli::main`) · `claude-autopilot-engine.exe`(콘솔 창 없는 하위 시스템, `run` 만) | |
+| core | `core::envs`(실행 환경 목록, §5.12.14 와 공유) · `core::test_claude`(시험용 claude 판정, 보드와 공유) · `core::paths::autopilot_root(dev)` | |
+
+### 12.2 명령줄 (`claude-autopilot.exe`)
+
+```
+claude-autopilot start <실행 폴더> [--dev] [--accept-unsandboxed] [--no-schedule] [--json]
+claude-autopilot run <실행 폴더> <고정 설정 해시>          (작업 스케줄러가 띄운다, 출력 없음)
+claude-autopilot control <실행 폴더> <pause|resume|stop|restart_from_intake> [--json]
+claude-autopilot status <실행 폴더> [--json]
+claude-autopilot unregister (<실행 폴더> | --all) [--dev] [--json]
+```
+
+- 종료 코드: 0 됨 · 1 거부(문턱 · 규칙에 걸림) · 2 인자 오류 · 3 내부 오류. `--json` 이면 표준 출력에 JSON 한 줄(거부는 `{"ok":false,"problems":[…]}`, `control` 은 `{"ok":false,"why":…}`), 아니면 쉬운 한국어 줄(오류는 표준 오류). `takeover`·`giveback`(터미널로 이어받기)은 받지 않는다.
+- `--no-schedule` 은 시험 전용이라 `CLAUDE_BOARD_HOME` 이 있을 때만 받는다. 시험용 claude(`CLAUDE_BOARD_CLAUDE`)도 같은 조건이다(§5.13).
+- `start` 의 차례(위에서 걸리면 멈추고 이미 바꾼 것만 되돌린다): ① 폴더 · `run.json` · `queue.json`(이미 `pinned\frozen.json` 이 있거나 state 가 `starting` 이 아니면 거부) ② 단위마다 `check` · 절대 경로 `cwd` 검사와 설정 칸 꼴 검사 ③ 실행 환경 문턱(§12.4) ④ `check` 의 그 환경에서의 꼴 ⑤ 경로 확인(`cli/roots`: `..` 거부, 네이티브에서 네트워크 경로 거부, 정규화, 드라이브 뿌리 · 홈과 그 위 · `~\.claude` 아래 · 시스템 폴더 아래 · 시작 프로그램 폴더 · 실행 폴더 · 엔진 전용 폴더와 겹치는 쓰기 범위 · 작업 폴더 거부)
+  ⑥ 같은 이름의 실행이 엔진 전용 폴더나 작업 스케줄러를 이미 쓰는지 ⑦ 시험용 claude 판정과 환경 준비 확인(`ExecEnv::check_ready`) ⑧ 단위 `cwd` 가 든 저장소마다 `git switch -c autopilot/<실행 id>`(실행 id 64자 이하) ⑨ `pinned\frozen.json`(키 이름 순, `exec_env` 포함) · 엔진 사본(`pinned\claude-autopilot-engine.exe`) · `run.json`(state `starting`, `launchd_label`) · `queue.json` 쓰기 ⑩ 작업 스케줄러 등록(인자 `run <폴더> <고정 설정 해시>`).
+- `status` 는 `run.json` · `queue.json` · 단위별 `engine.json` 의 `active_sec` · `cost_usd` 와 작업 스케줄러 등록 여부를 낸다. `control` 은 `control.json`(`{action, ts}`)만 쓴다. `unregister` 는 작업 스케줄러 등록만 지운다.
+- 엔진(`run`)은 고정 설정에서 실행 환경 어댑터를 되살려 `Engine` 에 넘기고 아무것도 출력하지 않는다. 로그는 `<실행 폴더>\engine.log`. 종료 코드는 끝났거나 다른 엔진이 이미 돌면 0, 고정 설정이 바뀌었거나 읽지 못하면 3. 잠금은 `<실행 폴더>\.engine.lock`.
+
+### 12.3 파일 약속
+
+실행 폴더는 보통 `%LOCALAPPDATA%\Claude Board[ Dev]\autopilot\runs\<실행 id>`(`autopilot_root(dev)`; `CLAUDE_BOARD_HOME` 이 홈을 바꾸면 `<홈>\AppData\Local` 아래). 엔진 전용 자리는 `<뿌리>\private\` 아래(`records.sqlite`, `<실행 id>\`)다.
+파일 이름 · JSON 칸은 macOS 판과 같다. 읽는 쪽은 모르는 칸을 `extra` 로 그대로 두고 키 순서를 지킨다. Windows 판이 더한 것은 하나다.
+
+| 파일 | 칸 | 뜻 |
+|---|---|---|
+| `run.json` · `pinned/frozen.json` | `exec_env: {key, kind, distro?, sandbox?, unsandboxed_ok?: {at, by}}` | 고른 실행 환경. `key` 는 `wsl:<배포판>` · `pwsh` · `powershell` · `cmd` · `git-bash`, `kind` 는 그 종류 id. `sandbox` 는 출발 확인이 정한 값(WSL 참, 네이티브 거짓). `unsandboxed_ok` 는 네이티브에서 샌드박스 없음에 동의한 시각과 주체다 |
+
+- 기록 저장소는 `private\records.sqlite` 판 4(WAL, busy 8회 재시도, 보다 새로운 판은 내리지 않고 거절). 단위 폴더 `units\<n>\`(진행 `engine.json` · 결과 `result.json` 등), `events.jsonl`, `control.json`(엔진이 읽고 늘 지운다), `pinned\`, `engine.log`.
+- `pinned\frozen.json` 의 해시는 `start` 가 작업 스케줄러 인자로 넘긴다. 엔진이 해시가 다름을 보면 멈춘다(`FROZEN_CHANGED_REASON`). 모델이 쓸 수 있는 `units\<n>\engine.json` 은 엔진이 읽는다(§12.9).
+- 작업 스케줄러 이름은 `com.claude.board[.dev].autopilot.<실행 id>.<실행 폴더 정규 경로(소문자) sha256 앞 4바이트>`, run.json `launchd_label` 에 둔다. 이름만 같은 부모 폴더 다른 실행이 서로 지우지 않게 하는 해시다.
+
+### 12.4 실행 환경 선택과 동의 (`rules/env_policy`)
+
+- 목록은 `core::envs::detect()`(§5.12.14): WSL(배포판마다) · PowerShell 7 · Windows PowerShell · 명령 프롬프트 · Git Bash. **기본값이 없다.** `run.json` 의 `exec_env` 가 없으면 `start` 가 거부한다(`choose`).
+- 문턱 1(`choose`, VM 을 깨우지 않는다): 기록 있음 · key 해석 가능 · `kind` 와 key 일치 · WSL 은 배포판 지정 · 이 PC 에 있음 · **샌드박스를 못 거는 환경(`EnvKind::sandbox_capable()` 이 거짓 = WSL 이 아닌 전부)은 `unsandboxed_ok.at > 0` 이 있어야 통과**. `start --accept-unsandboxed` 가 그 동의를 `{at: 지금, by: "cli"}` 로 기록한다. `by` 는 동의한 주체다(명령줄은 `cli`).
+- 문턱 2(`confirm_ready`, 어댑터 `check_ready`): 준비 안 됨이면 거부. 네이티브는 어댑터가 `sandbox: true` 를 줘도 따르지 않고 거짓으로 고정한다. WSL 은 샌드박스가 걸려야 하고 못 걸면 출발하지 않는다.
+- 근거는 Claude Code 공식 문서(sandboxing): 네이티브 Windows 는 샌드박스 없이 돌고, 샌드박스는 Linux · WSL2 에서 bubblewrap 과 socat 이 있을 때만 걸린다(WSL1 불가). WSL 어댑터의 `check_ready` 가 배포판이 WSL2 인지(`wsl -l -v`, 깨우지 않음), 한 번의 탐침으로 `claude` · `--version` · `bwrap`(실제로 한 번 돌려 봄) · `socat` · `/etc/wsl.conf` 의 자동 마운트 뿌리를 본다. 탐침만이 배포판(VM)을 깨운다.
+- 판정 명령(`check_invocation`): cmd `cmd /d /s /c "<글>"`(출력은 OEM 코드 페이지), PowerShell · pwsh 는 `-EncodedCommand` 감싸개(통과 규칙: 잡히지 않은 오류 1, 마지막 네이티브 종료 코드가 0 이 아니면 그 값, 오류 기록이 있으면 1, 아니면 0)와 환경변수 `CLAUDE_BOARD_CHECK`, Git Bash `bash -lc 'eval "$CLAUDE_BOARD_CHECK"'`(`CHERE_INVOKING=1`), WSL `wsl.exe -d <배포판> --cd <폴더> -e timeout -s INT -k 20 <초>s bash -lc …`(`WSLENV` 로 변수 전달, 124 · 137 은 시간 초과). 엔진은 글을 바꾸지 않고 사람이 그 환경의 문법으로 쓴다.
+- WSL 작업 폴더는 `\\wsl.localhost\<배포판>\…` 를 리눅스 경로로 바꾸고, 다른 배포판이면 거부한다(`wsl_cd_arg`). 네이티브는 권한 규칙 꼴(`permission_path`: `C:\work\toy` → `//c/work/toy`, 네트워크 경로 거부)로 바꾼다.
+
+### 12.5 모델 세션에 거는 거부 목록 (`engine/run/guard`, `turn`)
+
+네이티브에는 샌드박스가 없어 권한 규칙이 유일한 벽이다. macOS 엔진의 `alwaysDenied` 와 `harnessEntries` 를 같은 이름으로 옮기고 Windows 자리를 더했다. 모든 세션에, 환경과 상관없이 건다.
+
+- 쓰기 금지(`Edit`): 쓰기 범위(작업 폴더 + `write_roots`)마다 `CLAUDE.md` · `CLAUDE.local.md` · `.mcp.json` · `.gitattributes` · `.gitmodules` · `.claude` 통째 · `.git\config` · `.git\hooks` · `.git\info` · `.git\commondir` · `objects\info\alternates` · worktree · submodule 의 같은 자리, 하위 저장소의 같은 자리(`**\`). 네이티브는 사용자 영역도: Claude 설정 폴더(`~\.claude`, `CLAUDE_CONFIG_DIR` 가 있으면 그 폴더)의 `settings*.json` · `CLAUDE.md` · `.credentials.json`, `~\.claude.json`, 시작 프로그램 폴더.
+- 읽기 금지(`Read`): `.credentials.json`.
+- 도구 거부: `git push` 세 꼴과 `git.exe` 세 꼴 · `cmdkey` · `vaultcmd`(macOS 의 `security` 대응) · Atlassian MCP 쓰기. 고정 설정의 `disallowed_tools` 가 더해진다.
+- 허용 도구: 고정 설정에 `allowed_tools` 가 있으면 환경과 상관없이 그대로 쓴다. 없으면 `exec_env.sandbox` 가 참인 WSL 만 원본 기본 목록(맨 `Bash` 포함)이고, 네이티브는 맨 `Bash` 를 뺀다. 네이티브에서 셸이 필요하면 `Bash(<접두> *)` 꼴 규칙을 명시한다.
+- 한계: 이 규칙은 도구 권한만 막는다. 네이티브에서 Bash 를 허용하면 Bash 가 하는 일은 막지 못하고, `cmd /c git push` 같은 우회도 막지 못한다(§12.9). 규칙 경로는 `ExecEnv::render_settings` 가 환경 경로 꼴로 바꿔 `--settings` 파일로 넘긴다.
+
+### 12.6 작업 스케줄러 (`adapters/supervisor`)
+
+macOS LaunchAgent(`KeepAlive` · `RunAtLoad`)의 대응이다. COM 이 아니라 `schtasks.exe` 로 작업 XML 을 등록한다.
+
+- 실행마다 현재 사용자 작업 하나: 작업 폴더 `\ClaudeBoard\autopilot\`(`--dev` 는 `autopilot-dev`, 시험은 `autopilot-test`), 트리거는 로그온 + 1분 반복(`PT1M`, 끝없이), 이미 돌면 새로 띄우지 않고(`IgnoreNew`), 실행 시간 상한 없음(`PT0S`), 관리자 권한 없음(`LogonTrigger.UserId` 를 현재 사용자로 채운다 — 비우면 모든 사용자 로그온이 되어 관리자가 필요하다).
+- 엔진이 죽으면 다음 1분 반복이 다시 띄운다(macOS 10초). 둘이 겹쳐 떠도 `.engine.lock` 이 하나만 남긴다. 끝난 실행은 엔진이 자기 등록을 지운다.
+
+### 12.7 보드 쪽 (`autopilot.rs`, `AutopilotLine.svelte`)
+
+- 백엔드가 1초마다 `runs\` 아래 폴더를 훑어 스냅샷 `autopilot: AutopilotRun[]` 을 만든다(§6.1). 읽는 파일은 `run.json` · `queue.json` · 지금 단위의 `units\<n>\engine.json` 셋뿐이고, `(수정 시각, 길이)` 가 같으면 다시 읽지 않고 쓰는 중에 깨진 JSON 은 앞 값을 둔다. 끝난 실행은 600초 동안 목록에 둔다. 엔진이 살아 있는지는 보지 않는다(대기 · 일시정지 중에는 `run.json` 을 오래 쓰지 않는다).
+- 카드 짝짓기는 `project_root`(없으면 첫 단위 `cwd`) 경로를 대소문자 · 구분자 무시로 그룹 경로와 견준다. 줄 글: 상태 한국어 이름 · 실행 환경 이름 · `샌드박스 없음` 칩(`env.sandbox` 가 거짓일 때) · `단위 n/전체: 제목` · 쓴 시간 · `이번 단위 … USD` · 풀리는 시각 · `통과 · 미통과 · 상한(· 건너뜀 · 중단)`.
+- 명령 `autopilot_control(id, action)`: `pause` · `resume` · `stop` 만, 상태가 받을 수 있을 때만(`board_can_control`, 일시정지 중에만 재개 · 아닐 때만 일시정지) `control.json` 을 쓴다. 상태의 주인은 엔진이고 보드는 이 파일 하나만 쓴다.
+
+### 12.8 시험 도구
+
+| 도구 | 하는 일 |
+|---|---|
+| `crates/autopilot/tests/*.rs` | 규칙 · 상태 기계 · 어댑터 · 엔진 루프(가짜 포트 `tests/fakes`) · 명령줄(`cli.rs`, 실제 `claude-autopilot.exe` 를 `CLAUDE_BOARD_HOME`=임시 폴더로) · 종단(`e2e_fake.rs`) |
+| `tests/ported.rs` + `PORTED.json` | 옮긴 macOS 원본 파일(`rules/*` 다섯)과 그 시험 파일의 sha256 을 비교한다. macOS 규칙이 바뀌면 이 시험이 실패해 옮길 일을 알려 준다. 원본은 `Sources/AutopilotRules` |
+| `ci/fake-claude-stream.cjs` (+ `.test.cjs`) | `claude -p --input-format stream-json --output-format stream-json` 를 흉내 내는 가짜(모델 비용 0, 네트워크 없음). `FAKE_CLAUDE_*` 환경변수로 턴별 동작을 준다. `start` 가 `FAKE_CLAUDE_` 변수를 고정 설정 `claude_env` 에 얼린다 |
+| `tests/fixtures/mac-run/` | macOS 가 쓴 실행 폴더 사본. 파일 호환 시험(`tests/model.rs`)이 읽고 다시 써 본다 |
+| `#[ignore] measured_start_registers_and_unregister_all` | 실제 작업 스케줄러에 등록 · 지우기. `cargo test -p claude-board-autopilot --test cli -- --ignored` |
+
+돌리기: `cd windows && cargo test -p claude-board-autopilot`(Node 와 Git Bash 가 필요한 종단 시험은 없으면 실패한다). 규칙 · 부품 시험은 macOS 에서도 돈다.
+
+검증 결과(Windows 11 10.0.26300 한 대):
+
+| 대상 | 방법 | 결과 |
+|---|---|---|
+| 출발부터 끝까지(명령 프롬프트 · Git Bash) | 가짜 claude, 실제 어댑터, `start --no-schedule` 뒤 `run` | 모두 통과 |
+| 판정 명령 | 네 셸(cmd · PowerShell 7 · Windows PowerShell · Git Bash)에서 실제 실행 | 통과 |
+| 작업 스케줄러 | 관리자 없이 등록 · 1분 반복 실측 · 지우기 | 통과 |
+| 진짜 claude 2.1.296(haiku) 첫 실행 | 엔진이 넘기는 모든 옵션 수락 · stream-json 해석 · 비용 상한 적용 · 거부 약 110개의 설정 파일 수락 | 통과(단위 하나가 끝까지 통과하지는 않았다: 판정 명령을 잘못 적었다) |
+| WSL 어댑터 | 가짜 `WslRunner` 이음매로 시험(`tests/wsl_env.rs`) | 실제 배포판에서는 한 번도 띄우지 않았다(미확인) |
+
+### 12.9 정직한 한계
+
+- 없는 것: 시작 준비 화면(명령줄로만 시작, `run.json` · `queue.json` 을 손으로 적는다) · 합치기 / 승격 화면 · Jira · Notion · Figma 연결 · 보고서 · 터미널로 이어받기(`takeover` · `giveback`) · 여러 실행 자리(슬롯) · 비밀 어댑터(`adapters/secrets`).
+- 배포: 엔진 실행 파일 둘은 릴리스 zip · setup.exe · `install.ps1` 에 들어 있지 않다(소스에서 `cargo build --release -p claude-board-autopilot`). 들어가면 §8.1 과 `packaging` 을 고친다.
+- 규칙은 손으로 옮긴 것이라 macOS 쪽 변경은 `ported.rs` 가 실패해야 알 수 있다. `apAddEvidence`(밖에서 읽은 근거를 비밀값을 가려 기록)는 옮기지 않았다.
+- 모델이 쓸 수 있는 `units\<n>\engine.json` 을 엔진이 읽는다. 사람 없이 진짜로 돌리기 전에 닫아야 하는 문이다.
+- 네이티브 거부 규칙은 도구 권한만 막는다. Bash 를 허용한 실행에서 Bash 가 하는 일은 막지 못한다. 네이티브 환경은 샌드박스 없음에 동의한 실행에만 쓴다.
+- 확인하지 못한 것(`untested:`): 실제 WSL 배포판에서의 WSL 어댑터와 WSL 샌드박스, 실제 Windows 10, 로그오프 · 재부팅 뒤 작업 스케줄러가 엔진을 다시 띄우는 것, 오래 사람 없이 도는 실행, 진짜 claude 로 단위 하나가 끝까지 통과하는 것.
+- 엔진이 죽은 뒤 다시 뜨기까지는 최대 약 60초다(작업 스케줄러 반복 간격의 한계, macOS 10초).

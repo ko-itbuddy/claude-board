@@ -41,6 +41,10 @@ enum Pump {
 
 const FILE_WRITE_TOOLS: [&str; 4] = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
 
+/// 고정 설정에 `allowed_tools` 가 없을 때의 허용 목록 기본값(원본 `defaultAllowed`). Bash 는 맨 이름으로 들어 있다
+const DEFAULT_ALLOWED: [&str; 11] =
+    ["Read", "Glob", "Grep", "Bash", "Task", "TaskStop", "SendMessage", "Skill", "ToolSearch", "Monitor", "TodoWrite"];
+
 fn strs(v: Option<&Value>) -> Vec<String> {
     v.and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
 }
@@ -232,6 +236,18 @@ impl<'p> Engine<'p> {
         self.frozen.write_roots.get().map(|v| v.iter().map(PathBuf::from).collect()).unwrap_or_default()
     }
 
+    /// 허용 도구 목록. 고정 설정의 `allowed_tools` 가 있으면 환경과 상관없이 그대로 쓴다(항상 이긴다).
+    /// 없을 때의 기본값은 환경이 정한다 — 고정 설정 `exec_env.sandbox` 가 true(작동하는 샌드박스가 있는 WSL)면 원본 기본 목록 그대로,
+    /// 아니면(네이티브 Windows, 값 없음 포함) 같은 목록에서 맨 `Bash` 만 뺀다. 샌드박스가 없으면 맨 `Bash` 는 홈 어디든 쓰고 읽을 수 있어
+    /// 기본으로 주지 않는다. 네이티브에서 셸이 필요하면 고정 설정이 `Bash(npm test *)` 꼴 규칙을 명시해야 하고, 그 규칙은 그대로 넘어간다
+    fn allowed_tools_base(&self) -> Vec<String> {
+        if let Some(v) = self.frozen.extra.get("allowed_tools") {
+            return strs(Some(v));
+        }
+        let sandboxed = self.frozen.extra.get("exec_env").and_then(|e| e.get("sandbox")).and_then(Value::as_bool).unwrap_or(false);
+        DEFAULT_ALLOWED.iter().filter(|t| sandboxed || **t != "Bash").map(|t| t.to_string()).collect()
+    }
+
     /// 모델 세션이 할 수 있는 일의 범위. 실행 폴더의 상태 파일·고정 사본·다른 단위·엔진 전용 폴더는 쓰기 거부, 엔진 전용 폴더는 읽기도 거부
     fn session_policy(&self, n: usize) -> SessionPolicy {
         let unit_dir = self.unit_dir(n);
@@ -282,7 +298,8 @@ impl<'p> Engine<'p> {
             network_allow: strs(self.frozen.extra.get("network_allow")),
             local_binding: self.frozen.extra.get("local_binding").and_then(Value::as_bool).unwrap_or(false),
             // 파일 쓰기 도구는 쓰기 범위마다 경로를 붙인 규칙으로만 허용한다
-            allowed_tools: strs(self.frozen.extra.get("allowed_tools"))
+            allowed_tools: self
+                .allowed_tools_base()
                 .into_iter()
                 .filter(|t| !FILE_WRITE_TOOLS.contains(&t.as_str()))
                 .collect(),
