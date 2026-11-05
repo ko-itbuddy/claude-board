@@ -182,7 +182,7 @@ struct APImportStep1: View {
                 .accessibilityIdentifier("ap-imp-path")
             if m.reading { apNote("읽는 중…") }
             else if let r = m.repo {
-                if let e = r.error { apNote(e, APColor.fail) }
+                if let e = r.error { apNote(e, APColor.fail).accessibilityIdentifier("ap-imp-path-error") }
                 else {
                     apNote("프로젝트 \(r.project ?? "?")" + (r.known ? " · 지난 실행 \(r.pastRuns)" : " · 처음") + (r.setAt != nil ? " · 자율주행 세트 있음(\(apDay(r.setAt)))" : " · 세트의 지시 없음(가져오기 세션이 초안을 씀)"))
                 }

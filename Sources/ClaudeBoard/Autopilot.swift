@@ -2925,6 +2925,85 @@ func apGit(_ args: [String], _ cwd: String, env: [String] = []) -> String? {
     return p.terminationStatus == 0 ? String(decoding: d, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) : nil
 }
 
+// 출발 준비 git 자리 확인의 진짜 어댑터(규칙 apPrepGitCheck, 다듬기 ⑬-1 ④) — 파일 시스템은 lstat 으로만(바로 가기를 따라가지 않음), git 설정은
+// git config --file --no-includes(저장소를 찾지 않게 / 에서, 보통 파일만 — FIFO 로 멈추지 않게), 색인은 확인을 지난 git 폴더로 박은 보호 git 으로만 읽는다
+struct APBoardPrepGit: APPrepGitWorld {
+    private func mode(_ p: String) -> mode_t? { var st = stat(); return lstat(p, &st) == 0 ? st.st_mode & S_IFMT : nil }
+    func entry(_ dir: String) -> APGitEntry? {
+        let p = (dir == "/" ? "" : dir) + "/.git"
+        guard let m = mode(p) else { return nil }
+        switch m {
+        case S_IFDIR: return .dir
+        case S_IFLNK: return .link
+        case S_IFREG:
+            guard let t = text(p), t.hasPrefix("gitdir:") else { return .file(nil) }
+            return .file(String(t.dropFirst(7)))
+        default: return .other
+        }
+    }
+    func real(_ path: String) -> String? {
+        guard let r = realpath(path, nil) else { return nil }
+        defer { free(r) }
+        return String(cString: r)
+    }
+    func text(_ path: String) -> String? {
+        var st = stat()
+        guard lstat(path, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG, st.st_size <= 65_536 else { return nil }
+        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+        guard fd >= 0 else { return nil }
+        let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        return String(data: (try? h.read(upToCount: 65_536)) ?? Data(), encoding: .utf8)
+    }
+    func isFile(_ path: String) -> Bool { mode(path) == S_IFREG }
+    func isDir(_ path: String) -> Bool { mode(path) == S_IFDIR }
+    func stamp(_ path: String) -> String? { apGitStat(path) }
+    func config(_ file: String) -> [APConfigEntry]? {
+        guard let m = mode(file) else { return [] }
+        guard m == S_IFREG else { return nil }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        p.arguments = ["config", "--file", file, "--no-includes", "--null", "--list"]
+        p.currentDirectoryURL = URL(fileURLWithPath: "/")
+        p.environment = apGitEnv([])
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        p.standardInput = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return nil }
+        let d = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        guard p.terminationStatus == 0 else { return nil }
+        return String(decoding: d, as: UTF8.self).split(separator: "\0").map { (e: Substring) -> APConfigEntry in
+            // 키\n값, 값 없는 키(불리언)는 줄바꿈이 없다
+            guard let nl = e.firstIndex(of: "\n") else { return APConfigEntry(key: String(e), value: nil) }
+            return APConfigEntry(key: String(e[..<nl]), value: String(e[e.index(after: nl)...]))
+        }
+    }
+    func submodules(top: String, gitDir: String) -> (gitlinks: [String], gitmodules: Bool)? {
+        let pin = ["GIT_DIR=" + gitDir, "GIT_WORK_TREE=" + top]
+        let ls = apGitRun(["-c", "core.quotePath=false", "ls-files", "-s", "-z"], top, env: pin)
+        guard ls.code == 0 else { return nil }
+        let gm = mode(top + "/.gitmodules") != nil
+            || !(apGit(["ls-files", "-s", "-z", "--", ".gitmodules"], top, env: pin) ?? "").isEmpty
+            || apGitRun(["cat-file", "-e", "HEAD:.gitmodules"], top, env: pin).code == 0
+        return (apGitlinkPaths(lsFilesZ: ls.out), gm)
+    }
+}
+// 경로 하나를 확인한다(뒤 스레드에서). records: 이어 가는 지난 실행의 저장소별 git 자리 기록
+func apPrepGit(_ path: String, records: [String: APGitRecord] = [:]) -> APPrepGit {
+    apPrepGitCheck(path, world: APBoardPrepGit(), records: records, home: NSHomeDirectory())
+}
+// 지난 실행 run.json 의 저장소별 git 자리 기록(branches.repos.<저장소> 의 common_dir·common_ino) — 이어 가기의 출발 준비가 그때와 같은 git 폴더인지 본다
+func apPastGitRecords(_ runDir: String) -> [String: APGitRecord] {
+    let repos = ((apRead(runDir + "/run.json") as? [String: Any])?["branches"] as? [String: Any])?["repos"] as? [String: Any] ?? [:]
+    var out: [String: APGitRecord] = [:]
+    for (r, v) in repos {
+        guard let e = v as? [String: Any], let c = e["common_dir"] as? String else { continue }
+        out[r] = APGitRecord(commonDir: c, commonIno: e["common_ino"] as? String, workGitDir: nil, workGitIno: nil)
+    }
+    return out
+}
+
 // JSON 을 임시 파일을 거쳐 바꿔 넣는다(엔진이 읽는 파일이 반쯤 쓰인 채 보이지 않게)
 @discardableResult func apWriteJSON(_ path: String, _ obj: Any) -> Bool {
     guard let d = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) else { return false }
@@ -2992,6 +3071,7 @@ struct APPrepLine: Equatable, Identifiable {
 }
 
 struct APRepoInfo: Equatable {
+    var blocked: String?         // git 자리 확인(규칙 apPrepGitCheck, 다듬기 ⑬-1 ④)에 걸린 까닭 — 있으면 이 저장소에서 git 을 돌리지 않았다(아래 값은 비어 있음)
     var current: String?
     var branches: [String] = []
     var heads: [String: String] = [:]
@@ -3097,6 +3177,7 @@ extension APRecords {
     @Published private(set) var prepared = false
     @Published private(set) var rechecking = false
     @Published private(set) var problems: [String] = []
+    @Published private(set) var gitBlocked: [String] = []   // 보드의 git 자리 확인(다듬기 ⑬-1 ④)에 걸린 저장소 줄 — 있으면 준비를 멈추고 출발을 잠근다
     @Published private(set) var mode = ""
     @Published private(set) var modeReason = ""
     @Published private(set) var repos: [String] = []
@@ -3573,9 +3654,13 @@ extension APRecords {
             }
         }
         var have: [String: Set<String>] = [:], found: [(repo: String, branch: String)] = []
+        let records = apPastGitRecords(runDir)
         for w in want where FileManager.default.fileExists(atPath: w.repo) {
             if have[w.repo] == nil {
-                have[w.repo] = Set((apGit(["for-each-ref", "--format=%(refname)", "refs/heads/"], w.repo) ?? "").split(separator: "\n").map { String($0.dropFirst(11)) })
+                // git 자리 확인(다듬기 ⑬-1 ④): 걸린 저장소는 가지를 읽지 않는다(출발 준비가 그 저장소 줄에 까닭을 보이고 멈춘다)
+                let c = apPrepGit(w.repo, records: records)
+                have[w.repo] = c.block != nil || c.top != w.repo ? [] : Set((apGit(["for-each-ref", "--format=%(refname)", "refs/heads/"], w.repo, env: c.pin) ?? "")
+                    .split(separator: "\n").map { String($0.dropFirst(11)) })
             }
             if have[w.repo]?.contains(w.branch) == true, !found.contains(where: { $0 == w }) { found.append(w) }
         }
@@ -3622,7 +3707,7 @@ extension APRecords {
         guard !preparing, let run = pastRun else { return }
         step = 2
         preparing = true; prepared = false
-        problems = []; prerunPassed = []; harnessCards = []; harnessInfo = [:]; harnessPoints = []; harnessRebase = false
+        problems = []; prerunPassed = []; harnessCards = []; harnessInfo = [:]; harnessPoints = []; harnessRebase = false; gitBlocked = []
         let cand = units.filter { $0.excluded == nil }
         let gone = units.filter { $0.excluded != nil }
         lines = [
@@ -3654,12 +3739,21 @@ extension APRecords {
             return
         }
         setLine("check", "run")
-        let rootNow = root, settingsNow = settings, projectNow = project
+        let rootNow = root, settingsNow = settings, projectNow = project, pastDir = run.runDir
         queue.async {
-            let info = APStart.readRepos(cand, root: rootNow)
+            let info = APStart.readRepos(cand, root: rootNow, records: apPastGitRecords(pastDir))
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self.repos = info.repos; self.repoInfo = info.info
+                    // git 자리 확인에 걸린 저장소가 있으면 엔진·하네스·판정 걸음을 하지 않고 멈춘다(그 저장소에서 git 을 돌리지 않는다)
+                    let blocks = APStart.gitBlocks(info)
+                    guard blocks.isEmpty else {
+                        self.gitBlocked = blocks
+                        for l in ["harness", "misses", "recover", "revise", "env", "where", "prerun", "probe", "critic"] { self.setLine(l, "skip", note: "git 자리 확인에 걸린 저장소가 있어 하지 않았습니다") }
+                        self.setLine("check", "fail", note: blocks[0], detail: Array(blocks.dropFirst()))
+                        self.preparing = false; self.prepared = false
+                        return
+                    }
                     self.pickDefaultBases(projectNow, settingsNow)
                     self.writeDraft(cand.filter { $0.blocked == nil })
                     // 하네스 읽기(⑫-7b) → 판정 놓침(⑪-3) → 사라진 판정 시나리오 되살리기(⑫-7b) → 하네스가 바뀌었거나 놓침이 있으면 세트 이어 쓰기(판정 명령·시나리오·지시를 고침)
@@ -3680,35 +3774,48 @@ extension APRecords {
     }
 
     // 단위 작업 폴더가 든 저장소(엔진 gitRepos 와 같이 git 뿌리)와 그 지금 가지·가지 목록·머리·커밋 안 한 변경, dev 에만 있는 커밋 수
-    nonisolated static func readRepos(_ units: [APDraftUnit], root: String) -> (repos: [String], info: [String: APRepoInfo]) {
-        var repos: [String] = []
+    // 저장소 뿌리는 git 을 부르지 않고 파일 시스템으로 찾고, 엔진과 같은 git 자리 확인(규칙 apPrepGitCheck, 다듬기 ⑬-1 ④)을 지난 저장소만 읽는다.
+    // 걸린 저장소는 목록에 남기고(저장소 줄에 까닭) git 을 돌리지 않는다. records: 이어 가는 지난 실행의 git 자리 기록(그때와 같은 git 폴더인지)
+    nonisolated static func readRepos(_ units: [APDraftUnit], root: String, records: [String: APGitRecord] = [:]) -> (repos: [String], info: [String: APRepoInfo]) {
+        var checks: [(top: String, check: APPrepGit)] = []
         for u in units {
             guard let d = (try? JSONSerialization.jsonObject(with: u.def)) as? [String: Any], let cwd = d["cwd"] as? String,
-                  FileManager.default.fileExists(atPath: cwd), let top = apGit(["rev-parse", "--show-toplevel"], cwd), !top.isEmpty else { continue }
-            if !repos.contains(top) { repos.append(top) }
+                  FileManager.default.fileExists(atPath: cwd) else { continue }
+            let c = apPrepGit(cwd, records: records)
+            if let top = c.top, !checks.contains(where: { $0.top == top }) { checks.append((top, c)) }
         }
-        return (repos, repoInfos(repos))
+        return (checks.map(\.top), repoInfos(checks))
     }
-    // 주제로 시작(⑪-2): 작업 경로(git 뿌리)로 바로 — 단위가 아직 없다
+    // 주제로 시작(⑪-2)·가져오기(⑫-7a): 작업 경로(git 뿌리)로 바로 — 단위가 아직 없다
     nonisolated static func readRepos(roots: [String]) -> (repos: [String], info: [String: APRepoInfo]) {
-        let repos = roots.compactMap { r in apGit(["rev-parse", "--show-toplevel"], r).flatMap { $0.isEmpty ? nil : $0 } }
-        return (repos, repoInfos(repos))
+        var checks: [(top: String, check: APPrepGit)] = []
+        for r in roots {
+            let c = apPrepGit(r)
+            if let top = c.top, !checks.contains(where: { $0.top == top }) { checks.append((top, c)) }
+        }
+        return (checks.map(\.top), repoInfos(checks))
     }
-    nonisolated static func repoInfos(_ repos: [String]) -> [String: APRepoInfo] {
+    nonisolated static func repoInfos(_ checks: [(top: String, check: APPrepGit)]) -> [String: APRepoInfo] {
         var info: [String: APRepoInfo] = [:]
-        for r in repos {
+        for (r, c) in checks {
             var i = APRepoInfo()
-            i.current = apGit(["symbolic-ref", "-q", "--short", "HEAD"], r).flatMap { $0.isEmpty ? nil : $0 }
-            for line in (apGit(["for-each-ref", "--format=%(refname)\t%(objectname)", "refs/heads/"], r) ?? "").split(separator: "\n") {
+            if let why = c.block { i.blocked = apPrepGitBlockText(top: r, why: why, home: NSHomeDirectory()); info[r] = i; continue }
+            let pin = c.pin   // 확인한 git 폴더·작업 트리로 박는다(git 이 위로 저장소를 스스로 찾지 않게)
+            i.current = apGit(["symbolic-ref", "-q", "--short", "HEAD"], r, env: pin).flatMap { $0.isEmpty ? nil : $0 }
+            for line in (apGit(["for-each-ref", "--format=%(refname)\t%(objectname)", "refs/heads/"], r, env: pin) ?? "").split(separator: "\n") {
                 let f = line.split(separator: "\t")
                 if f.count == 2, f[0].hasPrefix("refs/heads/") { let b = String(f[0].dropFirst(11)); i.branches.append(b); i.heads[b] = String(f[1]) }
             }
-            i.dirty = (apGit(["status", "--porcelain", "--ignore-submodules=all"], r) ?? "").split(separator: "\n").map(String.init)
+            i.dirty = (apGit(["status", "--porcelain", "--ignore-submodules=all"], r, env: pin) ?? "").split(separator: "\n").map(String.init)
             let names = apBranchRoles(i.branches)
-            if let dev = names.dev, let live = names.live { i.devAhead = Int(apGit(["rev-list", "--count", "\(live)..\(dev)"], r) ?? "") }
+            if let dev = names.dev, let live = names.live { i.devAhead = Int(apGit(["rev-list", "--count", "\(live)..\(dev)"], r, env: pin) ?? "") }
             info[r] = i
         }
         return info
+    }
+    // git 자리 확인에 걸린 저장소의 줄 글(없으면 빈 배열) — 준비를 멈추고 출발을 잠근다
+    nonisolated static func gitBlocks(_ info: (repos: [String], info: [String: APRepoInfo])) -> [String] {
+        info.repos.compactMap { info.info[$0]?.blocked }
     }
 
     // 출발 가지 기본값(설계 판단): 프로젝트 설정 last_base → 지난 실행에서 고른 출발 가지 → 처음이면 승격 차례에서 master 바로 앞 가지.
@@ -4332,6 +4439,7 @@ extension APRecords {
         step = 2
         preparing = true; prepared = false
         problems = []; prerunPassed = []; units = []; cards = []; draftResult = [:]; draftCards = []; harnessCards = []; harnessInfo = [:]; harnessPoints = []; harnessRebase = false; scenarioCards = []; criterionCards = []
+        gitBlocked = []
         probeCards = []; criticCards = []; criticSummary = [:]; weakCard = nil; fixRound = 0; fixing = false; missInfo = [:]; judgeChanges = []; judgeChangeFrom = ""
         missesUsed = []; pendingSet = nil; critRound = 0; keepHistory = false
         let new = t.pathMode == "new"
@@ -4514,6 +4622,8 @@ extension APRecords {
                 MainActor.assumeIsolated {
                     guard self.source == "topic", self.preparing else { return }
                     self.repos = info.repos; self.repoInfo = info.info
+                    let blocks = APStart.gitBlocks(info)   // git 자리 확인(다듬기 ⑬-1 ④) — 걸리면 뼈대·초안 세션을 하지 않는다
+                    guard blocks.isEmpty else { self.gitBlocked = blocks; self.setLine("skeleton", "fail", note: blocks[0]); self.topicStop("git 자리 확인에 걸렸습니다"); return }
                     self.pickDefaultBases(self.project, self.settings)
                     if self.topicNew { self.promotion = apDefaultPromotion(self.repoInfo[rootNow]?.branches ?? []) }
                     self.writeTopic()
@@ -5293,6 +5403,7 @@ extension APStart {
         step = 2
         preparing = true; prepared = false
         problems = []; prerunPassed = []; prerunIds = []; units = []; cards = []; draftCards = []; harnessCards = []; harnessInfo = [:]; harnessPoints = []; harnessRebase = false; scenarioCards = []; criterionCards = []
+        gitBlocked = []
         probeCards = []; criticCards = []; criticSummary = [:]; weakCard = nil; fixRound = 0; fixing = false; missInfo = [:]; judgeChanges = []; judgeChangeFrom = ""
         missesUsed = []; pendingSet = nil; critRound = 0; keepHistory = false
         importGather = [:]; importResult = [:]; importChanged = [:]; importDraftedSet = false
@@ -5348,6 +5459,8 @@ extension APStart {
                 MainActor.assumeIsolated {
                     guard self.dir == d, self.isImport, self.preparing else { return }
                     self.repos = info.repos; self.repoInfo = info.info
+                    let blocks = APStart.gitBlocks(info)   // git 자리 확인(다듬기 ⑬-1 ④) — 걸리면 원천 모으기·가져오기 세션을 하지 않는다
+                    guard blocks.isEmpty else { self.gitBlocked = blocks; self.setLine("collect", "fail", note: blocks[0]); self.importStop("git 자리 확인에 걸렸습니다"); return }
                     self.pickDefaultBases(self.project, self.settings)
                     apWriteJSON(d + "/import.json", cfg)
                     self.writeDraft([])
@@ -5749,6 +5862,7 @@ struct APStartFoot: View {
         case 2:
             if s.preparing, s.linkUndecided { apNote("못 읽은 링크가 있습니다. 줄마다 다시 읽거나 이 링크를 빼고 계속합니다", APColor.limit) }
             else if s.preparing { apNote("준비하는 중입니다. 끝나면 다음으로 갈 수 있습니다. 시트를 닫아도 뒤에서 이어 갑니다") }
+            else if !s.gitBlocked.isEmpty { apNote("git 자리 확인에 걸린 저장소가 있어 준비를 멈췄습니다. 까닭을 확인해 고친 뒤 1단계에서 다시 준비합니다", APColor.limit) }
             else if s.source == "topic", !s.prepared { apNote("주제로 시작 준비가 멈췄습니다. 실패한 줄의 까닭을 보고 1단계에서 고친 뒤 다시 준비합니다", APColor.limit) }
             else if s.isImport, !s.prepared { apNote("가져오기 준비가 멈췄습니다. 실패한 줄의 까닭을 보고 1단계에서 고친 뒤 다시 준비합니다", APColor.limit) }
             else if !s.problems.isEmpty { apNote("엔진이 출발 전 확인에서 고칠 것을 찾았습니다. 단위 제안은 볼 수 있고 출발은 잠깁니다", APColor.limit) }
@@ -6019,6 +6133,7 @@ struct APStep2: View {
             APBox(title: s.preparing ? "보드가 준비하는 중" : "보드가 준비한 일", note: "사람은 기다리기만 합니다") {
                 ForEach(s.lines) { l in line(l) }
             }
+            if !s.gitBlocked.isEmpty { APGitBlocks(blocks: s.gitBlocked) }
             if !s.problems.isEmpty { APProblems(problems: s.problems) }
         }
     }
@@ -6054,6 +6169,19 @@ struct APStep2: View {
 }
 
 // 엔진 출발 전 확인의 고칠 것 — 엔진 문장 그대로
+// 보드의 git 자리 확인(규칙 apPrepGitCheck, 다듬기 ⑬-1 ④)에 걸린 저장소 — 그 저장소에서 git 을 돌리지 않았고 준비를 멈췄다
+struct APGitBlocks: View {
+    let blocks: [String]
+    var body: some View {
+        APBox(title: "보드의 git 자리 확인: 걸린 저장소 \(blocks.count)개", note: "고른 경로가 다른 저장소 안의 중첩 git 이거나 git 설정·하위 모듈에 걸렸습니다. 고친 뒤 1단계에서 다시 준비합니다",
+              tint: APColor.fail, axid: "ap-gitblocked") {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, p in
+                Text("· " + p).boardFont(11).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
 struct APProblems: View {
     let problems: [String]
     var body: some View {
