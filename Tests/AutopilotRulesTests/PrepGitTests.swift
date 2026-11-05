@@ -224,6 +224,18 @@ private let rows: [PrepGitRow] = [
         #expect(apPrepGitReadEnv == ["GIT_NO_LAZY_FETCH=1", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=protocol.allow", "GIT_CONFIG_VALUE_0=never"])
     }
 
+    @Test("보안 검토 고침 7: 출발 준비 읽기 환경은 물려받은 GIT_* 를 모두 빼고 보호·박기만 넣는다")
+    func 물려받은env() {
+        let inherited = ["PATH": "/usr/bin:/bin", "HOME": "/h", "GIT_CONFIG_PARAMETERS": "'filter.q.clean'='/w/plant.sh'", "GIT_CONFIG_COUNT": "2",
+                         "GIT_CONFIG_KEY_0": "core.fsmonitor", "GIT_CONFIG_VALUE_0": "/w/plant.sh", "GIT_CONFIG_KEY_1": "x", "GIT_CONFIG_VALUE_1": "y",
+                         "GIT_SSH_COMMAND": "/w/plant.sh", "GIT_ALLOW_PROTOCOL": "file", "GIT_INDEX_FILE": "/tmp/i", "GIT_DIR": "/elsewhere"]
+        let pin = APPrepGit(top: "/w/a", gitDir: "/w/a/.git", commonDir: "/w/a/.git").pin
+        let env = apPrepGitEnv(inherited: inherited, extra: pin)
+        #expect(env == ["PATH": "/usr/bin:/bin", "HOME": "/h", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_ATTR_NOSYSTEM": "1",
+                        "GIT_NO_REPLACE_OBJECTS": "1", "GIT_DIR": "/w/a/.git", "GIT_WORK_TREE": "/w/a", "GIT_NO_LAZY_FETCH": "1",
+                        "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "protocol.allow", "GIT_CONFIG_VALUE_0": "never"])
+    }
+
     @Test("막을 때 줄 글")
     func 글() {
         #expect(apPrepGitBlockText(top: "/h/w/nest/app", why: "다른 저장소(~/w/nest)의 작업 트리 안에 든 git 자리라", home: "/h")
