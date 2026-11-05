@@ -15,6 +15,7 @@ final class FakeGitFS: APPrepGitWorld, @unchecked Sendable {
     var index: [String: (gitlinks: [String], gitmodules: Bool)] = [:]
     var indexFail: Set<String> = []
     var stamps: [String: String] = [:]
+    var pins: [String: [String]] = [:]   // 색인 읽기(submodules)에 받은 박는 env
 
     func mkdir(_ p: String) {
         var cur = ""
@@ -58,7 +59,8 @@ final class FakeGitFS: APPrepGitWorld, @unchecked Sendable {
         return configs[file] ?? []
     }
     func submodules(top: String, pin: [String]) -> (gitlinks: [String], gitmodules: Bool)? {
-        indexFail.contains(top) ? nil : index[top] ?? ([], false)
+        pins[top] = pin
+        return indexFail.contains(top) ? nil : index[top] ?? ([], false)
     }
 }
 
@@ -119,6 +121,22 @@ private let rows: [PrepGitRow] = [
     .init(note: "하위 모듈 자리(.git/modules) 통과", path: "/w/s/sub", build: { f in
         f.repo("/w/s"); f.mkdir("/w/s/.git/modules/sub"); f.put("/w/s/.git/modules/sub/HEAD"); f.put("/w/s/sub/.git", "gitdir: ../.git/modules/sub")
     }, top: "/w/s/sub", gitDir: "/w/s/.git/modules/sub"),
+    // 보안 검토 고침 8(재현: .git/commondir 가 저장소 밖에 심은 공통 git 폴더를 가리키고 그 config 에 clean filter — 옛 확인은 깨끗한 .git/config 만 보고
+    // 지나갔고 보드 꼴 git status 가 filter 를 돌림, 표지 2). git 은 commondir 가 가리키는 자리의 config 를 읽는다
+    .init(note: "보안 검토 고침 8: .git/commondir 가 다른 폴더(심은 config 에 filter)를 가리키면 막음", path: "/w/a", build: { f in
+        f.repo("/w/a"); f.put("/w/a/.git/commondir", "/w/planted\n"); f.mkdir("/w/planted/objects"); f.mkdir("/w/planted/refs")
+        f.cfg("/w/planted/config", [("filter.x.clean", "/w/plant.sh")])
+    }, top: "/w/a", block: "git 폴더(/w/a/.git)에 commondir 가 있어 공통 git 폴더를 다른 자리로 돌려"),
+    .init(note: "보안 검토 고침 8: commondir 가 그 git 폴더 자신을 가리켜도 막음(따로 작업 트리 밖의 commondir 는 받지 않음)", path: "/w/a", build: { f in
+        f.repo("/w/a"); f.put("/w/a/.git/commondir", ".\n")
+    }, top: "/w/a", block: "git 폴더(/w/a/.git)에 commondir 가 있어 공통 git 폴더를 다른 자리로 돌려"),
+    .init(note: "보안 검토 고침 8: commondir 가 바로 가기여도 있음으로 보고 막음", path: "/w/a", build: { f in
+        f.repo("/w/a"); f.mkdir("/w/planted"); f.links["/w/a/.git/commondir"] = "/w/planted"
+    }, top: "/w/a", block: "git 폴더(/w/a/.git)에 commondir 가 있어 공통 git 폴더를 다른 자리로 돌려"),
+    .init(note: "보안 검토 고침 8: 하위 모듈 git 폴더에 commondir 가 있으면 막음", path: "/w/s/sub", build: { f in
+        f.repo("/w/s"); f.mkdir("/w/s/.git/modules/sub"); f.put("/w/s/.git/modules/sub/HEAD"); f.put("/w/s/sub/.git", "gitdir: ../.git/modules/sub")
+        f.mkdir("/w/planted"); f.put("/w/s/.git/modules/sub/commondir", "/w/planted")
+    }, top: "/w/s/sub", block: "하위 모듈 git 폴더(/w/s/.git/modules/sub)에 commondir 가 있어 공통 git 폴더를 다른 자리로 돌려"),
     .init(note: "하위 모듈 git 폴더가 그 저장소 밖이면 막음", path: "/w/t/sub", build: { f in
         f.repo("/w/s"); f.mkdir("/w/s/.git/modules/sub"); f.mkdir("/w/t"); f.put("/w/t/sub/.git", "gitdir: /w/s/.git/modules/sub")
     }, top: "/w/t/sub", block: "하위 모듈 git 폴더가 그 저장소 밖을 가리켜"),
@@ -217,6 +235,20 @@ private let rows: [PrepGitRow] = [
         if let g = r.gitDir { #expect(got.gitDir == g) }
         if r.block == nil, let t = r.top, let g = r.gitDir { #expect(got.pin == ["GIT_DIR=" + g, "GIT_COMMON_DIR=" + (got.commonDir ?? g), "GIT_WORK_TREE=" + t] + apPrepGitReadEnv) }
         if r.block != nil { #expect(got.pin.isEmpty, "막은 저장소는 박을 env 도 없다") }
+    }
+
+    @Test("보안 검토 고침 8: 박는 env 에 확인한 공통 git 폴더(따로 작업 트리면 그 저장소 git 폴더), 색인 읽기도 같은 env")
+    func 공통폴더박기() {
+        let f = FakeGitFS()
+        f.repo("/w/a"); f.put("/w/wt/x/.git", "gitdir: /w/a/.git/worktrees/x\n")
+        f.put("/w/a/.git/worktrees/x/gitdir", "/w/wt/x/.git\n"); f.put("/w/a/.git/worktrees/x/commondir", "../..\n"); f.put("/w/a/.git/worktrees/x/HEAD")
+        let wt = apPrepGitCheck("/w/wt/x", world: f, home: "/h")
+        #expect(wt.block == nil)
+        #expect(wt.pin == ["GIT_DIR=/w/a/.git/worktrees/x", "GIT_COMMON_DIR=/w/a/.git", "GIT_WORK_TREE=/w/wt/x"] + apPrepGitReadEnv)
+        #expect(f.pins["/w/wt/x"] == wt.pin)
+        let plain = apPrepGitCheck("/w/a", world: f, home: "/h")
+        #expect(plain.pin == ["GIT_DIR=/w/a/.git", "GIT_COMMON_DIR=/w/a/.git", "GIT_WORK_TREE=/w/a"] + apPrepGitReadEnv)
+        #expect(f.pins["/w/a"] == plain.pin)
     }
 
     @Test("보안 검토 고침 6: 읽기 env 는 늦은 받기를 끄고 전송 프로토콜을 막는다")
