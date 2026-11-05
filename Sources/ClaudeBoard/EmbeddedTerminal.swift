@@ -237,9 +237,22 @@ func terminalFontConfiguration() -> TerminalConfiguration {
     return TerminalConfiguration().fontSize(Float(size))
 }
 
-// ~/.claude/notifier/board.log 에 한 줄 남긴다 — 보드는 그대로 동작해야 하는 문제(단축키 등록 실패 등)를 적는다
+// 이 앱의 기록 파일 자리(BoardRules boardLogPlace, AppleScript 오류 기록과 같은 자리). 시험 빌드는 설치판 기록에 줄을 더하지 않게
+// ~/Library/Application Support/Claude Board Dev/board.log 에 쓴다(다듬기 ⑬-1). 맨 위 코드의 전역 값보다 먼저 불릴 수 있어 계산 값으로 둔다
+var boardLogAt: BoardLogPlace { boardLogPlace(bundleID: Bundle.main.bundleIdentifier, home: NSHomeDirectory()) }
+// 시험 빌드 자리는 폴더·파일이 없으면 만든다. 설치판은 아무것도 하지 않는다(파일이 없을 때 두 곳의 동작이 전과 같게)
+func boardLogPrepare(_ at: BoardLogPlace) {
+    guard at.dev, !FileManager.default.fileExists(atPath: at.path) else { return }
+    try? FileManager.default.createDirectory(atPath: (at.path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+    FileManager.default.createFile(atPath: at.path, contents: nil)
+}
+
+// ~/.claude/notifier/board.log 에 한 줄 남긴다 — 보드는 그대로 동작해야 하는 문제(단축키 등록 실패 등)를 적는다.
+// 설치판은 파일이 없으면 쓰지 않는다(시험 빌드는 위 boardLogPrepare 가 만든다)
 func boardLog(_ message: String) {
-    if let h = FileHandle(forWritingAtPath: NSHomeDirectory() + "/.claude/notifier/board.log") {
+    let at = boardLogAt
+    boardLogPrepare(at)
+    if let h = FileHandle(forWritingAtPath: at.path) {
         h.seekToEndOfFile(); h.write("\(Date()) \(message)\n".data(using: .utf8)!); h.closeFile()
     }
 }

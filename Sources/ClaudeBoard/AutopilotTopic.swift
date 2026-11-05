@@ -469,12 +469,16 @@ struct APMCPServerInfo: Equatable, Identifiable {
         guard p.hasPrefix("/"), FileManager.default.fileExists(atPath: p, isDirectory: &isDir), isDir.boolValue else {
             r.error = "그 경로에 폴더가 없습니다"; return r
         }
-        guard let top = apGit(["rev-parse", "--show-toplevel"], p), !top.isEmpty else {
+        // 저장소 뿌리는 git 을 부르지 않고 파일 시스템으로 찾고, 엔진과 같은 git 자리 확인(규칙 apPrepGitCheck, 다듬기 ⑬-1 ④)을 지나야 git 을 읽는다.
+        // 걸리면 까닭을 이 경로 칸에 보이고 그 저장소에서 git 을 돌리지 않는다(다음으로 넘어가지 않음)
+        let c = apPrepGit(p)
+        guard let top = c.top else {
             r.error = "git 저장소가 아닙니다. 저장소를 고르거나 '새 폴더 만들기'로 만듭니다"; return r
         }
+        if let why = c.block { r.error = apPrepGitBlockText(top: top, why: why, home: NSHomeDirectory()); return r }
         r.top = top
-        r.branch = apGit(["symbolic-ref", "-q", "--short", "HEAD"], top).flatMap { $0.isEmpty ? nil : $0 }
-        r.branches = (apGit(["for-each-ref", "--format=%(refname:short)", "refs/heads/"], top) ?? "").split(separator: "\n").map(String.init)
+        r.branch = apGit(["symbolic-ref", "-q", "--short", "HEAD"], top, env: c.pin).flatMap { $0.isEmpty ? nil : $0 }
+        r.branches = (apGit(["for-each-ref", "--format=%(refname:short)", "refs/heads/"], top, env: c.pin) ?? "").split(separator: "\n").map(String.init)
         let known = APRecords.project(autopilotRoot + "/private/records.sqlite", root: top)
         r.known = known != nil
         r.project = known?.id ?? String((top as NSString).lastPathComponent.map { $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) ? $0 : "-" }).prefix(40).description
@@ -701,7 +705,7 @@ struct APTopicStep1: View {
         }
         if t.reading { apNote("경로를 읽는 중입니다", APColor.work) }
         else if let r = t.repo {
-            if let e = r.error { apNote(e, APColor.fail) }
+            if let e = r.error { apNote(e, APColor.fail).accessibilityIdentifier("ap-topic-path-error") }
             else if let top = r.top {
                 HStack(spacing: 6) {
                     Text(apHome(top)).boardFont(11, design: .monospaced).lineLimit(1).truncationMode(.head)
