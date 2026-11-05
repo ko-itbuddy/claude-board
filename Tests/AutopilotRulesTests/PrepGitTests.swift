@@ -122,8 +122,43 @@ private let rows: [PrepGitRow] = [
     .init(note: "하위 모듈 git 폴더가 그 저장소 밖이면 막음", path: "/w/t/sub", build: { f in
         f.repo("/w/s"); f.mkdir("/w/s/.git/modules/sub"); f.mkdir("/w/t"); f.put("/w/t/sub/.git", "gitdir: /w/s/.git/modules/sub")
     }, top: "/w/t/sub", block: "하위 모듈 git 폴더가 그 저장소 밖을 가리켜"),
-    .init(note: "떨어진 git 폴더(<이름>.git) 통과", path: "/w/sep", build: { f in f.mkdir("/w/store/sep.git"); f.put("/w/store/sep.git/HEAD"); f.put("/w/sep/.git", "gitdir: /w/store/sep.git") },
-          top: "/w/sep", gitDir: "/w/store/sep.git"),
+    .init(note: "보안 검토 고침 2: 떨어진 git 폴더(--separate-git-dir 꼴)는 자리를 믿을 수 없어 막음(전에는 통과)", path: "/w/sep",
+          build: { f in f.mkdir("/w/store/sep.git"); f.put("/w/store/sep.git/HEAD"); f.put("/w/sep/.git", "gitdir: /w/store/sep.git") },
+          top: "/w/sep", block: "git 파일이 떨어진 git 폴더(/w/store/sep.git)를 가리켜 자리를 믿을 수 없어"),
+    .init(note: "보안 검토 고침 1·2: .git 파일이 임시 자리 git 폴더를 가리키면 막음(전에는 통과, 그 설정의 clean filter 를 보드 status 가 돌림)", path: "/w/top", build: { f in
+        f.repo("/tmp/evil"); f.cfg("/tmp/evil/.git/config", [("filter.x.clean", "/w/plant.sh")]); f.put("/w/top/.git", "gitdir: /tmp/evil/.git")
+    }, top: "/w/top", block: "git 폴더(/tmp/evil/.git)가 임시 폴더·자율주행 작업 트리 자리에 있어"),
+    .init(note: "보안 검토 고침 2: 따로 작업 트리의 git 폴더가 임시 자리면 막음", path: "/w/wt/x", build: { f in
+        f.repo("/private/var/folders/q/m"); f.put("/w/wt/x/.git", "gitdir: /private/var/folders/q/m/.git/worktrees/x")
+        f.put("/private/var/folders/q/m/.git/worktrees/x/gitdir", "/w/wt/x/.git"); f.put("/private/var/folders/q/m/.git/worktrees/x/commondir", "../..")
+    }, top: "/w/wt/x", block: "git 폴더(/private/var/folders/q/m/.git/worktrees/x)가 임시 폴더·자율주행 작업 트리 자리에 있어"),
+    .init(note: "보안 검토 고침 2: 자율주행 작업 트리 자리(~/.claude-board/worktrees) 안 git 폴더면 막음", path: "/w/q", build: { f in
+        f.repo("/h/.claude-board/worktrees/r1/x"); f.put("/w/q/.git", "gitdir: /h/.claude-board/worktrees/r1/x/.git")
+    }, top: "/w/q", block: "git 폴더(~/.claude-board/worktrees/r1/x/.git)가 임시 폴더·자율주행 작업 트리 자리에 있어"),
+    .init(note: "보안 검토 고침 2: .git 파일이 그 작업 트리 안 git 폴더를 가리키면 막음", path: "/w/t", build: { f in f.repo("/w/t/.hide"); f.put("/w/t/.git", "gitdir: .hide/.git") },
+          top: "/w/t", block: "git 폴더(/w/t/.hide/.git)가 그 작업 트리 안에 있어"),
+    .init(note: "보안 검토 고침 1: .git 파일이 다른 곳의 저장소를 가리켜도 고른 폴더가 다른 저장소 작업 트리 안이면 막음(전에는 통과)", path: "/w/x/sub", build: { f in
+        f.repo("/w/x"); f.repo("/w/other"); f.put("/w/x/sub/.git", "gitdir: /w/other/.git")
+    }, top: "/w/x/sub", block: "다른 저장소(/w/x)의 작업 트리 안에 든 git 자리라"),
+    .init(note: "자율주행 작업 트리 자리의 따로 작업 트리(git 폴더는 원래 저장소)는 통과", path: "/h/.claude-board/worktrees/r1/a", build: { f in
+        f.repo("/w/a"); f.put("/h/.claude-board/worktrees/r1/a/.git", "gitdir: /w/a/.git/worktrees/r1")
+        f.put("/w/a/.git/worktrees/r1/gitdir", "/h/.claude-board/worktrees/r1/a/.git"); f.put("/w/a/.git/worktrees/r1/commondir", "../..")
+    }, top: "/h/.claude-board/worktrees/r1/a", gitDir: "/w/a/.git/worktrees/r1"),
+    .init(note: "보안 검토 고침 3: 저장소 설정의 filter 명령(clean)은 막음(보드 status 가 돌림, 전에는 통과)", path: "/w/own", build: { f in
+        f.repo("/w/own"); f.cfg("/w/own/.git/config", [("filter.x.clean", "/w/plant.sh flt")])
+    }, top: "/w/own", block: "저장소 설정(/w/own/.git/config)에 filter 명령(filter.x.clean)이 있어"),
+    .init(note: "보안 검토 고침 3: smudge·process 도 막음(대소문자 접음)", path: "/w/own", build: { f in
+        f.repo("/w/own"); f.cfg("/w/own/.git/config", [("filter.Y.Process", "evil")])
+    }, top: "/w/own", block: "저장소 설정(/w/own/.git/config)에 filter 명령(filter.y.process)이 있어"),
+    .init(note: "git-lfs 표준 filter 는 통과", path: "/w/lfs", build: { f in
+        f.repo("/w/lfs"); f.cfg("/w/lfs/.git/config", [("filter.lfs.clean", "git-lfs clean -- %f"), ("filter.lfs.smudge", "git-lfs smudge -- %f"),
+                                                       ("filter.lfs.process", "git-lfs filter-process"), ("filter.lfs.required", "true")])
+    }, top: "/w/lfs", gitDir: "/w/lfs/.git"),
+    .init(note: "git-lfs 를 흉내 낸 다른 글은 막음", path: "/w/lfs", build: { f in f.repo("/w/lfs"); f.cfg("/w/lfs/.git/config", [("filter.lfs.clean", "git-lfs clean -- %f; touch x")]) },
+          top: "/w/lfs", block: "저장소 설정(/w/lfs/.git/config)에 filter 명령(filter.lfs.clean)이 있어"),
+    .init(note: "보드가 돌리는 git(ls-files·cat-file·symbolic-ref·for-each-ref·status·rev-list)이 부르지 않는 명령 키는 막지 않음(재현 안 됨)", path: "/w/own", build: { f in
+        f.repo("/w/own"); f.cfg("/w/own/.git/config", [("diff.external", "x"), ("diff.y.textconv", "x"), ("core.pager", "x"), ("core.sshcommand", "x")])
+    }, top: "/w/own", gitDir: "/w/own/.git"),
     .init(note: ".git 꼴이 아닌 자리를 가리키면 막음", path: "/w/odd", build: { f in f.mkdir("/w/store/plain"); f.put("/w/odd/.git", "gitdir: /w/store/plain") },
           top: "/w/odd", block: "git 폴더(/w/store/plain)가 저장소 .git 꼴 자리가 아니라"),
     .init(note: "저장소 자체 .git/config 의 core.fsmonitor 명령은 막음", path: "/w/cfg", build: { f in f.repo("/w/cfg"); f.cfg("/w/cfg/.git/config", [("core.fsmonitor", "/w/cfg/plant.sh")]) },
