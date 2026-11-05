@@ -1,0 +1,6 @@
+{
+  "format": "claude-board-autopilot-ported",
+  "version": 1,
+  "files": [],
+  "windows_only": ["src/rules/env_policy.rs"]
+}

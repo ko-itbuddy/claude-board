@@ -7,6 +7,7 @@
 pub mod claude_live;
 pub mod clock;
 pub mod console;
+pub mod envs;
 pub mod fileio;
 pub mod hooks;
 pub mod notify;
