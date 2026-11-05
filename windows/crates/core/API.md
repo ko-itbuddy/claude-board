@@ -13,7 +13,7 @@ Tauri 쪽에서는 `claude-board-core = { path = "../../crates/core" }` 로 넣�
 | `claude_json()` | `~/.claude.json` |
 | `notifier_dir()` | `CLAUDE_BOARD_NOTIFIER_DIR` > `~/.claude/notifier` |
 | `sessions_dir()`, `hook_exe()`, `app_path_file()` | `notifier/sessions`, `notifier/claude-board-hook.exe`, `notifier/app-path` |
-| `autopilot_root(dev)` | 자율주행 데이터 뿌리 `%LOCALAPPDATA%\Claude Board[ Dev]utopilot`(`CLAUDE_BOARD_HOME` 이 있으면 그 아래 `AppData\Local`). 실행 폴더는 `runs\<실행 id>` |
+| `autopilot_root(dev)` | 자율주행 데이터 뿌리 `%LOCALAPPDATA%\Claude Board[ Dev]\autopilot`(`CLAUDE_BOARD_HOME` 이 있으면 그 아래 `AppData\Local`). 실행 폴더는 `runs\<실행 id>` |
 | `mute_all_file()`, `notify_position_file()`, `board_theme_file()` | `notifier/mute-all`, `notifier/notify-position`, `notifier/board-theme` |
 | `local_bin()` | `~/.local/bin` |
 | `basename(&str)` | 마지막 이름(Windows 는 `\`·`/` 모두 구분자) — 세션의 `project` 규칙 |
