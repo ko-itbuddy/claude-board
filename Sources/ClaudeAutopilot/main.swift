@@ -5957,7 +5957,9 @@ func cmdFinish(_ args: [String]) -> Never {
     for r in info.keys.sorted() {
         guard var i = info[r] as? [String: Any], isDir(r) else { continue }
         let w = (i["work_tree"] as? String).flatMap { isDir($0) ? $0 : nil } ?? r
-        if w == r { i["work_git_dir"] = nil }
+        // 따로 작업 트리를 이미 지웠으면(finish merge 가 합친 뒤 지움) 그 작업 트리 git 폴더(git_dir·work_git_dir)는 없다 — 공통 git 폴더(자리·inode)만 본다.
+        // 다듬기 ⑬-2 ⑤: 전에는 git_dir 을 남겨 원래 저장소의 git 폴더와 견주어, 합친 뒤의 promote·cleanup·discard 가 "다른 자리로 풀려" 로 늘 거부됐다
+        if w == r { i["work_git_dir"] = nil; if (i["work_tree"] as? String) != nil { i["git_dir"] = nil } }
         if let why = gitDirChange(i, at: w) { fail("보안: \(repoName(r)) 의 \(why) 합치거나 버리지 않습니다(바꿔치기 의심). 사람이 확인하세요.") }
     }
     var promoted = b["promoted"] as? [[String: Any]] ?? []
