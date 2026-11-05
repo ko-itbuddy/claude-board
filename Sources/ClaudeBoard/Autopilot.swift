@@ -930,7 +930,9 @@ struct APHistory: Equatable {
 // 기록 저장소 읽기 — 읽기 전용으로 열고(SQLITE_OPEN_READONLY, 만들지 않음) 읽을 때마다 닫는다(긴 읽기 트랜잭션이 엔진의 체크포인트를 막지 않게).
 // 판(user_version)이 이 보드가 아는 판보다 높으면 읽을 수 있는 만큼 읽고 "보드를 업데이트하세요"를 보인다(설계 5장 7절)
 enum APRecords {
-    static let knownVersion = Int(apRecordsVersion)   // 판 2(5단계 ⑪-3 판정 놓침 표)
+    // 아는 판은 규칙의 판(다듬기 ⑬-2 부터 판 5: 단위 커밋 기록 unit_commits). 보드는 unit_commits·tickets 를 그리지 않고, 승격 뒤 되돌림은
+    // 엔진 misses 가 판정 놓침 줄(출발 준비 "판정 놓침(이 프로젝트)")로 내놓는다. 판 4 를 아는 옛 보드는 판 5 저장소를 읽기만 하고 위 안내를 보인다(시험 빌드로 확인)
+    static let knownVersion = Int(apRecordsVersion)
 
     private static func open(_ path: String) -> OpaquePointer? {
         guard FileManager.default.fileExists(atPath: path) else { return nil }

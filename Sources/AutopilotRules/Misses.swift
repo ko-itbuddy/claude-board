@@ -1,7 +1,7 @@
 // 자율주행 규칙(AutopilotRules) — 판정 놓침 되먹임(5단계 ⑪-3, 2026-10-30, 설계 2장 "③ 판정 놓침 되먹임"·"세트 기록과 이어 쓰기", 5장 7절 judge_misses).
 // 판정이 통과시켰지만 틀렸던 것(판정 쪽)과 지시가 모델을 멈추게 하거나 헤매게 한 자리(지시 쪽)를 실행 기록 저장소에 기계로 짝지어 남긴다.
 // 신호(판정 쪽): 판정을 통과한 단위를 합치기·승격 화면에서 버림(discard), 판정을 통과했는데 미룬 몫이 남음(next_start, 판정이 보지 않은 일),
-//   ①② 에서 확인된 지적(probe·critic). 승격 뒤 되돌림(revert)은 단위 커밋을 기록하지 않아 이번에는 남기지 않는다(설계 4장 "5단계 ⑪-3 판단").
+//   ①② 에서 확인된 지적(probe·critic), 승격 뒤 되돌림(revert, 다듬기 ⑬-2 부터 — 단위 커밋 기록과 짝짓기는 UnitCommits.swift).
 // 신호(지시 쪽): 권한 거부(denial), 묻기 도구 거부(asked), 판정을 지나지 못한 단위의 보류(parked), decisions_applied 근거가 지시·카드가 아닌 저장소 규칙(decision_basis).
 // 버리기 화면에서 까닭을 묻지 않는다(끝난 뒤 묻지 않는다는 원칙). 다음 가져오기·초안·비판·세트 이어 쓰기 세션에 요약해 근거로 넘기고(프로젝트마다 크기 상한),
 // 세트 이어 쓰기를 다시 돌리는 조건에 "판정 놓침이 있음"을 더한다(하네스가 그대로여도 같은 경로 다시 출발 때 판정 차이가 보이게).
@@ -11,7 +11,7 @@ import Foundation
 
 public enum APMissSignal: String, Equatable, Sendable, CaseIterable {
     case discard                         // 판정을 통과한 단위를 버림
-    case revert                          // 승격 뒤 되돌림(이번에는 쓰지 않음, 자리만)
+    case revert                          // 승격 뒤 되돌림(다듬기 ⑬-2, UnitCommits.swift 의 apRevertMisses)
     case nextStart = "next_start"        // 판정을 통과했는데 미룬 몫이 남음
     case probe                           // 반대 탐침에서 확인된 지적
     case critic                          // 비판 세션 반례로 확인된 지적
@@ -72,6 +72,8 @@ private func clip(_ s: String, _ n: Int = apMissWhyMax) -> String {
     let t = s.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
     return t.count <= n ? t : String(t.prefix(n - 1)) + "…"
 }
+// 같은 자르기를 다른 신호 규칙(되돌림, UnitCommits.swift)도 쓴다
+public func apClipMissWhy(_ s: String, _ n: Int = apMissWhyMax) -> String { clip(s, n) }
 
 // 버린 합칠 쪽(run.json branches.discarded 의 source)에 그 단위가 들었나: 자율주행 가지(autopilot)면 스토리 없는 단위, story:<키> 면 그 스토리의 단위
 public func apDiscardedUnit(story: String?, discardedSources: Set<String>) -> Bool {

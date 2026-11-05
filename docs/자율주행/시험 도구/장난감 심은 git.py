@@ -9,6 +9,10 @@
 #   top/        .git 파일이 --temp 아래 git 폴더를 가리키고 그 config 에 clean filter(보안 검토 고침 1·2)
 #   own/        저장소 자체 .git/config 의 clean filter(보안 검토 고침 3). diff.external·textconv·pager·sshCommand 도 심음(보드 git 이 부르지 않아 표지 없음)
 #   inc/        .git/config 의 include.path 가 저장소 밖 파일(<폴더>/inc.cfg)을 끌어오고 그 파일에 clean filter·fsmonitor(보안 검토 고침 4)
+#   uinc/       .git/config 의 include.path 가 ~<이 사용자>/… 꼴로 저장소 밖 파일(<폴더>/uinc.cfg)을 끌어오고 그 파일에 clean filter(보안 검토 고침 5, 다듬기 ⑬-2 에서 더함)
+#   cdir/       .git/commondir 가 저장소 밖에 심은 공통 git 폴더(<폴더>/planted-common)를 가리키고 그 config 에 clean filter(보안 검토 고침 8, ⑬-2 에서 더함)
+#   plain/      아무것도 심지 않은 저장소(.gitattributes 의 filter=x 만). 엔진 명령을 GIT_CONFIG_PARAMETERS 에 clean filter 를 심은 환경으로 부르는
+#               물려받은 GIT_* 꼴(보안 검토 고침 7)에 쓴다: GIT_CONFIG_PARAMETERS="'filter.x.clean'='<폴더>/plant-env.sh'"(⑬-2 에서 더함)
 # 보드가 filter 를 부를 꼴(크기 같고 시각만 다른 추적 파일)로 두려면 출발 준비에 넣기 전에 각 저장소에서 `touch -t 202601010000 README.md .gitattributes`.
 # 표지 수는 `ls <폴더>/MARK-*` 로 센다. fsmonitor 스크립트는 표준 입력을 읽지 않는다(cat 이면 git 이 기다리며 멈춤)
 import argparse, os, subprocess
@@ -82,4 +86,28 @@ d = os.path.join(root, "inc"); repo(d, attrs=True)
 with open(os.path.join(root, "inc.cfg"), "w") as f:
     f.write('[filter "x"]\n\tclean = %s\n[core]\n\tfsmonitor = %s\n' % (script("inc-flt", True), script("inc-fsm", False)))
 git(d, "config", "include.path", os.path.join(root, "inc.cfg"))
+
+# uinc: ~<사용자>/ 꼴 include(git 은 그 사용자의 홈으로 푼다). 이 사용자의 홈 아래에 root 가 있어야 같은 파일을 가리킨다
+d = os.path.join(root, "uinc"); repo(d, attrs=True)
+with open(os.path.join(root, "uinc.cfg"), "w") as f:
+    f.write('[filter "x"]\n\tclean = %s\n' % script("uinc-flt", True))
+home = os.path.expanduser("~")
+if root.startswith(home + "/"):
+    import pwd
+    git(d, "config", "include.path", "~%s/%s" % (pwd.getpwuid(os.getuid()).pw_name, os.path.relpath(os.path.join(root, "uinc.cfg"), home)))
+
+# cdir: .git/commondir → 저장소 밖 공통 git 폴더(그 config 에 clean filter). 객체·가지는 그 폴더 것으로 돈다
+c = os.path.join(root, "cdir-src"); repo(c, attrs=True)
+pc = os.path.join(root, "planted-common")
+subprocess.run(["cp", "-R", os.path.join(c, ".git"), pc], check=True)
+subprocess.run(["git", "config", "--file", os.path.join(pc, "config"), "filter.x.clean", script("cdir-flt", True)], check=True, env=env)
+d = os.path.join(root, "cdir"); os.makedirs(d, exist_ok=True)
+subprocess.run(["cp", "-R", os.path.join(c, ".git"), os.path.join(d, ".git")], check=True)
+for name in ("README.md", ".gitattributes"):
+    subprocess.run(["cp", os.path.join(c, name), os.path.join(d, name)], check=True)
+with open(os.path.join(d, ".git", "commondir"), "w") as f: f.write(pc + "\n")
+
+# plain: 심은 것 없음(물려받은 GIT_CONFIG_PARAMETERS 꼴에 씀)
+d = os.path.join(root, "plain"); repo(d, attrs=True)
+script("env", True)
 print(root)

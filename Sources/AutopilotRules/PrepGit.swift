@@ -100,11 +100,16 @@ private let apLFSFilter: [String: String] = ["filter.lfs.clean": "git-lfs clean 
 // 유스케이스: 경로 하나(고른 작업 경로·단위 작업 폴더)의 저장소와 막을 까닭. records 는 이어 가는 지난 실행의 저장소별 git 자리 기록(뿌리 → 기록)
 public func apPrepGitCheck(_ path: String, world: APPrepGitWorld, records: [String: APGitRecord] = [:], home: String) -> APPrepGit {
     guard let start = world.real(path) else { return APPrepGit() }
-    // ① 위로 올라가며 처음 만난 .git — git 이 저장소로 보지 않는 .git 폴더(HEAD 없음)는 git 처럼 지나친다
-    var d = start, found: (top: String, entry: APGitEntry)?
+    // ① 위로 올라가며 처음 만난 .git — git 이 저장소로 보지 않는 .git 폴더(HEAD 없음)는 git 처럼 지나친다.
+    // 보안 검토 고침(다듬기 ⑬-2, MEDIUM 찾기가 git 과 다름): git 은 HEAD 가 refs/ 를 가리키는 바로 가기여도 저장소로 받는다(재현: HEAD 를 바로 가기로 바꾼
+    // 저장소를 이 규칙은 지나쳐 위 폴더를 고르거나 저장소가 아니라고 봤고, 엔진 prerun 의 탐침이 git 이 찾은 그 저장소에서 filter 를 돌림, 표지 4·8).
+    // HEAD 가 있는데 보통 파일이 아니면(바로 가기·FIFO 등) 그 .git 을 찾은 것으로 두고 막는다(닫힌 쪽)
+    var d = start, found: (top: String, entry: APGitEntry)?, oddHead = false
     while true {
         if let e = world.entry(d) {
-            if case .dir = e, !world.isFile(d + "/.git/HEAD") {} else { found = (d, e); break }
+            if case .dir = e, !world.isFile(d + "/.git/HEAD") {
+                if world.stamp(d + "/.git/HEAD") != nil { found = (d, e); oddHead = true; break }
+            } else { found = (d, e); break }
         }
         if d == "/" { break }
         d = parent(d)
@@ -112,6 +117,7 @@ public func apPrepGitCheck(_ path: String, world: APPrepGitWorld, records: [Stri
     guard let (top, entry) = found else { return APPrepGit() }
     var r = APPrepGit(top: top)
     func stop(_ why: String) -> APPrepGit { r.block = why; return r }
+    if oddHead { return stop(".git/HEAD 가 보통 파일이 아니라(바로 가기 등)") }
     let g: String
     switch entry {
     case .link: return stop(".git 이 바로 가기라")

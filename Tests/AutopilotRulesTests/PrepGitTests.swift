@@ -81,6 +81,17 @@ private let rows: [PrepGitRow] = [
     .init(note: "git 저장소가 아님(위로 / 까지 .git 없음)", path: "/w/plain", build: { $0.mkdir("/w/plain") }, top: nil),
     .init(note: "없는 경로", path: "/w/none", build: { _ in }, top: nil),
     .init(note: "HEAD 없는 .git 폴더는 git 처럼 지나친다", path: "/w/a/x", build: { $0.repo("/w/a"); $0.mkdir("/w/a/x/.git") }, top: "/w/a", gitDir: "/w/a/.git"),
+    // 보안 검토 고침(다듬기 ⑬-2, MEDIUM 찾기가 git 과 다름): git 은 HEAD 가 refs/ 를 가리키는 바로 가기여도 저장소로 받는다 — 지나치지 않고 막는다
+    .init(note: "HEAD 가 바로 가기인 .git(혼자 선 저장소)은 막음", path: "/w/hs", build: { f in
+        f.repo("/w/hs"); f.files["/w/hs/.git/HEAD"] = nil; f.put("/w/hs/.git/refs/heads/main", "0"); f.links["/w/hs/.git/HEAD"] = "/w/hs/.git/refs/heads/main"
+    }, top: "/w/hs", block: ".git/HEAD 가 보통 파일이 아니라(바로 가기 등)"),
+    .init(note: "바깥 저장소 안 중첩 저장소의 HEAD 가 바로 가기면 바깥으로 지나치지 않고 막음", path: "/w/a/app/src", build: { f in
+        f.repo("/w/a"); f.repo("/w/a/app"); f.mkdir("/w/a/app/src"); f.files["/w/a/app/.git/HEAD"] = nil
+        f.put("/w/a/app/.git/refs/heads/main", "0"); f.links["/w/a/app/.git/HEAD"] = "/w/a/app/.git/refs/heads/main"
+    }, top: "/w/a/app", block: ".git/HEAD 가 보통 파일이 아니라(바로 가기 등)"),
+    .init(note: "HEAD 가 FIFO 인 .git 도 막음", path: "/w/hf", build: { f in
+        f.repo("/w/hf"); f.files["/w/hf/.git/HEAD"] = nil; f.fifos.insert("/w/hf/.git/HEAD")
+    }, top: "/w/hf", block: ".git/HEAD 가 보통 파일이 아니라(바로 가기 등)"),
     .init(note: ".git 이 바로 가기면 막음", path: "/w/l", build: { $0.mkdir("/w/l"); $0.repo("/w/real"); $0.links["/w/l/.git"] = "/w/real/.git" },
           top: "/w/l", block: ".git 이 바로 가기라"),
     .init(note: ".git 이 FIFO 면 막음", path: "/w/f", build: { $0.mkdir("/w/f"); $0.fifos.insert("/w/f/.git") }, top: "/w/f", block: ".git 이 폴더도 파일도 아니라"),
