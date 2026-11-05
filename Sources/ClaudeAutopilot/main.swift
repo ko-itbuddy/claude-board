@@ -10,6 +10,7 @@
 //        claude-autopilot takeover-check <실행 폴더>                  이어받은 실행의 작업 트리 git 확인(보드가 이어받기 탭을 열기 직전, JSON {ok, why})
 //        claude-autopilot records import [--dev|--db <파일>] [--project <이름>] [--unit-key <칸 경로>] <원본…>
 //                                                                   실행 기록 저장소(SQLite)에 실행 폴더·일반 꼴 대기열을 옮겨 담기
+//        claude-autopilot records scan-reverts <프로젝트> [--dev] [--json]   승격 뒤 되돌림 훑기(다듬기 ⑬-2, 판정 놓침 revert. misses·start 도 부름)
 //        claude-autopilot prerun <실행 폴더> [--dev]                  출발 전 판정 미리 돌리기(prerun.json)
 //        claude-autopilot report <실행 폴더> [--out <파일>|-]         보고서 다시 그리기(report.html·units/<n>/report.html, 모델을 부르지 않음).
 //                                                                   도는 엔진은 단위 판정 뒤·건너뛴 뒤·끝 정리 때 같은 틀(AutopilotRules)로 스스로 그린다
@@ -1950,6 +1951,95 @@ extension RecordsDB {
             """, [project])
         return written
     }
+}
+
+// MARK: - 승격 뒤 되돌림 훑기 (다듬기 ⑬-2 ③, 규칙 AutopilotRules/UnitCommits.swift)
+
+// git 어댑터 — 사람 저장소 git 자리 확인(prepGit, 지난 실행의 git 폴더 기록과도 견줌)을 지난 저장소만, 확인한 git 폴더·공통 git 폴더·작업 트리로 박고
+// 늦은 받기·전송을 막은 env 로 읽기만 한다(가지·ref 쓰기 0). log 는 서명 확인·notes·mailmap 을 끄고 커밋마다 NUL 로 가른다
+struct EngineRevertWorld: APRevertWorld {
+    let pins: [String: [String]]
+    func commits(repo: String, into: String, from: String, max: Int) -> [APScannedCommit]? {
+        guard let pin = pins[repo], apRefNameOK(into), apFullSHA(from) != nil else { return nil }
+        let r = gitRun(["log", "--no-show-signature", "--no-color", "--no-notes", "--no-mailmap", "-z", "--format=%H%n%B", "--max-count=\(max)",
+                        "\(from)..refs/heads/\(into)", "--"], cwd: repo, withErr: false, env: pin)
+        guard r.code == 0 else { return nil }
+        return r.out.split(separator: "\0", omittingEmptySubsequences: true).compactMap { rec -> APScannedCommit? in
+            let t = String(rec.drop { $0 == "\n" })
+            let parts = t.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+            guard let first = parts.first, let sha = apFullSHA(String(first)) else { return nil }
+            return APScannedCommit(sha: sha, message: parts.count > 1 ? String(parts[1]) : "")
+        }
+    }
+    func introduced(repo: String, merge: String, max: Int) -> [String]? {
+        guard let pin = pins[repo], let m = apFullSHA(merge) else { return nil }
+        let r = gitRun(["rev-list", "--max-count=\(max)", "\(m)^1..\(m)", "--"], cwd: repo, withErr: false, env: pin)
+        return r.code == 0 ? r.out.split(separator: "\n").compactMap { apFullSHA(String($0)) } : nil
+    }
+}
+
+struct RevertScanOutcome {
+    var scanned = 0, hits = 0, added = 0, dropped = 0
+    var notes: [String] = []
+    var failed = false
+    var json: [String: Any] { ["scanned": scanned, "hits": hits, "added": added, "dropped": dropped, "notes": notes, "ok": !failed] }
+}
+// 그 프로젝트의 실행들이 승격한 가지(runs.branches.promoted)를 훑어 판정 놓침 revert 를 남기고 거둔다(쓰는 것은 기록 저장소 judge_misses 뿐, git 은 읽기만)
+func scanReverts(project: String, dev: Bool) -> RevertScanOutcome {
+    var o = RevertScanOutcome()
+    let path = recordsPath(dev: dev)
+    guard fm.fileExists(atPath: path) else { o.notes.append("실행 기록 저장소가 아직 없습니다"); return o }
+    let db: RecordsDB
+    do { db = try RecordsDB(path) } catch { o.notes.append("실행 기록 저장소를 열지 못했습니다: \(error)"); o.failed = true; return o }
+    defer { db.close() }
+    do {
+        var promoted: [[String: Any]] = [], records: [String: APGitRecord] = [:], setOf: [String: String] = [:], dirOf: [String: String] = [:]
+        for r in try db.rows("SELECT id, branches, set_id, run_dir FROM runs WHERE project_id=? ORDER BY started", [project]) {
+            guard let id = r[0] as? String else { continue }
+            setOf[id] = r[2] as? String; dirOf[id] = r[3] as? String
+            guard let b = (r[1] as? String).flatMap({ try? JSONSerialization.jsonObject(with: Data($0.utf8)) }) as? [String: Any] else { continue }
+            promoted += b["promoted"] as? [[String: Any]] ?? []
+            for (repo, v) in b["repos"] as? [String: Any] ?? [:] {
+                guard let i = v as? [String: Any], let c = i["common_dir"] as? String else { continue }
+                records[repo] = APGitRecord(commonDir: c, commonIno: i["common_ino"] as? String, workGitDir: nil, workGitIno: nil)   // 뒤(최근) 실행의 기록이 이김
+            }
+        }
+        let ranges = apRevertRanges(promoted: promoted)
+        guard !ranges.isEmpty else { return o }
+        // 저장소마다 git 자리 확인(⑬-2 ⑥, 지난 실행이 출발할 때 적은 공통 git 폴더와도 견줌) — 걸리면 그 저장소는 git 을 부르지 않는다
+        var pins: [String: [String]] = [:], blocked: [String: String] = [:]
+        for repo in Set(ranges.map(\.repo)) {
+            guard isDir(repo) else { blocked[repo] = "저장소 자리가 없어"; continue }
+            let g = prepGit(repo, records: records[repo].map { [realPathLoose(repo): $0] } ?? [:])
+            if let why = g.block { blocked[repo] = "보안: " + why }
+            else if g.top.map(canonical) != canonical(repo) { blocked[repo] = "그 자리가 저장소 뿌리가 아니라" }
+            else { pins[repo] = g.pin }
+        }
+        let recorded = try db.rows("SELECT run_id, unit_n, repo, sha, kind, ref, source, at FROM unit_commits WHERE run_id IN (SELECT id FROM runs WHERE project_id=?)", [project])
+            .compactMap { r -> APUnitCommit? in
+                guard let run = r[0] as? String, let repo = r[2] as? String, let sha = (r[3] as? String).flatMap(apFullSHA),
+                      let kind = (r[4] as? String).flatMap(APCommitKind.init(rawValue:)) else { return nil }
+                return APUnitCommit(run: run, unitN: inum(r[1]), repo: repo, sha: sha, kind: kind, ref: r[5] as? String ?? "", source: r[6] as? String, at: num(r[7]) ?? 0)
+            }
+        let scan = apScanReverts(ranges: ranges, recorded: recorded, world: EngineRevertWorld(pins: pins), blocked: blocked)
+        o.scanned = scan.scanned; o.hits = scan.hits.count; o.notes = scan.notes
+        // 단위 기록(상태·제목·원천 키)과 판정 글(고정 설정, 실행 폴더가 남아 있으면)
+        var units: [String: APRevertUnit] = [:], frozenUnits: [String: [[String: Any]]] = [:]
+        for r in try db.rows("SELECT run_id, n, unit_id, source_key, title, status FROM units WHERE run_id IN (SELECT id FROM runs WHERE project_id=?)", [project]) {
+            guard let run = r[0] as? String, let n = inum(r[1]) else { continue }
+            if frozenUnits[run] == nil { frozenUnits[run] = dirOf[run].flatMap { (readJSON($0 + "/pinned/frozen.json") as? [String: Any])?["units"] as? [[String: Any]] } ?? [] }
+            let fu = frozenUnits[run] ?? []
+            let label = fu.indices.contains(n - 1) ? judgeLabelOf(fu[n - 1]) : ""
+            units["\(run)/\(n)"] = APRevertUnit(status: r[5] as? String ?? "", unitId: r[2] as? String, sourceKey: r[3] as? String, title: r[4] as? String ?? "",
+                                                judge: label.isEmpty ? nil : label, judgeDigest: label.isEmpty ? nil : sha256(Data(label.utf8)), setId: setOf[run])
+        }
+        let (put, drop) = apRevertMisses(scan, project: project, units: units, repoName: repoName, at: r3(now()))
+        try db.transaction {
+            o.added = put.isEmpty ? 0 : try db.putMisses(put)
+            for id in drop { o.dropped += try db.run("DELETE FROM judge_misses WHERE id=? AND project_id=? AND state='open'", [id, project]) }
+        }
+    } catch { o.notes.append("되돌림을 훑지 못했습니다: \(error)"); o.failed = true }
+    return o
 }
 
 // MARK: - 엔진
@@ -4472,6 +4562,9 @@ func usage() -> Never {
              출발 전 --json: 보드가 읽는 확인 결과(고칠 것·어디서·저장소·Jira 단위의 가지)
            claude-autopilot records import [--dev | --db <파일>] [--project <이름>] [--unit-key <칸 경로>] <원본…>
              원본: 실행 폴더(run.json·queue.json 이 있는 폴더) 또는 일반 꼴 대기열 파일(format "claude-board-queue")
+           claude-autopilot records scan-reverts <프로젝트> [--dev] [--json]
+             승격 뒤 되돌림 훑기(읽기만): 그 프로젝트 실행들이 승격한 가지를 승격 머리 뒤로만 읽어 "This reverts commit <sha>" 가 기록된 단위 커밋·병합 커밋과
+             같을 때만 판정 놓침(revert)으로 남긴다. 되돌림을 다시 되돌렸으면 열린 줄을 거둔다. 출발 준비의 misses 와 start 도 같은 훑기를 한다
            claude-autopilot report <실행 폴더> [--out <파일>|-]
              보고서 다시 그리기(모델 0): 실행 폴더의 report.html·units/<n>/report.html. --out 이면 실행 보고서 하나만 그 파일에(- 는 표준 출력)
            claude-autopilot finish <실행 폴더> merge --into <가지> [--story <키>]
@@ -5114,6 +5207,11 @@ func cmdStart(_ args: [String]) -> Never {
         } catch { print("가져오기 줄을 기록 저장소에 쓰지 못했습니다: \(error)") }
     }
     print("출발했습니다: \(label)\n상태 보기: \(pinned) status \(dir)")
+    // 같은 프로젝트의 지난 실행이 승격한 가지에서 되돌림을 훑는다(다듬기 ⑬-2 ③, 명령줄 출발에도 — 보드 출발 준비는 misses 가 먼저 함). 못 해도 출발은 그대로
+    if let p = frozen["project"] as? String, validName(p) {
+        let rs = scanReverts(project: p, dev: dev)
+        if rs.added > 0 || rs.dropped > 0 || rs.failed { print("승격 뒤 되돌림: 새로 남긴 판정 놓침 \(rs.added)줄 · 거둔 줄 \(rs.dropped)줄\(rs.failed ? " · " + (rs.notes.last ?? "") : "")") }
+    }
     exit(0)
 }
 
@@ -5444,6 +5542,16 @@ func sourceDigest(_ p: String) -> String {
 
 // 실행 기록 저장소에 지난 기록을 옮겨 담는다. 원본은 읽기만 한다. 일반 꼴 대기열을 먼저 옮기고(단위의 예상을 대기열 항목에서 찾아 붙이므로) 실행 폴더를 옮긴다
 func cmdRecords(_ args: [String]) -> Never {
+    if args.first == "scan-reverts" {
+        guard let project = args.dropFirst().first(where: { !$0.hasPrefix("--") }), validName(project) else { usage() }
+        let o = scanReverts(project: project, dev: args.contains("--dev"))
+        if args.contains("--json") { print(jsonText(o.json)) }
+        else {
+            print("승격 뒤 되돌림: 훑은 커밋 \(o.scanned)개 · 짝지은 되돌림 \(o.hits)건 · 새로 남긴 판정 놓침 \(o.added)줄 · 거둔 줄 \(o.dropped)줄")
+            for n in o.notes { print("  " + n) }
+        }
+        exit(o.failed ? 1 : 0)
+    }
     guard args.first == "import" else { usage() }
     var dev = false, dbArg: String?, project: String?, unitKey: String?, sources: [String] = []
     var i = 1
@@ -7675,6 +7783,8 @@ func cmdMisses(_ args: [String]) -> Never {
         writeJSON(dir + "/misses.json", o); print(jsonText(o)); exit(0)
     }
     mkdirPrivate(privateRoot(dev: dev))
+    // 승격 뒤 되돌림을 먼저 훑는다(다듬기 ⑬-2 ③) — 출발 준비의 이 줄에 그 신호가 함께 보이게. 못 훑어도 놓침 읽기는 한다
+    let rs = scanReverts(project: project, dev: dev)
     let db: RecordsDB
     do { db = try RecordsDB(recordsPath(dev: dev)) } catch { fail("실행 기록 저장소를 열지 못했습니다: \(error)") }
     let open = (try? db.misses(project: project, openOnly: true)) ?? []
@@ -7685,7 +7795,7 @@ func cmdMisses(_ args: [String]) -> Never {
          "label": apMissLabel(m.signal), "side": m.side, "judge": m.judge ?? NSNull(), "why": m.why, "created": m.created]
     }
     let o: [String: Any] = ["project": project, "open": open.count, "open_judge": open.filter { $0.side == "judge" }.count, "total": all.count, "rows": rows,
-                            "digest": apMissDigest(all), "at": r3(now())]
+                            "digest": apMissDigest(all), "revert_scan": rs.json, "at": r3(now())]
     writeJSON(dir + "/misses.json", o)
     print(jsonText(o)); exit(0)
 }
