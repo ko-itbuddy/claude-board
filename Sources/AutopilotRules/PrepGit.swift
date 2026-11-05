@@ -58,10 +58,10 @@ public struct APPrepGit: Equatable, Sendable {
     public init(top: String? = nil, gitDir: String? = nil, commonDir: String? = nil, block: String? = nil) {
         self.top = top; self.gitDir = gitDir; self.commonDir = commonDir; self.block = block
     }
-    // 통과한 저장소의 읽기(지금 가지·가지 목록·status·rev-list)에 박는 env — git 이 위로 저장소를 스스로 찾지 않게
+    // 통과한 저장소의 읽기(지금 가지·가지 목록·status·rev-list)에 박는 env — git 이 위로 저장소를 스스로 찾지 않게, 원격으로 객체를 받지 않게(apPrepGitReadEnv)
     public var pin: [String] {
         guard block == nil, let t = top, let g = gitDir else { return [] }
-        return ["GIT_DIR=" + g, "GIT_WORK_TREE=" + t]
+        return ["GIT_DIR=" + g, "GIT_WORK_TREE=" + t] + apPrepGitReadEnv
     }
 }
 
@@ -77,6 +77,10 @@ private func fsmonitorIsBool(_ v: String?) -> Bool {
     guard let v else { return true }
     return ["", "true", "false", "yes", "no", "on", "off", "1", "0"].contains(v.trimmingCharacters(in: .whitespaces).lowercased())
 }
+
+// 보안 검토 고침 6(받침, 재현하지 않음): 출발 준비의 git 읽기는 부분 복제(promisor) 저장소에서 빠진 객체를 받으려고 원격 명령
+// (remote.*.uploadpack·core.sshCommand)을 부르지 않게 늦은 받기를 끄고 모든 전송 프로토콜을 막는다(GIT_CONFIG_COUNT 로 명령줄 설정과 같은 무게)
+public let apPrepGitReadEnv = ["GIT_NO_LAZY_FETCH=1", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=protocol.allow", "GIT_CONFIG_VALUE_0=never"]
 
 // git-lfs 가 저장소에 쓰는 표준 filter 글(git lfs install --local) — 이 글 그대로일 때만 filter 명령을 받는다
 private let apLFSFilter: [String: String] = ["filter.lfs.clean": "git-lfs clean -- %f", "filter.lfs.smudge": "git-lfs smudge -- %f", "filter.lfs.process": "git-lfs filter-process"]
@@ -186,6 +190,9 @@ public func apPrepGitCheck(_ path: String, world: APPrepGitWorld, records: [Stri
                 return "\(root ? "저장소 설정" : "git 설정")(\(apPrepShortPath(file, home: home)))에 filter 명령(\(k))이 있어"
             }
             guard k == "include.path" || (k.hasPrefix("includeif.") && k.hasSuffix(".path")), let v = e.value, !v.isEmpty else { continue }
+            // 보안 검토 고침 5: git 은 ~<사용자>/ 를 그 사용자의 홈으로, %(prefix)/ 를 git 설치 자리로 푼다(재현: ~<이 사용자>/ 로 끌어온 파일의 filter 를 status 가 돌림).
+            // 우리 풀이와 달라 엉뚱한 파일을 보게 되므로 닫힌 쪽으로 막는다
+            if (v.hasPrefix("~") && v != "~" && !v.hasPrefix("~/")) || v.contains("%(prefix)") { return "git 설정 include 경로(\(v.count > 80 ? String(v.prefix(80)) + "…" : v))를 git 과 같게 풀 수 없어" }
             let p = v == "~" ? home : v.hasPrefix("~/") ? home + v.dropFirst(1) : v.hasPrefix("/") ? v : dir + "/" + v
             if inScope(p) { return "git 설정 include 가 저장소·임시 폴더 안(\(apPrepShortPath(p, home: home)))을 가리켜" }
             if depth >= 10 { return "git 설정 include 가 10단 넘게 겹쳐" }

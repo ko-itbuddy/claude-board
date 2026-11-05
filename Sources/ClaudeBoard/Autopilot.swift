@@ -2980,12 +2980,13 @@ struct APBoardPrepGit: APPrepGitWorld {
         }
     }
     func submodules(top: String, gitDir: String) -> (gitlinks: [String], gitmodules: Bool)? {
-        let pin = ["GIT_DIR=" + gitDir, "GIT_WORK_TREE=" + top]
+        let pin = ["GIT_DIR=" + gitDir, "GIT_WORK_TREE=" + top] + apPrepGitReadEnv   // 늦은 받기·전송 프로토콜 막음(보안 검토 고침 6)
         let ls = apGitRun(["-c", "core.quotePath=false", "ls-files", "-s", "-z"], top, env: pin)
         guard ls.code == 0 else { return nil }
+        // HEAD 의 .gitmodules 는 트리 줄만 본다(ls-tree — 부분 복제에서 빠진 blob 을 찾지 않게)
         let gm = mode(top + "/.gitmodules") != nil
             || !(apGit(["ls-files", "-s", "-z", "--", ".gitmodules"], top, env: pin) ?? "").isEmpty
-            || apGitRun(["cat-file", "-e", "HEAD:.gitmodules"], top, env: pin).code == 0
+            || !(apGit(["ls-tree", "HEAD", "--", ".gitmodules"], top, env: pin) ?? "").isEmpty
         return (apGitlinkPaths(lsFilesZ: ls.out), gm)
     }
 }
