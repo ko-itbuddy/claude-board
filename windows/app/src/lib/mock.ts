@@ -198,6 +198,7 @@ const S: Snapshot = {
     newSessionCommand: "",
     newSessionMdRender: true,
     autoUpdateCheck: true,
+    terminalShell: null,
   },
   claudeVersion: "2.1.301",
   terminals: [
@@ -206,6 +207,7 @@ const S: Snapshot = {
     { id: "powershell", name: "Windows PowerShell", installed: true, running: false },
     { id: "cmd", name: "명령 프롬프트", installed: true, running: false },
     { id: "git-bash", name: "Git Bash", installed: false, running: false },
+    { id: "wsl:Ubuntu", name: "WSL · Ubuntu", installed: true, running: false },
   ],
 };
 
@@ -427,6 +429,11 @@ export async function handle(cmd: string, a: Record<string, unknown>): Promise<u
       st.newSessionCommand = str("command").trim();
       st.newSessionMdRender = bool("mdRender");
       break;
+    case "set_terminal_shell":
+      st.terminalShell = typeof a.shell === "string" ? a.shell : null;
+      break;
+    case "list_envs":
+      return MOCK_ENVS;
     case "set_auto_update_check":
       st.autoUpdateCheck = bool("on");
       break;
@@ -550,6 +557,7 @@ class FakeTerm {
     private cols: number,
     private rows: number,
     private readonly cwd: string,
+    private readonly shell: string = "pwsh",
   ) {
     // 제목(OSC 0) — 셸 탭의 "하는 일" 자리에 보이는 터미널 제목
     this.print(`\x1b]0;${cwd}\x07Mock PowerShell (echo) ${cols}x${rows}\r\n한 줄을 치고 Enter 를 누르면 되돌려 줍니다. exit, flood, clear\r\n\r\n${PROMPT}`);
@@ -559,7 +567,7 @@ class FakeTerm {
     return {
       id: this.id,
       pid: 4000 + Number(this.id.slice(1)),
-      shell: "pwsh",
+      shell: this.shell,
       cwd: this.cwd,
       cols: this.cols,
       rows: this.rows,
@@ -650,9 +658,24 @@ class FakeTerm {
   }
 }
 
+// 가짜 실행 환경 목록(list_envs) — WSL 한 개를 포함한다
+const MOCK_ENVS = [
+  { key: "pwsh", label: "PowerShell 7" },
+  { key: "powershell", label: "Windows PowerShell" },
+  { key: "cmd", label: "명령 프롬프트" },
+  { key: "git-bash", label: "Git Bash" },
+  { key: "wsl:Ubuntu", label: "WSL · Ubuntu" },
+];
+
+// 띄울 셸 키 — 백엔드 규칙과 같다: 요청 > 설정 > pwsh. claude 를 칠 탭이면 WSL 은 기본 셸로 돌아간다
+function mockShellFor(spec: TermSpec): string {
+  const wanted = spec.shell ?? S.settings.terminalShell ?? "pwsh";
+  return spec.typesClaude && wanted.startsWith("wsl") ? "pwsh" : wanted;
+}
+
 function spawnTerm(spec: TermSpec): TermInfo {
   const id = `t${nextTermNumber++}`;
-  const term = new FakeTerm(id, spec.cols, spec.rows, spec.cwd ?? HOME);
+  const term = new FakeTerm(id, spec.cols, spec.rows, spec.cwd ?? HOME, mockShellFor(spec));
   fakeTerms.set(id, term);
   return term.info();
 }

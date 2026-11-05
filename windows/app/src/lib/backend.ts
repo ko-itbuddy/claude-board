@@ -4,7 +4,7 @@
 import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
-  AccountLoginPayload, BoardSide, ConfirmShutdownPayload, DriveStep, MascotKind, NotifyOptions, NotifyPosition, OpenSessionPayload, PidTarget, RenameCheck, SessionAction,
+  AccountLoginPayload, EnvChoice, BoardSide, ConfirmShutdownPayload, DriveStep, MascotKind, NotifyOptions, NotifyPosition, OpenSessionPayload, PidTarget, RenameCheck, SessionAction,
   SettingsEventPayload, SettingsTransition, ShortcutOverride, Snapshot, State, TabEntry, TermFrame, TermId, TermInfo, TermSpec,
 } from "./types";
 
@@ -585,6 +585,19 @@ export function setNewSessionDefaults(command: string, mdRender: boolean) {
     s.settings.newSessionMdRender = mdRender;
   });
   fire("set_new_session_defaults", { command, mdRender });
+}
+
+// 새 탭의 셸 — key 는 listEnvs 가 준 것, null 이면 기본 셸. 모양이 틀린 키는 백엔드가 받지 않는다
+export function setTerminalShell(shell: string | null) {
+  optimistic((s) => {
+    s.settings.terminalShell = shell;
+  });
+  fire("set_terminal_shell", { shell });
+}
+
+// 이 PC 에서 터미널 셸로 고를 수 있는 실행 환경 목록(WSL 배포판 포함)
+export function listEnvs(): Promise<EnvChoice[]> {
+  return call<EnvChoice[]>("list_envs");
 }
 
 export function setAutoUpdateCheck(on: boolean) {
