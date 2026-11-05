@@ -95,6 +95,17 @@ pub trait RunFiles: Send + Sync {
     fn make_private_dir(&self, dir: &Path) -> PortResult<()>;
     /// 배타 잠금(`.engine.lock`). 남이 쥐었으면 Ok(None).
     fn try_lock(&self, path: &Path) -> PortResult<Option<Box<dyn Held>>>;
+    /// 파일 크기와 수정 시각(유닉스 초). 없으면 Ok(None)
+    fn stat(&self, path: &Path) -> PortResult<Option<FileStat>>;
+    /// `offset` 부터 끝까지 읽되 마지막 `max` 바이트만. 없으면 Ok(None). 글자 중간에서 잘릴 수 있다(부르는 쪽이 lossy 로 푼다)
+    fn read_from(&self, path: &Path, offset: u64, max: usize) -> PortResult<Option<Vec<u8>>>;
+}
+
+/// `RunFiles::stat` 의 결과.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FileStat {
+    pub len: u64,
+    pub modified: f64,
 }
 
 // ── 실행 환경 ────────────────────────────────────────

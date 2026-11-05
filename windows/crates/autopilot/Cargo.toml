@@ -13,6 +13,11 @@ name = "claude_board_autopilot"
 name = "claude-autopilot"
 path = "src/bin/claude-autopilot.rs"
 
+# 작업 스케줄러가 1분마다 띄우는 엔진 — 콘솔 창이 뜨지 않게 창 없는 하위 시스템으로 빌드한다
+[[bin]]
+name = "claude-autopilot-engine"
+path = "src/bin/claude-autopilot-engine.rs"
+
 [dependencies]
 claude-board-core = { path = "../core" }
 serde = { version = "1.0.229", features = ["derive"] }
