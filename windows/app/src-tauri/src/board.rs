@@ -776,6 +776,21 @@ fn set_auto_update_check(board: B<'_>, on: bool) {
     }
 }
 
+/// 새 터미널 탭의 셸을 고른다 — 키는 `list_envs` 가 준 것. `null` 이면 기본 셸, 키 모양이 틀리면 받지 않는다. 현재 값은 상태 묶음의 `terminalShell`.
+#[tauri::command(async)]
+fn set_terminal_shell(board: B<'_>, shell: Option<String>) {
+    board.update_settings(|s| {
+        s.set_terminal_shell(shell);
+    });
+    board.publish();
+}
+
+/// 이 PC 에서 고를 수 있는 실행 환경(`[{key,label}]`) — 기본 셸들, Git Bash, WSL 배포판마다 하나.
+#[tauri::command(async)]
+fn list_envs() -> Vec<crate::model::EnvChoiceView> {
+    terminal::env_views(&claude_board_core::envs::detect())
+}
+
 #[tauri::command(async)]
 fn set_notify_position(board: B<'_>, pos: String) {
     if let Err(e) = settings::set_notify_position(&pos) {
@@ -1033,6 +1048,8 @@ pub fn run(argv: Vec<String>, context: tauri::Context<tauri::Wry>) {
             set_settings_transition,
             set_new_session_defaults,
             set_auto_update_check,
+            set_terminal_shell,
+            list_envs,
             crate::hotkeys::set_shortcut,
             crate::hotkeys::reset_shortcuts,
             crate::hotkeys::sync_hotkeys,
