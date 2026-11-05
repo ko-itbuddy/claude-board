@@ -5187,7 +5187,9 @@ func cmdStatus(_ args: [String]) -> Never {
     }
     if let u = run["usage"] as? [String: Any] {
         let p = { (k: String) in num(u[k]).map { "\(Int(($0 * 100).rounded()))%" } ?? "?" }
-        out += "계정 사용률: 5시간 \(p("five_hour")) · 주간 \(p("seven_day"))\((u["from"] as? String).map { " (\($0))" } ?? "")\n"
+        // 5시간 한도가 없는 요금제(Ultra)는 5시간 칸이 없다 — 주간만 쓴다(규칙 apShowFiveHour, 2026-11)
+        let five = apShowFiveHour(usage: u) ? "5시간 \(p("five_hour")) · " : ""
+        out += "계정 사용률: \(five)주간 \(p("seven_day"))\((u["from"] as? String).map { " (\($0))" } ?? "")\n"
     }
     // 여러 실행 함께 돌리기(6단계 ⑫-6): 기록 저장소의 멈출 선 자리와 같은 경로 자리를 읽기만 한다
     let id = (dir as NSString).lastPathComponent, dbPath = recordsPath(dev: run["dev"] as? Bool ?? args.contains("--dev"))

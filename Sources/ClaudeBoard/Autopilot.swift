@@ -1430,20 +1430,22 @@ struct APRunLine: View, Equatable {
     }
 }
 
-// 계정 사용률 두 막대(주간·5시간)와 멈출 선 눈금 — 엔진이 run.json 에 남긴 값(stream·캐시·API 가운데 엔진이 본 것)
+// 계정 사용률 두 막대(주간·5시간)와 멈출 선 눈금 — 엔진이 run.json 에 남긴 값(stream·캐시·API 가운데 엔진이 본 것).
+// 5시간 한도가 없는 요금제(Ultra)는 엔진이 5시간 칸을 남기지 않아 주간 막대만(규칙 apShowFiveHour, 2026-11)
 struct APUsageMeters: View {
     let run: APRun
     var small = false       // 실행 줄: 나란히, 초기화 시각 없이. 자율주행 중 화면: 위아래로, 초기화 시각까지
+    private var showFive: Bool { apShowFiveHour(known: run.five != nil || run.seven != nil, hasFive: run.five != nil) }
     var body: some View {
         if small {
             HStack(alignment: .top, spacing: 10) {
                 meter("주간", run.seven, run.sevenResets, run.stop7)
-                meter("5시간", run.five, run.fiveResets, run.stop5)
+                if showFive { meter("5시간", run.five, run.fiveResets, run.stop5) }
             }
         } else {
             VStack(alignment: .leading, spacing: 8) {
                 meter("주간", run.seven, run.sevenResets, run.stop7)
-                meter("5시간", run.five, run.fiveResets, run.stop5)
+                if showFive { meter("5시간", run.five, run.fiveResets, run.stop5) }
             }
         }
     }
@@ -3161,6 +3163,12 @@ extension APRecords {
         return (pp, mins, usd)
     }
     var usage7: Double? { (NSApp.delegate as? AppDelegate)?.usage.limits.first { $0.id == "7d" }?.pct }
+    // 지금 계정에 5시간 한도가 있는가: 보드 사용량 상자의 한도 목록(5시간 한도가 없는 요금제(Ultra)는 5h 가 없음).
+    // 목록을 아직 받지 못했으면 있다고 보고 고르기를 보인다(규칙 apShowFiveHour, 2026-11). 멈출 선의 five_hour 값은 숨겨도 그대로 넘긴다
+    var showFive: Bool {
+        let l = (NSApp.delegate as? AppDelegate)?.usage.limits ?? []
+        return apShowFiveHour(known: !l.isEmpty, hasFive: l.contains { $0.id == "5h" })
+    }
     var budget: Double? { usage7.map { max(0, stop7 - $0) } }
 
     // 시트 — 창 전체를 덮는 시트(와이어프레임 "창 전체 시트"). 보드를 앞으로 꺼내지 않는다(시험 중 사용자가 치던 글자가 보드로 새지 않게)
@@ -6564,13 +6572,18 @@ struct APConfirm: View {
         let t = s.ticketsToMake
         let w = Int(s.stop7.rounded()), f = Int(s.stop5.rounded())
         let pubHead = (s.publish.mode == .auto ? "자동으로 올림" : "검수 뒤 올림") + (s.publish.report.map { " · " + apServiceName($0.service) } ?? "")
-        let head = "모델 \(s.model) · 멈출 선 주간 \(w)% · 5시간 \(f)% · \(pubHead)" + (s.jira ? " · 만들 티켓 \(t.stories + t.tasks + t.moved)" : "")
+        let five = s.showFive
+        let head = "모델 \(s.model) · 멈출 선 주간 \(w)%" + (five ? " · 5시간 \(f)%" : "") + " · \(pubHead)" + (s.jira ? " · 만들 티켓 \(t.stories + t.tasks + t.moved)" : "")
         return APFold(title: "설정", summary: head, axid: "ap-fold-settings", open: bind("settings"), tag: s.settingsEdited || s.publishEdited ? "바꿈" : nil) {
             apNote(s.settingsEdited ? "바꾼 값은 이 출발에 쓰고, 출발하면 프로젝트 설정에 남깁니다(다음 출발의 기본값)."
                    : s.settingsFrom == "project" ? "프로젝트 설정에 저장된 값입니다. 그 자리에서 바꿉니다." : "지난 실행의 실행 설정을 그대로 잇습니다. 그 자리에서 바꿉니다.")
             pickRow("모델", apModelOptions(current: s.model), s.model, axid: "ap-set-model") { s.setModel($0) }
             pickRow("멈출 선 주간", apStopOptions(apStopWeekChoices, current: w).map(String.init), String(w), suffix: "%", axid: "ap-set-week") { s.setStop(week: Int($0)) }
-            pickRow("5시간", apStopOptions(apStopFiveChoices, current: f).map(String.init), String(f), suffix: "%", axid: "ap-set-five") { s.setStop(five: Int($0)) }
+            if five {
+                pickRow("5시간", apStopOptions(apStopFiveChoices, current: f).map(String.init), String(f), suffix: "%", axid: "ap-set-five") { s.setStop(five: Int($0)) }
+            } else {
+                apNote("지금 계정은 5시간 한도가 없는 요금제라 주간 멈출 선만 봅니다.")
+            }
             ForEach(s.settingsProblems, id: \.self) { apNote("· " + $0, APColor.fail) }
             apNote("모델을 바꾸면 단위 예상(보정)도 그 모델의 지난 값으로 다시 셉니다.")
             publishRows
