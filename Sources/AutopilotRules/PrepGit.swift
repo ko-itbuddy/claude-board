@@ -12,8 +12,9 @@
 //     저장소·임시 폴더 안을 가리키는 include 를 막는다(엔진 configIncludes 와 같은 범위 꼴, 10단 상한).
 //  ⑤ 하위 모듈(색인 gitlink·.gitmodules)이 있으면 막는다(엔진 start 가 출발하지 않는 것과 같음). 색인을 못 읽으면 닫힌 쪽.
 // 보안 검토 고침(같은 날): 고른 폴더 위의 다른 저장소 작업 트리, .git 파일이 가리키는 git 폴더가 임시·작업 트리 안·자율주행 작업 트리 자리이거나
-// 떨어진 git 폴더 꼴, 저장소 설정과 include 로 끌어온 설정의 filter 명령(git-lfs 표준 글 밖)도 막는다(재현: 보드의 git status 가 그 자리 설정의 clean filter 를 돌림).
-// 막으면 그 저장소에서 git 을 더 돌리지 않고(보드가 저장소 줄에 까닭) 출발 준비를 멈춘다. 통과하면 읽기에 박을 env(GIT_DIR·GIT_WORK_TREE)를 준다.
+// 떨어진 git 폴더 꼴, 저장소 설정과 include 로 끌어온 설정의 filter 명령(git-lfs 표준 글 밖), 따로 작업 트리가 아닌 git 폴더의 commondir 도 막는다
+// (재현: 보드의 git status 가 그 자리 설정의 clean filter 를 돌림).
+// 막으면 그 저장소에서 git 을 더 돌리지 않고(보드가 저장소 줄에 까닭) 출발 준비를 멈춘다. 통과하면 읽기에 박을 env(GIT_DIR·GIT_COMMON_DIR·GIT_WORK_TREE)를 준다.
 // 파일 시스템·git 은 포트(APPrepGitWorld)로만 본다 — 진짜 어댑터는 보드, 가짜는 Tests/AutopilotRulesTests/PrepGitTests
 import Foundation
 
@@ -46,8 +47,8 @@ public protocol APPrepGitWorld {
     func stamp(_ path: String) -> String?
     /// git config --file <파일> --no-includes --null --list(저장소를 찾지 않는 자리에서). 파일이 없으면 [], 보통 파일이 아니거나 읽지 못하면 nil
     func config(_ file: String) -> [APConfigEntry]?
-    /// 박은 GIT_DIR·GIT_WORK_TREE 로 색인의 gitlink(ls-files -s -z)와 .gitmodules(작업 트리·색인·HEAD). 색인을 읽지 못하면 nil
-    func submodules(top: String, gitDir: String) -> (gitlinks: [String], gitmodules: Bool)?
+    /// 박는 env(pin: GIT_DIR·GIT_COMMON_DIR·GIT_WORK_TREE 와 apPrepGitReadEnv)로 색인의 gitlink(ls-files -s -z)와 .gitmodules(작업 트리·색인·HEAD). 색인을 읽지 못하면 nil
+    func submodules(top: String, pin: [String]) -> (gitlinks: [String], gitmodules: Bool)?
 }
 
 public struct APPrepGit: Equatable, Sendable {
@@ -58,10 +59,11 @@ public struct APPrepGit: Equatable, Sendable {
     public init(top: String? = nil, gitDir: String? = nil, commonDir: String? = nil, block: String? = nil) {
         self.top = top; self.gitDir = gitDir; self.commonDir = commonDir; self.block = block
     }
-    // 통과한 저장소의 읽기(지금 가지·가지 목록·status·rev-list)에 박는 env — git 이 위로 저장소를 스스로 찾지 않게, 원격으로 객체를 받지 않게(apPrepGitReadEnv)
+    // 통과한 저장소의 읽기(지금 가지·가지 목록·status·rev-list)에 박는 env — git 이 위로 저장소를 스스로 찾지 않게, 원격으로 객체를 받지 않게(apPrepGitReadEnv).
+    // 보안 검토 고침 8: 공통 git 폴더도 확인한 자리로 박는다(GIT_COMMON_DIR 가 있으면 git 은 git 폴더의 commondir 파일을 읽지 않는다 — 확인 뒤에 commondir 를 심어도 따르지 않게)
     public var pin: [String] {
         guard block == nil, let t = top, let g = gitDir else { return [] }
-        return ["GIT_DIR=" + g, "GIT_WORK_TREE=" + t] + apPrepGitReadEnv
+        return ["GIT_DIR=" + g, "GIT_COMMON_DIR=" + (commonDir ?? g), "GIT_WORK_TREE=" + t] + apPrepGitReadEnv
     }
 }
 
@@ -147,9 +149,15 @@ public func apPrepGitCheck(_ path: String, world: APPrepGitWorld, records: [Stri
         }
         if rest.isEmpty { return stop("git 파일이 떨어진 git 폴더(\(apPrepShortPath(g, home: home)))를 가리켜 자리를 믿을 수 없어") }
     }
+    // 보안 검토 고침 8: git 은 git 폴더에 commondir 파일이 있으면 그 자리를 공통 git 폴더로 써서 거기 config 를 읽는다(재현: .git/commondir 가 다른 폴더를
+    // 가리키고 그 config 에 clean filter 를 심으면 이 확인은 깨끗한 .git/config 만 보고 지나갔고 보드의 git status 가 filter 를 돌림, 표지 2).
+    // commondir 는 따로 작업 트리(worktrees/<이름>, 아래에서 그 저장소 git 폴더로 풀리는지 봄)에만 받고, 그 밖의 git 폴더(.git 그대로·modules/…)에 있으면 막는다.
+    // 있는지는 lstat(바로 가기·FIFO 도 있음으로)
+    let hasCommondir = world.stamp(g + "/commondir") != nil
     var common = g
     if rest.isEmpty {
         // 그 저장소의 .git 폴더 그대로 — 자리는 아래 ② 로 본다
+        if hasCommondir { return stop("git 폴더(\(apPrepShortPath(g, home: home)))에 commondir 가 있어 공통 git 폴더를 다른 자리로 돌려") }
     } else if rest.count == 2, rest[0] == "worktrees" {
         // 따로 작업 트리: 되짚는 자리(gitdir)가 이 .git 파일이고 commondir 가 그 git 폴더여야 한다
         let back = world.text(g + "/gitdir")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -160,6 +168,7 @@ public func apPrepGitCheck(_ path: String, world: APPrepGitWorld, records: [Stri
         common = owner
     } else if rest.count >= 2, rest[0] == "modules" {
         guard top.hasPrefix(base + "/") else { return stop("하위 모듈 git 폴더가 그 저장소 밖을 가리켜") }
+        if hasCommondir { return stop("하위 모듈 git 폴더(\(apPrepShortPath(g, home: home)))에 commondir 가 있어 공통 git 폴더를 다른 자리로 돌려") }
     } else {
         return stop("git 폴더(\(apPrepShortPath(g, home: home)))가 저장소 .git 꼴 자리가 아니라")
     }
@@ -214,7 +223,7 @@ public func apPrepGitCheck(_ path: String, world: APPrepGitWorld, records: [Stri
         if let why = walk(f, 0, root: true) { return stop(why) }
     }
     // ⑤ 하위 모듈(색인 gitlink·.gitmodules) — 엔진이 출발하지 않는 저장소. 색인을 못 읽으면 닫힌 쪽
-    guard let sm = world.submodules(top: top, gitDir: g) else { return stop("색인을 읽지 못해(git ls-files 실패)") }
+    guard let sm = world.submodules(top: top, pin: r.pin) else { return stop("색인을 읽지 못해(git ls-files 실패)") }
     if apHasSubmodule(gitlinks: sm.gitlinks, gitmodules: sm.gitmodules) { return stop(apSubmoduleReason(gitlinks: sm.gitlinks, gitmodules: sm.gitmodules)) }
     return r
 }

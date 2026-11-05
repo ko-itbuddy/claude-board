@@ -57,7 +57,7 @@ final class FakeGitFS: APPrepGitWorld, @unchecked Sendable {
         guard files[file] != nil else { return [] }
         return configs[file] ?? []
     }
-    func submodules(top: String, gitDir: String) -> (gitlinks: [String], gitmodules: Bool)? {
+    func submodules(top: String, pin: [String]) -> (gitlinks: [String], gitmodules: Bool)? {
         indexFail.contains(top) ? nil : index[top] ?? ([], false)
     }
 }
@@ -215,7 +215,7 @@ private let rows: [PrepGitRow] = [
         #expect(got.top == r.top)
         #expect(got.block == r.block)
         if let g = r.gitDir { #expect(got.gitDir == g) }
-        if r.block == nil, let t = r.top, let g = r.gitDir { #expect(got.pin == ["GIT_DIR=" + g, "GIT_WORK_TREE=" + t] + apPrepGitReadEnv) }
+        if r.block == nil, let t = r.top, let g = r.gitDir { #expect(got.pin == ["GIT_DIR=" + g, "GIT_COMMON_DIR=" + (got.commonDir ?? g), "GIT_WORK_TREE=" + t] + apPrepGitReadEnv) }
         if r.block != nil { #expect(got.pin.isEmpty, "막은 저장소는 박을 env 도 없다") }
     }
 
@@ -232,7 +232,7 @@ private let rows: [PrepGitRow] = [
         let pin = APPrepGit(top: "/w/a", gitDir: "/w/a/.git", commonDir: "/w/a/.git").pin
         let env = apPrepGitEnv(inherited: inherited, extra: pin)
         #expect(env == ["PATH": "/usr/bin:/bin", "HOME": "/h", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_ATTR_NOSYSTEM": "1",
-                        "GIT_NO_REPLACE_OBJECTS": "1", "GIT_DIR": "/w/a/.git", "GIT_WORK_TREE": "/w/a", "GIT_NO_LAZY_FETCH": "1",
+                        "GIT_NO_REPLACE_OBJECTS": "1", "GIT_DIR": "/w/a/.git", "GIT_COMMON_DIR": "/w/a/.git", "GIT_WORK_TREE": "/w/a", "GIT_NO_LAZY_FETCH": "1",
                         "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "protocol.allow", "GIT_CONFIG_VALUE_0": "never"])
     }
 

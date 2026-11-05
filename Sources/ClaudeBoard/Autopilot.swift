@@ -2984,8 +2984,8 @@ struct APBoardPrepGit: APPrepGitWorld {
             return APConfigEntry(key: String(e[..<nl]), value: String(e[e.index(after: nl)...]))
         }
     }
-    func submodules(top: String, gitDir: String) -> (gitlinks: [String], gitmodules: Bool)? {
-        let pin = ["GIT_DIR=" + gitDir, "GIT_WORK_TREE=" + top] + apPrepGitReadEnv   // 늦은 받기·전송 프로토콜 막음(보안 검토 고침 6)
+    func submodules(top: String, pin: [String]) -> (gitlinks: [String], gitmodules: Bool)? {
+        // pin: 확인한 git 폴더·공통 git 폴더·작업 트리와 늦은 받기·전송 프로토콜 막음(규칙 APPrepGit.pin, 보안 검토 고침 6·8)
         let ls = apGitRun(["-c", "core.quotePath=false", "ls-files", "-s", "-z"], top, env: pin)
         guard ls.code == 0 else { return nil }
         // HEAD 의 .gitmodules 는 트리 줄만 본다(ls-tree — 부분 복제에서 빠진 blob 을 찾지 않게)
