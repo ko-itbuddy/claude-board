@@ -19,6 +19,7 @@ import WebKit
 // 엔진이 쓴 report.html 파일을 열지 않는 것은 설계 판단: 단위 폴더는 모델이 쓸 수 있는 자리이고, 화면은 늘 지금 기록으로 그리며, 원문을 지운 실행도 같은 길로 보인다.
 // 웹 보기는 가둔다: JavaScript 끔, 처음 글과 같은 문서 안 이동(#unit-n)만 허용, https 링크는 확인 뒤 기본 브라우저로,
 // 그 밖 이동·새 창은 막음, http(s)·ws(s)·ftp 요청은 콘텐츠 규칙으로도 막음(보고서 글의 CSP 와 겹쳐), 저장소는 nonPersistent.
+// 콘텐츠 규칙은 붙은 뒤에만 싣는다(규칙 APRuleGate, 다듬기 ⑬-1 ②): 컴파일 중에 연 창은 기다리고, 실패하면 싣지 않고 까닭·다시 해 보기(닫힌 쪽).
 // 글은 loadHTMLString 에 처리기 없는 자체 주소(claude-board-report://report/)를 바탕으로 넣는다 — 파일 주소가 아니라 로컬 파일을 하나도 읽지 않고,
 // baseURL nil(about:blank)은 #unit-n 이 about:blank%23unit-n 으로 바뀌어 문서 안 이동이 안 돼서다(실측). "파일로 저장…"은 보이는 글 그대로 한 파일로 쓴다
 
@@ -67,7 +68,11 @@ func apBoardReportHTML(run id: String, runDir: String) -> String? {
 final class APReportViewer: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
     private static var open: [String: APReportViewer] = [:]
     private static var blockList: WKContentRuleList?
-    private static var blockTried = false
+    // 콘텐츠 규칙 준비 차례(규칙 APRuleGate, 다듬기 ⑬-1 ②): 컴파일이 끝나기 전에 연 창은 규칙이 붙은 뒤에 싣고, 실패하면 싣지 않은 채
+    // 까닭과 "다시 해 보기"를 보이며, 다음 창(또는 다시 해 보기)이 다시 컴파일한다(전에는 첫 창이 시작하자마자 "해 봤음" 이라 둘째 창은 규칙 없이 실렸고 실패하면 다시 하지 않았다)
+    private static var gate = APRuleGate()
+    // 시험 빌드만: 컴파일 끝을 늦추는 초(설정 autopilotReportRuleDelay)와 앞 n번 컴파일을 깨진 규칙 글로 실패시키기(설정 autopilotReportRuleFail, 이 앱이 뜬 동안 센다)
+    private static var devFailLeft: Int = apDevBuild ? UserDefaults.standard.integer(forKey: "autopilotReportRuleFail") : 0
     // 바깥 요청 막기(콘텐츠 규칙): 주소 꼴이 http(s)·ws(s)·ftp(s) 면 어떤 자원이든 막는다. 바탕 주소와 같은 문서 안 이동은 걸리지 않는다.
     // 규칙 글의 정규식은 갈래(|)를 받지 않아(컴파일 실패, 실측) 꼴마다 규칙 하나다
     private static let blockRules = #"[{"trigger":{"url-filter":"^https?://"},"action":{"type":"block"}},"#
@@ -81,6 +86,7 @@ final class APReportViewer: NSObject, NSWindowDelegate, WKNavigationDelegate, WK
     private var win: NSWindow?
     private var web: WKWebView?
     private var note: NSTextField?
+    private var retry: NSButton?
     private var loaded = false
 
     // 지난 실행·합치기 시트에서 부른다. 기록을 뒤에서 읽고 그린 뒤 창을 연다
@@ -110,33 +116,53 @@ final class APReportViewer: NSObject, NSWindowDelegate, WKNavigationDelegate, WK
         title = t.isEmpty ? id : t
         if win == nil { build() }
         win?.title = "자율주행 보고서: " + title
-        note?.stringValue = ""
-        withBlockList { [weak self] in
-            guard let self, let web = self.web else { return }
-            self.loaded = false
-            web.loadHTMLString(self.html, baseURL: Self.base)
-        }
         win?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        Self.perform(Self.gate.want(id))   // 규칙이 있으면 바로, 컴파일 중이면 기다렸다가, 실패했으면 다시 컴파일
     }
 
-    private func withBlockList(_ then: @escaping () -> Void) {
-        if Self.blockTried { attachBlock(); then(); return }
-        Self.blockTried = true
-        WKContentRuleListStore.default().compileContentRuleList(forIdentifier: "claude-board-report-block", encodedContentRuleList: Self.blockRules) { list, err in
-            DispatchQueue.main.async {
-                Self.blockList = list
-                if list == nil { boardLog("자율주행 보고서: 콘텐츠 규칙을 만들지 못했습니다(CSP·이동 막기는 그대로): \(err?.localizedDescription ?? "?")") }
-                self.attachBlock()
-                then()
+    // 규칙 차례가 정한 일을 한다 — 창은 open 에 든 것만(닫힌 창은 gate 에서도 뺐다)
+    private static func perform(_ actions: [APRuleGateAction]) {
+        for a in actions {
+            switch a {
+            case .compile: compile()
+            case .wait(let id): open[id]?.showNote(apRuleGateWaitText, failed: false)
+            case .load(let id): open[id]?.loadNow()
+            case .refuse(let id, let why): open[id]?.showNote(why, failed: true)
             }
         }
     }
-    private func attachBlock() {
-        guard let l = Self.blockList, let ucc = web?.configuration.userContentController else { return }
+    private static func compile() {
+        let dev = apDevBuild
+        let delay = dev ? max(0, UserDefaults.standard.double(forKey: "autopilotReportRuleDelay")) : 0
+        var rules = blockRules
+        if dev, devFailLeft > 0 { devFailLeft -= 1; rules = "[{" }   // 시험 빌드만: 깨진 규칙 글로 WebKit 컴파일을 실제로 실패시킨다
+        WKContentRuleListStore.default().compileContentRuleList(forIdentifier: "claude-board-report-block", encodedContentRuleList: rules) { list, err in
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                if let list { blockList = list }
+                else { boardLog("자율주행 보고서: 콘텐츠 규칙을 만들지 못해 보고서를 싣지 않았습니다(다음 창·다시 해 보기에서 다시 만듭니다): \(err?.localizedDescription ?? "?")") }
+                perform(gate.compiled(ok: list != nil, error: err?.localizedDescription))
+            }
+        }
+    }
+    // 규칙을 붙이고 싣는다 — 규칙 없이는 싣지 않는다(준비됨이면 목록이 늘 있다)
+    private func loadNow() {
+        guard let web, let l = Self.blockList else { return }
+        let ucc = web.configuration.userContentController
         ucc.removeAllContentRuleLists()
         ucc.add(l)
+        showNote("", failed: false)
+        loaded = false
+        web.loadHTMLString(html, baseURL: Self.base)
+        if apDevBuild { boardLog("자율주행 보고서(\(id)): 콘텐츠 규칙을 붙인 뒤 실었습니다(규칙 만들기 \(Self.gate.tries)번째)") }   // 시험 빌드 기록에만(GUI 시험이 차례를 본다)
     }
+    private func showNote(_ text: String, failed: Bool) {
+        note?.stringValue = text
+        note?.textColor = failed ? .systemRed : .secondaryLabelColor
+        note?.toolTip = text.isEmpty ? nil : text   // 긴 까닭은 한 줄에서 잘리니 전문은 도움말·접근성 값으로
+        retry?.isHidden = !failed
+    }
+    @objc private func retryRules() { Self.perform(Self.gate.want(id)) }
 
     private func build() {
         let cfg = WKWebViewConfiguration()
@@ -166,7 +192,12 @@ final class APReportViewer: NSObject, NSWindowDelegate, WKNavigationDelegate, WK
         note.font = .systemFont(ofSize: 11.5)
         note.lineBreakMode = .byTruncatingMiddle
         note.setAccessibilityIdentifier("ap-report-note")
-        let bar = NSStackView(views: [note, NSView(), save, close])
+        let retry = NSButton(title: "다시 해 보기", target: self, action: #selector(retryRules))
+        retry.bezelStyle = .rounded
+        retry.isHidden = true
+        retry.setAccessibilityIdentifier("ap-report-retry")
+        retry.toolTip = "바깥 요청 막기 규칙을 다시 만들고, 되면 보고서를 싣습니다"
+        let bar = NSStackView(views: [note, NSView(), retry, save, close])
         bar.orientation = .horizontal
         bar.spacing = 8
         bar.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
@@ -197,7 +228,7 @@ final class APReportViewer: NSObject, NSWindowDelegate, WKNavigationDelegate, WK
         if f.minX - w.frame.width - 8 >= vis.minX { w.setFrameOrigin(NSPoint(x: f.minX - w.frame.width - 8, y: y)) }
         else if f.maxX + 8 + w.frame.width <= vis.maxX { w.setFrameOrigin(NSPoint(x: f.maxX + 8, y: y)) }
         else { w.center() }
-        self.web = web; self.note = note; self.win = w
+        self.web = web; self.note = note; self.retry = retry; self.win = w
     }
 
     @objc private func saveFile() {
@@ -223,6 +254,7 @@ final class APReportViewer: NSObject, NSWindowDelegate, WKNavigationDelegate, WK
         web?.navigationDelegate = nil
         web?.uiDelegate = nil
         Self.open[id] = nil
+        Self.gate.closed(id)   // 규칙을 기다리던 창이면 뺀다
     }
 
     // 이동 막기 — 처음 글과 같은 문서 안 이동(#unit-n)만. https 링크는 확인 뒤 기본 브라우저, 그 밖은 아무 일도 하지 않는다
