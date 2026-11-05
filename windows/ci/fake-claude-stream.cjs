@@ -49,6 +49,13 @@ const path = require('path');
 const crypto = require('crypto');
 
 const argv = process.argv.slice(2);
+
+// 진짜 claude 처럼 버전만 묻고 끝난다 — `claude-autopilot start` 의 준비 확인이 이 한 줄로 claude 가 있는지 본다
+if (argv.includes('--version')) {
+  process.stdout.write('9.9.9 (Claude Code)\n');
+  process.exit(0);
+}
+
 const startedAt = Date.now();
 const logFile = process.env.FAKE_CLAUDE_LOG || '';
 const cwd = process.cwd();

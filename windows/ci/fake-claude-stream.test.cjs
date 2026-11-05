@@ -88,6 +88,12 @@ async function oneTurn(setup, args, text = 'hello') {
   return { code, events: run.events };
 }
 
+test('--version — 버전 한 줄만 내고 입력을 기다리지 않고 0 으로 끝난다', () => {
+  const r = cp.spawnSync(process.execPath, [SCRIPT, '--version'], { encoding: 'utf8', input: '', timeout: 5000 });
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /^\d+\.\d+\.\d+ \(Claude Code\)\r?\n$/);
+});
+
 test('새 세션 — init 에 session_id, 사용률 사건, assistant 글, result 의 total_cost_usd·num_turns, 입력이 닫히면 0', async () => {
   const setup = start();
   try {
