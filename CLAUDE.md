@@ -227,8 +227,8 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
   포트 `APTakeoverWorld`(진짜 어댑터 엔진 `EngineTakeoverWorld`). 시험 `TakeoverTests`(가짜 어댑터 표)·`ControlTests` 의 ⑫-8 줄.
   다듬기 ⑬-1(보드): `ReportGate.swift`(보고서 창 콘텐츠 규칙 준비 차례 `APRuleGate`: 컴파일 중 연 창은 기다렸다 싣고, 실패하면 싣지 않고 다음 요청이 다시 컴파일),
   `SlotTable.swift`(보드 멈출 선 자리 표 `apSlotTable`: 기록 저장소 `stopline_slots`·`path_claims` 줄 → 도는 중·기다림 차례·죽은 엔진의 자리, 보일 때), `PrepGit.swift`(출발 준비·이어 가기
-  git 자리 확인 `apPrepGitCheck`: 뿌리·git 폴더를 파일로만 찾고 중첩 git·.git 바로 가기·임시 자리 git 폴더·떨어진 git 폴더·지난 실행 기록과 다른 git 폴더·명령인 fsmonitor·filter·
-  범위 안·~<사용자> include·하위 모듈을 막음, 통과하면 박는 env `pin`(늦은 받기·전송 막기 `apPrepGitReadEnv`)과 물려받은 GIT_* 를 뺀 환경 `apPrepGitEnv`). 포트 `APPrepGitWorld`
+  git 자리 확인 `apPrepGitCheck`: 뿌리·git 폴더를 파일로만 찾고 중첩 git·.git 바로 가기·임시 자리 git 폴더·떨어진 git 폴더·따로 작업 트리 밖의 commondir·지난 실행 기록과 다른 git 폴더·명령인 fsmonitor·filter·
+  범위 안·~<사용자> include·하위 모듈을 막음, 통과하면 박는 env `pin`(GIT_DIR·GIT_COMMON_DIR·GIT_WORK_TREE 와 늦은 받기·전송 막기 `apPrepGitReadEnv`)과 물려받은 GIT_* 를 뺀 환경 `apPrepGitEnv`). 포트 `APPrepGitWorld`
   (진짜 어댑터 보드 `APBoardPrepGit`). 시험 `ReportGateTests`·`SlotTableTests`·`PrepGitTests`(가짜 파일 시스템 표, 보안 검토 재현 줄).
   자율주행 규칙은 맨 위 `rules-table/`(Windows 공용 표)에 넣지 않는다.
 - `Sources/ClaudeAutopilot/main.swift` — 자율주행 엔진 `claude-autopilot`(`start`·`run`·`control`(8단계 ⑫-8 부터 `takeover`·`giveback [--accept <카드 id,…>]`, 보드와 같은 규칙 `apBoardCanControl`)·`status`·`records import`·`prerun`·`finish`(`--dev` 는 그 실행의 뿌리와 맞는지만 본다)·`report`(끝난 실행의 보고서 다시 그리기)·`outbox`(올릴 글 list·post·skip·later, 보드 검수 화면이 부름)·`connection check`(설정 › 연결의 연결 확인)·`read`(바깥 읽기: 내장 REST·`--mcp <서버>` 읽기 세션, `read epic <키>`·`read servers`, 시험 빌드만 `--mcp-from`·`--claude`)·`tickets <출발 준비 폴더> make|list`(출발 확인의 티켓 나무 만들기, 출발한 실행은 거부)·`seed <출발 준비 폴더> base|scenarios|drop|recover`·`draft <출발 준비 폴더>`(주제로 시작, 5단계 ⑪-2, ⑪-3 부터 `--fix <차례> --cards <id,…>`·`--accept-fix <차례>`)·`critic <출발 준비 폴더> [--round <차례>]`·`misses <폴더>`·`revise <출발 준비 폴더>`(5단계 ⑪-3, 폴더가 첫 인자)·`harness <출발 준비 폴더>`(하네스 읽기, 7단계 ⑫-7b)·`import <출발 준비 폴더> gather|session`(가져오기, 7단계 ⑫-7a)·`notify test <webhook id>`·`notify summary`(시험 빌드만 `--at`), 사용법은 `usage()`).
