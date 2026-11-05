@@ -177,6 +177,18 @@ export interface Snapshot {
   settings: BoardSettings;
   claudeVersion: string | null;
   terminals: TerminalApp[];
+  autopilot?: AutopilotRun[];  // 자율주행 실행(5.2 의 뷰) — 없으면 빈 목록으로 본다(옛 백엔드)
+}
+
+// ── 자율주행 — 백엔드 autopilot.rs 의 AutopilotRunView 와 같은 칸(camelCase, 시각은 ms) ──
+export interface AutopilotEnv { key: string; label: string; sandbox: boolean }
+export interface AutopilotUnit { n: number; title: string; phase: string; activeSec: number; costUsd: number; tries: number }
+export type AutopilotAction = "pause" | "resume" | "stop";
+export interface AutopilotRun {
+  id: string; path: string; title: string; state: string; reason: string; waitUntil: number | null;
+  env: AutopilotEnv; unit: AutopilotUnit | null; total: number;
+  done: number; failed: number; capped: number; skipped: number; stopped: number;
+  can: AutopilotAction[]; ended: boolean;
 }
 
 // 세션 줄·카드에서 부르는 동작 — 백엔드 명령 session_action 의 action 값. mac performAction 의 어휘(pause·resume·stop·reopen·focus)와 Windows 전용 activate

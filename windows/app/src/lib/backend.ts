@@ -4,7 +4,7 @@
 import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
-  AccountLoginPayload, EnvChoice, BoardSide, ConfirmShutdownPayload, DriveStep, MascotKind, NotifyOptions, NotifyPosition, OpenSessionPayload, PidTarget, RenameCheck, SessionAction,
+  AccountLoginPayload, AutopilotAction, EnvChoice, BoardSide, ConfirmShutdownPayload, DriveStep, MascotKind, NotifyOptions, NotifyPosition, OpenSessionPayload, PidTarget, RenameCheck, SessionAction,
   SettingsEventPayload, SettingsTransition, ShortcutOverride, Snapshot, State, TabEntry, TermFrame, TermId, TermInfo, TermSpec,
 } from "./types";
 
@@ -226,6 +226,12 @@ export function setBoardMini(on: boolean) {
 // pause·resume·stop = 일시중지·일시중지한 세션 재개·중단(중단 확인 대화상자는 백엔드가 띄운다)
 export function sessionAction(action: SessionAction, id: string, carryOn?: boolean) {
   fire("session_action", { action, id, carryOn });
+}
+
+// 자율주행 실행을 일시정지·재개·중단한다 — 백엔드가 그 실행 폴더의 control.json 에 남긴다(중단은 확인 창을 먼저 띄운다).
+// 실패하면 reject 하므로 부른 쪽이 처리한다
+export function autopilotControl(runId: string, action: AutopilotAction): Promise<void> {
+  return call("autopilot_control", { runId, action });
 }
 
 // 보드가 안 떠 있던 동안 쌓인 "세션 열기" 요청을 모두 꺼낸다(오래된 것부터) — 처음 부르면 프런트엔드가 준비됐다는 표시도 된다.

@@ -7,6 +7,8 @@
   import { setBoardMini, setBoardWidth, toggleCollapsed } from "$lib/backend";
   import type { Group } from "$lib/types";
   import EdgeDock from "$lib/board/EdgeDock.svelte";
+  import AutopilotLine from "$lib/board/AutopilotLine.svelte";
+  import { orphanRuns } from "$lib/board/autopilotView";
   import GroupCard from "$lib/board/GroupCard.svelte";
   import Header from "$lib/board/Header.svelte";
   import HintLayer from "$lib/board/HintLayer.svelte";
@@ -167,6 +169,10 @@
 
   const medium = $derived(ui.tier === "medium");
 
+  // 자율주행 실행 — 옛 백엔드는 칸이 없다. 어느 카드에도 짝이 없는 실행은 카드 목록 위에 따로 보인다
+  const autopilot = $derived(snap?.autopilot ?? []);
+  const orphans = $derived(orphanRuns(autopilot, snap?.groups.map((g) => g.path) ?? []));
+
   function toggleCard(id: string) {
     if (medium) {
       // 중간 화면에서 눌러 펼친 카드는 따로 기억한다 — 저장한 접힘 상태는 그대로
@@ -274,6 +280,14 @@
             <div class="scrollWrap">
               <div class="scroller" bind:this={scrollerEl} onscroll={updateHidden}>
                 <div class="cards">
+                  {#if orphans.length}
+                    <div class="orphans">
+                      <div class="orphansHead">경로 카드가 없는 자율주행</div>
+                      {#each orphans as run (run.id)}
+                        <AutopilotLine {run} now={snap.now} />
+                      {/each}
+                    </div>
+                  {/if}
                   {#each shown as g (g.id)}
                     <div
                       class="cardSlot"
@@ -289,6 +303,7 @@
                         toggle={() => toggleCard(g.id)}
                         settings={snap.settings}
                         locked={snap.allMuted}
+                        autopilot={autopilot}
                       />
                     </div>
                   {/each}
@@ -474,6 +489,12 @@
     flex-direction: column;
     gap: 11px;
     padding: 0 0 12px;
+  }
+  .orphansHead {
+    padding: 0 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--fg2);
   }
   .below {
     position: absolute;

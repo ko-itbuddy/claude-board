@@ -3,7 +3,7 @@
 // 화면 대조용 시나리오(?scenario=mac1) — 파일은 저장소에 올리지 않는다(없으면 건너뜀)
 type Scenarios = { applyMac1?: (s: typeof S) => void; FROZEN_NOW?: number };
 const scenarios: Scenarios = Object.values(import.meta.glob("./mock-scenarios.ts", { eager: true }))[0] as Scenarios ?? {};
-import type { Account, Brain, Group, Session, Snapshot, State, Sub, TermId, TermInfo, TermSpec } from "./types";
+import type { Account, AutopilotAction, AutopilotRun, Brain, Group, Session, Snapshot, State, Sub, TermId, TermInfo, TermSpec } from "./types";
 
 const SEC = 1000;
 const MIN = 60 * SEC;
@@ -150,10 +150,73 @@ const demo: Account = { id: "acc-demo|org-demo", email: "demo@example.com", org:
 const work: Account = { id: "acc-work|org-work", email: "work@example.com", org: "Example Inc.", plan: "Max 5x", expired: false };
 const old: Account = { id: "acc-old|org-old", email: "old@example.com", org: "", plan: "Pro", expired: true };
 
+// 자율주행 실행 — 도는 cmd 실행(샌드박스 없음 칩), 끝난 실행, 한도를 기다리는 WSL 실행(접힌 infra 카드 안)
+function autopilotRun(path: string, p: Partial<AutopilotRun> & { id: string; title: string }): AutopilotRun {
+  return {
+    path,
+    state: "running",
+    reason: "",
+    waitUntil: null,
+    env: { key: "cmd", label: "명령 프롬프트", sandbox: false },
+    unit: null,
+    total: 5,
+    done: 0,
+    failed: 0,
+    capped: 0,
+    skipped: 0,
+    stopped: 0,
+    can: ["pause", "stop"],
+    ended: false,
+    ...p,
+  };
+}
+
+function initialAutopilot(): AutopilotRun[] {
+  if (empty) return [];
+  return [
+    autopilotRun("~\\work\\shop-api", {
+      id: "ap-shop-1",
+      title: "결제 모듈 정리",
+      unit: { n: 2, title: "결과 파일 맞추기", phase: "work", activeSec: 12 * 60, costUsd: 0.42, tries: 1 },
+      done: 1,
+      capped: 1,
+    }),
+    autopilotRun("~\\work\\web-dashboard", {
+      id: "ap-web-1",
+      title: "차트 색 통일",
+      state: "done",
+      total: 3,
+      done: 3,
+      can: [],
+      ended: true,
+    }),
+    autopilotRun("~\\work\\infra", {
+      id: "ap-infra-1",
+      title: "배포 스크립트 점검",
+      state: "waiting_limit",
+      waitUntil: t0 + 2 * HOUR,
+      env: { key: "wsl:Ubuntu", label: "WSL · Ubuntu", sandbox: true },
+      unit: { n: 4, title: "롤백 경로 확인", phase: "work", activeSec: 63 * 60, costUsd: 1.5, tries: 2 },
+      total: 6,
+      done: 3,
+      failed: 1,
+      can: ["pause", "stop"],
+    }),
+  ];
+}
+
+// 누른 단추가 실행의 상태를 바꾼 것처럼 보이게 한다(실제 백엔드는 control.json 만 쓰고 엔진이 상태를 바꾼다)
+function applyAutopilotControl(run: AutopilotRun, action: string) {
+  if (action === "pause") Object.assign(run, { state: "paused", can: ["resume", "stop"] });
+  if (action === "resume") Object.assign(run, { state: "running", waitUntil: null, can: ["pause", "stop"] });
+  if (action === "stop") Object.assign(run, { state: "stopped", can: [], ended: true });
+}
+
 const S: Snapshot = {
   now: t0,
   runsClaude: [], // 지금 claude 가 도는 보드 터미널 — 가짜 화면에서 실제로 도는 claude 는 없다
   groups: initialGroups(),
+  autopilot: initialAutopilot(),
   allMuted: false,
   counts: { waiting: 0, working: 0, idle: 0, paused: 0, ended: 0 },
   usage: {
@@ -340,6 +403,15 @@ export async function handle(cmd: string, a: Record<string, unknown>): Promise<u
       if (action === "pause") Object.assign(s, { state: "paused", paused: true, updated: now });
       if (action === "resume") Object.assign(s, { state: "working", paused: false, since: now, updated: now });
       if (action === "stop") Object.assign(s, { state: "ended", paused: false, subagents: [], updated: now });
+      break;
+    }
+    case "autopilot_control": {
+      const run = S.autopilot?.find((r) => r.id === str("runId"));
+      const action = str("action");
+      console.info(`[mock] autopilot_control ${action} ${str("runId")}`);
+      if (!run) throw new Error("모르는 실행");
+      if (!run.can.includes(action as AutopilotAction)) throw new Error("지금 상태에서는 할 수 없습니다");
+      applyAutopilotControl(run, action);
       break;
     }
     case "switch_account": {

@@ -346,6 +346,8 @@ pub struct Snapshot {
     pub runs_claude: Vec<String>,
     /// 셸이 프롬프트에 있는 보드 터미널 `TermId`들.
     pub at_prompt: Vec<String>,
+    /// 자율주행 실행들(최근 것이 앞).
+    pub autopilot: Vec<crate::autopilot::AutopilotRunView>,
 }
 
 #[cfg(test)]

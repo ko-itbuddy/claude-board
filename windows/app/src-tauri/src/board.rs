@@ -16,6 +16,7 @@ use claude_board_core::{clock, console, paths};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindowBuilder};
 
 use crate::accounts::{self, AccountPaths, Accounts};
+use crate::autopilot::AutopilotReader;
 use crate::autoswitch::{self, AutoSwitch};
 use crate::model::{Counts, Group, Session, Snapshot};
 use crate::settings::{self, set_in, toggle, Frame, Settings};
@@ -54,6 +55,8 @@ pub struct Board {
     pub account_paths: AccountPaths,
     pub updater: Mutex<Updater>,
     pub auto: Mutex<AutoSwitch>,
+    /// 자율주행 실행 폴더 읽기 — 읽기 전용(실행 상태의 주인은 엔진)
+    pub(crate) autopilot: Mutex<AutopilotReader>,
     pub terminals: Mutex<Terminals>,
     claude_version: Mutex<(f64, Option<String>)>,
     /// 지난 확인 때의 Windows Terminal pid — 새로 생기면 보드를 보인다
@@ -92,6 +95,7 @@ impl Board {
             account_paths,
             updater: Mutex::new(Updater::new()),
             auto: Mutex::new(AutoSwitch::default()),
+            autopilot: Mutex::new(AutopilotReader::new(crate::autopilot::default_root())),
             terminals: Mutex::new(Terminals::default()),
             claude_version: Mutex::new((f64::NEG_INFINITY, None)),
             wt_pids: Mutex::new(None),
@@ -145,6 +149,7 @@ impl Board {
         drop(st);
         drop(store);
         *self.view.lock().unwrap() = View { groups: r.groups, all_muted: r.all_muted };
+        self.autopilot.lock().unwrap().refresh(clock::now());
     }
 
     fn claude_version(&self, now: f64) -> Option<String> {
@@ -183,6 +188,7 @@ impl Board {
             terminals: self.terminals.lock().unwrap().view(),
             runs_claude,
             at_prompt,
+            autopilot: self.autopilot.lock().unwrap().view(now),
         }
     }
 
@@ -1012,6 +1018,7 @@ pub fn run(argv: Vec<String>, context: tauri::Context<tauri::Wry>) {
             reveal,
             session_action,
             crate::drive::drive_session,
+            crate::autopilot::autopilot_control,
             crate::drive::rename_check,
             crate::open_session::show_board,
             crate::open_session::take_open_session,
@@ -1157,7 +1164,7 @@ mod tests {
             }
         }
         assert!(body.lines().count() > 10, "snapshot 본문을 찾지 못했다");
-        for field in ["view", "settings", "probe", "terminals", "store", "claude_version"] {
+        for field in ["view", "settings", "probe", "terminals", "store", "claude_version", "autopilot"] {
             let needle = format!("self.{field}.lock()");
             assert!(body.matches(&needle).count() <= 1, "{field} 잠금을 두 번 이상 잡는다");
         }
