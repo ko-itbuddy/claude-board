@@ -2629,6 +2629,7 @@ final class Engine {
             event("engine", "엔진이 다시 떴습니다. 직전에 비정상으로 끝나 하던 자리에서 잇습니다.")
             saveRun()
         }
+        if !first { redrawMissingReports("엔진이 다시 떠서") }   // 단위 판정 뒤 보고서를 그리기 전에 죽었으면(다듬기 ⑬-2 ④)
         while true {
             if state == "paused" { pausedLoop(); continue }
             if state == apTakenOverState { takenOverLoop(); continue }
@@ -2697,6 +2698,21 @@ final class Engine {
         return d
     }
 
+    // 빠진 단위 보고서(다듬기 ⑬-2 ④, 규칙 apMissingUnitReports): 끝난 단위인데 단위 폴더의 report.html(보통 파일)이 없는 것 — 엔진이 단위 판정 뒤
+    // 기록 저장소에 쓴 다음 보고서를 그리기 전에 죽으면 생긴다. 바로 가기는 없는 것으로 본다(EngineReportSink 가 rename 으로 바꿔 끼운다)
+    func missingUnitReports() -> [Int] {
+        apMissingUnitReports(statuses: statuses, hasDir: { n in isDir(self.unitDir(n)) && !isLink(self.unitDir(n)) }, hasReport: { n in
+            var st = stat()
+            return lstat(self.unitDir(n) + "/report.html", &st) == 0 && st.st_mode & S_IFMT == S_IFREG
+        })
+    }
+    func redrawMissingReports(_ when: String) {
+        let m = missingUnitReports()
+        guard !m.isEmpty else { return }
+        let d = drawReports(m)
+        event("engine", "\(when) 보고서가 빠진 단위 \(m.count)개(\(m.map(String.init).joined(separator: "·")))를 다시 그렸습니다(\(d.written.filter { $0 != .run }.count)개, 모델 0).")
+    }
+
     // 끝(완료·중단·오류)의 정리: 하네스를 다시 재어 출발 때와 같은지 적고, 출발 때 없던 빈 .claude/.cc-writes 를 치우고, 기록 저장소에 끝을 쓴다.
     // 출발 때 남긴 지문(manifest.json)만 읽으므로 고정 설정을 못 읽은 오류 끝에서도 돈다
     // 차례(설계 4장 시작과 끝): 하네스 끝 검사·빈 자리 치우기 → 가지 끝 머리 → 기록 저장소 → 출발 때 가지로 되돌리기 → 한 번 더 기록 → wrapped.
@@ -2735,7 +2751,12 @@ final class Engine {
         saveRun()
         record("끝")
         if restoreBranches() { record("되돌린 뒤") }
-        let rep = drawReports([])
+        // 끝난 단위 가운데 보고서가 빠진 것도 실행 보고서와 함께 다시 그린다(다듬기 ⑬-2 ④, 모델 0)
+        let miss = missingUnitReports()
+        let rep = drawReports(miss)
+        if !miss.isEmpty {
+            event("engine", "끝 정리: 보고서가 빠진 단위 \(miss.count)개(\(miss.map(String.init).joined(separator: "·")))를 다시 그렸습니다(\(rep.written.filter { $0 != .run }.count)개).")
+        }
         if rep.written.contains(.run) {
             event("engine", "실행 보고서를 그렸습니다(실행 폴더의 report.html, 단위 \(total)개). 보드의 지난 실행에서 봅니다.")
         } else {
