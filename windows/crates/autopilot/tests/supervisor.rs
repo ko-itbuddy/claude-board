@@ -209,6 +209,13 @@ fn parse_list_quote_escape() {
 
 #[cfg(windows)]
 #[test]
+fn create_args_never_overwrite_an_existing_task() {
+    let args = create_args(r"\ClaudeBoard\autopilot-test\x", r"C:\t\x.xml");
+    assert_eq!(args, ["/create", "/tn", r"\ClaudeBoard\autopilot-test\x", "/xml", r"C:\t\x.xml"]);
+    assert!(!args.iter().any(|a| a.eq_ignore_ascii_case("/f")), "/f 는 같은 이름의 작업을 조용히 덮는다");
+}
+
+#[test]
 fn bad_label_never_reaches_schtasks() {
     let s = TaskScheduler::with_folder(FOLDER_TEST).unwrap();
     assert_eq!(s.register(&job("a b", &[])).unwrap_err().kind, PortErrorKind::Invalid);
@@ -439,6 +446,24 @@ mod measured {
         let after = wscript_count();
         println!("wscript 수: 시험 전 {before}, 도는 중 {during}, 정리 뒤 {after}");
         assert!(after <= before, "정리 뒤에도 탐침이 남았다(전 {before}, 후 {after})");
+    }
+
+    #[test]
+    #[ignore = "실제 작업을 만들고 지운다"]
+    fn measured_second_register_with_the_same_name_fails_and_keeps_the_first() {
+        assert_not_elevated();
+        let r = rig(FOLDER_TEST);
+        r.sched.register(&r.job(None)).unwrap_or_else(|e| panic!("첫 register 실패: {e}"));
+        // 같은 이름에 다른 프로그램 인자를 가진 두 번째 등록은 덮어쓰지 않고 실패한다
+        let mut other = r.job(None);
+        other.args.push("SECOND-REGISTER-MARKER".to_string());
+        let err = r.sched.register(&other).expect_err("같은 이름의 두 번째 등록은 실패해야 한다");
+        println!("두 번째 register 오류: {err}");
+        assert!(r.sched.is_registered(&r.label).unwrap(), "두 번째 등록이 실패하면서 첫 작업을 지웠다");
+        let (code, xml) = schtasks(&["/query", "/tn", &r.path, "/xml"]);
+        assert_eq!(code, 0, "{xml}");
+        assert!(!xml.contains("SECOND-REGISTER-MARKER"), "첫 작업이 두 번째 정의로 덮였다:\n{xml}");
+        r.assert_gone();
     }
 
     #[test]

@@ -76,17 +76,98 @@ fn find_git() -> Option<PathBuf> {
 
 // ── 실행 ─────────────────────────────────────────────
 
-fn run_protected(exe: &Path, repo: &Path, args: &[&str], timeout: Duration) -> PortResult<GitOutput> {
+/// 늘 거는 설정(`-c`). 저장소 안의 설정·속성 파일이 엔진 프로세스 권한으로 명령을 돌리지 못하게 한다.
+/// 이름이 정해진 칸만 여기서 막고, 이름을 저장소가 정하는 칸(`filter.<이름>.*`·`diff.<이름>.*`·`merge.<이름>.*`)은
+/// `driver_neutralisers` 가 저장소 설정을 읽어 찾아 막는다
+fn static_config() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("core.fsmonitor", "false"),
+        ("core.hooksPath", NULL_DEVICE),
+        ("core.attributesFile", NULL_DEVICE),
+        ("core.excludesFile", NULL_DEVICE),
+        ("diff.external", ""),
+        ("core.pager", "cat"),
+        ("protocol.ext.allow", "never"),
+        ("commit.gpgsign", "false"),
+    ]
+}
+
+/// 저장소가 이름을 붙인 코드 실행 칸(`filter.x.clean` 처럼)을 찾아 비우는 설정 쌍.
+/// 쓰는 일은 `git config --list` 읽기뿐이라 코드가 돌지 않는다. 설정을 못 읽으면 빈 목록(그 저장소에 대한 본 명령도 같은 까닭으로 실패한다)
+fn driver_neutralisers(exe: &Path, repo: &Path, timeout: Duration) -> Vec<(String, String)> {
+    let mut cmd = base_command(exe, repo, &[]);
+    cmd.args(["config", "--list", "--name-only", "-z"]);
+    match exec(cmd, "config", timeout) {
+        Ok(out) if out.code == 0 => neutralisers_for(&out.stdout),
+        _ => Vec::new(),
+    }
+}
+
+/// `git config --list --name-only -z` 출력(NUL 로 끝나는 이름들) → 비울 칸 쌍. 순수 함수
+pub fn neutralisers_for(names: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut put = |key: String, value: &str| {
+        if !out.iter().any(|(k, _)| *k == key) {
+            out.push((key, value.to_string()));
+        }
+    };
+    for name in names.split('\0').filter(|n| !n.is_empty()) {
+        let Some((section, rest)) = name.split_once('.') else { continue };
+        let Some((sub, var)) = rest.rsplit_once('.') else { continue };
+        match (section, var) {
+            ("filter", "clean" | "smudge" | "process") => {
+                put(name.to_string(), "");
+                // 필수 필터가 비어 실패하면 status 가 죽는다 — 필수 표시도 끈다
+                put(format!("filter.{sub}.required"), "false");
+            }
+            ("diff", "textconv" | "command") => put(name.to_string(), ""),
+            ("merge", "driver") => put(name.to_string(), ""),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// `diff`·`show`·`log` 에는 외부 diff·textconv 를 끄는 옵션을 앞에 끼운다(이미 있어도 무해)
+fn with_safe_flags(args: &[&str]) -> Vec<String> {
+    let mut out: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+    if matches!(args.first().copied(), Some("diff" | "show" | "log")) {
+        out.splice(1..1, ["--no-ext-diff".to_string(), "--no-textconv".to_string()]);
+    }
+    out
+}
+
+/// 보호 환경을 건 `git -C <저장소>` 명령. `extra_config` 는 환경 변수 설정 쌍(`GIT_CONFIG_COUNT`)으로 건다 —
+/// 키에 `=` 가 있어도 `-c` 처럼 갈라지지 않는다
+fn base_command(exe: &Path, repo: &Path, extra_config: &[(String, String)]) -> Command {
     let mut cmd = Command::new(exe);
+    cmd.arg("--no-optional-locks");
     cmd.arg("-C").arg(repo);
     // -c 는 저장소 설정보다 우선한다. 훅 폴더는 비워 훅을 못 찾게 한다
-    cmd.arg("-c").arg("core.fsmonitor=false");
-    cmd.arg("-c").arg(format!("core.hooksPath={NULL_DEVICE}"));
-    cmd.args(args);
+    for (key, value) in static_config() {
+        cmd.arg("-c").arg(format!("{key}={value}"));
+    }
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     apply_env(&mut cmd);
+    if !extra_config.is_empty() {
+        cmd.env("GIT_CONFIG_COUNT", extra_config.len().to_string());
+        for (i, (key, value)) in extra_config.iter().enumerate() {
+            cmd.env(format!("GIT_CONFIG_KEY_{i}"), key).env(format!("GIT_CONFIG_VALUE_{i}"), value);
+        }
+    }
     hide_window(&mut cmd);
+    cmd
+}
 
+fn run_protected(exe: &Path, repo: &Path, args: &[&str], timeout: Duration) -> PortResult<GitOutput> {
+    let neutral = driver_neutralisers(exe, repo, timeout);
+    let mut cmd = base_command(exe, repo, &neutral);
+    cmd.args(with_safe_flags(args));
+    exec(cmd, args.first().copied().unwrap_or(""), timeout)
+}
+
+/// 띄워서 끝까지(또는 시간 상한까지) 기다리고 출력을 모은다
+fn exec(mut cmd: Command, what: &str, timeout: Duration) -> PortResult<GitOutput> {
     let mut child = cmd.spawn()?;
     let out_rx = drain(child.stdout.take());
     let err_rx = drain(child.stderr.take());
@@ -102,7 +183,7 @@ fn run_protected(exe: &Path, repo: &Path, args: &[&str], timeout: Duration) -> P
             let _ = child.wait();
             return Err(PortError::new(
                 PortErrorKind::Timeout,
-                format!("git {} 가 {}초 안에 끝나지 않았다", args.first().copied().unwrap_or(""), timeout.as_secs_f64()),
+                format!("git {what} 가 {}초 안에 끝나지 않았다", timeout.as_secs_f64()),
             ));
         }
         std::thread::sleep(POLL);
@@ -117,12 +198,29 @@ fn run_protected(exe: &Path, repo: &Path, args: &[&str], timeout: Duration) -> P
 
 /// 상속된 git 환경을 걷어내고 보호 값을 건다.
 fn apply_env(cmd: &mut Command) {
-    // GIT_DIR 등이 남아 있으면 -C 와 상관없이 엉뚱한 저장소를 만진다. GIT_CONFIG_* 는 COUNT/KEY_n/VALUE_n 도 포함한다
+    // GIT_DIR 등이 남아 있으면 -C 와 상관없이 엉뚱한 저장소를 만진다. GIT_CONFIG_* 는 COUNT/KEY_n/VALUE_n 도 포함한다.
+    // 외부 diff·속성 원본·편집기·pager·ssh·인증 도우미를 가리키는 변수도 코드를 돌릴 수 있어 걷어낸다
+    const STRIPPED: [&str; 14] = [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_EXTERNAL_DIFF",
+        "GIT_ATTR_SOURCE",
+        "GIT_PAGER",
+        "GIT_EDITOR",
+        "GIT_SEQUENCE_EDITOR",
+        "GIT_SSH",
+        "GIT_SSH_COMMAND",
+        "GIT_ASKPASS",
+        "GIT_PROXY_COMMAND",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_OBJECT_DIRECTORY",
+    ];
     let stripped: Vec<OsString> = std::env::vars_os()
         .map(|(k, _)| k)
         .filter(|k| {
             let up = k.to_string_lossy().to_ascii_uppercase();
-            up == "GIT_DIR" || up == "GIT_WORK_TREE" || up == "GIT_INDEX_FILE" || up.starts_with("GIT_CONFIG")
+            STRIPPED.contains(&up.as_str()) || up.starts_with("GIT_CONFIG")
         })
         .collect();
     for k in stripped {
@@ -130,6 +228,8 @@ fn apply_env(cmd: &mut Command) {
     }
     cmd.env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", NULL_DEVICE)
+        .env("GIT_ATTR_NOSYSTEM", "1")
+        .env("GIT_PAGER", "cat")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0");
 }

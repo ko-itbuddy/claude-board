@@ -86,7 +86,7 @@ fn valid_distro_name(name: &str) -> bool {
 /// `wsl.exe -l -q` 출력(UTF-16LE, BOM 이 있을 수도 없을 수도) → 배포판 이름.
 /// 빈 줄, `docker-desktop` 으로 시작하는 이름, 위 이름 규칙에 어긋나는 이름은 뺀다. 순서는 지키고 겹친 이름은 한 번만 낸다.
 pub fn parse_wsl_list(raw: &[u8]) -> Vec<String> {
-    let units: Vec<u16> = raw.chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
+    let units: Vec<u16> = raw.as_chunks::<2>().0.iter().map(|b| u16::from_le_bytes(*b)).collect();
     // BOM(U+FEFF)과 NUL 찌꺼기는 이름의 일부가 아니다
     let text: String = String::from_utf16_lossy(&units).chars().filter(|&c| c != '\0' && c != '\u{feff}').collect();
     let mut names: Vec<String> = Vec::new();

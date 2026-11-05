@@ -1,6 +1,7 @@
-//! `start` — 출발. 차례(위에서 걸리면 멈추고 이미 바꾼 것만 되돌린다): 폴더·파일 → 단위 검사 → 실행 환경 문턱 → 판정 명령 꼴 →
-//! 시험용 claude 판정과 준비 확인 → 가지 → 고정 설정 → run.json·queue.json → 작업 스케줄러 등록.
-//! 같은 경로의 두 번째 출발은 막지 않는다(기록 저장소 `path_claims` 는 6단계 일).
+//! `start` — 출발. 차례(위에서 걸리면 멈추고 이미 바꾼 것만 되돌린다): 폴더·파일 → 단위·설정 검사 → 실행 환경 문턱 → 판정 명령 꼴 →
+//! 경로 확인(정규화·쓸 수 없는 자리) → 같은 이름의 실행이 이미 있는지 → 시험용 claude 판정과 준비 확인 → 가지 → 고정 설정 → run.json·queue.json → 작업 스케줄러 등록.
+//! 같은 이름의 실행 폴더가 다른 곳에 있어도 엔진 전용 폴더(`private\<id>`)를 나눠 쓰지 못하게 막고, 작업 이름에는 폴더 경로 해시를 붙인다.
+//! 같은 저장소를 다루는 두 번째 출발은 막지 않는다(기록 저장소 `path_claims` 는 6단계 일).
 
 use std::path::{Path, PathBuf};
 
@@ -8,8 +9,10 @@ use claude_board_core::envs::{EnvChoice, EnvEntry, EnvKind};
 use claude_board_core::test_claude::Decision;
 use serde_json::{json, Map, Value};
 
-use super::{first_line, label_for, native_env, read_required, refuse, run_id_of, valid_run_id, Deps, Fail, Reply, ENGINE_EXE};
+use super::roots::{self, Forbidden};
+use super::{first_line, label_for_dir, native_env, read_required, refuse, run_id_of, valid_run_id, Deps, Fail, Reply, ENGINE_EXE};
 use crate::adapters::git::autopilot_branch_name;
+use crate::adapters::wsl_env::WslEnv;
 use crate::engine::run::frozen_digest;
 use crate::model::{ExecEnv as ExecEnvRecord, Num, Ordered, QueueFile, RunFile, UnsandboxedOk};
 use crate::ports::{ExecEnv, Git, KeepAlive};
@@ -74,10 +77,6 @@ fn unit_problems(queue: &QueueFile) -> Vec<String> {
     out
 }
 
-fn unit_cwds(queue: &QueueFile) -> Vec<PathBuf> {
-    queue.iter().filter_map(|u| u.cwd.get()).map(PathBuf::from).collect()
-}
-
 /// 걸음 3·4 — 실행 환경 문턱과 판정 명령 꼴. (고른 환경, 기록할 `exec_env` 초안)
 fn pick_env(
     l: &Loaded,
@@ -104,10 +103,6 @@ fn pick_env(
     Ok((entry, rec.and_then(|r| r.unsandboxed_ok)))
 }
 
-fn wsl_pending() -> Fail {
-    refuse("WSL 실행 환경은 아직 준비 중입니다.")
-}
-
 /// 시험 모드에서 고정하는 `claude_cmd`(조각 배열)와 `claude_env`(이름·값). 꺼짐이면 None
 pub type TestClaude = Option<(Vec<String>, Vec<(String, String)>)>;
 
@@ -120,10 +115,15 @@ fn confirm_env(d: &Deps, entry: &EnvEntry, first_cwd: &Path) -> Result<(TestClau
         }
         Decision::Rejected(why) => return Err(refuse(format!("시험용 claude 설정이 어긋납니다: {why}"))),
     };
-    if entry.choice.kind == EnvKind::Wsl {
-        return Err(wsl_pending());
-    }
-    let env = native_env(entry, test.as_ref().map(|(cmd, _)| cmd.as_slice())).map_err(|e| refuse(e.message))?;
+    let env: Box<dyn ExecEnv> = if entry.choice.kind == EnvKind::Wsl {
+        // 시험용 claude 는 Windows 프로그램(node.exe 등)이라 배포판 안에서 돌릴 수 없다. 진짜 claude 가 대신 뜨지 않게 여기서 멈춘다
+        if test.is_some() {
+            return Err(refuse("시험용 claude 는 WSL 실행 환경에서 쓸 수 없습니다."));
+        }
+        Box::new(WslEnv::from_entry(entry).map_err(|e| refuse(e.message))?)
+    } else {
+        Box::new(native_env(entry, test.as_ref().map(|(cmd, _)| cmd.as_slice())).map_err(|e| refuse(e.message))?)
+    };
     let report = env.check_ready(first_cwd);
     let sandbox = confirm_ready(&entry.choice, &report).map_err(refuse)?;
     Ok((test, sandbox))
@@ -222,8 +222,8 @@ fn branches_value(repos: &[Repo], work: &str) -> Value {
 
 // ── 고정 설정 ────────────────────────────────────────
 
-/// run.json 에서 frozen 으로 옮기는 설정 칸
-const FROZEN_FROM_RUN: [&str; 15] = [
+/// run.json 에서 frozen 으로 옮기는 설정 칸. `claude_args`(시험용)는 `--dev` 일 때만 `build_frozen` 이 따로 옮긴다
+const FROZEN_FROM_RUN: [&str; 18] = [
     "model",
     "effort",
     "stopline",
@@ -239,7 +239,49 @@ const FROZEN_FROM_RUN: [&str; 15] = [
     "project",
     "project_root",
     "title",
+    // 엔진이 세션 정책을 만들 때 읽는다: 프로젝트 자율주행 지시(`set.instruction`), 네트워크 허용 목록, localhost 모든 포트
+    "set",
+    "network_allow",
+    "local_binding",
 ];
+
+/// 설정 칸의 꼴 확인. 틀리면 출발하지 않는다(엔진은 틀린 꼴을 조용히 빈 값으로 읽는다)
+fn settings_problems(run: &Value, dev: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    for key in ["network_allow", "allowed_tools", "disallowed_tools", "claude_args"] {
+        if let Some(v) = run.get(key).filter(|v| !v.is_null()) {
+            if !v.as_array().is_some_and(|a| a.iter().all(Value::is_string)) {
+                out.push(format!("run.json 의 {key} 는 글자 배열이어야 합니다."));
+            }
+        }
+    }
+    if run.get("local_binding").is_some_and(|v| !v.is_null() && !v.is_boolean()) {
+        out.push("run.json 의 local_binding 은 true/false 여야 합니다.".to_string());
+    }
+    if run.get("set").is_some_and(|v| !v.is_null() && !v.is_object()) {
+        out.push("run.json 의 set 은 객체여야 합니다.".to_string());
+    }
+    if !dev && run.get("claude_args").is_some_and(|v| !v.is_null()) {
+        out.push("run.json 의 claude_args 는 시험용이라 --dev 로 출발할 때만 받습니다.".to_string());
+    }
+    out
+}
+
+/// 경로 확인을 마친 값(정규 경로)으로 고정 설정의 작업 폴더·쓰기 범위·읽기 금지를 바꾼다. 원래 없던 칸은 만들지 않는다
+fn apply_checked(frozen: &mut Value, checked: &roots::Checked) {
+    if let Some(units) = frozen.get_mut("units").and_then(Value::as_array_mut) {
+        for (unit, cwd) in units.iter_mut().zip(&checked.cwds) {
+            if let Some(slot) = unit.get_mut("cwd") {
+                *slot = Value::from(cwd.to_string_lossy().into_owned());
+            }
+        }
+    }
+    for (key, list) in [("write_roots", &checked.write_roots), ("read_deny", &checked.read_deny)] {
+        if let Some(slot) = frozen.get_mut(key) {
+            *slot = json!(list);
+        }
+    }
+}
 
 /// `pinned/frozen.json` 에 쓸 값. 키는 이름 순이다(macOS 가 쓴 것과 같은 순서). 시험 모드면 `claude_cmd`·`claude_env` 도 고정한다
 pub fn build_frozen(
@@ -256,6 +298,9 @@ pub fn build_frozen(
         if let Some(v) = run.get(key) {
             fields.insert(key.to_string(), v.clone());
         }
+    }
+    if let (true, Some(v)) = (dev, run.get("claude_args")) {
+        fields.insert("claude_args".into(), v.clone());
     }
     fields.insert("units".into(), queue.clone());
     fields.insert("exec_env".into(), exec_env);
@@ -292,6 +337,22 @@ fn write_value<T: serde::Serialize>(d: &Deps, path: &Path, value: &T) -> Result<
     d.files.write_json(path, &v).map_err(|e| e.message)
 }
 
+/// 같은 이름의 실행이 이미 쓰는 자리가 있으면 거부한다: 엔진 전용 폴더(`private\<id>`)가 이미 있거나(다른 부모 폴더의 같은 이름 실행),
+/// 이 폴더의 작업이 작업 스케줄러에 이미 있으면. 되돌리기(`remove_frozen`)가 남의 엔진 전용 폴더를 지우는 일을 이것이 막는다
+fn refuse_if_taken(d: &Deps, dev: bool, no_schedule: bool, private_dir: &Path, label: &str) -> Result<(), Fail> {
+    if private_dir.exists() {
+        return Err(refuse(format!(
+            "같은 이름의 실행이 이미 엔진 전용 폴더를 쓰고 있습니다: {}. 실행 폴더 이름을 바꾸거나 그 실행을 끝낸 뒤 다시 출발하세요.",
+            private_dir.display()
+        )));
+    }
+    // 스케줄러를 읽지 못하면(Err) 판단하지 않는다 — 등록할 때 같은 까닭으로 실패하고 되돌린다
+    if !no_schedule && (d.supervisor)(dev).is_registered(label).unwrap_or(false) {
+        return Err(refuse(format!("이 실행 폴더의 작업이 이미 작업 스케줄러에 있습니다({label}). 끝난 실행이면 unregister 로 지운 뒤 출발하세요.")));
+    }
+    Ok(())
+}
+
 // ── start 본체 ───────────────────────────────────────
 
 pub(super) fn start(d: &Deps, dir: &Path, dev: bool, accept_unsandboxed: bool, no_schedule: bool) -> Result<Reply, Fail> {
@@ -300,19 +361,25 @@ pub(super) fn start(d: &Deps, dir: &Path, dev: bool, accept_unsandboxed: bool, n
     }
     let now = d.clock.now();
     let mut l = load_run(d, dir)?;
-    let problems = unit_problems(&l.queue);
+    let mut problems = unit_problems(&l.queue);
+    problems.extend(settings_problems(&l.run_v, dev));
     if !problems.is_empty() {
         return Err(Fail::Refused(problems));
     }
     let entries = (d.detect)();
     let (entry, consent) = pick_env(&l, &entries, accept_unsandboxed, now)?;
-    let cwds = unit_cwds(&l.queue);
-    let (test, sandbox) = confirm_env(d, &entry, &cwds[0])?;
 
     let id = l.id.clone();
+    let private_dir = (d.autopilot_root)(dev).join("private").join(&id);
+    let forbidden = Forbidden::from_env(dir, &private_dir);
+    let checked = roots::check(&forbidden, entry.choice.kind, &l.queue, &l.run_v).map_err(Fail::Refused)?;
+    let label = label_for_dir(dev, dir);
+    refuse_if_taken(d, dev, no_schedule, &private_dir, &label)?;
+    let cwds = checked.cwds.clone();
+    let (test, sandbox) = confirm_env(d, &entry, &cwds[0])?;
+
     let work = autopilot_branch_name(&id).map_err(|e| refuse(e.message))?;
     let repos = create_branches(d.git, &cwds, &work).map_err(refuse)?;
-    let private_dir = (d.autopilot_root)(dev).join("private").join(&id);
     let undo_all = |why: &str| -> Fail {
         remove_frozen(dir, &private_dir);
         undo_branches(d.git, &repos, &work);
@@ -321,13 +388,13 @@ pub(super) fn start(d: &Deps, dir: &Path, dev: bool, accept_unsandboxed: bool, n
 
     let record = record_for(&entry.choice, sandbox, consent);
     let record_v = serde_json::to_value(&record).unwrap_or(Value::Null);
-    let frozen = build_frozen(&l.run_v, &l.queue_v, record_v, &id, dev, now, test);
+    let mut frozen = build_frozen(&l.run_v, &l.queue_v, record_v, &id, dev, now, test);
+    apply_checked(&mut frozen, &checked);
     let (hash, engine) = match write_pinned(d, dir, &private_dir, &frozen) {
         Ok(x) => x,
         Err(why) => return Err(undo_all(&format!("고정 설정을 쓰지 못했습니다: {why}"))),
     };
 
-    let label = label_for(dev, &id);
     for u in l.queue.iter_mut().filter(|u| u.status.is_absent()) {
         u.status.set("pending".to_string());
     }

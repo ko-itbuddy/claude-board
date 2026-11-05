@@ -17,6 +17,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const BOM: &[u8] = b"\xEF\xBB\xBF";
 
+/// `read_json` 이 읽는 파일 하나의 크기 한도. 모델이 쓸 수 있는 폴더의 파일(`result.json` 등)을 읽을 때의 마지막 방어선이다
+/// (그 파일들의 더 낮은 한도 `engine::run::MODEL_FILE_MAX` 는 엔진이 `stat` 으로 먼저 본다)
+pub const JSON_MAX_BYTES: u64 = 16 << 20;
+
 /// 임시 파일 이름 표시. `list` 는 이 꼴을 숨긴다(쓰는 도중의 흔적이라 이름 목록에 낄 자리가 아니다).
 const TEMP_PREFIX: &str = ".";
 const TEMP_SUFFIX: &str = ".tmp";
@@ -48,11 +52,21 @@ fn is_temp_name(name: &str) -> bool {
 
 impl RunFiles for FsRunFiles {
     fn read_json(&self, path: &Path) -> PortResult<Option<serde_json::Value>> {
-        let bytes = match fs::read(path) {
-            Ok(b) => b,
+        use std::io::Read;
+        let file = match fs::File::open(path) {
+            Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e.into()),
         };
+        // 모델이 쓸 수 있는 폴더의 파일을 읽는다: 보통 파일만, 한도까지만(한도를 넘게 자라는 파일도 메모리를 다 쓰지 못한다)
+        if !file.metadata()?.is_file() {
+            return Err(PortError::new(PortErrorKind::Invalid, format!("{}: 보통 파일이 아니다", path.display())));
+        }
+        let mut bytes = Vec::new();
+        file.take(JSON_MAX_BYTES + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > JSON_MAX_BYTES {
+            return Err(PortError::new(PortErrorKind::Invalid, format!("{}: {} 바이트를 넘어 읽지 않는다", path.display(), JSON_MAX_BYTES)));
+        }
         let body = bytes.strip_prefix(BOM).unwrap_or(&bytes);
         serde_json::from_slice(body)
             .map(Some)

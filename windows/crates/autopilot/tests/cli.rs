@@ -2,6 +2,8 @@
 // 작업 스케줄러를 가짜로 바꿔야 하는 것(등록 인자·등록 실패 되돌리기)은 `cli::execute_with` 에 가짜 `Deps` 를 넣어 본다.
 // 실제 작업 스케줄러를 만드는 시험은 `#[ignore] measured_start_registers_and_unregister_all` 하나뿐이다.
 // start 가 준비 확인까지 가는 시험은 node 와 한 줄짜리 가짜 claude(`--version` 만 답한다)를 시험용 claude 로 쓴다.
+mod fakes;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -62,7 +64,19 @@ impl Fx {
 
     /// 실행 폴더를 만들고 run.json·queue.json 을 쓴다
     fn make_run(&self, id: &str, run: Value, queue: Value) -> PathBuf {
-        let dir = self.path("runs").join(id);
+        self.make_run_in("runs", id, run, queue)
+    }
+
+    /// `make_run` 인데 부모 폴더를 고른다(같은 이름의 실행 폴더를 다른 부모에 둘 때)
+    fn make_run_in(&self, parent: &str, id: &str, mut run: Value, queue: Value) -> PathBuf {
+        // 기본 설정의 쓰기 범위 자리표(`C:\shared`)는 실제로 있는 임시 폴더로 바꾼다 — 출발은 없는 폴더를 거부한다
+        if let Some(roots) = run.get_mut("write_roots").and_then(Value::as_array_mut) {
+            for r in roots.iter_mut().filter(|r| r.as_str() == Some("C:\\shared")) {
+                std::fs::create_dir_all(self.path("shared")).unwrap();
+                *r = json!(self.path("shared").to_string_lossy());
+            }
+        }
+        let dir = self.path(parent).join(id);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("run.json"), serde_json::to_string_pretty(&run).unwrap()).unwrap();
         std::fs::write(dir.join("queue.json"), serde_json::to_string_pretty(&queue).unwrap()).unwrap();
@@ -110,6 +124,13 @@ fn toy_repo(dir: &Path) -> PathBuf {
     git(dir, &["add", "a.txt"]);
     git(dir, &["commit", "-q", "-m", "first"]);
     dir.to_path_buf()
+}
+
+/// `\\?\` 를 뗀 정규 경로(출발이 고정 설정에 싣는 꼴)
+fn canon(p: &Path) -> String {
+    let c = std::fs::canonicalize(p).unwrap();
+    let s = c.to_string_lossy();
+    s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
 }
 
 fn branch_of(dir: &Path) -> String {
@@ -317,13 +338,14 @@ fn start_refuses_unknown_env() {
 }
 
 #[test]
-fn start_refuses_wsl_while_its_adapter_is_missing() {
+fn start_refuses_a_wsl_distro_that_is_not_on_this_pc() {
     let fx = Fx::new();
     let repo = toy_repo(&fx.path("repo"));
     let mut run = base_run();
-    run["exec_env"] = json!({"key": "wsl:Ubuntu", "kind": "wsl", "distro": "Ubuntu"});
+    // 어느 PC 에도 있을 수 없는 이름 — 실제 배포판 이름을 쓰면 시험이 VM 을 깨울 수 있다
+    run["exec_env"] = json!({"key": "wsl:zz-no-such-distro-for-tests", "kind": "wsl", "distro": "zz-no-such-distro-for-tests"});
     let dir = fx.make_run("r1", run, json!([unit("u1", &repo)]));
-    // 이 PC 에 그 배포판이 없으면 "이 PC 에 없는 실행 환경", 있으면 "아직 준비 중" — 어느 쪽이든 출발하지 않는다
+    // 배포판이 없으면 "이 PC 에 없는 실행 환경"으로 출발하지 않는다
     let out = fx.cli(&["start", dir.to_str().unwrap(), "--no-schedule", "--json"]);
     assert_eq!(out.code, 1, "{}{}", out.stdout, out.stderr);
     assert!(!dir.join("pinned").exists());
@@ -442,7 +464,8 @@ fn start_no_schedule_writes_frozen_and_run_json() {
     let j = out.json();
     assert_eq!(j["ok"], true);
     assert_eq!(j["run"], "20261105-toy");
-    assert_eq!(j["label"], "com.claude.board.autopilot.20261105-toy");
+    assert_eq!(j["label"], cli::label_for_dir(false, &dir).as_str());
+    assert!(j["label"].as_str().unwrap().starts_with("com.claude.board.autopilot.20261105-toy."), "{}", j["label"]);
     assert_eq!(j["scheduled"], false);
     assert_eq!(j["exec_env"]["key"], "cmd");
     assert_eq!(j["exec_env"]["sandbox"], false);
@@ -455,7 +478,7 @@ fn start_no_schedule_writes_frozen_and_run_json() {
     assert_eq!(frozen["model"], "claude-sonnet-5-5");
     assert_eq!(frozen["effort"], "high");
     assert_eq!(frozen["caps"], json!({"minutes": 60, "usd": 5, "weekly_pp": 2}));
-    assert_eq!(frozen["write_roots"], json!(["C:\\shared"]));
+    assert_eq!(frozen["write_roots"], json!([canon(&fx.path("shared"))]), "쓰기 범위는 정규 경로로 고정한다");
     assert_eq!(frozen["units"].as_array().unwrap().len(), 2);
     assert_eq!(frozen["units"][0]["check"], "exit 0");
     assert!(frozen.get("memo").is_none());
@@ -469,7 +492,7 @@ fn start_no_schedule_writes_frozen_and_run_json() {
     assert_eq!(run["state"], "starting");
     assert_eq!(run["reason"], "출발을 기다립니다.");
     assert_eq!(run["dev"], false);
-    assert_eq!(run["launchd_label"], "com.claude.board.autopilot.20261105-toy");
+    assert_eq!(run["launchd_label"], cli::label_for_dir(false, &dir).as_str());
     assert_eq!(run["sessions"], json!([]));
     assert!(run["unit"].is_null() && run["wait_until"].is_null());
     assert!(run["created"].as_f64().unwrap() > 1.0e9);
@@ -621,7 +644,7 @@ fn start_registers_a_keepalive_job_for_the_pinned_engine() {
     assert_eq!(j["scheduled"], true);
     let jobs = sup.registered.lock().unwrap();
     assert_eq!(jobs.len(), 1);
-    assert_eq!(jobs[0].label, "com.claude.board.autopilot.r1");
+    assert_eq!(jobs[0].label, cli::label_for_dir(false, &dir));
     assert_eq!(jobs[0].program, dir.join("pinned").join("claude-autopilot-engine.exe"));
     assert_eq!(jobs[0].args, vec!["run".to_string(), dir.to_string_lossy().into_owned(), j["hash"].as_str().unwrap().to_string()]);
     assert_eq!(jobs[0].working_dir, dir);
@@ -653,6 +676,157 @@ fn start_register_failure_leaves_an_error_state_and_undoes_the_rest() {
     // 이미 끝난 상태라 다시 출발할 수 없다
     let again = run_with(&fx, &sup, Some(&claude), start_cmd(&dir, true));
     assert_eq!(again.code, 1);
+}
+
+// ── 같은 이름의 실행 폴더 ────────────────────────────
+
+#[test]
+fn same_named_run_folders_get_different_task_names() {
+    let fx = Fx::new();
+    let a = fx.make_run_in("a", "r1", base_run(), json!([]));
+    let b = fx.make_run_in("b", "r1", base_run(), json!([]));
+    let (la, lb) = (cli::label_for_dir(false, &a), cli::label_for_dir(false, &b));
+    assert_ne!(la, lb, "부모만 다른 같은 이름은 작업 이름이 달라야 한다");
+    assert!(la.starts_with("com.claude.board.autopilot.r1.") && lb.starts_with("com.claude.board.autopilot.r1."), "{la} {lb}");
+    // 같은 폴더는 늘 같은 이름이고, 개발 판은 이름이 다르다
+    assert_eq!(la, cli::label_for_dir(false, &a));
+    assert!(cli::label_for_dir(true, &a).starts_with("com.claude.board.dev.autopilot.r1."));
+    // 작업 스케줄러가 받는 이름 규칙 안(가장 긴 실행 id 도)
+    let long = fx.make_run_in("c", &"x".repeat(120), base_run(), json!([]));
+    for label in [&la, &lb, &cli::label_for_dir(true, &long)] {
+        assert!(claude_board_autopilot::adapters::supervisor::valid_label(label), "{label}");
+    }
+}
+
+#[test]
+fn second_start_of_a_same_named_folder_is_refused_and_leaves_the_first_run_alone() {
+    let fx = Fx::new();
+    let repo = toy_repo(&fx.path("repo"));
+    let a = fx.make_run_in("a", "r1", base_run(), json!([unit("u1", &repo)]));
+    let b = fx.make_run_in("b", "r1", base_run(), json!([unit("u1", &repo)]));
+    let claude = fx.fake_claude();
+    let env = [("CLAUDE_BOARD_CLAUDE", claude.as_str())];
+    let out = fx.cli_env(&["start", a.to_str().unwrap(), "--no-schedule", "--json"], &env);
+    assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
+    let private = fx.home().join("AppData").join("Local").join("Claude Board").join("autopilot").join("private").join("r1");
+    assert!(private.is_dir());
+    std::fs::write(private.join("marker.txt"), "first").unwrap();
+
+    let out = fx.cli_env(&["start", b.to_str().unwrap(), "--no-schedule", "--json"], &env);
+    refused_with(&out, "같은 이름의 실행이 이미 엔진 전용 폴더를 쓰고 있습니다");
+    assert_eq!(std::fs::read_to_string(private.join("marker.txt")).unwrap(), "first", "첫 실행의 엔진 전용 폴더가 그대로여야 한다");
+    assert!(a.join("pinned").join("frozen.json").is_file());
+    assert!(!b.join("pinned").exists() && read(&b, "run.json").get("state").is_none(), "둘째는 아무것도 바꾸지 않는다");
+    assert_eq!(branch_of(&repo), "autopilot/r1", "둘째가 가지를 건드리지 않았다");
+}
+
+#[test]
+fn start_is_refused_when_its_task_name_is_already_registered() {
+    let fx = Fx::new();
+    let repo = toy_repo(&fx.path("repo"));
+    let dir = fx.make_run("r1", base_run(), json!([unit("u1", &repo)]));
+    let claude = fx.fake_claude();
+    let sup = Arc::new(FakeSup::default());
+    sup.existing.lock().unwrap().push(cli::label_for_dir(false, &dir));
+    let out = run_with(&fx, &sup, Some(&claude), start_cmd(&dir, true));
+    assert_eq!(out.code, 1, "{}{}", out.stdout, out.stderr);
+    assert!(out.stdout.contains("작업 스케줄러에 있습니다"), "{}", out.stdout);
+    assert!(sup.registered.lock().unwrap().is_empty());
+    assert!(sup.removed.lock().unwrap().is_empty(), "남의 작업을 지우지 않는다");
+    assert!(!dir.join("pinned").exists() && !fx.path("root").join("live").join("private").join("r1").exists());
+    assert_eq!(branch_of(&repo), "main");
+
+    // 다른 부모 폴더의 같은 이름은 작업 이름이 달라 그대로 출발한다
+    let other = fx.make_run_in("b", "r1", base_run(), json!([unit("u1", &repo)]));
+    let out = run_with(&fx, &sup, Some(&claude), start_cmd(&other, true));
+    assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
+    assert_eq!(sup.registered.lock().unwrap()[0].label, cli::label_for_dir(false, &other));
+}
+
+// ── 경로 확인·고정할 설정 ────────────────────────────
+
+#[test]
+fn start_refuses_write_roots_that_are_too_wide_or_escape() {
+    let fx = Fx::new();
+    let repo = toy_repo(&fx.path("repo"));
+    let escaping = format!("{}{sep}..{sep}shared", fx.path("shared").display(), sep = std::path::MAIN_SEPARATOR);
+    let cases = [
+        (json!([fx.home().to_string_lossy()]), "홈 폴더 전체나 그 위"),
+        (json!([fx.path("").to_string_lossy()]), "홈 폴더 전체나 그 위"),
+        (json!([fx.home().join(".claude").to_string_lossy()]), ".claude 아래"),
+        (json!([escaping]), ".."),
+        (json!([fx.path("ghost").to_string_lossy()]), "write_roots"),
+    ];
+    std::fs::create_dir_all(fx.path("shared")).unwrap();
+    std::fs::create_dir_all(fx.home().join(".claude")).unwrap();
+    let claude = fx.fake_claude();
+    for (i, (roots, needle)) in cases.iter().enumerate() {
+        let mut run = base_run();
+        run["write_roots"] = roots.clone();
+        let dir = fx.make_run(&format!("r{i}"), run, json!([unit("u1", &repo)]));
+        let out = fx.cli_env(&["start", dir.to_str().unwrap(), "--no-schedule", "--json"], &[("CLAUDE_BOARD_CLAUDE", &claude)]);
+        refused_with(&out, needle);
+        assert!(!dir.join("pinned").exists(), "{roots}");
+    }
+    assert_eq!(branch_of(&repo), "main", "거부한 출발은 가지를 만들지 않는다");
+}
+
+#[test]
+fn start_copies_set_network_local_binding_and_claude_args_and_the_engine_uses_them() {
+    use claude_board_autopilot::engine::decide::RunState;
+    use claude_board_autopilot::engine::run::RunExit;
+    let fx = Fx::new();
+    let repo = toy_repo(&fx.path("repo"));
+    let mut run = base_run();
+    run["set"] = json!({"dir": "ignored", "instruction": "이 프로젝트는 쉬운 말로 보고한다"});
+    run["network_allow"] = json!(["example.com", "repo.maven.apache.org"]);
+    run["local_binding"] = json!(true);
+    run["claude_args"] = json!(["--add-flag-for-test"]);
+    let dir = fx.make_run("r1", run, json!([unit("u1", &repo)]));
+    let claude = fx.fake_claude();
+    let out = fx.cli_env(&["start", dir.to_str().unwrap(), "--dev", "--no-schedule", "--json"], &[("CLAUDE_BOARD_CLAUDE", &claude)]);
+    assert_eq!(out.code, 0, "{}{}", out.stdout, out.stderr);
+    let frozen = read(&dir, "pinned/frozen.json");
+    assert_eq!(frozen["set"]["instruction"], "이 프로젝트는 쉬운 말로 보고한다");
+    assert_eq!(frozen["network_allow"], json!(["example.com", "repo.maven.apache.org"]));
+    assert_eq!(frozen["local_binding"], json!(true));
+    assert_eq!(frozen["claude_args"], json!(["--add-flag-for-test"]));
+
+    // 고정된 값을 그대로 엔진(가짜 포트)에 먹여, 정책·시스템 프롬프트·띄우기 인자까지 닿는지 본다
+    let mut s = fakes::Scenario::new(1);
+    for key in ["set", "network_allow", "local_binding", "claude_args"] {
+        s.frozen[key] = frozen[key].clone();
+    }
+    let w = s.build();
+    w.env.push_spawn(fakes::ChildScript::ok_turn(0.5));
+    assert_eq!(w.run(), RunExit::Finished(RunState::Done));
+    let policy = w.env.policies.lock().unwrap()[0].clone();
+    assert_eq!(policy.network_allow, ["example.com", "repo.maven.apache.org"]);
+    assert!(policy.local_binding);
+    let prompt = w.files.text("/private/r1/system-prompt.md").expect("시스템 프롬프트 파일");
+    assert!(prompt.contains("이 프로젝트는 쉬운 말로 보고한다"), "{prompt}");
+    assert!(w.env.launches()[0].extra_args.contains(&"--add-flag-for-test".to_string()));
+}
+
+#[test]
+fn start_refuses_bad_setting_shapes_and_claude_args_outside_dev() {
+    let fx = Fx::new();
+    let repo = toy_repo(&fx.path("repo"));
+    let claude = fx.fake_claude();
+    let cases = [
+        ("network_allow", json!("example.com"), "network_allow 는 글자 배열"),
+        ("local_binding", json!("yes"), "local_binding 은 true/false"),
+        ("set", json!(["x"]), "set 은 객체"),
+        ("claude_args", json!(["--x"]), "시험용이라 --dev"),
+    ];
+    for (i, (key, value, needle)) in cases.iter().enumerate() {
+        let mut run = base_run();
+        run[*key] = value.clone();
+        let dir = fx.make_run(&format!("r{i}"), run, json!([unit("u1", &repo)]));
+        let out = fx.cli_env(&["start", dir.to_str().unwrap(), "--no-schedule", "--json"], &[("CLAUDE_BOARD_CLAUDE", &claude)]);
+        refused_with(&out, needle);
+    }
+    assert_eq!(branch_of(&repo), "main");
 }
 
 #[test]

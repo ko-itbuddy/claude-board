@@ -12,24 +12,17 @@ use serde_json::Value;
 use super::{native_env, panic_text, run_id_of, ENGINE_EXE};
 use crate::adapters::files::{FsRunFiles, SystemClock};
 use crate::adapters::git::ProcessGit;
+use crate::adapters::http::UreqHttp;
 use crate::adapters::records_sqlite::SqliteRecords;
 use crate::adapters::supervisor::TaskScheduler;
 use crate::adapters::usage::FallbackUsage;
+use crate::adapters::wsl_env::WslEnv;
 use crate::engine::run::{Engine, Ports, RunConfig, RunExit, FROZEN_CHANGED_REASON};
 use crate::ports::{
-    CheckOutcome, CheckRun, ChildProcess, ClaudeLaunch, Clock, EnvReport, ExecEnv, Http, HttpRequest, HttpResponse, PortError, PortErrorKind,
+    CheckOutcome, CheckRun, ChildProcess, ClaudeLaunch, Clock, EnvReport, ExecEnv, PortError, PortErrorKind,
     PortResult, Records, RunFiles, SessionPolicy,
 };
 use crate::rules::stopline::Tz;
-
-/// 시험용 가짜가 아닌 실제 판에는 아직 HTTP 어댑터가 없다 — 사용량 API 길은 늘 못 쓴다(캐시까지만)
-struct NoHttp;
-
-impl Http for NoHttp {
-    fn send(&self, _req: &HttpRequest) -> PortResult<HttpResponse> {
-        Err(PortError::new(PortErrorKind::Unavailable, "이 판에는 HTTP 어댑터가 아직 없다"))
-    }
-}
 
 /// 실행 환경을 만들지 못했을 때의 자리. 엔진이 claude 를 띄우는 자리에서 까닭과 함께 실패해 run.json 에 남게 한다
 struct BrokenEnv {
@@ -53,7 +46,7 @@ impl ExecEnv for BrokenEnv {
     fn to_env_path(&self, path: &Path) -> PortResult<String> {
         Ok(path.to_string_lossy().into_owned())
     }
-    fn from_env_path(&self, path: &str) -> PortResult<PathBuf> {
+    fn env_path_to_windows(&self, path: &str) -> PortResult<PathBuf> {
         Ok(PathBuf::from(path))
     }
     fn render_settings(&self, _policy: &SessionPolicy) -> PortResult<Value> {
@@ -78,12 +71,15 @@ fn engine_env(frozen: &Value, entries: &[EnvEntry]) -> Box<dyn ExecEnv> {
     };
     let key = frozen.get("exec_env").and_then(|e| e.get("key")).and_then(Value::as_str).unwrap_or("");
     let Some(choice) = EnvChoice::parse(key) else { return broken(None, &format!("고정 설정의 실행 환경({key})을 알 수 없습니다.")) };
-    if choice.kind == EnvKind::Wsl {
-        return broken(Some(choice), "WSL 실행 환경은 아직 준비 중입니다.");
-    }
     let Some(entry) = entries.iter().find(|e| e.choice == choice) else {
         return broken(Some(choice.clone()), &format!("이 PC 에 없는 실행 환경({})입니다.", choice.key()));
     };
+    if choice.kind == EnvKind::Wsl {
+        return match WslEnv::from_entry(entry) {
+            Ok(env) => Box::new(env),
+            Err(e) => broken(Some(choice), &e.message),
+        };
+    }
     let cmd = strings(frozen.get("claude_cmd"));
     match native_env(entry, (!cmd.is_empty()).then_some(cmd.as_slice())) {
         Ok(env) => Box::new(env),
@@ -117,7 +113,7 @@ fn run_inner(dir: &Path, hash: &str) -> RunExit {
     let env = engine_env(&frozen, &detect());
     let git = ProcessGit::new();
     let records = SqliteRecords::open(&root.join("private").join("records.sqlite")).ok();
-    let usage = FallbackUsage::system(NoHttp);
+    let usage = FallbackUsage::system(UreqHttp::new());
     let clock = SystemClock;
     let supervisor = TaskScheduler::new(dev);
     // 직전 엔진이 남긴 claude 를 끝낸다. 생성 시각이 없으면 같은 pid 의 다른 프로세스일 수 있어 건드리지 않는다

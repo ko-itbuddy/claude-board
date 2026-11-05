@@ -118,13 +118,95 @@ fn status_and_diff_output_parse() {
     assert_eq!(parse_diff_stat(&diff.stdout), (1, 2, 1));
 }
 
+/// 저장소 설정·속성 파일이 코드를 돌리게 심어 둔 저장소. 표식 파일 경로 셋(clean·textconv·external)을 돌려준다.
+/// a.txt 는 커밋돼 있고, 심은 뒤 같은 길이로 고쳐 git 이 내용을 다시 읽게 한다(길이가 다르면 읽지 않고 바뀐 것으로 본다)
+fn booby_trapped_repo(repo: &Path) -> [std::path::PathBuf; 3] {
+    init_repo(repo);
+    std::fs::write(repo.join("a.txt"), "one\ntwo\n").unwrap();
+    let g = git();
+    assert_eq!(g.run(repo, &["add", "a.txt"]).unwrap().code, 0);
+    assert_eq!(g.run(repo, &["commit", "-q", "-m", "a"]).unwrap().code, 0);
+
+    let markers = [repo.join("marker-clean"), repo.join("marker-textconv"), repo.join("marker-external")];
+    let [clean, textconv, external] = [slashes(&markers[0]), slashes(&markers[1]), slashes(&markers[2])];
+    let cfg = repo.join(".git").join("config");
+    let mut text = std::fs::read_to_string(&cfg).unwrap();
+    text.push_str(&format!(
+        "[filter \"x\"]\n\tclean = \"echo x > '{clean}'; cat\"\n\tsmudge = \"echo x > '{clean}'; cat\"\n\trequired = true\n\
+         [diff \"y\"]\n\ttextconv = \"echo x > '{textconv}'; cat\"\n\
+         [diff]\n\texternal = \"echo x > '{external}'; true\"\n"
+    ));
+    std::fs::write(&cfg, text).unwrap();
+    std::fs::write(repo.join(".gitattributes"), "*.txt filter=x diff=y\n").unwrap();
+    std::fs::write(repo.join("a.txt"), "uno\ntwo\n").unwrap();
+    markers
+}
+
+/// 보호 없이 부르면 심은 코드가 실제로 도는지 — 아래 시험이 "안 돈다"를 말할 자격이 있는지 가린다
+#[test]
+fn control_unprotected_git_runs_the_planted_filter() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    let markers = booby_trapped_repo(repo);
+    let raw = |args: &[&str]| {
+        let o = std::process::Command::new("git").arg("-C").arg(repo).args(args).output().unwrap();
+        assert!(o.status.success(), "{args:?}: {}", String::from_utf8_lossy(&o.stderr));
+    };
+    raw(&["status", "--porcelain"]);
+    raw(&["diff"]);
+    assert!(markers[0].exists(), "보호 없는 status/diff 가 clean 필터를 돌리지 않았다 — 시험이 힘이 없다");
+    assert!(markers[1].exists() || markers[2].exists(), "보호 없는 diff 가 textconv·external 을 돌리지 않았다");
+}
+
+#[test]
+fn planted_filters_textconv_and_external_diff_do_not_run() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    let markers = booby_trapped_repo(repo);
+    let g = git();
+    let st = g.run(repo, &["status", "--porcelain"]).unwrap();
+    assert_eq!(st.code, 0, "{}", st.stderr);
+    assert!(st.stdout.contains("a.txt"), "{}", st.stdout);
+    for args in [&["diff"][..], &["diff", "--stat", "--ignore-submodules=all"], &["diff", "--shortstat"]] {
+        let d = g.run(repo, args).unwrap();
+        assert_eq!(d.code, 0, "{args:?}: {}", d.stderr);
+    }
+    assert!(!markers[0].exists(), "clean/smudge 필터가 돌았다");
+    assert!(!markers[1].exists(), "textconv 가 돌았다");
+    assert!(!markers[2].exists(), "외부 diff 가 돌았다");
+}
+
+#[test]
+fn neutralisers_name_only_the_code_running_driver_keys() {
+    use claude_board_autopilot::adapters::git::neutralisers_for;
+    let names = "core.bare\0filter.x.clean\0filter.x.smudge\0filter.y.process\0diff.z.textconv\0diff.z.command\0diff.z.xfuncname\0merge.m.driver\0merge.m.name\0user.name\0filter.x.clean\0";
+    let got = neutralisers_for(names);
+    let keys: Vec<&str> = got.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(
+        keys,
+        [
+            "filter.x.clean",
+            "filter.x.required",
+            "filter.x.smudge",
+            "filter.y.process",
+            "filter.y.required",
+            "diff.z.textconv",
+            "diff.z.command",
+            "merge.m.driver",
+        ]
+    );
+    assert!(got.iter().all(|(k, v)| if k.ends_with(".required") { v == "false" } else { v.is_empty() }));
+    // 점이 든 이름도 마지막 점에서 가른다
+    assert_eq!(neutralisers_for("filter.a.b.clean\0")[0].0, "filter.a.b.clean");
+    assert!(neutralisers_for("").is_empty());
+}
+
 #[test]
 fn missing_repo_is_nonzero_or_error() {
     let tmp = tempfile::tempdir().unwrap();
     let missing = tmp.path().join("nope");
-    match git().run(&missing, &["status"]) {
-        Ok(out) => assert_ne!(out.code, 0),
-        Err(_) => {}
+    if let Ok(out) = git().run(&missing, &["status"]) {
+        assert_ne!(out.code, 0);
     }
 }
 

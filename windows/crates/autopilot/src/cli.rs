@@ -9,6 +9,7 @@
 //! `start`·`control`·`status`·`unregister` 는 `Deps` 만 만지므로 시험은 가짜 작업 스케줄러·환경 목록을 넣을 수 있다.
 
 mod inspect;
+pub mod roots;
 mod run;
 mod start;
 
@@ -290,6 +291,20 @@ pub fn valid_run_id(id: &str) -> bool {
 /// 작업 이름: `com.claude.board[.dev].autopilot.<실행 id>`. run.json `launchd_label` 칸에 둔다
 pub fn label_for(dev: bool, id: &str) -> String {
     format!("com.claude.board{}.autopilot.{id}", if dev { ".dev" } else { "" })
+}
+
+/// 작업 이름: `com.claude.board[.dev].autopilot.<실행 id>.<경로 해시 8자>`. 해시는 실행 폴더의 정규 전체 경로(소문자)의 sha256 앞 4바이트다.
+/// 부모 폴더만 다른 같은 이름의 실행 폴더 둘이 작업 이름을 나눠 갖지 않게 한다(`start` 가 쓰고 run.json `launchd_label` 에 둔다)
+pub fn label_for_dir(dev: bool, dir: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    let canon = std::fs::canonicalize(dir).map(|p| adapters_strip(&p)).unwrap_or_else(|_| absolute(dir));
+    let digest = Sha256::digest(canon.to_string_lossy().to_lowercase().as_bytes());
+    let short: String = digest.iter().take(4).map(|b| format!("{b:02x}")).collect();
+    format!("{}.{short}", label_for(dev, &run_id_of(dir)))
+}
+
+fn adapters_strip(p: &Path) -> PathBuf {
+    crate::adapters::winproc::strip_verbatim(p)
 }
 
 fn absolute(p: &Path) -> PathBuf {

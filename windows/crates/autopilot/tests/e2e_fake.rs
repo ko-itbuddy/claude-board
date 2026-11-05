@@ -260,7 +260,7 @@ fn tree(dir: &Path) -> Vec<String> {
 /// 한 행을 {칸 이름: 값} 으로
 fn sql_rows(db: &Connection, sql: &str) -> Vec<Map<String, Value>> {
     let mut st = db.prepare(sql).unwrap();
-    let names: Vec<String> = st.column_names().into_iter().map(|s| s.to_string()).collect();
+    let names: Vec<String> = st.column_names().map(|s| s.to_string()).collect();
     st.query_map([], |r| {
         let mut m = Map::new();
         for (i, name) in names.iter().enumerate() {
@@ -416,7 +416,7 @@ fn check_run_json(c: &mut Checks, dir: &Path, id: &str, env_key: &str, toy: &Pat
     c.eq(r.pointer("/exec_env/kind"), json!(env_key), "run.json exec_env.kind", &ctx);
     c.eq(r.pointer("/exec_env/sandbox"), json!(false), "run.json exec_env.sandbox", &ctx);
     c.eq(r.pointer("/exec_env/unsandboxed_ok/by"), json!("cli"), "run.json exec_env.unsandboxed_ok.by", &ctx);
-    c.eq(r.get("launchd_label"), json!(format!("com.claude.board.autopilot.{id}")), "run.json launchd_label", &ctx);
+    c.eq(r.get("launchd_label"), json!(claude_board_autopilot::cli::label_for_dir(false, dir)), "run.json launchd_label", &ctx);
     let sessions = r.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
     c.that(sessions.len() == 2 && sessions[0] != sessions[1] && sessions.iter().all(Value::is_string), "run.json sessions 가 서로 다른 글 2개", &ctx);
     let repos = r.pointer("/branches/repos").and_then(Value::as_object);
@@ -527,7 +527,7 @@ fn check_starts_log(c: &mut Checks, dir: &Path) {
     c.that(lines.len() == 1, &format!("starts.log 한 줄 (실제 {}줄)", lines.len()), &ctx);
     let cols: Vec<&str> = lines.first().map(|l| l.split('\t').collect()).unwrap_or_default();
     c.that(cols.get(2) == Some(&"normal"), "starts.log 세 번째 칸 normal", &ctx);
-    c.that(cols.iter().any(|x| *x == "prev=starting"), "starts.log 에 prev=starting", &ctx);
+    c.that(cols.contains(&"prev=starting"), "starts.log 에 prev=starting", &ctx);
 }
 
 /// 가짜 claude 기록을 보고, 그 프로세스 pid 들을 돌려준다

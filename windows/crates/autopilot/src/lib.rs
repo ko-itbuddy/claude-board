@@ -25,6 +25,7 @@ pub mod engine {
 pub mod adapters {
     pub mod files;
     pub mod git;
+    pub mod http;
     pub mod native_env;
     pub mod records_sqlite;
     pub mod secrets;

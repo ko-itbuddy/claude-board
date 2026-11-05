@@ -323,6 +323,12 @@ fn ensure_windows() -> PortResult<()> {
     }
 }
 
+/// `schtasks /create` 인자. `/f`(덮어쓰기)를 일부러 뺐다 — 같은 이름의 작업이 이미 있으면(다른 실행 폴더의 것이거나 지난 실행의 것)
+/// 조용히 덮어쓰지 않고 실패한다. 실패한 `register` 는 자기가 만들지 않은 작업을 지우지도 않는다
+pub fn create_args(task_path: &str, xml_file: &str) -> Vec<String> {
+    ["/create", "/tn", task_path, "/xml", xml_file].map(String::from).to_vec()
+}
+
 /// 임시 XML 파일. 떨어지면 지운다(만든 뒤 어느 길로 끝나도)
 struct TempXml(PathBuf);
 
@@ -343,7 +349,8 @@ impl Supervisor for TaskScheduler {
         // 쓰기가 반쯤 실패해도 파일이 남지 않게, 쓰기 전에 지울 몫부터 쥔다
         let temp = TempXml(file);
         std::fs::write(&temp.0, utf16le_with_bom(&xml))?;
-        let created = run_ok("create", &["/create", "/tn", &path, "/xml", &temp.0.to_string_lossy(), "/f"]);
+        let args = create_args(&path, &temp.0.to_string_lossy());
+        let created = run_ok("create", &args.iter().map(String::as_str).collect::<Vec<_>>());
         drop(temp);
         created?;
         if let Err(e) = run_ok("run", &["/run", "/tn", &path]) {

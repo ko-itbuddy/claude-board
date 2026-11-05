@@ -38,7 +38,7 @@ impl<H: Http> FallbackUsage<H> {
         )
     }
 
-    fn from_cache(&self, now: f64) -> Option<UsageSnapshot> {
+    fn read_cache(&self, now: f64) -> Option<UsageSnapshot> {
         let written = fs::metadata(&self.cache_path).ok()?.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_secs_f64();
         let age = now - written;
         // 미래 수정 시각(시계 어긋남)은 믿지 않는다. 보드도 같은 경우를 낡은 것으로 본다
@@ -49,7 +49,7 @@ impl<H: Http> FallbackUsage<H> {
         snapshot_from_body(&body, UsageFrom::Cache, written)
     }
 
-    fn from_api(&self, now: f64) -> Option<UsageSnapshot> {
+    fn fetch_api(&self, now: f64) -> Option<UsageSnapshot> {
         let token = read_token(&self.credentials_path, now)?;
         let req = HttpRequest {
             method: "GET".into(),
@@ -72,7 +72,7 @@ impl<H: Http> FallbackUsage<H> {
 
 impl<H: Http> Usage for FallbackUsage<H> {
     fn fallback(&self, now: f64) -> PortResult<Option<UsageSnapshot>> {
-        Ok(self.from_cache(now).or_else(|| self.from_api(now)))
+        Ok(self.read_cache(now).or_else(|| self.fetch_api(now)))
     }
 }
 

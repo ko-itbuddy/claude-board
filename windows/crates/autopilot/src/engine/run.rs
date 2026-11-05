@@ -18,12 +18,14 @@ use crate::engine::decide::{
 };
 use crate::model::{FrozenFile, Num, Ordered, QueueFile, QueueUnit, RunFile, Slot, UnitProgress, UnitProgressFile};
 use crate::ports::{
-    ChildProcess, Clock, ExecEnv, Git, Held, Records, Row, RunFiles, Supervisor, Usage, UsageFrom, UsageSnapshot,
+    ChildProcess, Clock, ExecEnv, Git, Held, PortError, PortErrorKind, Records, Row, RunFiles, Supervisor, Usage, UsageFrom,
+    UsageSnapshot,
 };
 use crate::rules::control;
 use crate::rules::stopline::Tz;
 use crate::stream::StreamState;
 
+pub mod guard;
 mod load;
 mod perform;
 mod prompt;
@@ -35,6 +37,10 @@ pub use load::{
 };
 pub use prompt::{first_message, is_under, PromptUnit, RESULT_FORMAT, SYSTEM_PROMPT};
 pub use rows::{project_row, run_row, unit_row};
+
+/// 모델이 쓸 수 있는 폴더의 파일(`result.json`·단위 `engine.json`·`control.json`)을 엔진이 통째로 읽어도 되는 크기.
+/// 넘으면 읽지 않고 "쓸 수 있는 내용이 없다"로 본다(모델이 거대한 파일을 두어 엔진의 메모리를 쓰게 하지 못하게)
+pub const MODEL_FILE_MAX: u64 = 1 << 20;
 
 /// 고정 설정이 출발 뒤에 바뀌었을 때 run.json 에 적는 까닭
 pub const FROZEN_CHANGED_REASON: &str = "고정 설정(pinned/frozen.json)이 출발 뒤에 바뀌어 멈춥니다.";
@@ -310,7 +316,7 @@ impl<'p> Engine<'p> {
             return Ok(None);
         };
         let n = i + 1;
-        match self.p.files.read_json(&self.unit_dir(n).join("engine.json")) {
+        match self.read_capped(&self.unit_dir(n).join("engine.json")) {
             Ok(Some(v)) => Ok(Some((n, parse(v, &format!("units/{n}/engine.json"))?))),
             Ok(None) => Ok(None),
             Err(e) => Err(RunExit::LoadFailed(format!("units/{n}/engine.json 을(를) 읽지 못했습니다: {e}"))),
@@ -383,7 +389,7 @@ impl<'p> Engine<'p> {
                 return false;
             }
         };
-        let json = match self.p.files.read_json(&path) {
+        let json = match self.read_capped(&path) {
             Ok(v) => v,
             Err(e) => {
                 self.warn("control.json", &e);
@@ -407,7 +413,7 @@ impl<'p> Engine<'p> {
     fn pick_usage(&mut self) -> Option<Map<String, Value>> {
         let now = self.now();
         let at = self.run.usage.get().and_then(|u| u.get("at")).and_then(jnum);
-        if at.map_or(true, |a| now - a >= 900.0) {
+        if at.is_none_or(|a| now - a >= 900.0) {
             match self.p.usage.fallback(now) {
                 Ok(Some(snap)) => {
                     self.run.usage.set(usage_value(&snap));
@@ -445,6 +451,21 @@ impl<'p> Engine<'p> {
 
     fn def_text(&self, n: usize, key: &str) -> Option<String> {
         self.def(n).extra.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string)
+    }
+
+    // ── 모델이 쓸 수 있는 파일 읽기 ──
+
+    /// 이 파일이 `MODEL_FILE_MAX` 를 넘는가(넘으면 그 크기). 없거나 재지 못하면 None
+    fn oversize(&self, path: &Path) -> Option<u64> {
+        self.p.files.stat(path).ok().flatten().map(|s| s.len).filter(|len| *len > MODEL_FILE_MAX)
+    }
+
+    /// `read_json` 인데 `MODEL_FILE_MAX` 를 넘는 파일은 읽지 않고 Invalid 로 돌려준다
+    fn read_capped(&self, path: &Path) -> Result<Option<Value>, PortError> {
+        if let Some(len) = self.oversize(path) {
+            return Err(PortError::new(PortErrorKind::Invalid, format!("{}: {len} 바이트라 {MODEL_FILE_MAX} 바이트를 넘어 읽지 않는다", path.display())));
+        }
+        self.p.files.read_json(path)
     }
 
     // ── 쓰기 ──
@@ -522,7 +543,7 @@ impl<'p> Engine<'p> {
     // ── 단위 engine.json (메모리 사본) ──
 
     fn load_unit_file(&self, n: usize) -> UnitProgressFile {
-        let found = self.p.files.read_json(&self.unit_dir(n).join("engine.json")).ok().flatten();
+        let found = self.read_capped(&self.unit_dir(n).join("engine.json")).ok().flatten();
         found.and_then(|v| serde_json::from_value(v).ok()).unwrap_or_else(|| {
             let mut e = UnitProgress::default();
             e.unit.set(n as u32);
@@ -628,7 +649,7 @@ impl<'p> Engine<'p> {
         }
         let engs: Vec<Option<UnitProgressFile>> = (1..=self.queue.len())
             .map(|n| {
-                let v = self.p.files.read_json(&self.unit_dir(n).join("engine.json")).ok().flatten()?;
+                let v = self.read_capped(&self.unit_dir(n).join("engine.json")).ok().flatten()?;
                 serde_json::from_value(v).ok()
             })
             .collect();
@@ -639,9 +660,13 @@ impl<'p> Engine<'p> {
         let model = self.frozen.model.get().or_else(|| self.run.model.get()).cloned();
         for (i, q) in self.queue.iter().enumerate() {
             let n = i + 1;
-            let result_text = match self.p.files.read_from(&self.unit_dir(n).join("result.json"), 0, 1 << 20) {
-                Ok(Some(b)) => Some(String::from_utf8_lossy(&b).into_owned()),
-                _ => None,
+            let result_path = self.unit_dir(n).join("result.json");
+            let result_text = match self.oversize(&result_path) {
+                Some(_) => None,
+                None => match self.p.files.read_from(&result_path, 0, MODEL_FILE_MAX as usize) {
+                    Ok(Some(b)) => Some(String::from_utf8_lossy(&b).into_owned()),
+                    _ => None,
+                },
             };
             let status = q.status.get().map_or("pending", String::as_str);
             let row = unit_row(&run_id, n, self.def(n), status, engs[i].as_ref(), result_text.as_deref(), model.as_deref());

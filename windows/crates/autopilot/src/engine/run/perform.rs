@@ -195,7 +195,15 @@ impl<'p> Engine<'p> {
         let now = self.now();
         self.ensure_unit(n);
         let git = (status == UnitStatus::Capped).then(|| self.git_snapshot(n));
-        let result_ok = matches!(self.p.files.read_json(&self.unit_dir(n).join("result.json")), Ok(Some(Value::Object(_))));
+        let result_path = self.unit_dir(n).join("result.json");
+        let big = self.oversize(&result_path);
+        if let Some(len) = big {
+            self.event(
+                Who::Board,
+                &format!("결과 기록(result.json)이 {len} 바이트로 너무 커서(한도 {}) 읽지 않고 결과가 없는 것으로 봅니다.", super::MODEL_FILE_MAX),
+            );
+        }
+        let result_ok = big.is_none() && matches!(self.p.files.read_json(&result_path), Ok(Some(Value::Object(_))));
         let branch = self.def(n).branch.get().cloned();
         let (active, cost) = {
             let e = self.unit_mut(n);
@@ -276,7 +284,7 @@ impl<'p> Engine<'p> {
     /// 직전 엔진이 남긴 claude 를 끝낸다(한 세션을 두 프로세스가 함께 쓰지 않게)
     fn kill_leftovers(&mut self, n: usize) {
         let known = self.unit.as_ref().is_some_and(|(m, _)| *m == n)
-            || matches!(self.p.files.read_json(&self.unit_dir(n).join("engine.json")), Ok(Some(_)));
+            || matches!(self.read_capped(&self.unit_dir(n).join("engine.json")), Ok(Some(_)));
         if !known {
             return;
         }

@@ -109,7 +109,7 @@ fn open_frozen_changed_errors_and_unregisters() {
 #[test]
 fn open_appends_starts_line_normal_first() {
     let w = Scenario::new(1).build();
-    let e = w.open().ok().expect("열림");
+    let e = w.open().expect("열림");
     let lines = w.files.lines("starts.log");
     assert_eq!(lines.len(), 1);
     let f: Vec<&str> = lines[0].split('\t').collect();
@@ -133,7 +133,7 @@ fn open_abnormal_counts_window() {
     let normal = starts_line(NOW - 50.0, "normal");
     s.file("starts.log", &format!("{old}\n{recent}\n{normal}\n깨진 줄\n"));
     let w = s.build();
-    let e = w.open().ok().expect("열림");
+    let e = w.open().expect("열림");
     assert_eq!(e.abnormal_recent(), 2);
     let last = w.files.lines("starts.log").pop().unwrap();
     assert!(last.contains("\tabnormal\t") && last.contains("prev=running"), "{last}");
@@ -937,4 +937,68 @@ fn flow_two_units_pass_and_cap() {
     assert_ne!(sid_of(&launches[0]), sid_of(&launches[1]), "단위마다 세션이 다르다");
     assert_eq!(w.env.child_events(1), vec!["interrupt"]);
     assert_eq!(w.supervisor.unregistered.lock().unwrap().len(), 1);
+}
+
+// ── 모델이 쓰는 파일의 크기 한도 ──
+
+#[test]
+fn oversize_result_json_is_not_read_and_counts_as_missing() {
+    let mut s = Scenario::new(1);
+    // 모델이 쓸 수 있는 폴더의 result.json 이 한도(1 MiB)를 넘는다. 내용은 올바른 JSON 이어도 읽지 않는다
+    let big = format!("{{\"outcome\":\"done\",\"pad\":\"{}\"}}", "x".repeat((1 << 20) + 10));
+    s.file("units/1/result.json", &big);
+    let w = s.build();
+    w.env.push_spawn(ChildScript::ok_turn(0.5));
+    assert_eq!(w.run(), RunExit::Finished(RunState::Done));
+    assert_eq!(w.unit_json(1)["result_ok"], false);
+    let texts = w.event_texts();
+    assert_eq!(count(&texts, "너무 커서"), 1, "{texts:?}");
+    assert_eq!(count(&texts, "모델이 결과 기록(result.json)을 남기지 않았습니다."), 1);
+}
+
+#[test]
+fn result_json_at_the_limit_is_still_read() {
+    let mut s = Scenario::new(1);
+    let head = "{\"outcome\":\"done\",\"pad\":\"";
+    let tail = "\"}";
+    let pad = "x".repeat((1 << 20) - head.len() - tail.len());
+    s.file("units/1/result.json", &format!("{head}{pad}{tail}"));
+    let w = s.build();
+    w.env.push_spawn(ChildScript::ok_turn(0.5));
+    assert_eq!(w.run(), RunExit::Finished(RunState::Done));
+    assert_eq!(w.unit_json(1)["result_ok"], true);
+    assert_eq!(count(&w.event_texts(), "너무 커서"), 0);
+}
+
+// ── 늘 거는 거부 목록 ──
+
+#[test]
+fn session_policy_carries_the_always_on_deny_list() {
+    let mut s = Scenario::new(1);
+    s.frozen["write_roots"] = json!(["D:\\shared"]);
+    s.frozen["disallowed_tools"] = json!(["Bash(rm *)"]);
+    let w = s.build();
+    w.env.push_spawn(ChildScript::ok_turn(0.5));
+    assert_eq!(w.run(), RunExit::Finished(RunState::Done));
+    let policy = w.env.policies.lock().unwrap()[0].clone();
+    let writes: Vec<String> = policy.deny_write.iter().map(|p| p.to_string_lossy().replace('\\', "/")).collect();
+    for root in ["C:/work", "D:/shared"] {
+        for spot in ["CLAUDE.md", ".claude", ".git/config", ".git/hooks", ".mcp.json", "**/CLAUDE.md"] {
+            let want = format!("{root}/{spot}");
+            assert!(writes.contains(&want), "{want} 가 쓰기 금지에 없다");
+        }
+    }
+    // 사용자 영역: 로그인 정보는 읽기도, 설정·시작 프로그램은 쓰기를
+    let creds = claude_board_core::paths::claude_dir().join(".credentials.json").to_string_lossy().replace('\\', "/");
+    assert!(policy.deny_read.iter().any(|p| p.to_string_lossy().replace('\\', "/") == creds), "{:?}", policy.deny_read);
+    assert!(writes.iter().any(|w| w.ends_with("/.claude/settings*.json")), "{writes:?}");
+    assert!(writes.iter().any(|w| w.ends_with("Start Menu/Programs/Startup")), "{writes:?}");
+    // 단위 설정의 거부 도구는 그대로 두고 늘 거는 규칙이 붙는다
+    assert_eq!(policy.disallowed_tools[0], "Bash(rm *)");
+    for t in ["Bash(git push *)", "Bash(git -C * push *)", "Edit(**/CLAUDE.md)", "mcp__atlassian"] {
+        assert!(policy.disallowed_tools.contains(&t.to_string()), "{t}");
+    }
+    // 같은 규칙이 두 번 들지 않는다
+    let mut seen = std::collections::HashSet::new();
+    assert!(policy.disallowed_tools.iter().all(|t| seen.insert(t.clone())));
 }

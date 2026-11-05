@@ -6,12 +6,13 @@ use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
+use super::guard;
 use super::load::session_uuid;
 use super::prompt::SYSTEM_PROMPT;
 use super::{dur, jnum, slot_f, Engine};
 use crate::engine::decide::{turn_progress, ClaudeOutcome, Event, Next, TurnProgress, Who};
 use crate::model::Num;
-use crate::ports::{ClaudeLaunch, PortErrorKind, SessionPolicy, SessionStart};
+use crate::ports::{ClaudeLaunch, EnvKind, PortErrorKind, SessionPolicy, SessionStart};
 use crate::stream::{parse_line, tool_input_summary, Emit, StreamState, StreamUsage};
 
 /// 한 번 띄운 claude 의 턴 동안 이어지는 값
@@ -250,6 +251,30 @@ impl<'p> Engine<'p> {
         let mut deny_read = vec![self.cfg.private_dir.clone()];
         deny_read.extend(self.frozen.read_deny.get().map(|v| v.iter().map(PathBuf::from).collect::<Vec<_>>()).unwrap_or_default());
 
+        // 늘 거는 거부 목록: 쓰기 범위(작업 폴더 + write_roots)마다 하네스 자리, 사용자 설정·로그인 정보·시작 프로그램, git push.
+        // 사용자 영역의 절대 경로는 네이티브 Windows 만 — WSL 은 홈이 리눅스 쪽이라 `~/` 꼴 규칙이 맡는다
+        let mut roots = vec![PathBuf::from(self.def(n).cwd.get().cloned().unwrap_or_default())];
+        roots.extend(self.write_roots());
+        let native = self.p.env.choice().kind != EnvKind::Wsl;
+        let user = native.then(guard::UserArea::from_env);
+        let always = guard::build(&roots, user.as_ref());
+        for p in always.deny_write {
+            if !deny_write.contains(&p) {
+                deny_write.push(p);
+            }
+        }
+        for p in always.deny_read {
+            if !deny_read.contains(&p) {
+                deny_read.push(p);
+            }
+        }
+        let mut disallowed_tools = strs(self.frozen.extra.get("disallowed_tools"));
+        for t in always.disallowed_tools {
+            if !disallowed_tools.contains(&t) {
+                disallowed_tools.push(t);
+            }
+        }
+
         SessionPolicy {
             allow_write,
             deny_write,
@@ -261,7 +286,7 @@ impl<'p> Engine<'p> {
                 .into_iter()
                 .filter(|t| !FILE_WRITE_TOOLS.contains(&t.as_str()))
                 .collect(),
-            disallowed_tools: strs(self.frozen.extra.get("disallowed_tools")),
+            disallowed_tools,
         }
     }
 

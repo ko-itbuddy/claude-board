@@ -26,6 +26,8 @@ serde_json = { version = "1.0.149", features = ["preserve_order"] }
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 sha2 = "0.11.1"
 unicode-normalization = "0.1.26"
+# 사용량 API 호출. 보드(app/src-tauri)와 같은 구성(운영체제 인증서 저장소 사용은 http 어댑터가 맡는다)
+ureq = { version = "3", default-features = false, features = ["native-tls"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = [

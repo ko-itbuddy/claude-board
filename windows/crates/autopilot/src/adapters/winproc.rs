@@ -1,6 +1,7 @@
 //! Windows 프로세스 띄우기 — 자율주행이 claude 와 판정 명령을 띄우는 유일한 길(`native_env` 가 쓴다).
 //!
-//! - 창을 만들지 않고(`CREATE_NO_WINDOW`), 환경 변수는 부모 것을 허용 목록(`ENV_ALLOW`)만 물려받은 뒤 호출자 쌍을 얹는다.
+//! - 창을 만들지 않고(`CREATE_NO_WINDOW`), 환경 변수는 부모 것을 허용 목록(`ENV_ALLOW`·`ENV_ALLOW_PREFIXES`)만 물려받은 뒤 호출자 쌍을 얹는다.
+//!   이름에 비밀 낱말이 든 변수(`is_secret_name`)는 허용 목록에 걸려도 물려주지 않는다(호출자가 `spec.env` 로 직접 준 것만 간다).
 //! - `CREATE_SUSPENDED` 로 만들어 Job Object(`KILL_ON_JOB_CLOSE`)에 넣은 **뒤에** 첫 스레드를 깨운다 — 자손이 Job 밖으로 새는 틈이 없다.
 //!   그래서 `WinProcess` 를 떨어뜨리면(엔진이 죽어도) 자손까지 끝난다.
 //! - Store 로 깐 PowerShell 7(MSIX 패키지 앱)이 띄운 자식은 Job 밖으로 빠져나간다(실측). 그래서 `kill_tree` 는 Job 을 끝내기 전에
@@ -50,7 +51,30 @@ pub const ENV_ALLOW: &[&str] = &[
     "CommonProgramW6432",
     "GIT_INSTALL_ROOT",
     "GIT_EXEC_PATH",
+    // macOS 엔진의 `envKeep` 과 같은 이름(프록시·인증서·도구 위치는 Windows 빌드도 기댄다)
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "LANG",
+    "TMPDIR",
+    "TERM",
+    "JAVA_HOME",
+    "DOCKER_HOST",
+    "DOCKER_CONFIG",
+    "DOCKER_CONTEXT",
+    "DOCKER_CERT_PATH",
+    "DOCKER_TLS_VERIFY",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "ALL_PROXY",
+    "SSL_CERT_FILE",
+    "NODE_EXTRA_CA_CERTS",
+    "CLAUDE_CONFIG_DIR",
 ];
+
+/// 이름이 이 머리말로 시작하면 물려준다(macOS `envKeepPrefixes`). 비밀 낱말이 든 이름은 여기서도 걸러진다
+pub const ENV_ALLOW_PREFIXES: &[&str] = &["LC_", "GRADLE_", "SDKMAN_"];
 
 /// 명령줄 길이 한도(글자 수, 끝 NUL 제외) — `CreateProcessW` 는 32,767 글자까지
 const COMMAND_LINE_MAX: usize = 32_766;
@@ -80,8 +104,20 @@ pub struct SpawnSpec {
 
 // ── 순수 함수 ────────────────────────────────────────
 
+/// 이름에 비밀 낱말이 들었는가(macOS `secretName` 정규식과 같은 뜻):
+/// `TOKEN|SECRET|PASSW|CREDENTIAL|PRIVATE|API_?KEY|(^|_)KEY($|_)|AUTH`, 대소문자 무시
+pub fn is_secret_name(name: &str) -> bool {
+    let up = name.to_ascii_uppercase();
+    ["TOKEN", "SECRET", "PASSW", "CREDENTIAL", "PRIVATE", "APIKEY", "API_KEY", "AUTH"].iter().any(|w| up.contains(w))
+        || up.split('_').any(|part| part == "KEY")
+}
+
 fn in_allow_list(name: &str) -> bool {
-    ENV_ALLOW.iter().any(|a| a.eq_ignore_ascii_case(name))
+    if is_secret_name(name) {
+        return false;
+    }
+    let has_prefix = |p: &&str| name.get(..p.len()).is_some_and(|head| head.eq_ignore_ascii_case(p));
+    ENV_ALLOW.iter().any(|a| a.eq_ignore_ascii_case(name)) || ENV_ALLOW_PREFIXES.iter().any(has_prefix)
 }
 
 /// 부모 환경(`parent`) 가운데 허용 목록만 남기고 `extra` 를 얹는다. `HOME` 이 없으면 `USERPROFILE` 에서 만든다.
@@ -210,18 +246,62 @@ pub fn descendants(table: &claude_board_core::proc::ProcessTable, root: u32) -> 
     found
 }
 
+/// `descendants` 와 같되 **생성 시각**도 본다: 자식은 부모보다 나중에 만들어졌어야 한다.
+/// 부모가 죽고 그 pid 를 다른 프로세스가 물려받으면 표에는 옛 자식이 새 pid 의 자식으로 남는데, 그것을 후손으로 세어 끝내면
+/// 남의 프로세스를 죽인다. `ctime_of(root)` 가 없으면 시각을 견줄 수 없으니 부모 관계만 따른다(`descendants`).
+/// 후보의 시각을 모르면 후손으로 세지 않는다 — 시각을 못 읽는 프로세스는 `terminate` 도 열지 못한다
+pub fn descendants_since(
+    table: &claude_board_core::proc::ProcessTable,
+    root: u32,
+    ctime_of: &dyn Fn(u32) -> Option<f64>,
+) -> Vec<u32> {
+    let Some(root_time) = ctime_of(root) else { return descendants(table, root) };
+    let mut found: Vec<u32> = Vec::new();
+    let mut queue = vec![(root, root_time)];
+    while let Some((pid, born)) = queue.pop() {
+        for child in table.children(pid) {
+            if child == root || found.contains(&child) {
+                continue;
+            }
+            if let Some(t) = ctime_of(child).filter(|t| *t >= born) {
+                found.push(child);
+                queue.push((child, t));
+            }
+        }
+    }
+    found
+}
+
 // ── 프로세스 ─────────────────────────────────────────
 
 /// 띄운 프로세스 하나와 그 Job. 떨어뜨리면 Job 이 닫혀 자손까지 끝난다.
 pub struct WinProcess {
     inner: sys::Inner,
     lines: Option<Receiver<Vec<u8>>>,
+    /// 표준 입력 쓰기 스레드로 가는 길. None 이면 닫힌 것(스레드는 맡은 줄을 다 쓴 뒤 입력을 닫는다)
+    stdin: Option<Sender<Vec<u8>>>,
+}
+
+/// 표준 입력을 쥔 스레드. 자식이 안 읽어 파이프(64 KB)가 차면 이 스레드만 막히고 부르는 쪽(엔진 루프)은 계속 돈다.
+/// 쓰기가 실패하면(자식이 끝났다) 스레드가 끝나 보내는 길이 닫히고, 다음 `write_line` 이 오류를 낸다
+fn spawn_stdin_writer(mut file: std::fs::File) -> PortResult<Sender<Vec<u8>>> {
+    use std::io::Write;
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    std::thread::Builder::new().name("winproc-stdin".into()).spawn(move || {
+        for bytes in rx {
+            if file.write_all(&bytes).and_then(|()| file.flush()).is_err() {
+                break;
+            }
+        }
+    })?;
+    Ok(tx)
 }
 
 impl WinProcess {
     /// 만들고 Job 에 넣은 뒤 깨운다. `Io::Streaming` 이면 줄 읽기·쓰기가 되고, `MergedToFile` 이면 읽을 것이 없다(`read_line` 은 곧바로 EOF)
     pub fn spawn(spec: &SpawnSpec) -> PortResult<WinProcess> {
-        let (inner, stdout) = sys::spawn(spec)?;
+        let (mut inner, stdout) = sys::spawn(spec)?;
+        let stdin = inner.take_stdin().map(spawn_stdin_writer).transpose()?;
         let lines = stdout.map(|reader| {
             let (tx, rx) = mpsc::channel();
             std::thread::Builder::new()
@@ -231,21 +311,26 @@ impl WinProcess {
                 .map_err(PortError::from)
         });
         let lines = lines.transpose()?;
-        Ok(WinProcess { inner, lines })
+        Ok(WinProcess { inner, lines, stdin })
     }
 
     pub fn pid(&self) -> u32 {
         self.inner.pid()
     }
 
-    /// 한 줄 쓰고 `\n` 을 붙여 비운다. 자식이 안 읽어 파이프(64 KB)가 차면 막힌다
+    /// 한 줄(`\n` 을 붙여)을 쓰기 스레드에 맡기고 곧바로 돌아온다. 자식이 안 읽어 파이프(64 KB)가 차도 막히지 않는다.
+    /// 줄은 맡긴 차례대로 쓰인다. 입력을 닫았거나 자식이 끝나 쓰기 스레드가 멈췄으면 오류
     pub fn write_line(&mut self, line: &str) -> PortResult<()> {
-        self.inner.write_line(line)
+        let tx = self.stdin.as_ref().ok_or_else(|| PortError::new(PortErrorKind::Io, "표준 입력이 닫혀 있다"))?;
+        let mut bytes = Vec::with_capacity(line.len() + 1);
+        bytes.extend_from_slice(line.as_bytes());
+        bytes.push(b'\n');
+        tx.send(bytes).map_err(|_| PortError::new(PortErrorKind::Io, "표준 입력에 쓰지 못했다(자식이 끝났거나 입력이 닫혔다)"))
     }
 
-    /// 표준 입력을 닫는다(자식에게 EOF). 이미 닫았으면 아무 일 없다
+    /// 표준 입력을 닫는다(자식에게 EOF). 맡겨 둔 줄은 다 쓴 뒤에 닫힌다. 이미 닫았으면 아무 일 없다
     pub fn close_stdin(&mut self) {
-        self.inner.close_stdin();
+        self.stdin = None;
     }
 
     /// 표준 출력 한 줄(UTF-8 로 푼 것, 줄 끝 `\r\n`·`\n` 뗌). Ok(None) = EOF. 시간 안에 없으면 Timeout
@@ -285,7 +370,6 @@ mod sys {
     use super::*;
     use std::ffi::{c_void, OsStr};
     use std::fs::{File, OpenOptions};
-    use std::io::Write;
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use std::ptr::{null, null_mut};
@@ -528,19 +612,9 @@ mod sys {
             self.pid
         }
 
-        pub fn write_line(&mut self, line: &str) -> PortResult<()> {
-            let stdin = self.stdin.as_mut().ok_or_else(|| PortError::new(PortErrorKind::Io, "표준 입력이 닫혀 있다"))?;
-            let mut bytes = Vec::with_capacity(line.len() + 1);
-            bytes.extend_from_slice(line.as_bytes());
-            bytes.push(b'\n');
-            // 한 번에 써서 두 스레드가 끼어들어도 줄이 섞이지 않게 한다
-            stdin.write_all(&bytes)?;
-            stdin.flush()?;
-            Ok(())
-        }
-
-        pub fn close_stdin(&mut self) {
-            self.stdin = None;
+        /// 표준 입력을 쥘 몫을 넘긴다(쓰기 스레드가 쥔다). 처음 한 번만 Some
+        pub fn take_stdin(&mut self) -> Option<File> {
+            self.stdin.take()
         }
 
         pub fn wait(&mut self, timeout: Duration) -> PortResult<Option<i32>> {
@@ -569,7 +643,7 @@ mod sys {
             // 패키지 앱(Store 의 PowerShell 7)이 띄운 자식은 Job 밖으로 빠져나간다(실측). 루트가 아직 살아 있을 때
             // 프로세스 표에서 후손을 미리 모아 두었다가 Job 을 끝낸 뒤 남은 것을 직접 끝낸다
             let root_alive = matches!(self.wait(Duration::ZERO), Ok(None));
-            let escaped = if root_alive { descendants(&claude_board_core::proc::ProcessTable::capture(), self.pid) } else { Vec::new() };
+            let escaped = if root_alive { descendants_since(&claude_board_core::proc::ProcessTable::capture(), self.pid, &claude_board_core::proc::creation_time) } else { Vec::new() };
             // SAFETY: 살아 있는 Job 핸들이다
             let job_ended = unsafe { TerminateJobObject(self.job.as_raw_handle(), 1) } != 0;
             let job_error = (!job_ended).then(|| os_error("Job 을 끝내지 못했다"));
@@ -616,10 +690,9 @@ mod sys {
         pub fn pid(&self) -> u32 {
             0
         }
-        pub fn write_line(&mut self, _line: &str) -> PortResult<()> {
-            Err(PortError::new(PortErrorKind::Unavailable, "Windows 에서만 쓸 수 있다"))
+        pub fn take_stdin(&mut self) -> Option<File> {
+            None
         }
-        pub fn close_stdin(&mut self) {}
         pub fn wait(&mut self, _timeout: Duration) -> PortResult<Option<i32>> {
             Err(PortError::new(PortErrorKind::Unavailable, "Windows 에서만 쓸 수 있다"))
         }

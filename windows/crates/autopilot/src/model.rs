@@ -20,17 +20,12 @@ use std::ops::{Deref, DerefMut};
 // ── 칸 하나의 세 상태 ─────────────────────────────
 
 /// 칸이 없음(`Absent`)·`null`·값(`Val`) 중 어느 것인가. 없는 칸은 쓸 때 건너뛰고 `null` 은 `null` 로 쓴다.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum Slot<T> {
+    #[default]
     Absent,
     Null,
     Val(T),
-}
-
-impl<T> Default for Slot<T> {
-    fn default() -> Self {
-        Slot::Absent
-    }
 }
 
 impl<T> From<T> for Slot<T> {

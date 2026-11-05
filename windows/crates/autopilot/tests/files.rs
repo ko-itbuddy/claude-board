@@ -239,7 +239,7 @@ mod windows_only {
         assert!(ok, "icacls /save 실패");
         // /save 는 UTF-16LE(BOM 포함)로 쓴다
         let b = std::fs::read(&save).unwrap();
-        let u: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        let u: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
         String::from_utf16_lossy(&u)
     }
 
@@ -324,4 +324,26 @@ fn read_from_returns_only_the_last_max_bytes_after_offset() {
     assert_eq!(files.read_from(&p, 99, 4).unwrap().unwrap(), b"");
     // max 0 이면 빈 값
     assert_eq!(files.read_from(&p, 0, 0).unwrap().unwrap(), b"");
+}
+
+// ── 읽기 한도·종류 ──
+
+#[test]
+fn read_json_refuses_a_directory_and_a_file_over_the_limit() {
+    let d = dir();
+    let files = FsRunFiles::new();
+    // 폴더가 result.json 자리에 있다
+    let as_dir = d.path().join("result.json");
+    std::fs::create_dir(&as_dir).unwrap();
+    assert!(files.read_json(&as_dir).is_err());
+    // 한도를 넘는 파일은 올바른 JSON 이어도 읽지 않는다
+    let big = d.path().join("big.json");
+    let body = format!("\"{}\"", "x".repeat(JSON_MAX_BYTES as usize));
+    std::fs::write(&big, body).unwrap();
+    let err = files.read_json(&big).unwrap_err();
+    assert_eq!(err.kind, PortErrorKind::Invalid);
+    // 한도 안의 파일은 읽힌다
+    let ok = d.path().join("ok.json");
+    std::fs::write(&ok, format!("\"{}\"", "x".repeat(1000))).unwrap();
+    assert!(files.read_json(&ok).unwrap().is_some());
 }

@@ -215,7 +215,7 @@ pub trait ExecEnv: Send + Sync {
     /// Windows 경로 → 환경 쪽 경로(네이티브는 그대로, WSL 은 `/mnt/c/...` 또는 `\\wsl.localhost\<배포판>\...` → `/...`).
     fn to_env_path(&self, path: &Path) -> PortResult<String>;
     /// 환경 쪽 경로 → Windows 경로(stream 의 도구 입력을 기록할 때).
-    fn from_env_path(&self, path: &str) -> PortResult<PathBuf>;
+    fn env_path_to_windows(&self, path: &str) -> PortResult<PathBuf>;
     /// `--settings` 파일 내용. WSL 은 `sandbox.enabled`·`failIfUnavailable`·`allowUnsandboxedCommands: false`.
     /// 네이티브는 `sandbox.enabled: false` 와 권한 규칙만(failIfUnavailable 을 넣으면 claude 가 시작하자마자 끝난다).
     fn render_settings(&self, policy: &SessionPolicy) -> PortResult<serde_json::Value>;

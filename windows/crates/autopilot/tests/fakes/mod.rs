@@ -38,9 +38,12 @@ impl Journal {
 
 // ── 시계 ──
 
+/// 시각이 이 값에 닿으면 한 번 부르는 훅
+type ClockHook = (f64, Box<dyn FnOnce() + Send>);
+
 pub struct FakeClock {
     t: Mutex<f64>,
-    hooks: Mutex<Vec<(f64, Box<dyn FnOnce() + Send>)>>,
+    hooks: Mutex<Vec<ClockHook>>,
 }
 
 impl FakeClock {
@@ -458,7 +461,7 @@ impl ExecEnv for ScriptedEnv {
     fn to_env_path(&self, path: &Path) -> PortResult<String> {
         Ok(path.to_string_lossy().into_owned())
     }
-    fn from_env_path(&self, path: &str) -> PortResult<PathBuf> {
+    fn env_path_to_windows(&self, path: &str) -> PortResult<PathBuf> {
         Ok(PathBuf::from(path))
     }
     fn render_settings(&self, policy: &SessionPolicy) -> PortResult<Value> {
@@ -624,6 +627,9 @@ impl Supervisor for FakeSupervisor {
 
 // ── 한 세계 ──
 
+/// 끝내라고 부른 프로세스 하나: (pid, 생성 시각)
+pub type ReapedPid = (u32, Option<f64>);
+
 /// 시험 한 건이 쓰는 가짜 전부와 실행 폴더 내용. `Scenario::build` 로 만든다
 pub struct World {
     pub clock: Arc<FakeClock>,
@@ -634,7 +640,7 @@ pub struct World {
     pub usage: Arc<FakeUsage>,
     pub supervisor: FakeSupervisor,
     pub journal: Arc<Journal>,
-    pub reaped: Arc<Mutex<Vec<(u32, Option<f64>)>>>,
+    pub reaped: Arc<Mutex<Vec<ReapedPid>>>,
     reap: Box<dyn Fn(u32, Option<f64>) -> bool + Send + Sync>,
     pub dir: PathBuf,
     pub private: PathBuf,

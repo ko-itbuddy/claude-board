@@ -25,7 +25,7 @@ use crate::rules::env_policy::{check_invocation, sandbox_block, OutputCodec};
 /// `claude --version` 을 기다리는 시간
 const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 /// 판정 출력 끝부분으로 돌려주는 바이트 수
-const TAIL_BYTES: u64 = 4000;
+pub(crate) const TAIL_BYTES: u64 = 4000;
 
 /// claude 를 어디서 찾을까
 #[derive(Debug, Clone)]
@@ -185,18 +185,26 @@ fn push_unique(list: &mut Vec<String>, item: String) {
 /// 정책 → `permissions` 덩어리. 허용 목록(경로 없는 도구 규칙 + 쓰기 범위마다 `Edit(<경로>/**)`)과
 /// 거부 목록(거부 도구 + 쓰기 금지 `Edit(...)` + 읽기 금지 `Read(...)`). 거부는 폴더 자신과 그 아래 둘 다 적는다
 pub fn permission_rules(policy: &SessionPolicy) -> PortResult<(Vec<String>, Vec<String>)> {
+    permission_rules_with(policy, &permission_path)
+}
+
+/// `permission_rules` 와 같되 경로를 규칙 꼴로 바꾸는 함수를 받는다(WSL 어댑터가 리눅스 경로로 쓴다)
+pub fn permission_rules_with(
+    policy: &SessionPolicy,
+    to_rule_path: &dyn Fn(&Path) -> PortResult<String>,
+) -> PortResult<(Vec<String>, Vec<String>)> {
     let mut allow: Vec<String> = Vec::new();
     let mut deny: Vec<String> = Vec::new();
     policy.allowed_tools.iter().for_each(|t| push_unique(&mut allow, t.clone()));
     policy.disallowed_tools.iter().for_each(|t| push_unique(&mut deny, t.clone()));
     for path in &policy.allow_write {
-        let p = permission_path(path)?;
+        let p = to_rule_path(path)?;
         push_unique(&mut allow, if has_glob(&p) { format!("Edit({p})") } else { format!("Edit({p}/**)") });
     }
     let guarded = [("Edit", &policy.deny_write), ("Read", &policy.deny_read)];
     for (tool, paths) in guarded {
         for path in paths {
-            let p = permission_path(path)?;
+            let p = to_rule_path(path)?;
             push_unique(&mut deny, format!("{tool}({p})"));
             if !has_glob(&p) {
                 push_unique(&mut deny, format!("{tool}({p}/**)"));
@@ -209,7 +217,7 @@ pub fn permission_rules(policy: &SessionPolicy) -> PortResult<(Vec<String>, Vec<
 // ── 출력 끝부분 ──────────────────────────────────────
 
 /// 파일 끝 `max` 바이트를 글로 푼다. 자르면서 UTF-8 글자 중간이 앞에 남으면 버린다
-fn read_tail(path: &Path, max: u64, codec: OutputCodec) -> String {
+pub(crate) fn read_tail(path: &Path, max: u64, codec: OutputCodec) -> String {
     let Ok(mut file) = File::open(path) else { return String::new() };
     let len = file.metadata().map(|m| m.len()).unwrap_or(0);
     let cut = len > max;
@@ -229,7 +237,7 @@ fn read_tail(path: &Path, max: u64, codec: OutputCodec) -> String {
     }
 }
 
-fn temp_log(tag: &str) -> PathBuf {
+pub(crate) fn temp_log(tag: &str) -> PathBuf {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!("claude-board-{tag}-{}-{n}.log", std::process::id()))
@@ -295,7 +303,7 @@ impl ExecEnv for NativeEnv {
         Ok(strip_verbatim(path).to_string_lossy().into_owned())
     }
 
-    fn from_env_path(&self, path: &str) -> PortResult<PathBuf> {
+    fn env_path_to_windows(&self, path: &str) -> PortResult<PathBuf> {
         Ok(strip_verbatim(Path::new(path)))
     }
 

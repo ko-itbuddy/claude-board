@@ -77,7 +77,8 @@ function argValue(flag) {
 function readText(file) {
   if (!file) return null;
   try {
-    return fs.readFileSync(file, 'utf8').slice(0, 8000);
+    // 설정 파일은 거부 규칙이 쓰기 범위마다 붙어 8000자를 넘는다 — 잘리면 e2e 가 JSON 으로 읽지 못한다
+    return fs.readFileSync(file, 'utf8').slice(0, 200000);
   } catch (e) {
     return `읽지 못함: ${e.message}`;
   }

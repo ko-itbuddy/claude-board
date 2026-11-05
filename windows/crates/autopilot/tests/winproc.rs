@@ -54,6 +54,71 @@ fn build_env_keeps_only_the_allow_list() {
 }
 
 #[test]
+fn build_env_passes_the_macos_names_and_proxy_settings() {
+    let parent = pairs(&[
+        ("https_proxy", "http://p:8080"),
+        ("NO_PROXY", "localhost"),
+        ("ALL_PROXY", "http://p:8080"),
+        ("NODE_EXTRA_CA_CERTS", r"C:\ca.pem"),
+        ("SSL_CERT_FILE", r"C:\ca.pem"),
+        ("CLAUDE_CONFIG_DIR", r"C:\cfg"),
+        ("JAVA_HOME", r"C:\jdk"),
+        ("GRADLE_USER_HOME", r"C:\g"),
+        ("LC_ALL", "C"),
+        ("SDKMAN_DIR", r"C:\s"),
+        ("DOCKER_HOST", "tcp://x"),
+        ("NPM_CONFIG_REGISTRY", "x"),
+    ]);
+    let names: Vec<String> = build_env(&parent, &[]).into_iter().map(|(n, _)| n).collect();
+    for want in [
+        "https_proxy",
+        "NO_PROXY",
+        "ALL_PROXY",
+        "NODE_EXTRA_CA_CERTS",
+        "SSL_CERT_FILE",
+        "CLAUDE_CONFIG_DIR",
+        "JAVA_HOME",
+        "GRADLE_USER_HOME",
+        "LC_ALL",
+        "SDKMAN_DIR",
+        "DOCKER_HOST",
+    ] {
+        assert!(names.iter().any(|n| n == want), "{want} 가 빠졌다: {names:?}");
+    }
+    assert!(!names.iter().any(|n| n == "NPM_CONFIG_REGISTRY"), "허용 밖은 새지 않는다: {names:?}");
+}
+
+#[test]
+fn build_env_never_passes_secret_named_variables_even_on_the_allow_list() {
+    let parent = pairs(&[
+        ("GRADLE_PUBLISH_SECRET", "s"),
+        ("GRADLE_ENTERPRISE_ACCESS_KEY", "k"),
+        ("SDKMAN_CANDIDATES_API", "ok"),
+        ("LC_AUTH_TOKEN", "t"),
+        ("HTTPS_PROXY_PASSWORD", "p"),
+        ("DOCKER_CONFIG_CREDENTIALS", "c"),
+        ("JAVA_HOME", r"C:\jdk"),
+        ("GITHUB_TOKEN", "t"),
+        ("AWS_SECRET_ACCESS_KEY", "k"),
+    ]);
+    let names: Vec<String> = build_env(&parent, &[]).into_iter().map(|(n, _)| n).collect();
+    assert_eq!(names, ["SDKMAN_CANDIDATES_API", "JAVA_HOME"]);
+    // 호출자가 직접 준 쌍은 그대로 간다(env_pass 처럼 사람이 이름을 적은 것)
+    let explicit = build_env(&parent, &pairs(&[("GITHUB_TOKEN", "t")]));
+    assert!(explicit.contains(&("GITHUB_TOKEN".to_string(), "t".to_string())));
+}
+
+#[test]
+fn secret_name_rule_matches_the_macos_pattern() {
+    for secret in ["TOKEN", "my_token", "A_SECRET_B", "DB_PASSWORD", "PASSWD", "AWS_CREDENTIALS", "PRIVATE_X", "APIKEY", "ANTHROPIC_API_KEY", "SSH_KEY", "KEY_ID", "A_KEY_B", "OAUTH_X"] {
+        assert!(is_secret_name(secret), "{secret}");
+    }
+    for plain in ["PATH", "KEYBOARD", "MONKEY", "HOMEPATH", "JAVA_HOME", "GRADLE_USER_HOME", "TURKEY_X"] {
+        assert!(!is_secret_name(plain), "{plain}");
+    }
+}
+
+#[test]
 fn build_env_extra_wins_case_insensitively() {
     let parent = pairs(&[("Path", r"C:\bin"), ("HOME", r"C:\h"), ("USERPROFILE", r"C:\Users\a")]);
     let env = build_env(&parent, &pairs(&[("PATH", r"C:\mine"), ("MY_VAR", "값")]));
@@ -127,6 +192,42 @@ fn descendants_follow_parent_links_only() {
     let mut cyc = descendants(&table, 30);
     cyc.sort_unstable();
     assert_eq!(cyc, [31]);
+}
+
+#[test]
+fn descendants_since_skips_children_older_than_their_parent() {
+    use claude_board_core::proc::ProcessTable;
+    // 14 는 루트(10)보다 먼저 만들어졌는데 표에는 10 의 자식으로 남아 있다(10 의 pid 를 물려받은 경우)
+    let table = ProcessTable::from_entries([
+        (10, 1, "root.exe".to_string()),
+        (11, 10, "child.exe".to_string()),
+        (12, 11, "grand.exe".to_string()),
+        (13, 10, "stale-child.exe".to_string()),
+        (14, 13, "stale-grand.exe".to_string()),
+        (15, 11, "older-than-11.exe".to_string()),
+        (16, 10, "unreadable.exe".to_string()),
+    ]);
+    let times = |pid: u32| -> Option<f64> {
+        match pid {
+            10 => Some(100.0),
+            11 => Some(101.0),
+            12 => Some(102.0),
+            13 => Some(50.0),
+            14 => Some(120.0),
+            15 => Some(100.5),
+            _ => None,
+        }
+    };
+    let mut got = descendants_since(&table, 10, &times);
+    got.sort_unstable();
+    assert_eq!(got, [11, 12], "옛 자식(13)과 그 아래(14), 부모보다 먼저인 15, 시각을 모르는 16 은 뺀다");
+    // 루트의 시각을 모르면 견줄 수 없어 부모 관계만 따른다
+    let none = |_: u32| -> Option<f64> { None };
+    let mut all = descendants_since(&table, 10, &none);
+    all.sort_unstable();
+    let mut plain = descendants(&table, 10);
+    plain.sort_unstable();
+    assert_eq!(all, plain);
 }
 
 #[test]
@@ -271,6 +372,32 @@ process.stdin.on('end', () => process.stdout.write('bye\n'));
         assert_eq!(proc.read_line(Duration::from_secs(10)).unwrap().as_deref(), Some("bye"));
         assert_eq!(proc.wait_timeout(Duration::from_secs(10)).unwrap(), Some(0));
         assert!(proc.write_line("late").is_err(), "닫은 뒤 쓰기는 오류");
+    }
+
+    #[test]
+    fn a_huge_first_line_does_not_block_while_the_child_reads_late() {
+        let dir = tempfile::tempdir().unwrap();
+        // 자식이 2초 쉰 뒤에야 읽기 시작한다. 파이프(64 KB)보다 큰 줄을 보내는 쪽은 그동안 막히면 안 된다
+        let script = r#"
+setTimeout(() => {
+  let n = 0;
+  process.stdin.on('data', (d) => { n += d.length; });
+  process.stdin.on('end', () => process.stdout.write('got ' + n + '\n'));
+}, 2000);
+"#;
+        let (mut proc, _) = run_node(dir.path(), script, &[]);
+        let big = "x".repeat(256 * 1024);
+        let started = Instant::now();
+        proc.write_line(&big).unwrap();
+        proc.write_line("{}").unwrap();
+        assert!(started.elapsed() < Duration::from_millis(1500), "쓰기가 자식이 읽기를 기다렸다: {:?}", started.elapsed());
+        // 쓰는 동안에도 읽는 쪽은 돈다(루프가 시각 상한과 control 을 볼 수 있다)
+        let err = proc.read_line(Duration::from_millis(200)).expect_err("아직 줄이 없다");
+        assert_eq!(err.kind, PortErrorKind::Timeout);
+        proc.close_stdin();
+        let want = 256 * 1024 + 1 + 3;
+        assert_eq!(proc.read_line(Duration::from_secs(15)).unwrap().as_deref(), Some(format!("got {want}").as_str()));
+        assert_eq!(proc.wait_timeout(Duration::from_secs(10)).unwrap(), Some(0));
     }
 
     #[test]

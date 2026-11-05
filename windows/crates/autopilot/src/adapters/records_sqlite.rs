@@ -22,7 +22,7 @@ const BUSY_RETRIES: u32 = 8;
 
 /// 원본: `apBusyRetryDelay`. `attempt` 는 1 부터, 여덟 번을 넘으면 None(포기)
 fn busy_retry_delay(attempt: u32) -> Option<Duration> {
-    if attempt < 1 || attempt > BUSY_RETRIES {
+    if !(1..=BUSY_RETRIES).contains(&attempt) {
         return None;
     }
     let secs = (0.1 * f64::from(1u32 << (attempt - 1).min(4))).min(1.0);
@@ -196,7 +196,7 @@ impl Records for SqliteRecords {
         if row.is_empty() {
             return Err(PortError::new(PortErrorKind::Invalid, "빈 행은 쓰지 않습니다"));
         }
-        if let Some(k) = pk.iter().find(|k| row.get(*k).map_or(true, |v| v.is_null())) {
+        if let Some(k) = pk.iter().find(|k| row.get(*k).is_none_or(|v| v.is_null())) {
             return Err(PortError::new(PortErrorKind::Invalid, format!("{table} 표의 기본키 칸이 비었습니다: {k}")));
         }
 
@@ -229,7 +229,7 @@ impl Records for SqliteRecords {
             if !st.readonly() {
                 return Err(PortError::new(PortErrorKind::Invalid, "읽기 전용입니다: 쓰는 문장은 받지 않습니다"));
             }
-            let names: Vec<String> = st.column_names().into_iter().map(String::from).collect();
+            let names: Vec<String> = st.column_names().map(String::from).collect();
             let mut rows = st.query(rusqlite::params_from_iter(params.iter())).map_err(to_port)?;
             let mut out = Vec::new();
             while let Some(r) = rows.next().map_err(to_port)? {

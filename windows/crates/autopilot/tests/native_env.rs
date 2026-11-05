@@ -99,7 +99,7 @@ fn env_paths_are_identity_without_verbatim_prefix() {
     let env = NativeEnv::new(choice(EnvKind::Cmd), p(r"C:\x\cmd.exe")).unwrap();
     assert_eq!(env.to_env_path(Path::new(r"\\?\C:\work\a")).unwrap(), r"C:\work\a");
     assert_eq!(env.to_env_path(Path::new(r"C:\work\한글")).unwrap(), r"C:\work\한글");
-    assert_eq!(env.from_env_path(r"C:\work\a").unwrap(), p(r"C:\work\a"));
+    assert_eq!(env.env_path_to_windows(r"C:\work\a").unwrap(), p(r"C:\work\a"));
     assert_eq!(env.choice(), &choice(EnvKind::Cmd));
 }
 
