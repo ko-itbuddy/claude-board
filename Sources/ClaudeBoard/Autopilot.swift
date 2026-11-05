@@ -2903,6 +2903,9 @@ func apGitStat(_ p: String) -> String? {
     return lstat(p, &st) == 0 ? "\(st.st_dev):\(st.st_ino)" : nil
 }
 func apGitEnv(_ extra: [String]) -> [String: String] {
+    // 출발 준비 읽기(박는 env 에 apPrepGitReadEnv 가 든 것)는 물려받은 GIT_* 를 모두 뺀 환경으로(규칙 apPrepGitEnv, 다듬기 ⑬-1 보안 검토 고침 7).
+    // 합치기·승격 시트 등 다른 읽기는 지금 그대로
+    if extra.contains(apPrepGitReadEnv[0]) { return apPrepGitEnv(inherited: ProcessInfo.processInfo.environment, extra: extra) }
     var env = ProcessInfo.processInfo.environment
     for (k, v) in [("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_ATTR_NOSYSTEM", "1"), ("GIT_NO_REPLACE_OBJECTS", "1")] { env[k] = v }
     // extra: "GIT_DIR=…"·"GIT_WORK_TREE=…"·"GIT_CEILING_DIRECTORIES=…" 꼴로 실행 기록이 있는 자리를 박는다(apBoardRefsPin)
@@ -2964,7 +2967,7 @@ struct APBoardPrepGit: APPrepGitWorld {
         p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         p.arguments = ["config", "--file", file, "--no-includes", "--null", "--list"]
         p.currentDirectoryURL = URL(fileURLWithPath: "/")
-        p.environment = apGitEnv([])
+        p.environment = apPrepGitEnv(inherited: ProcessInfo.processInfo.environment, extra: [])   // 물려받은 GIT_* 없이(보안 검토 고침 7)
         let out = Pipe()
         p.standardOutput = out
         p.standardError = FileHandle.nullDevice

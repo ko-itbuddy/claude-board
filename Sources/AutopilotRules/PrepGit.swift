@@ -82,6 +82,16 @@ private func fsmonitorIsBool(_ v: String?) -> Bool {
 // (remote.*.uploadpack·core.sshCommand)을 부르지 않게 늦은 받기를 끄고 모든 전송 프로토콜을 막는다(GIT_CONFIG_COUNT 로 명령줄 설정과 같은 무게)
 public let apPrepGitReadEnv = ["GIT_NO_LAZY_FETCH=1", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=protocol.allow", "GIT_CONFIG_VALUE_0=never"]
 
+// 보안 검토 고침 7: 출발 준비 읽기의 환경 — 보드가 물려받은 GIT_*(GIT_CONFIG_PARAMETERS·GIT_CONFIG_COUNT/KEY/VALUE·GIT_SSH*·GIT_ALLOW_PROTOCOL·
+// GIT_DIR·GIT_INDEX_FILE 등)는 모두 빼고(재현: 물려받은 GIT_CONFIG_PARAMETERS 의 clean filter 를 박은 읽기의 status 가 돌림, 표지 1),
+// 시스템·전역 설정·attributes·replace 를 읽지 않는 보호(보드 apGitEnv 와 같은 넷)와 박는 값(extra: "이름=값")만 넣는다
+public func apPrepGitEnv(inherited: [String: String], extra: [String]) -> [String: String] {
+    var env = inherited.filter { !$0.key.hasPrefix("GIT_") }
+    for (k, v) in [("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_ATTR_NOSYSTEM", "1"), ("GIT_NO_REPLACE_OBJECTS", "1")] { env[k] = v }
+    for s in extra { if let eq = s.firstIndex(of: "=") { env[String(s[..<eq])] = String(s[s.index(after: eq)...]) } }
+    return env
+}
+
 // git-lfs 가 저장소에 쓰는 표준 filter 글(git lfs install --local) — 이 글 그대로일 때만 filter 명령을 받는다
 private let apLFSFilter: [String: String] = ["filter.lfs.clean": "git-lfs clean -- %f", "filter.lfs.smudge": "git-lfs smudge -- %f", "filter.lfs.process": "git-lfs filter-process"]
 
