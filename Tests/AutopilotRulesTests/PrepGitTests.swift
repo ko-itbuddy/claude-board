@@ -182,6 +182,9 @@ private let rows: [PrepGitRow] = [
     .init(note: "범위 밖 파일의 fsmonitor 는 사람 설정이라 막지 않음(보드 git 의 -c 가 덮음)", path: "/w/a", build: { f in
         f.repo("/w/a"); f.cfg("/w/a/.git/config", [("include.path", "~/team.cfg")]); f.cfg("/h/team.cfg", [("core.fsmonitor", "watchman-hook")])
     }, top: "/w/a", gitDir: "/w/a/.git"),
+    .init(note: "보안 검토 고침 4: include 로 끌어온 범위 밖 파일의 filter 명령도 막음(보드 status 가 돌림, 전에는 뿌리 파일만 봄)", path: "/w/a", build: { f in
+        f.repo("/w/a"); f.cfg("/w/a/.git/config", [("include.path", "~/team.cfg")]); f.cfg("/h/team.cfg", [("filter.z.clean", "/w/plant.sh")])
+    }, top: "/w/a", block: "git 설정(~/team.cfg)에 filter 명령(filter.z.clean)이 있어"),
     .init(note: "include 가 10단 넘게 겹치면 막음", path: "/w/a", build: { f in
         f.repo("/w/a"); f.cfg("/w/a/.git/config", [("include.path", "/o/c0")])
         for i in 0..<12 { f.cfg("/o/c\(i)", [("include.path", "/o/c\(i + 1)")]) }
