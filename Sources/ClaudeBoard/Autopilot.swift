@@ -416,6 +416,9 @@ struct APLogGroup: Identifiable {
     @Published private(set) var takeoverTabs: Set<String> = []   // 이어받은 세션의 보드 탭이 있는 실행(1초마다, 바뀔 때만 알림 — 화면이 TerminalHub 를 직접 지켜보지 않게)
     @Published private(set) var history = APHistory()
     @Published private(set) var detail: APPastDetail?
+    // 멈출 선 자리 표(다듬기 ⑬-1 ③) — 자율주행 중 화면을 볼 때만, 기록 저장소 시각이 바뀌면 줄을 다시 읽고 1초마다 산 자리·죽은 자리를 다시 가른다(규칙 apSlotTable)
+    @Published private(set) var slotTable = APSlotTable()
+    private var slotStamp: [Double] = [], slotRows: (slots: [APSlot], claims: [APClaim]) = ([], [])
     // 지난 실행에서 거른 프로젝트(nil 이면 모든 프로젝트)와 상세에 보이는 실행 — 상세는 거른 목록 안에서 고른다(규칙 apHistoryPick, 5-3b ⑥)
     @Published var historyProject: String? { didSet { if historyProject != oldValue { tick() } } }
     @Published private(set) var historyShown: String?
@@ -524,6 +527,7 @@ struct APLogGroup: Identifiable {
             }
         }
         if let v = viewing { readEvents(base + "/" + v) } else if !evDir.isEmpty { evDir = ""; evOffset = 0; evRest = Data(); events = [] }
+        if let v = viewing { readSlots(v) } else if !slotStamp.isEmpty { slotStamp = []; slotRows = ([], []); slotTable = APSlotTable() }
         if case .history(let sel) = screen { readHistory(sel) }
         APNotices.shared.check(cache.values.compactMap(\.run), later: later)   // 끝 알림·나중에 뒤 다시 알림(4단계 ⑩-3)
     }
@@ -560,6 +564,14 @@ struct APLogGroup: Identifiable {
         var all = events + add
         if all.count > 5000 { all.removeFirst(all.count - 5000) }
         events = all
+    }
+
+    private func readSlots(_ viewing: String) {
+        let db = autopilotRoot + "/private/records.sqlite"
+        let st = [apStamp(db), apStamp(db + "-wal")]   // WAL 이라 체크포인트 전까지 본 파일 시각이 그대로다 — 둘 다 본다
+        if st != slotStamp { slotStamp = st; slotRows = APRecords.slots(db) }
+        let t = apSlotTable(slots: slotRows.slots, claims: slotRows.claims, activeRuns: runs.count, viewing: viewing, now: Date().timeIntervalSince1970)
+        if t != slotTable { slotTable = t }
     }
 
     private func readHistory(_ sel: String?) {
@@ -1156,6 +1168,24 @@ enum APRecords {
         }
         return APRecordsReportSource(runValue: run, queueValue: queue, engines: engines, results: results)
     }
+
+    // 멈출 선 자리·같은 경로 자리(판 3, 다듬기 ⑬-1 ③) — 엔진들이 함께 쓰는 줄을 읽기만 한다. 표가 없으면(판 3 앞) 빈 목록, 판이 아는 판보다 높아도 읽을 수 있는 칸만
+    static func slots(_ path: String) -> (slots: [APSlot], claims: [APClaim]) {
+        guard let db = open(path) else { return ([], []) }
+        defer { sqlite3_close_v2(db) }
+        var err: String?
+        let s = rows(db, "SELECT run_id, project_id, unit_n, kind, pp, used, pid, since, beat FROM stopline_slots", error: &err).compactMap { c -> APSlot? in
+            guard let run = c[0] as? String, let kind = (c[3] as? String).flatMap(APSlotKind.init(rawValue:)) else { return nil }
+            return APSlot(run: run, project: c[1] as? String, unit: Int(c[2] as? Double ?? 0), kind: kind, pp: c[4] as? Double ?? 0, used: c[5] as? Double ?? 0,
+                          pid: (c[6] as? Double).map { Int32(clamping: Int($0)) }, since: c[7] as? Double ?? 0, beat: c[8] as? Double ?? 0)
+        }
+        let cl = rows(db, "SELECT key, path, run_id, run_dir, label, pid, claimed FROM path_claims", error: &err).compactMap { c -> APClaim? in
+            guard let key = c[0] as? String, let path = c[1] as? String, let run = c[2] as? String else { return nil }
+            return APClaim(key: key, path: path, run: run, runDir: c[3] as? String ?? "", label: c[4] as? String ?? "",
+                           pid: (c[5] as? Double).map { Int32(clamping: Int($0)) }, claimed: c[6] as? Double ?? 0)
+        }
+        return (s, cl)
+    }
 }
 
 // MARK: 자율주행 · 작은 부품
@@ -1662,6 +1692,7 @@ struct APRunningScreen: View {
                 APChip(text: st, color: c, strong: true)
             }
             switcher(run, compact: true)
+            if ap.slotTable.show { APSlotBox(ap: ap, compact: true) }
             if let u = run.current {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 6) {
@@ -1688,6 +1719,7 @@ struct APRunningScreen: View {
                 nextBlock(run)
                 logBlock(run)
                 usageBlock(run)
+                if ap.slotTable.show { APSlotBox(ap: ap, compact: false) }
                 guardBlock(run)
             }
             .padding(.bottom, 12)
@@ -2139,6 +2171,59 @@ struct APRunningScreen: View {
         return s.joined(separator: " · ")
     }
 }
+
+// 멈출 선 자리 표(다듬기 ⑬-1 ③) — 기록 저장소의 멈출 선 자리(stopline_slots)·같은 경로 자리(path_claims)를 읽기만 해서 접힌 줄로.
+// 실행이 둘 이상이거나 기다리는 실행·죽은 엔진의 자리가 있을 때만(규칙 apSlotTable). 줄: 실행 · 단위 · 도는 중/기다림 n번째/죽은 엔진의 자리 · 잡은 %p · 시작한 때
+struct APSlotBox: View {
+    @ObservedObject var ap: AutopilotStore
+    let compact: Bool
+    @State private var open = false
+    var body: some View {
+        let t = ap.slotTable
+        APFold(title: "멈출 선 자리", summary: t.summary, axid: "ap-fold-slots", open: $open) {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(t.rows) { r in row(r) }
+                if t.rows.isEmpty { apNote("지금 잡은 자리가 없습니다. 새 단위를 시작할 때 실행마다 자리를 잡습니다.") }
+                ForEach(t.claimsOnly) { c in
+                    Text("\(name(c.run)) · 같은 경로 자리만: " + c.paths.map(apHomePath).joined(separator: ", "))
+                        .boardFont(10, design: .monospaced).foregroundStyle(.secondary).lineLimit(compact ? 1 : 2).truncationMode(.middle)
+                        .accessibilityIdentifier("ap-claim-\(c.run)")
+                }
+                if !compact {
+                    apNote("새 단위를 시작할 때 지금 주간 사용률에 다른 실행이 잡아 두고 아직 쓰지 않은 몫을 더해 멈출 선과 견줍니다. 15분 넘게 다시 적지 않은 자리는 죽은 엔진의 것으로 보고 다음 판정이 지웁니다.")
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("ap-slots")
+    }
+    private func name(_ id: String) -> String { ap.runs.first { $0.id == id }?.name ?? id }
+    private func color(_ s: APSlotRowState) -> Color { s == .running ? APColor.work : s == .waiting ? APColor.wait : APColor.fail }
+    private func when(_ r: APSlotRow) -> String {
+        switch r.state {
+        case .running: return "\(apClock(r.since)) 부터"
+        case .waiting: return "\(apClock(r.since)) 부터 기다림"
+        case .dead: return "마지막 기록 \(apClock(r.beat))"
+        }
+    }
+    private func row(_ r: APSlotRow) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            WrapRow(spacing: 5) {
+                Text(name(r.run) + (r.mine ? " (이 실행)" : "")).boardFont(10.5, weight: .semibold).lineLimit(1)
+                if r.unit > 0 { Text("단위 \(r.unit)").boardFont(10, design: .monospaced).foregroundStyle(.secondary).fixedSize() }
+                APChip(text: apSlotStateText(r), color: color(r.state), strong: r.state != .running)
+                Text(apSlotPPText(r)).boardFont(10).monospacedDigit().foregroundStyle(r.state == .dead ? APColor.fail : .secondary).fixedSize(horizontal: false, vertical: true)
+                Text(when(r)).boardFont(10).monospacedDigit().foregroundStyle(.secondary).fixedSize()
+            }
+            if !r.paths.isEmpty, !compact {
+                Text(r.paths.map(apHomePath).joined(separator: ", ")).boardFont(10, design: .monospaced).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("ap-slot-\(r.run)")
+    }
+}
+func apHomePath(_ p: String) -> String { p.hasPrefix(NSHomeDirectory() + "/") ? "~/" + p.dropFirst(NSHomeDirectory().count + 1) : p }
 
 // 방향을 바꿀 말(와이어프레임 자율주행 중 ③ "한마디", 2단계 5-4) — "지금 단위에"(이 세션의 다음 차례)·"다음 단위부터"(뒤 단위의 첫 입력)를 고르고 보낸다.
 // 아래에 보낸 말과 엔진이 한 일(받음·넘김·붙임·넘기지 못함과 까닭)을 최근 것부터. 작은 크기에서는 그리지 않는다(와이어프레임 ⑨)
