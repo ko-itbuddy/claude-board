@@ -6796,8 +6796,7 @@ struct APConfirm: View {
         let five = s.showFive
         let head = "모델 \(s.model) · 멈출 선 주간 \(w)%" + (five ? " · 5시간 \(f)%" : "") + " · \(pubHead)" + (s.jira ? " · 만들 티켓 \(t.stories + t.tasks + t.moved)" : "")
         return APFold(title: "설정", summary: head, axid: "ap-fold-settings", open: bind("settings"), tag: s.settingsEdited || s.publishEdited ? "바꿈" : nil) {
-            apNote(s.settingsEdited ? "바꾼 값은 이 출발에 쓰고, 출발하면 프로젝트 설정에 남깁니다(다음 출발의 기본값)."
-                   : s.settingsFrom == "project" ? "프로젝트 설정에 저장된 값입니다. 그 자리에서 바꿉니다." : "지난 실행의 실행 설정을 그대로 잇습니다. 그 자리에서 바꿉니다.")
+            apNote(apStartSettingsNote(from: s.settingsFrom, edited: s.settingsEdited))
             pickRow("모델", apModelOptions(current: s.model), s.model, axid: "ap-set-model") { s.setModel($0) }
             pickRow("멈출 선 주간", apStopOptions(apStopWeekChoices, current: w).map(String.init), String(w), suffix: "%", axid: "ap-set-week") { s.setStop(week: Int($0)) }
             if five {
