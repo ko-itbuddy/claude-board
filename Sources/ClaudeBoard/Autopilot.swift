@@ -1645,7 +1645,8 @@ struct APBar: View {
 
 // MARK: 자율주행 · 자율주행 중 화면
 
-// 보드 쪽 전체를 바꾸는 자율주행 화면들의 틀 — 보드와 같은 바탕·여백
+// 보드 쪽 전체를 바꾸는 자율주행 화면들의 틀 — 보드와 같은 바탕·여백. 내용 자리는 제목 막대 아래에서 시작한다.
+// 미니에서 내용이 창보다 길면 넘친 만큼 위아래로 삐져나와 머리 줄이 제목 막대(신호등 단추) 밑에 깔린다 — 미니 화면은 스크롤로 감싼다(다듬기 ⑬-1 ⑤)
 struct APScreenFrame<Content: View>: View {
     let mini: Bool
     @ViewBuilder let content: () -> Content
@@ -1681,10 +1682,11 @@ struct APRunningScreen: View {
         }
     }
 
-    // 작은 크기: 지금 단위 카드(제목·상태 꼬리표·단위 시계)와 단추만(와이어프레임 자율주행 중 ⑨)
+    // 작은 크기: 지금 단위 카드(제목·상태 꼬리표·단위 시계)와 단추만(와이어프레임 자율주행 중 ⑨).
+    // 다른 실행·멈출 선 자리·이어받기 줄이 더해지면 미니 높이(경로 수만큼, 최소 144)를 넘으므로 스크롤한다(다듬기 ⑬-1 ⑤: 전에는 아래 단추가 잘림)
     private func small(_ run: APRun) -> some View {
         let (st, c) = apStateChip(run)
-        return VStack(alignment: .leading, spacing: 8) {
+        return ScrollView(showsIndicators: false) { VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 APBack(title: "← 보드", axid: "ap-back") { ap.screen = .board }
                 Text("자율주행 · \(run.name)").boardFont(12, weight: .bold).lineLimit(1)
@@ -1705,8 +1707,8 @@ struct APRunningScreen: View {
                 .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.05)))
             }
             controls(run, compact: true)
-            Spacer(minLength: 0)
         }
+        .padding(.bottom, 6) }
     }
 
     private func large(_ run: APRun) -> some View {
