@@ -1722,6 +1722,19 @@ extension RecordsDB {
                 }
             }
         }
+        // 단위 커밋 기록(판 5, 다듬기 ⑬-2, 규칙 apUnitCommitRows·apFinishCommitRows): 단위가 만든 커밋·스토리로 합친 병합 커밋(엔진 비공개 단위 기록 먼저 —
+        // 단위 폴더 사본은 보드가 그리라고 내놓는 것)과 finish merge·promote 의 병합 커밋(run.json branches.promoted). 같은 줄은 다시 쓰지 않는다
+        for i in q.indices {
+            let n = i + 1
+            guard let e = (readJSON(dir + "/engine/unit-\(n).json") as? [String: Any]) ?? eng[n] else { continue }
+            for c in apUnitCommitRows(run: runId, n: n, engine: e) { written += try putCommit(c) }
+        }
+        for c in apFinishCommitRows(run: runId, promoted: (r["branches"] as? [String: Any])?["promoted"] as? [[String: Any]] ?? []) { written += try putCommit(c) }
+        // 만든 티켓(tickets 표, 다듬기 ⑬-2): 출발 확인의 티켓 나무(tickets-plan.json·tickets.json)와 실행 중에 새로 필요해져 검수 뒤 올린 티켓(outbox kind ticket)
+        if let project { written += try putTickets(dir: dir, project: project, run: runId, unitSources: Dictionary(q.indices.compactMap { i -> (String, String)? in
+            guard let uid = def(i)["id"] as? String ?? q[i]["id"] as? String, let k = def(i)["source_key"] as? String else { return nil }
+            return (uid, k)
+        }, uniquingKeysWith: { a, _ in a })) }
         // 출발 카드와 고른 답
         let cardsAny = readJSON(dir + "/cards.json")
         if let cards = cardsAny as? [[String: Any]] ?? (cardsAny as? [String: Any])?["cards"] as? [[String: Any]] {
@@ -1737,6 +1750,36 @@ extension RecordsDB {
             }
         }
         return written
+    }
+
+    // 단위 커밋 한 줄(판 5) — 같은 실행·저장소·이름·종류는 한 줄
+    func putCommit(_ c: APUnitCommit) throws -> Int {
+        try run("""
+            INSERT INTO unit_commits(run_id,unit_n,repo,sha,kind,ref,source,at) VALUES(?,?,?,?,?,?,?,?)
+            ON CONFLICT(run_id,repo,sha,kind) DO NOTHING
+            """, [c.run, c.unitN, c.repo, c.sha, c.kind.rawValue, c.ref.isEmpty ? nil : c.ref, c.source, r3(c.at)])
+    }
+    // 만든 티켓(tickets 표, 다듬기 ⑬-2, 규칙 apTicketRows·apOutboxTicketRows) — 이미 있는 키는 다시 쓰지 않는다(처음 남긴 실행·때를 지킴).
+    // 파일은 보통 파일·상한 아래만(티켓 상태는 엔진만 쓰고, 올릴 글은 엔진이 만든 꼴만 읽힘)
+    func putTickets(dir: String, project: String, run runId: String, unitSources: [String: String]) throws -> Int {
+        var rows: [APTicketRow] = []
+        if let pd = plainFile(dir + "/tickets-plan.json") {
+            rows += apTicketRows(plan: apTicketPlanParse(pd).plan, book: apTicketBookParse(plainFile(dir + "/tickets.json")), unitSources: unitSources, run: runId)
+        }
+        let box = dir + "/outbox"
+        if isDir(box), !isLink(box) {
+            let items = ((try? fm.contentsOfDirectory(atPath: box)) ?? []).filter { $0.hasSuffix(".json") && apOutboxIDOK(String($0.dropLast(5))) }.sorted()
+                .compactMap { plainFile(box + "/" + $0, max: apOutboxMaxBytes).flatMap(apOutboxParse) }
+            rows += apOutboxTicketRows(items, run: runId).filter { x in !rows.contains { $0.key == x.key } }
+        }
+        var n = 0
+        for t in rows {
+            n += try run("""
+                INSERT INTO tickets(project_id,key,kind,parent_key,title,url,source_key,created_run,created) VALUES(?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(project_id,key) DO NOTHING
+                """, [project, t.key, t.kind, t.parent.isEmpty ? nil : t.parent, t.title, t.url.isEmpty ? nil : t.url, t.sourceKey, t.run, r3(t.created)])
+        }
+        return n
     }
 
     // 판정 놓침(5단계 ⑪-3, 규칙 Misses.swift): 같은 id 면 다시 쓰지 않는다(상태 used·fixed 를 지키려고). 프로젝트마다 apMissKeepPerProject 줄까지(오래된 것부터 지움)
@@ -2847,6 +2890,29 @@ final class Engine {
         guard let c = repoInfo(r)["common_dir"] as? String else { return [] }
         return ["GIT_DIR=" + c]
     }
+    // 단위 커밋 기록(다듬기 ⑬-2): 저장소마다 지금 걸린 가지(repoInfo on)의 머리. 가지·커밋만 읽는 git 이라 공통 git 폴더로 박는다(pinRefs).
+    // git 폴더가 출발 때와 다르면(바꿔치기 의심) 그 저장소는 읽지 않는다(gitDirChange, 진행 기록은 그 저장소를 쓰는 다른 걸음이 남김)
+    func unitHeads() -> [String: Any] {
+        var out: [String: Any] = [:]
+        for r in repos {
+            let on = repoInfo(r)["on"] as? String ?? ""
+            guard !on.isEmpty, gitDirChange(repoInfo(r), at: wt(r)) == nil, let h = headOf(r, "refs/heads/" + on, env: pinRefs(r)) else { continue }
+            out[r] = ["branch": on, "head": h]
+        }
+        return out
+    }
+    // 단위가 끝날 때: 시작 때 가지의 머리가 움직였으면 그 사이 커밋(rev-list 시작..끝, 새것부터 apUnitCommitMax 개, 넘으면 more)
+    func unitCommits(_ start: [String: Any]) -> [[String: Any]] {
+        var out: [[String: Any]] = []
+        for r in repos {
+            guard let s = start[r] as? [String: Any], let b = s["branch"] as? String, let h0 = s["head"] as? String, apFullSHA(h0) != nil else { continue }
+            guard gitDirChange(repoInfo(r), at: wt(r)) == nil else { out.append(["repo": r, "branch": b, "from": h0, "shas": [] as [Any], "note": "git 폴더가 출발 때와 달라 읽지 않음"]); continue }
+            guard let h1 = headOf(r, "refs/heads/" + b, env: pinRefs(r)), h1 != h0 else { continue }
+            let list = (gitOut(["rev-list", "--max-count=\(apUnitCommitMax + 1)", "\(h0)..\(h1)"], cwd: r, env: pinRefs(r)) ?? "").split(separator: "\n").compactMap { apFullSHA(String($0)) }
+            out.append(["repo": r, "branch": b, "from": h0, "to": h1, "shas": Array(list.prefix(apUnitCommitMax)), "more": list.count > apUnitCommitMax])
+        }
+        return out
+    }
     // 작업 트리 안 git 꼴 자리를 출발 때 집합(branches.git_places)과 견주어 새로 생기거나 설정이 바뀐 것을 알린다(알림용 받침, gitPlaces 의 주석).
     // 찾은 것은 branches.git_places_changed 에 쌓고(같은 자리·같은 지문은 한 번), 훑기를 다 하지 못하면 branches.git_places_scan 에 적고 알린다
     // 돌려주는 값(⑫-8 보안 검토 고침, 이어받기 전 막기): 출발 때와 다른 git 자리 모두(이미 알린 것도)·훑기를 다 했는지·못 한 까닭
@@ -3165,7 +3231,7 @@ final class Engine {
         guard let k = def(n)["story"] as? String, let task = def(n)["branch"] as? String, let sb = def(n)["story_branch"] as? String,
               let r = repoOf(cwd(n)) else { return [:] }
         guard gitDirOK(r) else { return ["story": k, "task": task, "branch": sb, "state": "not_merged", "why": "git 폴더가 바뀌어 합치지 않았습니다", "at": r3(now())] }
-        var m: [String: Any] = ["story": k, "task": task, "branch": sb, "at": r3(now())]
+        var m: [String: Any] = ["story": k, "task": task, "branch": sb, "repo": r, "at": r3(now())]   // repo: 병합 커밋 기록(⑬-2 unit_commits)
         let rp = pinRefs(r)   // 이 저장소의 git 폴더로 박는다(5-4 보안)
         let th = headOf(r, "refs/heads/" + task, env: rp), sh = headOf(r, "refs/heads/" + sb, env: rp)
         func no(_ why: String) { m["state"] = "not_merged"; m["why"] = why }
@@ -3412,6 +3478,7 @@ final class Engine {
         for f in (fm.enumerator(atPath: dst)?.allObjects as? [String] ?? []) where !isDir(dst + "/" + f) { chmod(dst + "/" + f, 0o444) }
         let first = firstMessage(n, directions: directions)
         let u: [String: Any] = [
+            "heads_start": unitHeads(),   // 단위 커밋 기록(⑬-2): 저장소마다 지금 걸린 가지와 그 머리 — 끝날 때 이 머리 → 끝 머리 사이를 이 단위의 커밋으로
             "unit": n, "id": def(n)["id"] as? String ?? "u\(n)", "title": title(n), "status": "running",
             "phase": (def(n)["action"] as? String ?? "").isEmpty ? "model" : "action",
             "started": r3(now()), "active_sec": 0, "cost_usd": 0, "cost_done": 0, "turns": 0, "caps": caps(n),
@@ -3443,6 +3510,8 @@ final class Engine {
                 u["git"] = ["note": "작업 폴더가 git 저장소가 아니라 git 기록이 없습니다"]
             }
         }
+        // 단위 커밋 기록(판 5, 다듬기 ⑬-2): 시작 때 머리 → 지금 머리 사이 커밋(저장소마다). 기록 저장소에는 다음 record 가 옮긴다
+        if let hs = u["heads_start"] as? [String: Any], u["commits"] == nil { u["commits"] = unitCommits(hs) }
         // 결과 기록은 모델이 쓰는 자리라 FIFO·큰 파일이어도 엔진이 멈추지 않게 읽는다(5-4 보안)
         let ok = modelFileData(unitDir(n) + "/result.json").flatMap { try? JSONSerialization.jsonObject(with: $0) } is [String: Any]
         u["result_ok"] = ok
@@ -6218,6 +6287,16 @@ func cmdOutbox(_ args: [String]) {
         for id in ids {
             add(apPostItem(id, store: store, trigger: .press, connections: conns, dev: root.dev, secrets: secrets, http: EngineHTTP(),
                            clock: EngineClock(), waiter: EngineWaiter(), tz: .current), id)
+        }
+        // 실행 중에 새로 필요해진 티켓을 올렸으면 기록 저장소 tickets 표에도(다듬기 ⑬-2). 못 써도 올린 것은 그대로(다음 기록 때 다시 옮김)
+        if ids.contains(where: { store.read($0)?.kind == "ticket" && store.read($0)?.state == .posted }), let project = run["project"] as? String, validName(project) {
+            do {
+                let db = try RecordsDB(recordsPath(dev: root.dev))
+                let defs = (readJSON(dir + "/pinned/frozen.json") as? [String: Any])?["units"] as? [[String: Any]] ?? []
+                let src = Dictionary(defs.compactMap { d -> (String, String)? in (d["id"] as? String).flatMap { i in (d["source_key"] as? String).map { (i, $0) } } }, uniquingKeysWith: { a, _ in a })
+                try db.transaction { _ = try db.putTickets(dir: dir, project: project, run: (dir as NSString).lastPathComponent, unitSources: src) }
+                db.close()
+            } catch { if !asJSON { print("만든 티켓을 기록 저장소에 쓰지 못했습니다: \(error)") } }
         }
     case "skip", "later", "unskip":
         for id in ids { add(apMarkItem(id, verb, store: store, clock: EngineClock()), id) }
