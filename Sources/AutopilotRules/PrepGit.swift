@@ -11,6 +11,8 @@
 //  ④ git 설정 파일(공통 config·config.worktree)을 git 이 해석한 대로(git config --file --no-includes, 저장소를 찾지 않음) 읽어, 명령인 core.fsmonitor 와
 //     저장소·임시 폴더 안을 가리키는 include 를 막는다(엔진 configIncludes 와 같은 범위 꼴, 10단 상한).
 //  ⑤ 하위 모듈(색인 gitlink·.gitmodules)이 있으면 막는다(엔진 start 가 출발하지 않는 것과 같음). 색인을 못 읽으면 닫힌 쪽.
+// 보안 검토 고침(같은 날): 고른 폴더 위의 다른 저장소 작업 트리, .git 파일이 가리키는 git 폴더가 임시·작업 트리 안·자율주행 작업 트리 자리이거나
+// 떨어진 git 폴더 꼴, 저장소 설정의 filter 명령(git-lfs 표준 글 밖)도 막는다(재현: 보드의 git status 가 그 자리 설정의 clean filter 를 돌림).
 // 막으면 그 저장소에서 git 을 더 돌리지 않고(보드가 저장소 줄에 까닭) 출발 준비를 멈춘다. 통과하면 읽기에 박을 env(GIT_DIR·GIT_WORK_TREE)를 준다.
 // 파일 시스템·git 은 포트(APPrepGitWorld)로만 본다 — 진짜 어댑터는 보드, 가짜는 Tests/AutopilotRulesTests/PrepGitTests
 import Foundation
@@ -76,6 +78,9 @@ private func fsmonitorIsBool(_ v: String?) -> Bool {
     return ["", "true", "false", "yes", "no", "on", "off", "1", "0"].contains(v.trimmingCharacters(in: .whitespaces).lowercased())
 }
 
+// git-lfs 가 저장소에 쓰는 표준 filter 글(git lfs install --local) — 이 글 그대로일 때만 filter 명령을 받는다
+private let apLFSFilter: [String: String] = ["filter.lfs.clean": "git-lfs clean -- %f", "filter.lfs.smudge": "git-lfs smudge -- %f", "filter.lfs.process": "git-lfs filter-process"]
+
 // 유스케이스: 경로 하나(고른 작업 경로·단위 작업 폴더)의 저장소와 막을 까닭. records 는 이어 가는 지난 실행의 저장소별 git 자리 기록(뿌리 → 기록)
 public func apPrepGitCheck(_ path: String, world: APPrepGitWorld, records: [String: APGitRecord] = [:], home: String) -> APPrepGit {
     guard let start = world.real(path) else { return APPrepGit() }
@@ -109,9 +114,28 @@ public func apPrepGitCheck(_ path: String, world: APPrepGitWorld, records: [Stri
     guard let i = comps.lastIndex(of: ".git") ?? comps.lastIndex(where: { $0.hasSuffix(".git") }) else { return stop("git 폴더(\(apPrepShortPath(g, home: home)))가 저장소 .git 꼴 자리가 아니라") }
     let owner = "/" + comps[...i].joined(separator: "/"), rest = Array(comps[(i + 1)...])
     let base = comps[i] == ".git" ? parent(owner) : owner   // 그 git 폴더를 품은 저장소 뿌리(bare 꼴이면 그 폴더)
+    // 보안 검토 고침 1: 고른 폴더(뿌리) 위로도 본다 — 다른 저장소의 작업 트리 안이면 막는다. 그 저장소 자신의 따로 작업 트리·하위 모듈
+    // (git 폴더가 그 저장소 .git 의 worktrees·modules 아래)만 예외. 홈 폴더와 그 위는 보지 않는다(홈 dotfiles 저장소)
+    var up = parent(top)
+    while up != "/" && up != home && !(home + "/").hasPrefix(up + "/") {
+        if world.entry(up) != nil, !(up + "/.git" == owner && !rest.isEmpty) {
+            return stop("다른 저장소(\(apPrepShortPath(up, home: home)))의 작업 트리 안에 든 git 자리라")
+        }
+        up = parent(up)
+    }
+    // 보안 검토 고침 2: .git 파일이 가리키는 git 폴더는 모델이 쓸 수 있던 자리면 막는다 — 그 작업 트리 안, 임시 폴더, 자율주행 작업 트리 자리.
+    // 떨어진 git 폴더(--separate-git-dir 꼴)는 되짚는 자리가 없어 누가 만들었는지 가릴 수 없으므로 막는다(닫힌 쪽)
+    if case .file = entry {
+        if g.hasPrefix(top + "/") { return stop("git 폴더(\(apPrepShortPath(g, home: home)))가 그 작업 트리 안에 있어") }
+        let writable = ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/var/folders", "/private/var/folders", home + "/.claude-board/worktrees"].map { $0.lowercased() }
+        for x in [g, owner] where writable.contains(where: { x.lowercased() == $0 || x.lowercased().hasPrefix($0 + "/") }) {
+            return stop("git 폴더(\(apPrepShortPath(g, home: home)))가 임시 폴더·자율주행 작업 트리 자리에 있어")
+        }
+        if rest.isEmpty { return stop("git 파일이 떨어진 git 폴더(\(apPrepShortPath(g, home: home)))를 가리켜 자리를 믿을 수 없어") }
+    }
     var common = g
     if rest.isEmpty {
-        // 그 저장소의 git 폴더 그대로(.git 파일이 가리키는 떨어진 git 폴더 --separate-git-dir 꼴도) — 자리는 아래 ② 로 본다
+        // 그 저장소의 .git 폴더 그대로 — 자리는 아래 ② 로 본다
     } else if rest.count == 2, rest[0] == "worktrees" {
         // 따로 작업 트리: 되짚는 자리(gitdir)가 이 .git 파일이고 commondir 가 그 git 폴더여야 한다
         let back = world.text(g + "/gitdir")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -153,6 +177,11 @@ public func apPrepGitCheck(_ path: String, world: APPrepGitWorld, records: [Stri
             if root, k == "core.fsmonitor", !fsmonitorIsBool(e.value) {
                 let v = e.value ?? ""
                 return "저장소 설정(\(apPrepShortPath(file, home: home)))에 core.fsmonitor 명령(\(v.count > 60 ? String(v.prefix(60)) + "…" : v))이 있어"
+            }
+            // 보안 검토 고침 3: filter 드라이버의 명령(clean·smudge·process)은 보드의 git status 가 바뀐 듯한 파일을 견줄 때 돌린다(재현) — git-lfs 표준 글만 받는다.
+            // diff.external·diff.*.textconv·core.pager·core.sshCommand 는 보드가 돌리는 git(ls-files·cat-file·symbolic-ref·for-each-ref·status·rev-list)이 부르지 않는다(재현 안 됨)
+            if root, k.hasPrefix("filter."), k.hasSuffix(".clean") || k.hasSuffix(".smudge") || k.hasSuffix(".process"), !(apLFSFilter[k] == e.value) {
+                return "저장소 설정(\(apPrepShortPath(file, home: home)))에 filter 명령(\(k))이 있어"
             }
             guard k == "include.path" || (k.hasPrefix("includeif.") && k.hasSuffix(".path")), let v = e.value, !v.isEmpty else { continue }
             let p = v == "~" ? home : v.hasPrefix("~/") ? home + v.dropFirst(1) : v.hasPrefix("/") ? v : dir + "/" + v
