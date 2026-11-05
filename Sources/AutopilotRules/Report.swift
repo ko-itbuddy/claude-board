@@ -558,3 +558,11 @@ public func apDrawReports(id: String, source: APReportSource, sink: APReportSink
     if let e = sink.write(.run, apReportHTML(r, at: at, tz: tz, home: home)) { d.errors.append("실행 보고서: " + e) } else { d.written.append(.run) }
     return d
 }
+
+// 빠진 단위 보고서(다듬기 ⑬-2): 끝난 단위(통과·미통과·상한·중단·건너뜀) 가운데 단위 폴더는 있는데 보고서(units/<n>/report.html, 보통 파일)가 없는 것.
+// 엔진이 단위 판정 뒤 기록 저장소에 쓴 다음 보고서를 그리기 전에 죽으면 생긴다 — 엔진이 다시 떠서 이어 갈 때와 끝 정리 때 이것만 다시 그린다(모델 0).
+// statuses: 대기열 차례의 단위 상태, hasDir·hasReport: 단위 번호(1부터) → 폴더·보고서가 있는가(바로 가기는 없음으로)
+public let apReportEndedStatuses: Set<String> = ["done", "failed", "capped", "stopped", "skipped"]
+public func apMissingUnitReports(statuses: [String], hasDir: (Int) -> Bool, hasReport: (Int) -> Bool) -> [Int] {
+    statuses.indices.map { $0 + 1 }.filter { apReportEndedStatuses.contains(statuses[$0 - 1]) && hasDir($0) && !hasReport($0) }
+}

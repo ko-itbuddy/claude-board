@@ -480,3 +480,49 @@ public func apNewTicketOutbox(_ r: APReportRun, unit n: Int, story: String?, tas
     }
     return out
 }
+
+// MARK: - 기록 저장소 tickets 표(다듬기 ⑬-2, 2026-11-05, 설계 5장 7절)
+
+// 만든 티켓 한 줄 — 키·종류(story·task)·부모 키·제목·주소·원천 키·만든 실행·만든 때. 같은 키는 다시 쓰지 않는다(엔진 ON CONFLICT DO NOTHING)
+public struct APTicketRow: Equatable, Sendable {
+    public var key: String
+    public var kind: String
+    public var parent: String
+    public var title: String
+    public var url: String
+    public var sourceKey: String?
+    public var run: String
+    public var created: Double
+    public init(key: String, kind: String, parent: String, title: String, url: String, sourceKey: String?, run: String, created: Double) {
+        self.key = key; self.kind = kind; self.parent = parent; self.title = title; self.url = url; self.sourceKey = sourceKey; self.run = run; self.created = created
+    }
+}
+
+// 출발 확인의 티켓 나무(tickets-plan.json + tickets.json)에서 만든 것(made)만. 부모 바꾸기(move)는 만든 것이 아니라 넣지 않는다.
+// 작업의 원천 키는 그 단위(task:<단위 id>)의 source_key, 스토리는 없음. 부모가 같은 계획의 스토리(story:…)면 그 스토리의 만든 키
+public func apTicketRows(plan: APTicketPlan, book: APTicketBook, unitSources: [String: String], run: String) -> [APTicketRow] {
+    var out: [APTicketRow] = []
+    for e in plan.entries where e.kind != .move {
+        guard let r = book.entries[e.id], r.state == .made, apMatch(r.key, apIssueKeyPattern), !out.contains(where: { $0.key == r.key }) else { continue }
+        let parent: String
+        if e.parent.hasPrefix("story:") {
+            guard let p = book.entries[e.parent], p.state == .made, apMatch(p.key, apIssueKeyPattern) else { continue }
+            parent = p.key
+        } else { parent = apMatch(e.parent, apIssueKeyPattern) ? e.parent : "" }
+        let src = e.kind == .task && e.id.hasPrefix("task:") ? unitSources[String(e.id.dropFirst(5))] : nil
+        out.append(APTicketRow(key: r.key, kind: e.kind.rawValue, parent: parent, title: String(e.title.prefix(apTicketTitleMax)), url: r.url,
+                               sourceKey: src, run: run, created: r.updated))
+    }
+    return out
+}
+
+// 실행 중에 새로 필요해진 티켓(올릴 글 kind ticket)에서 올린 것(posted, 받은 곳 id 가 이슈 키)만. 종류는 하위 작업(task), 원천 키는 임시 번호(TMP-<단위>-<차례>)
+public func apOutboxTicketRows(_ items: [APOutboxItem], run: String) -> [APTicketRow] {
+    var out: [APTicketRow] = []
+    for it in items where it.kind == "ticket" && it.state == .posted {
+        guard let rm = it.remote, apMatch(rm.id, apIssueKeyPattern), !out.contains(where: { $0.key == rm.id }) else { continue }
+        out.append(APTicketRow(key: rm.id, kind: "task", parent: apMatch(it.target.parent, apIssueKeyPattern) ? it.target.parent : "", title: String(it.title.prefix(apTicketTitleMax)),
+                               url: rm.url, sourceKey: apMatch(it.target.issue, apTempTicketPattern) ? it.target.issue : nil, run: run, created: it.updated))
+    }
+    return out
+}
