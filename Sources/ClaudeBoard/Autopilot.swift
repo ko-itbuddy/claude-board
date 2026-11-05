@@ -7588,7 +7588,9 @@ struct APRepoPlan: Identifiable { let repo: String; let plan: APMergePlan?; var 
             for r in Set(m.repos + m.stories.flatMap { $0.repos.map(\.repo) + $0.tasks.map(\.repo) }) where !r.isEmpty && FileManager.default.fileExists(atPath: r) {
                 let rec = gitRec[r] ?? APGitRecord(commonDir: nil, commonIno: nil, workGitDir: nil, workGitIno: nil)
                 let live = apGit(["rev-parse", "--git-common-dir"], r).map { $0.hasPrefix("/") ? apCanonical($0) : apCanonical(r + "/" + $0) }
-                if let why = apBoardGitChanged(rec, liveCommon: live, liveCommonIno: live.flatMap(apGitStat), liveWorkIno: rec.workGitDir.flatMap(apGitStat)) {
+                // 이 실행의 따로 작업 트리가 지워졌으면(합친 뒤·버린 뒤) 공통 git 폴더만 본다(엔진 finish 와 같은 기준)
+                let wtGone = !runWorktree.contains { $0.value == r && FileManager.default.fileExists(atPath: $0.key) }
+                if let why = apBoardGitChanged(rec, liveCommon: live, liveCommonIno: live.flatMap(apGitStat), liveWorkIno: rec.workGitDir.flatMap(apGitStat), workTreeGone: wtGone) {
                     blocked[r] = why; continue   // 바꿔치기 의심: 이 저장소의 가지를 읽지 않는다(시트가 까닭을 보이고 단추를 잠근다)
                 }
                 pin[r] = apBoardRefsPin(rec, repoRoot: r)
