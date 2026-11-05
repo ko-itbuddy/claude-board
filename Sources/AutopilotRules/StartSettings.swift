@@ -46,3 +46,14 @@ public func apStartSettings(project: [String: Any], past: [String: Any]) -> APSt
     let qm = (past["model"] as? String).flatMap { $0.isEmpty ? nil : $0 }
     return APStartPick(model: qm, week: qw, five: qf, from: qm != nil || qw != nil || qf != nil ? "past" : "default")
 }
+
+// 출발 확인 설정 줄의 안내 글 — 값이 어디서 왔는지(apStartSettings 의 from)와 사람이 바꿨는지. 지난 실행·프로젝트 설정이 없으면 기본값이라고
+// 적는다(전에는 from 이 default 여도 "지난 실행의 실행 설정을 그대로 잇습니다"가 보였다, 2026-11-05 진짜 claude 장난감 실행의 주제로 시작)
+public func apStartSettingsNote(from: String, edited: Bool) -> String {
+    if edited { return "바꾼 값은 이 출발에 쓰고, 출발하면 프로젝트 설정에 남깁니다(다음 출발의 기본값)." }
+    switch from {
+    case "project": return "프로젝트 설정에 저장된 값입니다. 그 자리에서 바꿉니다."
+    case "past": return "지난 실행의 실행 설정을 그대로 잇습니다. 그 자리에서 바꿉니다."
+    default: return "이어 갈 지난 실행도, 프로젝트 설정에 남긴 값도 없어 기본값입니다. 그 자리에서 바꿉니다."
+    }
+}

@@ -183,10 +183,24 @@ private let checkRows: [DraftCheckRow] = [
         #expect(after("--permission-mode") == "dontAsk" && after("--settings") == "/P/settings.json")
         #expect(a.enumerated().filter { $0.element == "--add-dir" }.map { a[$0.offset + 1] } == paths.reads)
         let allow = after("--allowedTools")!.split(separator: " ").map(String.init), deny = after("--disallowedTools")!.split(separator: " ").map(String.init)
-        #expect(allow.filter { $0.hasPrefix("Write(") || $0.hasPrefix("Edit(") } == ["Write(/R/drafts/zz-toy/draft/**)", "Edit(/R/drafts/zz-toy/draft/**)"])
+        // 절대 경로 규칙은 빗금 둘(빗금 하나는 설정 파일 기준 상대 경로라 결과 폴더 Write 가 거부됨, 2026-11-05 진짜 claude 실측)
+        #expect(allow.filter { $0.hasPrefix("Write(") || $0.hasPrefix("Edit(") } == ["Write(//R/drafts/zz-toy/draft/**)", "Edit(//R/drafts/zz-toy/draft/**)"])
+        #expect(allow.contains("Read(//W/.seed-zz-toy/repo/**)") && !allow.contains { $0.range(of: #"^[A-Za-z]+\(/[^/]"#, options: .regularExpression) != nil })
         #expect(!allow.contains { $0.hasPrefix("Bash") || $0.hasPrefix("Web") || $0.hasPrefix("mcp") })
-        for d in ["Bash", "WebFetch", "WebSearch", "Task", "Agent", "mcp__*", "Read(/H/Library/Keychains/**)", "Write(/W/.seed-zz-toy/repo/**)"] { #expect(deny.contains(d), "\(d)") }
+        for d in ["Bash", "WebFetch", "WebSearch", "Task", "Agent", "mcp__*", "Read(//H/Library/Keychains/**)", "Write(//W/.seed-zz-toy/repo/**)", "Edit(~/.claude/**)"] { #expect(deny.contains(d), "\(d)") }
+        #expect(!deny.contains { $0.range(of: #"^[A-Za-z]+\(/[^/]"#, options: .regularExpression) != nil })
         #expect(a.last == apDraftDenyRules(paths).joined(separator: " "))   // 글은 표준 입력으로(뒤에 붙이지 않음)
+    }
+
+    @Test("경로 규칙 꼴: 절대 경로는 빗금 둘, 홈·상대 경로는 그대로", arguments: [
+        ("Write", "/Users/me/Library/Application Support/Claude Board Dev/autopilot/drafts/x/draft",
+         "Write(//Users/me/Library/Application Support/Claude Board Dev/autopilot/drafts/x/draft/**)"),
+        ("Read", "/R/private", "Read(//R/private/**)"),
+        ("Edit", "~/.claude", "Edit(~/.claude/**)"),
+        ("Edit", "draft", "Edit(draft/**)"),
+    ])
+    func 경로규칙(tool: String, path: String, want: String) {
+        #expect(apPathRule(tool, path) == want)
     }
 
     @Test("세션 설정: hook 끔, 같은 허용·거부, 샌드박스 쓰기는 결과 자리만·읽기 금지")

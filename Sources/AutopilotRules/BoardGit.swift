@@ -20,11 +20,14 @@ public struct APGitRecord: Equatable, Sendable {
 // rev-parse --git-common-dir 를 푼 절대 경로, liveCommonIno 는 그 자리의 "장치:inode", liveWorkIno 는 (따로 작업 트리면) 기록된 작업 트리 git 폴더의 지금 inode.
 // 다르면 까닭(사람에게 보이는 글머리), 같거나 기록이 없으면(옛 실행) nil. inode 를 기록해 두었는데 지금 nil 이면(못 읽음) 다르다고 본다(닫힌 쪽).
 // rev-parse 는 설정을 읽기만 하고 filter·hook 을 돌리지 않는다(보드 git 어댑터의 공통 보호 아래에서 돈다)
-public func apBoardGitChanged(_ record: APGitRecord, liveCommon: String?, liveCommonIno: String?, liveWorkIno: String?) -> String? {
+// workTreeGone: 이 실행의 따로 작업 트리 자리가 이제 없다(엔진 finish 가 합친 뒤·버린 뒤 지움) — 그 작업 트리 git 폴더(.git/worktrees/<이름>)도
+// 함께 지워졌으므로 공통 git 폴더만 본다(엔진 finish 의 ⑬-2 ⑤ 와 같은 기준). 전에는 합친 뒤 시트를 열면 늘 "작업 트리 git 폴더가 출발 때와 달라져"로
+// 그 저장소의 git 을 돌리지 않아, 빨간 경고와 "가지가 없습니다"가 보이고 다음 승격 단계가 잠겼다(2026-11-05 진짜 claude 장난감 실행)
+public func apBoardGitChanged(_ record: APGitRecord, liveCommon: String?, liveCommonIno: String?, liveWorkIno: String?, workTreeGone: Bool = false) -> String? {
     guard let c = record.commonDir else { return nil }   // 기록 없음: 막지 않고 공통 보호(safe.bareRepository)로만
     if liveCommon != c { return "git 폴더가 출발 때와 달라져" }
     if let ino = record.commonIno, liveCommonIno != ino { return "git 폴더가 출발 때와 달라져" }
-    if record.workGitDir != nil, let wino = record.workGitIno, liveWorkIno != wino { return "작업 트리 git 폴더가 출발 때와 달라져" }
+    if !workTreeGone, record.workGitDir != nil, let wino = record.workGitIno, liveWorkIno != wino { return "작업 트리 git 폴더가 출발 때와 달라져" }
     return nil
 }
 

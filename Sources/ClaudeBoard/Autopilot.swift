@@ -6796,8 +6796,7 @@ struct APConfirm: View {
         let five = s.showFive
         let head = "모델 \(s.model) · 멈출 선 주간 \(w)%" + (five ? " · 5시간 \(f)%" : "") + " · \(pubHead)" + (s.jira ? " · 만들 티켓 \(t.stories + t.tasks + t.moved)" : "")
         return APFold(title: "설정", summary: head, axid: "ap-fold-settings", open: bind("settings"), tag: s.settingsEdited || s.publishEdited ? "바꿈" : nil) {
-            apNote(s.settingsEdited ? "바꾼 값은 이 출발에 쓰고, 출발하면 프로젝트 설정에 남깁니다(다음 출발의 기본값)."
-                   : s.settingsFrom == "project" ? "프로젝트 설정에 저장된 값입니다. 그 자리에서 바꿉니다." : "지난 실행의 실행 설정을 그대로 잇습니다. 그 자리에서 바꿉니다.")
+            apNote(apStartSettingsNote(from: s.settingsFrom, edited: s.settingsEdited))
             pickRow("모델", apModelOptions(current: s.model), s.model, axid: "ap-set-model") { s.setModel($0) }
             pickRow("멈출 선 주간", apStopOptions(apStopWeekChoices, current: w).map(String.init), String(w), suffix: "%", axid: "ap-set-week") { s.setStop(week: Int($0)) }
             if five {
@@ -7588,7 +7587,9 @@ struct APRepoPlan: Identifiable { let repo: String; let plan: APMergePlan?; var 
             for r in Set(m.repos + m.stories.flatMap { $0.repos.map(\.repo) + $0.tasks.map(\.repo) }) where !r.isEmpty && FileManager.default.fileExists(atPath: r) {
                 let rec = gitRec[r] ?? APGitRecord(commonDir: nil, commonIno: nil, workGitDir: nil, workGitIno: nil)
                 let live = apGit(["rev-parse", "--git-common-dir"], r).map { $0.hasPrefix("/") ? apCanonical($0) : apCanonical(r + "/" + $0) }
-                if let why = apBoardGitChanged(rec, liveCommon: live, liveCommonIno: live.flatMap(apGitStat), liveWorkIno: rec.workGitDir.flatMap(apGitStat)) {
+                // 이 실행의 따로 작업 트리가 지워졌으면(합친 뒤·버린 뒤) 공통 git 폴더만 본다(엔진 finish 와 같은 기준)
+                let wtGone = !runWorktree.contains { $0.value == r && FileManager.default.fileExists(atPath: $0.key) }
+                if let why = apBoardGitChanged(rec, liveCommon: live, liveCommonIno: live.flatMap(apGitStat), liveWorkIno: rec.workGitDir.flatMap(apGitStat), workTreeGone: wtGone) {
                     blocked[r] = why; continue   // 바꿔치기 의심: 이 저장소의 가지를 읽지 않는다(시트가 까닭을 보이고 단추를 잠근다)
                 }
                 pin[r] = apBoardRefsPin(rec, repoRoot: r)

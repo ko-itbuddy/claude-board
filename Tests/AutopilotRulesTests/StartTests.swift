@@ -45,6 +45,16 @@ private let settingsRows: [SettingsRow] = [
         let p = apStartSettings(project: o(a.0), past: o(a.1))
         #expect("\(p.from) \(p.model ?? "nil") \(p.week.map { "\($0)" } ?? "nil") \(p.five.map { "\($0)" } ?? "nil")" == a.2)
     }
+
+    @Test("설정 줄 안내 글: 어디서 온 값인지·바꿨는지", arguments: [
+        ("default", false, "이어 갈 지난 실행도, 프로젝트 설정에 남긴 값도 없어 기본값입니다. 그 자리에서 바꿉니다."),   // 2026-11-05 진짜 claude 실행: 전에는 지난 실행 글
+        ("past", false, "지난 실행의 실행 설정을 그대로 잇습니다. 그 자리에서 바꿉니다."),
+        ("project", false, "프로젝트 설정에 저장된 값입니다. 그 자리에서 바꿉니다."),
+        ("default", true, "바꾼 값은 이 출발에 쓰고, 출발하면 프로젝트 설정에 남깁니다(다음 출발의 기본값)."),
+    ])
+    func 안내글(_ a: (String, Bool, String)) {
+        #expect(apStartSettingsNote(from: a.0, edited: a.1) == a.2)
+    }
 }
 
 // MARK: - 승격 차례 바꾸기
