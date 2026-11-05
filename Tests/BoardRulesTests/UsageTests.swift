@@ -70,6 +70,17 @@ private let realistic = #"""
 private let fiveOnly = #"{"five_hour":{"utilization":42,"resets_at":"2026-10-28T10:50:00Z"}}"#
 private let fiveOnlyLimits = [L("5h", "5시간", 42, 1_793_184_600_000)]
 private let realisticLimits = [L("5h", "5시간", 5, msFive), L("7d", "주간 · 전체", 13, msWeek), L("7d-Fable", "주간 · Fable", 0, msFable)]
+// 2026-11 실제 응답 모양(5시간 한도가 없는 요금제, Ultra) — five_hour 가 null, limits 에 session 이 없다(장난감 값, 쓰는 필드만)
+private let realisticNoFive = #"""
+{"five_hour":null,
+ "seven_day":{"utilization":25.0,"resets_at":"2026-11-05T07:00:00.191505+00:00"},
+ "seven_day_opus":null,
+ "limits":[
+  {"kind":"weekly_all","percent":25,"resets_at":"2026-11-05T07:00:00.191505+00:00","scope":null,"is_active":true},
+  {"kind":"weekly_scoped","percent":0,"resets_at":"2026-11-05T07:00:00+00:00","scope":{"model":{"id":null,"display_name":"Fable"},"surface":null},"is_active":false}
+ ]}
+"""#
+private let realisticNoFiveLimits = [L("7d", "주간 · 전체", 25, 1_793_862_000_191), L("7d-Fable", "주간 · Fable", 0, 1_793_862_000_000)]
 
 // MARK: - 사용량 API 응답 해석
 
@@ -120,9 +131,12 @@ private let parseRows: [ParseRow] = [
     .init(note: "weekly_scoped 의 utilization 은 보지 않는다(percent 만)", json: #"""
           {"five_hour":{"utilization":1},"limits":[{"kind":"weekly_scoped","utilization":50,"scope":{"model":{"display_name":"Opus"}}}]}
           """#, expected: [L("5h", "5시간", 1)]),
-    .init(note: "five_hour 없음 → 실패", json: #"{"seven_day":{"utilization":13}}"#, expected: nil),
-    .init(note: "five_hour 가 null → 실패", json: #"{"five_hour":null,"seven_day":{"utilization":13}}"#, expected: nil),
-    .init(note: "five_hour 가 객체가 아님 → 실패", json: #"{"five_hour":5}"#, expected: nil),
+    .init(note: "2026-11 실제 응답 모양(Ultra, five_hour null) — 5시간 없이 주간 전체·모델별 주간", json: realisticNoFive, expected: realisticNoFiveLimits),
+    .init(note: "five_hour 없음 → 5시간 없이 주간만으로 성공(3.2.5 까지는 실패)", json: #"{"seven_day":{"utilization":13}}"#, expected: [L("7d", "주간 · 전체", 13)]),
+    .init(note: "five_hour 가 null(5시간 한도가 없는 요금제) → 주간만으로 성공(3.2.5 까지는 실패)", json: #"{"five_hour":null,"seven_day":{"utilization":13}}"#,
+          expected: [L("7d", "주간 · 전체", 13)]),
+    .init(note: "five_hour 가 객체가 아니면 5시간만 빠짐 — 다른 한도가 없으면 푼 한도가 없어 실패", json: #"{"five_hour":5}"#, expected: nil),
+    .init(note: "five_hour 가 객체가 아니어도 주간이 풀리면 성공", json: #"{"five_hour":5,"seven_day":{"utilization":13}}"#, expected: [L("7d", "주간 · 전체", 13)]),
     .init(note: "JSON 아님 → 실패", json: "not json", expected: nil),
     .init(note: "JSON 배열 → 실패", json: "[]", expected: nil),
     .init(note: "빈 글자 → 실패", json: "", expected: nil),
@@ -161,7 +175,7 @@ private let parseRows: [ParseRow] = [
 ]
 
 @Suite("사용량: 응답 해석") struct UsageParseTests {
-    @Test("five_hour 가 있고 푼 한도가 하나 이상이어야 성공, 항목마다 숫자가 아니면 그 항목만 뺀다", arguments: parseRows)
+    @Test("five_hour 는 있을 때만 5시간으로 보이고, 푼 한도가 하나 이상이어야 성공, 항목마다 숫자가 아니면 그 항목만 뺀다", arguments: parseRows)
     func 표(_ row: ParseRow) {
         #expect(parseUsage(Data(row.json.utf8))?.map(L.init) == row.expected)
     }
@@ -279,7 +293,10 @@ private let cacheRows: [CacheRow] = [
     .init(note: "깨진 캐시 + 10초 전 → 적용하지 않고, 믿을 캐시가 없는 것과 같게 받는다", modified: -10, content: "{\"five_", cached: nil, fetch: true, read: true),
     .init(note: "깨진 캐시 + 120초 넘음 → 받는다", modified: -200, content: "garbage", cached: nil, fetch: true, read: true),
     .init(note: "깨진 캐시 + 받는 중 → 받지 않는다", modified: -10, content: "garbage", fetching: true, cached: nil, fetch: false, read: true),
-    .init(note: "five_hour 없는 캐시 → 적용하지 않고 받는다", modified: -30, content: #"{"seven_day":{"utilization":1}}"#, cached: nil, fetch: true, read: true),
+    .init(note: "five_hour 없는 캐시(주간만) → 적용하고 받지 않는다(3.2.5 까지는 적용하지 않고 받았다)", modified: -30, content: #"{"seven_day":{"utilization":1}}"#,
+          cached: [L("7d", "주간 · 전체", 1)], fetch: false, read: true),
+    .init(note: "five_hour 가 null 인 캐시(2026-11 Ultra 실제 꼴) → 적용하고 받지 않는다", modified: -30, content: realisticNoFive, cached: realisticNoFiveLimits,
+          fetch: false, read: true),
     .init(note: "빈 한도 캐시(푼 한도 없음) + 10초 전 → 깨진 캐시와 같게 받는다", modified: -10, content: #"{"five_hour":{"utilization":null}}"#,
           cached: nil, fetch: true, read: true),
     .init(note: "수정 시각은 있으나 내용을 못 읽음(그 사이 지워짐) → 적용 없이 받는다", modified: -30, content: nil, cached: nil, fetch: true, read: true),

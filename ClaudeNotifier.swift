@@ -2,6 +2,7 @@
 // 사용법: claude-notifier --title T --subtitle S --body B [--kind done|wait] [--summary waiting=1,working=2,idle=3]
 //        [--sound Glass] [--duration 10] [--activate <bundle id>] [--session <세션 id>]
 //        [--position center|top-left|top-right|bottom-left|bottom-right]
+// --activate 를 주면 그 앱(보드)이 떠 있을 때만 띄운다. 떠 있지 않으면 창 없이 바로 끝난다
 import AppKit
 
 struct Options {
@@ -453,6 +454,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             exit(0)
         }
     }
+}
+
+// 보드(--activate 의 앱)가 떠 있지 않으면 띄우지 않는다 — 보드를 끈 동안은 알림을 받지 않는다(이슈 #48).
+// 슬롯 파일을 잡기 전(AppDelegate 를 만들기 전)에 끝낸다. --activate 가 없으면 예전처럼 늘 띄운다.
+// notify.py 는 설치판 com.claude.board 를 넘기므로 시험 빌드 보드만 떠 있으면 뜨지 않는다
+let boardApp = parseOptions().activate
+if !boardApp.isEmpty, NSRunningApplication.runningApplications(withBundleIdentifier: boardApp).isEmpty {
+    exit(0)
 }
 
 let app = NSApplication.shared

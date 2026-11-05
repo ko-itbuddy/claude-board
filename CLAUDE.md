@@ -56,7 +56,7 @@ macOS CI `.github/workflows/rules.yml` 이 hook·보드 규칙 파일이 바뀐 
 
 ```
 Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_id>.json ──> ClaudeBoard (1초마다 읽음), board-tui.py
-                 └─> notify.py ──> claude-notifier 패널을 분리 프로세스로 띄움 (Stop·Notification 때)
+                 └─> notify.py ──> claude-notifier 패널을 분리 프로세스로 띄움 (Stop·Notification 때, 보드가 떠 있을 때만 — 패널이 확인)
 ```
 
 - `hooks.py` 의 `HOOKS` 표가 이벤트 11개를 `state.py <working|waiting|idle|ended|subagent>` / `notify.py <stop|notification>` 에 연결해 `~/.claude/settings.json` 에 넣는다.
@@ -203,7 +203,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
   `Misses.swift`(판정 놓침 신호 `APMissSignal`·`apUnitMisses`·`apPrepMisses`·`apDiscardedUnit`·요약 `apMissDigest`, 세트 이어 쓰기 조건 `apSetRewrite`·세션 글 `apRevisePrompt`·결과 검사 `apReviseCheck`, 판정 차이 `apJudgeChanges`·`apScenarioTextChanges`),
   `Records.swift`(기록 저장소 표 꼴 판 1 `apRecordsSchemaV1`(엔진에서 옮김)·판 2 `judge_misses`·판 올리기 `apRecordsSteps`). 포트 `APProbeWorkspace`(진짜 어댑터 엔진 `ProbeTrees`). 시험 `CritiqueTests`(가짜 작업 트리·결과 폴더 표, 옛 판 1 저장소를 SQLite 로 열어 판 2 로 올리는 시험, 대소문자·NFD·설정 파일 반례 줄).
   `Checks.swift` 에 출력 끝 `apOutputTail`·미리 돌리기 카드 `apPrerunCard`(엔진에서 옮김). 포트 `APToolProbe`·`APJudgeRunner`(진짜 어댑터 엔진 `EngineToolProbe`·`Engine.JudgeRunner`, `sandbox-exec -f` 로 감쌈). 시험 `ScenariosTests`(가짜 어댑터 표·프로필 골든)·`JudgeMoveTests`(옮기기 전 식 대조).
-  6단계 ⑫-6(여러 실행 함께 돌리기): `Stopline.swift`(엔진 stoplineGate 에서 옮긴 멈출 선 판정 `apStoplineWait`·퍼센트 꼴 사용량 `apUsageFromPercent`·`apISODate`, 옮기기 덤프 같음),
+  6단계 ⑫-6(여러 실행 함께 돌리기): `Stopline.swift`(엔진 stoplineGate 에서 옮긴 멈출 선 판정 `apStoplineWait`·퍼센트 꼴 사용량 `apUsageFromPercent`·`apISODate`, 옮기기 덤프 같음. 2026-11 부터 5시간은 있을 때만: 5시간 한도가 없는 요금제(Ultra)의 `five_hour` null 은 주간만 읽고, 5시간 칸을 보일까 `apShowFiveHour`),
   `Multirun.swift`(사용률 읽을 곳 `apUsageSteps`(설치판은 stream → 캐시 → API 그대로, 시험 빌드는 장난감 파일 `usage_path` → stream 이거나 stream → 캐시, API 없음), 멈출 선 자리 `APSlot`·`apSlotDecide`(지금 주간 사용률 + 다른 실행 자리의 쓰지 않은 %p 를 그 실행의 선과 견줌, 먼저 기다린 실행에 차례, 15분 지난 자리 지움)·`apTakeSlot`·`apBeatSlot`·`apReleaseSlot`·`apSlotSize`,
   같은 경로 자리 `APClaim`·`apClaimPaths`(한 transaction: 겹치고 살아 있으면 거부, 남은 자리는 치우고 잡음)·`apClaimAlive`·`apPathOverlap`(접은 경로, 같거나 안)·`apClaimKeys`·`apClaimBusyText`, 잠긴 저장소 다시 하기 `apBusyRetryDelay`),
   `Records.swift` 판 3(`path_claims`·`stopline_slots`). 포트 `APSlotBook`·`APClaimBook`(진짜 어댑터 엔진 `EngineSlotBook`·`EngineClaimBook`, 기록 저장소 BEGIN IMMEDIATE 한 transaction, 출발 전 확인은 읽기만 하는 `ReadOnlyClaimBook`)·`APClaimProbe`(엔진 `EngineClaimProbe`: run.json·엔진 pid 명령줄·LaunchAgent·출발 명령 pid).
@@ -250,7 +250,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
   도는 엔진은 단위 판정 뒤·건너뛴 뒤·끝 정리 때 실행 폴더에 보고서(`report.html`·`units/<n>/report.html`)를 AutopilotRules 틀로 직접 그린다(보드 창이 꺼져 있어도, 모델 0). SwiftPM 실행 타깃 `ClaudeAutopilot`(언어 모드 5, `AutopilotRules` 에 기댐)이고 한 파일이라 최상위 실행문이 있다.
   보드 앱 밖에서 LaunchAgent(KeepAlive)로 돌고, 출발 때 실행 폴더 `pinned/` 에 고정한 자기 사본과 설정(`frozen.json`, 해시는 LaunchAgent 인자)으로 돈다. 모델 세션은 Claude Code 샌드박스(`--settings`)·고른 환경 변수·`--setting-sources project,local` 로 띄운다.
   build-board.sh 는 보드와 같은 `swift build` 결과의 `ClaudeAutopilot` 을, make-dmg.sh 는 두 아키텍처 결과를 `lipo` 로 합쳐 앱 `Contents/MacOS/claude-autopilot` 에 싣는다(앱보다 먼저 서명). 설계·실측은 `docs/자율주행/설계.md`·`진행 상황.md`.
-- `ClaudeNotifier.swift` — 알림 패널. 인자는 파일 머리 주석 참고. 여러 패널이 동시에 뜨면 슬롯 파일로 자리를 나눈다. `--session` 을 받으면 누를 때 보드에 `focus` 동작을 알린다.
+- `ClaudeNotifier.swift` — 알림 패널. 인자는 파일 머리 주석 참고. `--activate` 의 앱(notify.py 는 설치판 `com.claude.board`)이 떠 있지 않으면 창·슬롯 없이 바로 끝난다(이슈 #48 — 보드를 끈 동안은 알림 없음, 판단이 패널에 있어 hook 공유 표 `hook-table/` 밖). 여러 패널이 동시에 뜨면 슬롯 파일로 자리를 나눈다. `--session` 을 받으면 누를 때 보드에 `focus` 동작을 알린다.
 - `board-tui.py` — 터미널판 보드(`claude-board-tui`).
 - `AppIcon.swift` — 앱 아이콘 PNG(iconset 이름 규칙)를 인자로 준 폴더에 그린다. 결과 `AppIcon.icns` 는 저장소에 커밋되어 있다.
 - `ClaudeStatus.swift` — 예전 메뉴 막대 앱. 어떤 빌드 스크립트도 빌드하지 않는다.
@@ -267,7 +267,8 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
 - 설치 경로는 두 가지다: `packaging/install.sh`(curl 설치·업데이트, 보드의 업데이트 단추도 이것을 실행)와 dmg 안의 pkg(`pkg/scripts/postinstall` → `user-setup.sh`). 둘 다 사용자 설정은 앱 안의 `user-setup.sh` 가 맡는다.
   `install.sh` 차례: 받기·서명 확인 → 보드와의 관계 `board_relation`(조상의 설치된 보드 바로 아래가 탭의 `login` 이면 `tab`, 아니면 `updater`(보드 → `bash -c`), 조상에 없으면 `outside`) → `outside` 이고 보드가 떠 있으면 바꿔 끼우기 전에 지금 깔린 앱으로 `--action quit -` 을 보내 정상 종료를 청한다(`ask_board_quit`: 5초 안에 `asking` 이 없으면 요청을 모르는 옛 보드라 3단계에서 `pkill`, 있으면 꺼질 때까지 10분까지 기다리고 `cancel` 이면 아무것도 바꾸지 않고 멈춤) → 바꿔 끼우기 → `updater` 는 `pkill -a`(보드가 이미 확인 창을 거침), `outside` 는 남은 것 `pkill -x` → `user-setup.sh` 가 LaunchAgent 를 `bootout`·`bootstrap` 해 새 앱을 띄운다. `tab` 이면 보드를 끄지 않고 `CLAUDE_BOARD_KEEP_RUNNING` 으로 `user-setup.sh` 의 `launchctl`·`open` 도 건너뛴다(LaunchAgent 로 뜬 보드는 `bootout` 이 확인 없이 끄고, 그 안에서 돌던 설치도 함께 끊긴다).
 - 저장소 `suhojang/claude-board` 와 릴리스 파일 이름 `ClaudeBoard.zip`·`install.sh`·`VERSION` 은 `release.sh`·`install.sh`·`Sources/ClaudeBoard/AppUpdate.swift`(`releaseRepo`) 가 함께 쓴다 — 이름을 바꾸면 이미 설치된 앱의 업데이트가 깨진다.
-- `install.sh` 는 서명 인증서의 SHA1(`CERT_SHA1`)을 고정해 확인한다. 인증서를 바꾸면 기존 사용자의 업데이트가 거부되고 Ghostty 제어 권한을 다시 묻는다.
+- `install.sh` 는 서명 인증서의 SHA1(`CERT_SHA1`)을 고정해 확인한다. 업데이트 단추는 새 릴리스의 install.sh 를 받으므로 인증서를 바꾸면 같은 릴리스에서 `CERT_SHA1` 도 새 지문으로 바꾼다(옛 지문이 남으면 업데이트가 거부된다). 사용자 Mac 은 Ghostty 제어 권한을 다시 묻는다.
+  3.2.6(2026-11-03)에서 배포 Mac 포맷으로 개인 키를 잃어 한 번 바꿨다 — 개인 키는 로그인 키체인에만 있으니 포맷 전에 p12 로 내보내 둔다.
 
 ## 저장소 관례
 

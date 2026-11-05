@@ -16,17 +16,27 @@ public func apISODate(_ s: String?) -> Double? {
 }
 
 // 사용량 API 응답·보드와 상태줄이 함께 쓰는 캐시(/tmp/.claude-usage-cache.json) 꼴({five_hour:{utilization 84.0, resets_at}, seven_day:{…}}) →
-// 엔진 run.json usage 꼴({at, from, five_hour 0.84, five_hour_resets, seven_day, seven_day_resets}). 퍼센트를 비율로 맞춘다. five_hour 가 없으면 nil
+// 엔진 run.json usage 꼴({at, from, five_hour 0.84, five_hour_resets, seven_day, seven_day_resets}). 퍼센트를 비율로 맞춘다.
+// 2026-11(5시간은 있을 때만): 5시간 한도가 없는 요금제(Ultra)는 five_hour 가 null 로 온다(보드 parseUsage 3.2.7 과 같은 까닭). 객체인 창만 넣고 없는 창은 칸을 넣지 않는다.
+// 두 창 모두 사용률(utilization)을 읽지 못하면 nil(사용률을 모름). 그 전에는 five_hour 객체가 없으면 nil 이라 Ultra 계정에서 사용률을 늘 몰랐다
 public func apUsageFromPercent(_ j: [String: Any], from: String, at: Double) -> [String: Any]? {
-    guard let five = j["five_hour"] as? [String: Any] else { return nil }
     var u: [String: Any] = ["at": (at * 1000).rounded() / 1000, "from": from]
-    if let v = apStopNum(five["utilization"]) { u["five_hour"] = v / 100 }
-    if let r = apISODate(five["resets_at"] as? String) { u["five_hour_resets"] = r }
-    if let seven = j["seven_day"] as? [String: Any] {
-        if let v = apStopNum(seven["utilization"]) { u["seven_day"] = v / 100 }
-        if let r = apISODate(seven["resets_at"] as? String) { u["seven_day_resets"] = r }
+    var read = false
+    for key in ["five_hour", "seven_day"] {
+        guard let w = j[key] as? [String: Any] else { continue }
+        if let v = apStopNum(w["utilization"]) { u[key] = v / 100; read = true }
+        if let r = apISODate(w["resets_at"] as? String) { u[key + "_resets"] = r }
     }
-    return u
+    return read ? u : nil
+}
+
+// 5시간 칸(사용률 막대·멈출 선 고르기·status 줄)을 보일까 — 사용률을 읽었는데(known) 5시간 값이 없으면 그 계정은 5시간 한도가 없는 요금제라 숨긴다.
+// 아직 읽지 못했으면 지금처럼 보인다(모름). 멈출 선 설정의 five_hour 값은 그대로 남는다(5시간 한도가 있는 계정으로 바꾸면 다시 본다)
+public func apShowFiveHour(known: Bool, hasFive: Bool) -> Bool { !known || hasFive }
+// run.json usage 꼴로 — 주간이나 5시간 사용률 가운데 하나라도 수면 읽은 것
+public func apShowFiveHour(usage: [String: Any]?) -> Bool {
+    let five = apStopNum(usage?["five_hour"]) != nil
+    return apShowFiveHour(known: five || apStopNum(usage?["seven_day"]) != nil, hasFive: five)
 }
 
 // 엔진 when() 과 같은 꼴("M월 d일 HH:mm", 한국어)
@@ -47,6 +57,7 @@ public struct APStoplineWait: Equatable, Sendable {
 
 // 새 단위를 시작해도 되는가(엔진 stoplineGate 의 판정). usage 는 run.json usage 꼴(비율, nil 이면 사용률을 모름), stopline 은 고정 설정의 멈출 선
 // ({seven_day 0.80, five_hour 0.95} 이 기본). 초기화 시각이 지난 창은 0 으로 본다. 주간이 먼저, 그다음 5시간. 넘으면 초기화 시각(지났거나 없으면 10분 뒤) + 2분까지.
+// usage 에 5시간 칸이 없으면(5시간 한도가 없는 요금제, apUsageFromPercent) 5시간 선은 보지 않고 주간 선만 본다(2026-11, 판정은 그 전과 같음).
 // 사용률을 모르면 10분 뒤 다시. 시작해도 되면 nil
 public func apStoplineWait(usage: [String: Any]?, stopline: [String: Any], now t: Double, tz: TimeZone) -> APStoplineWait? {
     let l7 = apStopNum(stopline["seven_day"]) ?? 0.80, l5 = apStopNum(stopline["five_hour"]) ?? 0.95
