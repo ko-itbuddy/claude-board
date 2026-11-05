@@ -795,7 +795,9 @@ func scanHarness(_ folders: [String]) -> HarnessScan {
 func harnessFolders(_ cwds: [String]) -> [String] {
     var out: [String] = []
     for c in cwds {
-        let top = safeGit(["rev-parse", "--show-toplevel"], cwd: c).trimmingCharacters(in: .whitespacesAndNewlines)
+        // 뿌리는 git 자리 확인(prepGit)으로(보안 검토 고침, 다듬기 ⑬-2). 출발 전 확인을 지난 뒤라 걸린 저장소는 없다 — 걸리면 그 폴더 그대로
+        let g = prepGit(c)
+        let top = g.block == nil ? g.top ?? "" : ""
         let f = top.hasPrefix("/") && isDir(top) ? canonical(top) : c
         if !out.contains(f) { out.append(f) }
     }
@@ -5677,7 +5679,10 @@ final class ProbeTrees: APProbeWorkspace {
     }
     func repo(_ n: Int) -> String? {
         guard orig.indices.contains(n - 1), let c = orig[n - 1]["cwd"] as? String, isDir(c) else { return nil }
-        return gitOut(["rev-parse", "--show-toplevel"], cwd: c).flatMap { $0.hasPrefix("/") ? canonical($0) : nil }
+        // 저장소 뿌리는 git 이 찾게 두지 않고 git 자리 확인(prepGit)을 지난 뿌리만(보안 검토 고침, 다듬기 ⑬-2 — rev-parse 는 확인하지 않은 .git 을 고를 수 있다)
+        let g = prepGit(c)
+        guard g.block == nil, let t = g.top else { return nil }
+        return canonical(t)
     }
     func basePoint(_ r: String) -> String? {
         seededRepo(f, r)?.head ?? baseBranch(f, r).flatMap { headOf(r, "refs/heads/" + $0) } ?? headOf(r, "HEAD")
