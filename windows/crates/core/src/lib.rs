@@ -16,6 +16,7 @@ pub mod place;
 pub mod proc;
 pub mod quote;
 pub mod state;
+pub mod test_claude;
 pub mod text;
 
 /// 세션 기록·hook 입력처럼 모양이 느슨한 JSON 객체. 키 순서를 지킨다(`preserve_order`).

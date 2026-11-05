@@ -95,7 +95,7 @@ impl Board {
             account_paths,
             updater: Mutex::new(Updater::new()),
             auto: Mutex::new(AutoSwitch::default()),
-            autopilot: Mutex::new(AutopilotReader::new(crate::autopilot::default_root())),
+            autopilot: Mutex::new(AutopilotReader::new(claude_board_core::paths::autopilot_root(false))),
             terminals: Mutex::new(Terminals::default()),
             claude_version: Mutex::new((f64::NEG_INFINITY, None)),
             wt_pids: Mutex::new(None),

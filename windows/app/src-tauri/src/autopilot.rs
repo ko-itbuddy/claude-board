@@ -17,7 +17,7 @@ use std::time::SystemTime;
 use claude_board_autopilot::model::{from_slice, to_pretty_json, ControlFile, ControlRequest, Num, Ordered, QueueFile, QueueUnit, Run, RunFile, Slot, UnitProgress, UnitProgressFile};
 use claude_board_autopilot::rules::control::{board_can_control, run_ended};
 use claude_board_core::envs::{EnvChoice, EnvKind};
-use claude_board_core::{clock, fileio, paths};
+use claude_board_core::{clock, fileio};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tauri::State;
@@ -41,23 +41,6 @@ fn can_send(action: &str, state: &str) -> bool {
         "resume" => paused,
         _ => true,
     }
-}
-
-/// 실행 데이터 뿌리 — macOS `~/Library/Application Support/Claude Board[ Dev]/autopilot` 의 Windows 대응
-/// (`%LOCALAPPDATA%\Claude Board[ Dev]\autopilot`). 4.3 의 `core::paths::autopilot_root` 와 같은 자리여야 한다.
-/// `CLAUDE_BOARD_HOME` 을 준 시험·개발 실행은 가짜 홈 아래 `AppData\Local` 을 쓴다.
-fn autopilot_root(dev: bool) -> PathBuf {
-    let local = if paths::overridden() {
-        paths::home().join("AppData").join("Local")
-    } else {
-        std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()).map(PathBuf::from).unwrap_or_else(|| paths::home().join("AppData").join("Local"))
-    };
-    local.join(if dev { "Claude Board Dev" } else { "Claude Board" }).join("autopilot")
-}
-
-/// 보드가 쓰는 실제 판의 뿌리.
-pub fn default_root() -> PathBuf {
-    autopilot_root(false)
 }
 
 // ── 뷰 (스냅샷 `autopilot`) ─────────────────────────
@@ -217,7 +200,7 @@ pub struct AutopilotReader {
 }
 
 impl AutopilotReader {
-    /// `root` 는 `autopilot_root(false)`. 실행 폴더는 그 아래 `runs\<id>\`
+    /// `root` 는 `claude_board_core::paths::autopilot_root(false)`. 실행 폴더는 그 아래 `runs\<id>\`
     pub fn new(root: PathBuf) -> Self {
         Self { runs_dir: root.join("runs"), caches: HashMap::new(), reads: 0 }
     }
