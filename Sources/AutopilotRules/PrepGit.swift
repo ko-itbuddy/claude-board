@@ -12,7 +12,7 @@
 //     저장소·임시 폴더 안을 가리키는 include 를 막는다(엔진 configIncludes 와 같은 범위 꼴, 10단 상한).
 //  ⑤ 하위 모듈(색인 gitlink·.gitmodules)이 있으면 막는다(엔진 start 가 출발하지 않는 것과 같음). 색인을 못 읽으면 닫힌 쪽.
 // 보안 검토 고침(같은 날): 고른 폴더 위의 다른 저장소 작업 트리, .git 파일이 가리키는 git 폴더가 임시·작업 트리 안·자율주행 작업 트리 자리이거나
-// 떨어진 git 폴더 꼴, 저장소 설정의 filter 명령(git-lfs 표준 글 밖)도 막는다(재현: 보드의 git status 가 그 자리 설정의 clean filter 를 돌림).
+// 떨어진 git 폴더 꼴, 저장소 설정과 include 로 끌어온 설정의 filter 명령(git-lfs 표준 글 밖)도 막는다(재현: 보드의 git status 가 그 자리 설정의 clean filter 를 돌림).
 // 막으면 그 저장소에서 git 을 더 돌리지 않고(보드가 저장소 줄에 까닭) 출발 준비를 멈춘다. 통과하면 읽기에 박을 env(GIT_DIR·GIT_WORK_TREE)를 준다.
 // 파일 시스템·git 은 포트(APPrepGitWorld)로만 본다 — 진짜 어댑터는 보드, 가짜는 Tests/AutopilotRulesTests/PrepGitTests
 import Foundation
@@ -179,9 +179,11 @@ public func apPrepGitCheck(_ path: String, world: APPrepGitWorld, records: [Stri
                 return "저장소 설정(\(apPrepShortPath(file, home: home)))에 core.fsmonitor 명령(\(v.count > 60 ? String(v.prefix(60)) + "…" : v))이 있어"
             }
             // 보안 검토 고침 3: filter 드라이버의 명령(clean·smudge·process)은 보드의 git status 가 바뀐 듯한 파일을 견줄 때 돌린다(재현) — git-lfs 표준 글만 받는다.
+            // 보안 검토 고침 4: include 로 끌어온 파일(범위 밖이어도)의 filter 도 같다(재현) — 뿌리 파일만이 아니라 지나는 모든 파일에서 본다.
+            // core.fsmonitor 는 보드 git 의 -c core.fsmonitor=false 가 끌어온 파일 것까지 덮어 돌지 않으므로(재현 안 됨) 저장소 자체 파일에서만 막는다.
             // diff.external·diff.*.textconv·core.pager·core.sshCommand 는 보드가 돌리는 git(ls-files·cat-file·symbolic-ref·for-each-ref·status·rev-list)이 부르지 않는다(재현 안 됨)
-            if root, k.hasPrefix("filter."), k.hasSuffix(".clean") || k.hasSuffix(".smudge") || k.hasSuffix(".process"), !(apLFSFilter[k] == e.value) {
-                return "저장소 설정(\(apPrepShortPath(file, home: home)))에 filter 명령(\(k))이 있어"
+            if k.hasPrefix("filter."), k.hasSuffix(".clean") || k.hasSuffix(".smudge") || k.hasSuffix(".process"), !(apLFSFilter[k] == e.value) {
+                return "\(root ? "저장소 설정" : "git 설정")(\(apPrepShortPath(file, home: home)))에 filter 명령(\(k))이 있어"
             }
             guard k == "include.path" || (k.hasPrefix("includeif.") && k.hasSuffix(".path")), let v = e.value, !v.isEmpty else { continue }
             let p = v == "~" ? home : v.hasPrefix("~/") ? home + v.dropFirst(1) : v.hasPrefix("/") ? v : dir + "/" + v
