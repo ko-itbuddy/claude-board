@@ -185,6 +185,11 @@ private let rows: [PrepGitRow] = [
     .init(note: "보안 검토 고침 4: include 로 끌어온 범위 밖 파일의 filter 명령도 막음(보드 status 가 돌림, 전에는 뿌리 파일만 봄)", path: "/w/a", build: { f in
         f.repo("/w/a"); f.cfg("/w/a/.git/config", [("include.path", "~/team.cfg")]); f.cfg("/h/team.cfg", [("filter.z.clean", "/w/plant.sh")])
     }, top: "/w/a", block: "git 설정(~/team.cfg)에 filter 명령(filter.z.clean)이 있어"),
+    .init(note: "보안 검토 고침 5: ~<사용자>/ 꼴 include 는 git 이 그 사용자 홈으로 풀어 우리 풀이와 달라 막음(전에는 상대 경로로 읽어 통과)", path: "/w/a", build: { f in
+        f.repo("/w/a"); f.cfg("/w/a/.git/config", [("include.path", "~toy/team.cfg")]); f.cfg("/h/team.cfg", [("filter.z.clean", "/w/plant.sh")])
+    }, top: "/w/a", block: "git 설정 include 경로(~toy/team.cfg)를 git 과 같게 풀 수 없어"),
+    .init(note: "보안 검토 고침 5: %(prefix) 꼴 include 도 막음", path: "/w/a", build: { f in f.repo("/w/a"); f.cfg("/w/a/.git/config", [("includeif.gitdir:/w/.path", "%(prefix)/etc/x.cfg")]) },
+          top: "/w/a", block: "git 설정 include 경로(%(prefix)/etc/x.cfg)를 git 과 같게 풀 수 없어"),
     .init(note: "include 가 10단 넘게 겹치면 막음", path: "/w/a", build: { f in
         f.repo("/w/a"); f.cfg("/w/a/.git/config", [("include.path", "/o/c0")])
         for i in 0..<12 { f.cfg("/o/c\(i)", [("include.path", "/o/c\(i + 1)")]) }
@@ -210,8 +215,13 @@ private let rows: [PrepGitRow] = [
         #expect(got.top == r.top)
         #expect(got.block == r.block)
         if let g = r.gitDir { #expect(got.gitDir == g) }
-        if r.block == nil, let t = r.top, let g = r.gitDir { #expect(got.pin == ["GIT_DIR=" + g, "GIT_WORK_TREE=" + t]) }
+        if r.block == nil, let t = r.top, let g = r.gitDir { #expect(got.pin == ["GIT_DIR=" + g, "GIT_WORK_TREE=" + t] + apPrepGitReadEnv) }
         if r.block != nil { #expect(got.pin.isEmpty, "막은 저장소는 박을 env 도 없다") }
+    }
+
+    @Test("보안 검토 고침 6: 읽기 env 는 늦은 받기를 끄고 전송 프로토콜을 막는다")
+    func 읽기env() {
+        #expect(apPrepGitReadEnv == ["GIT_NO_LAZY_FETCH=1", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=protocol.allow", "GIT_CONFIG_VALUE_0=never"])
     }
 
     @Test("막을 때 줄 글")
