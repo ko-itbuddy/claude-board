@@ -68,7 +68,7 @@ fn running_scenario(sid: &str) -> Scenario {
         "claude_runs": 1, "checks": [], "denials": [],
         "procs": {"claude_pid": 48250, "ctime": 123.5},
     });
-    s.file("units/1/engine.json", &serde_json::to_string_pretty(&engine).unwrap());
+    s.file("/private/r1/unit-1.json", &serde_json::to_string_pretty(&engine).unwrap());
     s
 }
 
@@ -860,6 +860,24 @@ fn crash_resume_restart_message() {
     assert!(last.contains("\tabnormal\t") && last.contains("prev=running"), "{last}");
     // 시계는 이어서 센다
     assert!(w.unit_json(1)["active_sec"].as_f64().unwrap() >= 50.0);
+}
+
+/// 모델이 쓸 수 있는 공개 사본(`units/1/engine.json`)을 바꿔도 엔진은 읽지 않는다. 엔진 전용 사본의 pid 만 끝낸다
+#[test]
+fn tampered_public_unit_file_is_ignored() {
+    let mut s = running_scenario(SID);
+    let forged = json!({
+        "unit": 1, "id": "u1", "title": "첫째", "status": "running", "phase": "model",
+        "session_id": "forged", "session_started": true, "procs": {"claude_pid": 1, "ctime": 1.0},
+    });
+    s.file("units/1/engine.json", &serde_json::to_string_pretty(&forged).unwrap());
+    let w = s.build();
+    w.env.push_spawn(ChildScript::ok_turn(0.5));
+    assert_eq!(w.run(), RunExit::Finished(RunState::Done));
+    assert_eq!(*w.reaped.lock().unwrap(), vec![(48250, Some(123.5))], "공개 사본의 pid 를 끝내지 않는다");
+    assert_eq!(w.env.launches()[0].session, SessionStart::Resume(SID.to_string()));
+    assert_eq!(w.files.json("/private/r1/unit-1.json").unwrap()["status"], "done", "엔진 전용 사본이 끝 상태");
+    assert_eq!(w.unit_json(1)["status"], "done", "공개 사본은 엔진이 덮어쓴 보드용 사본");
 }
 
 #[test]

@@ -284,7 +284,7 @@ impl<'p> Engine<'p> {
     /// 직전 엔진이 남긴 claude 를 끝낸다(한 세션을 두 프로세스가 함께 쓰지 않게)
     fn kill_leftovers(&mut self, n: usize) {
         let known = self.unit.as_ref().is_some_and(|(m, _)| *m == n)
-            || matches!(self.read_capped(&self.unit_dir(n).join("engine.json")), Ok(Some(_)));
+            || matches!(self.read_capped(&self.unit_state_path(n)), Ok(Some(_)));
         if !known {
             return;
         }

@@ -1420,7 +1420,7 @@ claude-autopilot unregister (<실행 폴더> | --all) [--dev] [--json]
 | `run.json` · `pinned/frozen.json` | `exec_env: {key, kind, distro?, sandbox?, unsandboxed_ok?: {at, by}}` | 고른 실행 환경. `key` 는 `wsl:<배포판>` · `pwsh` · `powershell` · `cmd` · `git-bash`, `kind` 는 그 종류 id. `sandbox` 는 출발 확인이 정한 값(WSL 참, 네이티브 거짓). `unsandboxed_ok` 는 네이티브에서 샌드박스 없음에 동의한 시각과 주체다 |
 
 - 기록 저장소는 `private\records.sqlite` 판 4(WAL, busy 8회 재시도, 보다 새로운 판은 내리지 않고 거절). 단위 폴더 `units\<n>\`(진행 `engine.json` · 결과 `result.json` 등), `events.jsonl`, `control.json`(엔진이 읽고 늘 지운다), `pinned\`, `engine.log`.
-- `pinned\frozen.json` 의 해시는 `start` 가 작업 스케줄러 인자로 넘긴다. 엔진이 해시가 다름을 보면 멈춘다(`FROZEN_CHANGED_REASON`). 모델이 쓸 수 있는 `units\<n>\engine.json` 은 엔진이 읽는다(§12.9).
+- `pinned\frozen.json` 의 해시는 `start` 가 작업 스케줄러 인자로 넘긴다. 엔진이 해시가 다름을 보면 멈춘다(`FROZEN_CHANGED_REASON`). 엔진이 판단에 쓰는 단위 진행은 엔진 전용 폴더의 `private\<실행 id>\unit-<n>.json` 이다. 모델이 쓸 수 있는 `units\<n>\engine.json` 은 엔진이 매번 덮어쓰는 보드용 사본이라 읽지 않는다(`procs` 의 pid 를 끝내고 `session_id` 로 이어 열기 때문에, 모델이 바꿀 수 있는 파일을 믿지 않는다).
 - 작업 스케줄러 이름은 `com.claude.board[.dev].autopilot.<실행 id>.<실행 폴더 정규 경로(소문자) sha256 앞 4바이트>`, run.json `launchd_label` 에 둔다. 이름만 같은 부모 폴더 다른 실행이 서로 지우지 않게 하는 해시다.
 
 ### 12.4 실행 환경 선택과 동의 (`rules/env_policy`)
@@ -1482,7 +1482,6 @@ macOS LaunchAgent(`KeepAlive` · `RunAtLoad`)의 대응이다. COM 이 아니라
 - 없는 것: 시작 준비 화면(명령줄로만 시작, `run.json` · `queue.json` 을 손으로 적는다) · 합치기 / 승격 화면 · Jira · Notion · Figma 연결 · 보고서 · 터미널로 이어받기(`takeover` · `giveback`) · 여러 실행 자리(슬롯) · 비밀 어댑터(`adapters/secrets`).
 - 배포: 엔진 실행 파일 둘은 릴리스 zip · setup.exe · `install.ps1` 에 들어 있지 않다(소스에서 `cargo build --release -p claude-board-autopilot`). 들어가면 §8.1 과 `packaging` 을 고친다.
 - 규칙은 손으로 옮긴 것이라 macOS 쪽 변경은 `ported.rs` 가 실패해야 알 수 있다. `apAddEvidence`(밖에서 읽은 근거를 비밀값을 가려 기록)는 옮기지 않았다.
-- 모델이 쓸 수 있는 `units\<n>\engine.json` 을 엔진이 읽는다. 사람 없이 진짜로 돌리기 전에 닫아야 하는 문이다.
 - 네이티브 거부 규칙은 도구 권한만 막는다. Bash 를 허용한 실행에서 Bash 가 하는 일은 막지 못한다. 네이티브 환경은 샌드박스 없음에 동의한 실행에만 쓴다.
 - 확인하지 못한 것(`untested:`): 실제 WSL 배포판에서의 WSL 어댑터와 WSL 샌드박스, 실제 Windows 10, 로그오프 · 재부팅 뒤 작업 스케줄러가 엔진을 다시 띄우는 것, 오래 사람 없이 도는 실행, 진짜 claude 로 단위 하나가 끝까지 통과하는 것.
 - 엔진이 죽은 뒤 다시 뜨기까지는 최대 약 60초다(작업 스케줄러 반복 간격의 한계, macOS 10초).

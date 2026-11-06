@@ -316,10 +316,10 @@ impl<'p> Engine<'p> {
             return Ok(None);
         };
         let n = i + 1;
-        match self.read_capped(&self.unit_dir(n).join("engine.json")) {
-            Ok(Some(v)) => Ok(Some((n, parse(v, &format!("units/{n}/engine.json"))?))),
+        match self.read_capped(&self.unit_state_path(n)) {
+            Ok(Some(v)) => Ok(Some((n, parse(v, &format!("unit-{n}.json"))?))),
             Ok(None) => Ok(None),
-            Err(e) => Err(RunExit::LoadFailed(format!("units/{n}/engine.json 을(를) 읽지 못했습니다: {e}"))),
+            Err(e) => Err(RunExit::LoadFailed(format!("unit-{n}.json 을(를) 읽지 못했습니다: {e}"))),
         }
     }
 
@@ -444,6 +444,12 @@ impl<'p> Engine<'p> {
         self.cfg.dir.join("units").join(n.to_string())
     }
 
+    /// 엔진이 판단에 쓰는 단위 진행 파일. 엔진 전용 폴더에 있어 모델 세션이 쓰지도 읽지도 못한다.
+    /// `units/<n>/engine.json` 은 보드가 그리는 사본일 뿐이라 엔진은 그것을 읽지 않는다
+    fn unit_state_path(&self, n: usize) -> PathBuf {
+        self.cfg.private_dir.join(format!("unit-{n}.json"))
+    }
+
     /// 고정 설정의 단위 정의(없으면 queue)
     fn def(&self, n: usize) -> &Ordered<QueueUnit> {
         self.frozen.units.get().and_then(|u| u.get(n - 1)).unwrap_or(&self.queue[n - 1])
@@ -543,7 +549,7 @@ impl<'p> Engine<'p> {
     // ── 단위 engine.json (메모리 사본) ──
 
     fn load_unit_file(&self, n: usize) -> UnitProgressFile {
-        let found = self.read_capped(&self.unit_dir(n).join("engine.json")).ok().flatten();
+        let found = self.read_capped(&self.unit_state_path(n)).ok().flatten();
         found.and_then(|v| serde_json::from_value(v).ok()).unwrap_or_else(|| {
             let mut e = UnitProgress::default();
             e.unit.set(n as u32);
@@ -569,7 +575,7 @@ impl<'p> Engine<'p> {
         }
     }
 
-    /// 메모리 사본을 units/<n>/engine.json 에 쓴다
+    /// 메모리 사본을 엔진 전용 `unit-<n>.json` 에 쓰고, 보드가 그리는 `units/<n>/engine.json` 에 같은 글을 복사한다
     fn save_unit(&mut self, n: usize) {
         let now = self.now();
         let value = match self.unit.as_mut() {
@@ -581,6 +587,9 @@ impl<'p> Engine<'p> {
         };
         match value {
             Ok(v) => {
+                if let Err(err) = self.p.files.write_json(&self.unit_state_path(n), &v) {
+                    self.warn("unit-state", &err);
+                }
                 if let Err(err) = self.p.files.write_json(&self.unit_dir(n).join("engine.json"), &v) {
                     self.warn("engine.json", &err);
                 }
@@ -649,7 +658,7 @@ impl<'p> Engine<'p> {
         }
         let engs: Vec<Option<UnitProgressFile>> = (1..=self.queue.len())
             .map(|n| {
-                let v = self.read_capped(&self.unit_dir(n).join("engine.json")).ok().flatten()?;
+                let v = self.read_capped(&self.unit_state_path(n)).ok().flatten()?;
                 serde_json::from_value(v).ok()
             })
             .collect();
