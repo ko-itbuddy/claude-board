@@ -3,6 +3,7 @@
 // 명령 인자 이름은 Rust 명령의 매개변수 이름과 같아야 한다(Tauri 가 camelCase ↔ snake_case 로 맞춘다)
 import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { AutopilotEnvOption, StartRequest } from "./autopilot/startForm";
 import type {
   AccountLoginPayload, AutopilotAction, EnvChoice, BoardSide, ConfirmShutdownPayload, DriveStep, MascotKind, NotifyOptions, NotifyPosition, OpenSessionPayload, PidTarget, RenameCheck, SessionAction,
   SettingsEventPayload, SettingsTransition, ShortcutOverride, Snapshot, State, TabEntry, TermFrame, TermId, TermInfo, TermSpec,
@@ -232,6 +233,21 @@ export function sessionAction(action: SessionAction, id: string, carryOn?: boole
 // 실패하면 reject 하므로 부른 쪽이 처리한다
 export function autopilotControl(runId: string, action: AutopilotAction): Promise<void> {
   return call("autopilot_control", { runId, action });
+}
+
+// 자율주행 시작 준비 — 이 PC 에서 고를 수 있는 실행 환경 목록(기본값 없음)
+export function autopilotEnvs(): Promise<AutopilotEnvOption[]> {
+  return call<AutopilotEnvOption[]>("autopilot_envs");
+}
+
+export interface AutopilotStartDone { runId: string; scheduled: boolean }
+
+// 시작 준비 화면의 출발 — 백엔드가 실행 폴더를 쓰고 `claude-autopilot start` 를 부른다.
+// 명령줄이 거절하면 reject 하고 그 글(여러 줄일 수 있다)이 Error 메시지로 온다
+export function autopilotStart(request: StartRequest): Promise<AutopilotStartDone> {
+  return call<AutopilotStartDone>("autopilot_start", { request }).catch((e) => {
+    throw e instanceof Error ? e : new Error(String(e));
+  });
 }
 
 // 보드가 안 떠 있던 동안 쌓인 "세션 열기" 요청을 모두 꺼낸다(오래된 것부터) — 처음 부르면 프런트엔드가 준비됐다는 표시도 된다.

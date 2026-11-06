@@ -6,6 +6,8 @@
   import { fade, fly, slide } from "svelte/transition";
   import { setBoardMini, setBoardWidth, toggleCollapsed } from "$lib/backend";
   import type { Group } from "$lib/types";
+  import AutopilotStartSheet from "$lib/autopilot/AutopilotStartSheet.svelte";
+  import { AutopilotStart } from "$lib/autopilot/start.svelte";
   import EdgeDock from "$lib/board/EdgeDock.svelte";
   import AutopilotLine from "$lib/board/AutopilotLine.svelte";
   import { orphanRuns } from "$lib/board/autopilotView";
@@ -338,6 +340,9 @@
   </div>
 </div>
 
+{#if AutopilotStart.shown}
+  <AutopilotStartSheet />
+{/if}
 <HintLayer />
 <TerminalNotice />
 <ShutdownList />

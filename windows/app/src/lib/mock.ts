@@ -3,6 +3,7 @@
 // 화면 대조용 시나리오(?scenario=mac1) — 파일은 저장소에 올리지 않는다(없으면 건너뜀)
 type Scenarios = { applyMac1?: (s: typeof S) => void; FROZEN_NOW?: number };
 const scenarios: Scenarios = Object.values(import.meta.glob("./mock-scenarios.ts", { eager: true }))[0] as Scenarios ?? {};
+import type { StartRequest } from "./autopilot/startForm";
 import type { Account, AutopilotAction, AutopilotRun, Brain, Group, Session, Snapshot, State, Sub, TermId, TermInfo, TermSpec } from "./types";
 
 const SEC = 1000;
@@ -414,6 +415,10 @@ export async function handle(cmd: string, a: Record<string, unknown>): Promise<u
       applyAutopilotControl(run, action);
       break;
     }
+    case "autopilot_envs":
+      return MOCK_AUTOPILOT_ENVS;
+    case "autopilot_start":
+      return mockAutopilotStart(a.request as StartRequest);
     case "switch_account": {
       const target = S.accounts.saved.find((x) => x.id === str("id"));
       if (!target) break;
@@ -728,6 +733,41 @@ class FakeTerm {
     new Uint8Array(frame, 8).set(bytes);
     this.emit(frame);
   }
+}
+
+// 자율주행 시작 준비의 실행 환경 목록(autopilot_envs) — WSL 만 샌드박스를 걸 수 있다
+const MOCK_AUTOPILOT_ENVS = [
+  { key: "wsl:Ubuntu", label: "WSL · Ubuntu", kind: "wsl", distro: "Ubuntu", sandboxCapable: true },
+  { key: "pwsh", label: "PowerShell 7", kind: "pwsh", distro: null, sandboxCapable: false },
+  { key: "powershell", label: "Windows PowerShell", kind: "powershell", distro: null, sandboxCapable: false },
+  { key: "cmd", label: "명령 프롬프트", kind: "cmd", distro: null, sandboxCapable: false },
+  { key: "git-bash", label: "Git Bash", kind: "git-bash", distro: null, sandboxCapable: false },
+];
+
+// 출발 — 실제 명령줄의 거절을 흉내 낸다: 동의 없는 네이티브 환경, 이름에 missing 이 든 작업 폴더. 통과하면 도는 실행 하나를 더한다
+function mockAutopilotStart(request: StartRequest): { runId: string; scheduled: boolean } {
+  const key = String((request.run.exec_env as { key?: string } | undefined)?.key ?? "");
+  const env = MOCK_AUTOPILOT_ENVS.find((e) => e.key === key);
+  const problems: string[] = [];
+  if (!env) problems.push("고른 실행 환경이 이 PC 에 없습니다.");
+  else if (!env.sandboxCapable && !request.acceptUnsandboxed) problems.push(`${env.label} 는 샌드박스를 걸 수 없는 환경입니다. 샌드박스 없이 돌리는 데 동의해야 출발합니다.`);
+  request.queue.forEach((u, i) => {
+    if (String(u.cwd).toLowerCase().includes("missing")) problems.push(`단위 ${i + 1}(${String(u.title)}): 작업 폴더(cwd)가 폴더가 아니거나 없습니다: ${String(u.cwd)}`);
+  });
+  if (problems.length > 0) throw new Error(problems.join("\n"));
+  const label = env?.label ?? key;
+  S.autopilot = [
+    autopilotRun(String(request.run.project_root), {
+      id: request.runId,
+      title: String(request.run.title),
+      state: "starting",
+      env: { key, label, sandbox: env?.sandboxCapable ?? false },
+      total: request.queue.length,
+      can: [],
+    }),
+    ...(S.autopilot ?? []),
+  ];
+  return { runId: request.runId, scheduled: true };
 }
 
 // 가짜 실행 환경 목록(list_envs) — WSL 한 개를 포함한다

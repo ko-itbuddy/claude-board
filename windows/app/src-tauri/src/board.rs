@@ -1019,6 +1019,8 @@ pub fn run(argv: Vec<String>, context: tauri::Context<tauri::Wry>) {
             session_action,
             crate::drive::drive_session,
             crate::autopilot::autopilot_control,
+            crate::autopilot::autopilot_envs,
+            crate::autopilot::autopilot_start,
             crate::drive::rename_check,
             crate::open_session::show_board,
             crate::open_session::take_open_session,
