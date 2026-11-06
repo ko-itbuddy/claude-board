@@ -559,6 +559,35 @@ mod windows {
         }
     }
 
+    /// Windows PowerShell 5.1 은 안 불러온 모듈의 cmdlet 을 처음 쓸 때 모듈 경로를 앞에서부터 훑어 그 cmdlet 을 내는 모듈을 자동으로 불러온다.
+    /// 모듈이 많고 분석 캐시가 없는 PC(GitHub 러너)에서는 이 훑기가 `Write-Output hello` 한 줄에 18~60초라 판정이 시간 초과로 끝났다.
+    /// 감싸개가 Utility·Management 를 이름으로 먼저 불러 두면 훑지 않는다 — 여기서는 모듈 경로 맨 앞에 `Test-Path` 를 내는 가짜 모듈을 두고,
+    /// 자동 불러오기가 일어났다면 `Test-Path` 가 가짜로 풀려 `DECOY` 가 찍히는 것으로 훑기가 일어났는지 시간과 무관하게 가른다
+    #[test]
+    fn powershell_judge_does_not_autoload_core_cmdlets_from_the_module_path() {
+        let Some(entry) = native_entries().into_iter().find(|e| e.choice.kind == EnvKind::PowerShell) else {
+            panic!("Windows PowerShell 5.1 은 어느 Windows 에나 있다");
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let decoy = dir.path().join("modules").join("Decoy");
+        std::fs::create_dir_all(&decoy).unwrap();
+        std::fs::write(decoy.join("Decoy.psm1"), "function Test-Path { 'DECOY' }\n").unwrap();
+        std::fs::write(
+            decoy.join("Decoy.psd1"),
+            "@{ RootModule='Decoy.psm1'; ModuleVersion='1.0'; GUID='6f6e3a0c-0b1e-4c3b-9a3e-1d2f3a4b5c6d'; FunctionsToExport=@('Test-Path'); CmdletsToExport=@(); AliasesToExport=@() }\n",
+        )
+        .unwrap();
+        let system_modules = PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot")).join(r"System32\WindowsPowerShell\v1.0\Modules");
+        let module_path = format!("{};{}", dir.path().join("modules").display(), system_modules.display());
+
+        let env = NativeEnv::new(entry.choice.clone(), entry.program.clone()).unwrap();
+        let mut run = check_run(dir.path(), "autoload", r"Test-Path C:\", Duration::from_secs(60));
+        run.env.push(("PSModulePath".into(), module_path));
+        let out = env.run_check(&run).unwrap();
+        assert_eq!(out.exit, Some(0), "{out:?}");
+        assert!(out.tail.contains("True") && !out.tail.contains("DECOY"), "자동 불러오기가 모듈 경로를 훑었다: tail={:?}", out.tail);
+    }
+
     #[test]
     fn run_check_runs_in_the_given_cwd_and_rejects_empty_commands() {
         let dir = tempfile::tempdir().unwrap();
@@ -576,11 +605,16 @@ mod windows {
         let script = dir.path().join("big.cjs");
         std::fs::write(&script, "process.stdout.write('가'.repeat(5000) + 'END');").unwrap();
         let env = NativeEnv::new(choice(EnvKind::Cmd), comspec()).unwrap();
-        // node 출력은 UTF-8 이라 cmd 의 OEM 풀이와 맞지 않는다 — 크기만 본다(4000 바이트 = 한글 1333자 + 'END')
+        // node 출력은 UTF-8 이라 cmd 의 OEM 풀이와 맞지 않는다 — 크기만 본다. 제품이 지키는 것은 "원본 바이트 끝 TAIL_BYTES(4000) 개"이고,
+        // OEM 풀이는 바이트마다 글자 하나(코드 페이지 437 이면 UTF-8 3바이트가 글자 3개, 글자마다 UTF-8 로 2~3바이트)라 글 길이(바이트)는 4000 을 넘을 수 있다.
+        // 그래서 글자 수로 센다: 4000 바이트에서는 4000 글자를 넘을 수 없다
         let cmd = format!("\"{}\" \"{}\"", node().display(), script.display());
         let out = env.run_check(&check_run(dir.path(), "big", &cmd, Duration::from_secs(60))).unwrap();
         assert_eq!(out.exit, Some(0));
-        assert!(!out.tail.is_empty() && out.tail.len() < 8000, "tail 길이 {}", out.tail.len());
+        let raw = std::fs::metadata(dir.path().join("evidence").join("big").join("output.log")).unwrap().len();
+        assert!(raw > TAIL_BYTES, "출력 로그가 tail 한도보다 커야 자르는 경로를 시험한다: {raw}");
+        let chars = out.tail.chars().count();
+        assert!(chars > 0 && chars as u64 <= TAIL_BYTES, "tail 은 원본 끝 {TAIL_BYTES} 바이트(글자 {TAIL_BYTES} 개 이하)여야 한다: 글자 {chars}, 바이트 {}", out.tail.len());
 
         // git-bash 가 있으면 UTF-8 풀이로 글자까지 본다
         if let Some(bash) = native_entries().into_iter().find(|e| e.choice.kind == EnvKind::GitBash) {

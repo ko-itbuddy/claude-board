@@ -19,9 +19,15 @@ pub const WSL_KILL_AFTER_SEC: u64 = 20;
 pub const WSL_OUTER_GRACE: Duration = Duration::from_secs(30);
 /// PowerShell 판정 감싸개. 통과 규칙: 잡히지 않은 오류면 1, 마지막 네이티브 명령의 종료 코드가 0 이 아니면 그 값,
 /// 오류 기록(비종료 오류 포함)이 하나라도 있으면 1, 아니면 0. 줄 끝은 LF 로 고정한다(`concat!` — 저장소 줄바꿈 설정에 기대지 않는다)
+///
+/// 맨 앞에서 `Microsoft.PowerShell.Utility`·`Management` 를 이름으로 불러 둔다. Windows PowerShell 5.1 은 아직 안 불러온 모듈의 cmdlet(`Write-Output`·`Test-Path` …)을
+/// 처음 쓸 때 모듈 경로의 모든 모듈을 훑어 찾는데(자동 불러오기), 엔진은 `PSModulePath`·`PSModuleAnalysisCachePath` 를 물려주지 않으므로
+/// 모듈이 많고 분석 캐시가 없는 PC 에서는 이 훑기가 수십 초 걸린다(GitHub 러너 windows-latest 실측: `Write-Output hello` 한 줄이 18~60초).
+/// 이름으로 불러오면 훑지 않고 첫 일치를 바로 쓴다(0.5초). 실패해도 무시하고 오류 기록을 비운다(`$Error.Clear()`)
 pub const POWERSHELL_WRAPPER: &str = concat!(
     "$ErrorActionPreference = 'Continue'\n",
     "$ProgressPreference = 'SilentlyContinue'\n",
+    "try { Import-Module Microsoft.PowerShell.Utility, Microsoft.PowerShell.Management -ErrorAction Stop } catch { }\n",
     "try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }\n",
     "$global:LASTEXITCODE = 0\n",
     "$Error.Clear()\n",

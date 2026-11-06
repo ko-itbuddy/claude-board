@@ -25,7 +25,7 @@ use crate::rules::env_policy::{check_invocation, sandbox_block, OutputCodec};
 /// `claude --version` 을 기다리는 시간
 const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 /// 판정 출력 끝부분으로 돌려주는 바이트 수
-pub(crate) const TAIL_BYTES: u64 = 4000;
+pub const TAIL_BYTES: u64 = 4000;
 
 /// claude 를 어디서 찾을까
 #[derive(Debug, Clone)]

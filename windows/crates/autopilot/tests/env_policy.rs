@@ -237,7 +237,19 @@ fn wrapper_text_is_lf_and_ends_with_newline() {
     assert!(!POWERSHELL_WRAPPER.contains('\r'));
     assert!(POWERSHELL_WRAPPER.ends_with("exit 0\n"));
     assert!(POWERSHELL_WRAPPER.starts_with("$ErrorActionPreference = 'Continue'\n"));
-    assert_eq!(POWERSHELL_WRAPPER.lines().count(), 14);
+    assert_eq!(POWERSHELL_WRAPPER.lines().count(), 15);
+}
+
+#[test]
+fn wrapper_preloads_core_modules_before_any_other_cmdlet() {
+    // 5.1 은 안 불러온 모듈의 cmdlet 을 처음 쓸 때 모듈 경로를 다 훑는다(러너에서 18~60초). 감싸개가 쓰는 cmdlet(New-Object·Out-String)과
+    // 판정 명령이 흔히 쓰는 Utility·Management 를 훑기 없이 이름으로 먼저 불러 둬야 한다
+    let import = POWERSHELL_WRAPPER.find("Import-Module Microsoft.PowerShell.Utility, Microsoft.PowerShell.Management").expect("Import-Module 줄");
+    let first_autoload_cmdlet = ["New-Object", "Out-String", "Write-Output", "Test-Path"].iter().filter_map(|c| POWERSHELL_WRAPPER.find(c)).min().expect("감싸개가 쓰는 cmdlet");
+    assert!(import < first_autoload_cmdlet, "모듈을 불러오기 전에 cmdlet 을 쓰면 자동 불러오기가 모듈 경로를 훑는다");
+    // 불러오기 실패는 판정 결과를 바꾸지 않는다: 잡아 넘기고, 뒤의 $Error.Clear() 가 기록을 비운다
+    assert!(POWERSHELL_WRAPPER.contains("-ErrorAction Stop } catch { }"));
+    assert!(import < POWERSHELL_WRAPPER.find("$Error.Clear()").unwrap());
 }
 
 #[test]
