@@ -86,12 +86,16 @@ function Install-ClaudeBoard {
     $Version = ($Version -replace '^windows-v', '') -replace '^v', ''
     if (-not $Version) {
       Write-Host '1) 최신 버전 찾기'
-      $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases?per_page=30" -UserAgent $UserAgent -UseBasicParsing
-      foreach ($r in $releases) {
-        if (-not $r.draft -and -not $r.prerelease -and "$($r.tag_name)".StartsWith('windows-v')) {
-          $Version = "$($r.tag_name)".Substring(9)
-          break
+      # macOS 판 릴리스가 앞에 많이 쌓여도 찾도록 쪽을 넘긴다(쪽당 100개, 최대 5쪽, 덜 찬 쪽이 마지막)
+      for ($page = 1; $page -le 5 -and -not $Version; $page++) {
+        $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases?per_page=100&page=$page" -UserAgent $UserAgent -UseBasicParsing
+        foreach ($r in $releases) {
+          if (-not $r.draft -and -not $r.prerelease -and "$($r.tag_name)".StartsWith('windows-v')) {
+            $Version = "$($r.tag_name)".Substring(9)
+            break
+          }
         }
+        if (($releases | Measure-Object).Count -lt 100) { break }
       }
       if (-not $Version) { throw 'Windows 판 릴리스(windows-v...)를 찾지 못했습니다.' }
     } else {
