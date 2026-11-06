@@ -265,6 +265,15 @@
 
         <div class="list" bind:this={listEl}>
           {#if snap.groups.length === 0}
+            <!-- 경로 카드가 하나도 없어도(세션 기록이 없는 순수 자율주행 실행) 실행 줄은 보인다 -->
+            {#if orphans.length}
+              <div class="orphans">
+                <div class="orphansHead">경로 카드가 없는 자율주행</div>
+                {#each orphans as run (run.id)}
+                  <AutopilotLine {run} now={snap.now} />
+                {/each}
+              </div>
+            {/if}
             <!-- 창이 낮으면 안내가 줄어들며 잘린다 — 줄지 않으면 보드가 넘쳐 아래 투명도 슬라이더가 밀려난다 -->
             <div class="empty" transition:fade={{ duration: 200 }}>
               <span class="moon"><Icon name="moon-zzz" size={30} /></span>
