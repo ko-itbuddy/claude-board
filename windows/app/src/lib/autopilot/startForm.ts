@@ -164,9 +164,9 @@ export function validateDraft(draft: StartDraft, envs: AutopilotEnvOption[]): Pr
     if (u.title.trim() === "") add(at("title"), `단위 ${n}: 제목을 쓰세요.`);
     else if (u.title.trim().length > MAX_TITLE) add(at("title"), `단위 ${n}: 제목은 ${MAX_TITLE}자 이하로 쓰세요.`);
     if (u.goal.trim() === "") add(at("goal"), `단위 ${n}: 목표(모델에게 처음 보낼 글)를 쓰세요.`);
-    else if (u.goal.length > MAX_GOAL) add(at("goal"), `단위 ${n}: 목표는 ${MAX_GOAL}자 이하로 쓰세요.`);
+    else if (u.goal.trim().length > MAX_GOAL) add(at("goal"), `단위 ${n}: 목표는 ${MAX_GOAL}자 이하로 쓰세요.`);
     if (u.check.trim() === "") add(at("check"), `단위 ${n}: 판정 명령을 쓰세요. 통과 여부를 이 명령의 종료 코드로 가릅니다.`);
-    else if (u.check.length > MAX_CHECK) add(at("check"), `단위 ${n}: 판정 명령은 ${MAX_CHECK}자 이하로 쓰세요.`);
+    else if (u.check.trim().length > MAX_CHECK) add(at("check"), `단위 ${n}: 판정 명령은 ${MAX_CHECK}자 이하로 쓰세요.`);
     if (parseCap(u.minutes) === "bad") add(at("minutes"), `단위 ${n}: 시간 상한은 0보다 큰 숫자(분)로 쓰세요.`);
     if (parseCap(u.usd) === "bad") add(at("usd"), `단위 ${n}: 비용 상한은 0보다 큰 숫자(USD)로 쓰세요.`);
   });

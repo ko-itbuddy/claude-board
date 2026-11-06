@@ -546,7 +546,14 @@ fn run_cli(exe: &Path, args: &[String], timeout: Duration) -> Result<CliOutput, 
             Err(e) => return Err(format!("출발 명령을 기다리지 못했습니다: {e}")),
         }
     };
-    let text = |h: JoinHandle<Vec<u8>>| String::from_utf8_lossy(&h.join().unwrap_or_default()).into_owned();
+    // 명령줄이 끝났는데 손자 프로세스가 파이프를 쥐고 있으면 read_to_end 가 끝나지 않는다. 2초만 기다리고 버린다
+    let drain_by = Instant::now() + Duration::from_secs(2);
+    let text = |h: JoinHandle<Vec<u8>>| {
+        while !h.is_finished() && Instant::now() < drain_by {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if h.is_finished() { String::from_utf8_lossy(&h.join().unwrap_or_default()).into_owned() } else { String::new() }
+    };
     Ok(CliOutput { code: status.code().unwrap_or(-1), stdout: text(out), stderr: text(err) })
 }
 
@@ -1069,6 +1076,442 @@ mod start_tests {
         let why = start_run(&t.0.join("none.exe"), &t.runs(), &request(), Duration::from_secs(5)).unwrap_err();
         assert!(why.contains("띄우지 못했습니다"), "{why}");
         assert!(!t.runs().join("20261106-090503-toy").exists());
+    }
+
+    // ── 가장자리: 크기·실행 id·동의 기록·명령줄 실패·정리·동시 출발 ──
+
+    fn with_prompt_bytes(n: usize) -> StartRequest {
+        let mut req = request();
+        req.queue[0]["prompt"] = json!("x".repeat(n));
+        req
+    }
+
+    fn request_size(req: &StartRequest) -> usize {
+        serde_json::to_vec(&req.run).unwrap().len() + serde_json::to_vec(&req.queue).unwrap().len()
+    }
+
+    /// 요청 크기 경계: run+queue 를 JSON 으로 쓴 바이트가 정확히 한도면 통과, 1바이트 넘으면 거절. 글자 수가 아니라 바이트로 센다
+    #[test]
+    fn request_size_limit_is_exact_and_counts_bytes() {
+        let base = request_size(&with_prompt_bytes(0));
+        assert_eq!(validate_request(&with_prompt_bytes(MAX_REQUEST_BYTES - base)), Ok(()), "한도 바이트 정확히");
+        assert_eq!(request_size(&with_prompt_bytes(MAX_REQUEST_BYTES - base)), MAX_REQUEST_BYTES);
+        refused(&with_prompt_bytes(MAX_REQUEST_BYTES - base + 1), "너무 큽니다");
+        // 한글은 글자 하나가 3바이트다 — 글자 수로 세면 이 요청은 통과해 버린다
+        let mut korean = request();
+        korean.queue[0]["prompt"] = json!("가".repeat(MAX_REQUEST_BYTES / 3));
+        refused(&korean, "너무 큽니다");
+        // run 쪽이 커도 같다
+        let mut big_run = request();
+        big_run.run["title"] = json!("t".repeat(MAX_REQUEST_BYTES));
+        refused(&big_run, "너무 큽니다");
+        // 단위 30개가 각자 작아도 합이 한도를 넘으면 거절
+        let mut spread = request();
+        spread.queue = (0..MAX_UNITS).map(|i| json!({"id": format!("u{i}"), "prompt": "y".repeat(MAX_REQUEST_BYTES / MAX_UNITS)})).collect();
+        refused(&spread, "너무 큽니다");
+    }
+
+    #[test]
+    fn unit_count_boundaries() {
+        for count in [1, MAX_UNITS] {
+            let req = StartRequest { queue: vec![json!({"id": "u"}); count], ..request() };
+            assert_eq!(validate_request(&req), Ok(()), "{count}개");
+        }
+        for count in [0, MAX_UNITS + 1, 1000] {
+            let req = StartRequest { queue: vec![json!({"id": "u"}); count], ..request() };
+            refused(&req, "단위는");
+        }
+        // 여럿 중 하나만 객체가 아니어도 거절
+        let mut mixed = vec![json!({"id": "a"}), json!({"id": "b"}), json!(null)];
+        refused(&StartRequest { queue: mixed.clone(), ..request() }, "객체가 아닙니다");
+        mixed[2] = json!([]);
+        refused(&StartRequest { queue: mixed, ..request() }, "객체가 아닙니다");
+    }
+
+    /// 실행 id 표: 폴더 밖으로 나가거나 윈도우가 다르게 읽는 모양은 파일을 쓰기 전에 거절된다(명령줄도 부르지 않는다)
+    #[test]
+    fn run_id_table_is_refused_before_anything_is_written() {
+        let long_ok = "a".repeat(120);
+        let too_long = "a".repeat(121);
+        let bad = [
+            "", ".", "..", "...", "../x", "..\\x", "x/..", "a/b", "a\\b", "/abs", "\\abs", "\\\\server\\share", "C:\\x", "C:x", "C:", "x:y",
+            "a b", " a", "a ", "a\tb", "a\nb", "a\0b", "a*b", "a?b", "a\"b", "a<b", "a>b", "a|b", "a:b", "%TEMP%", "$HOME", "~", "한글", "a\u{ff0e}\u{ff0e}", "\u{2024}\u{2024}",
+            too_long.as_str(),
+        ];
+        for id in bad {
+            let t = Temp::new();
+            let req = StartRequest { run_id: id.to_string(), ..request() };
+            refused(&req, "실행 id");
+            // 존재하지 않는 명령줄을 줘서, 검사에 걸리지 않고 지나갔다면 "띄우지 못했습니다" 로 바뀐다
+            let why = start_run(&t.0.join("none.exe"), &t.runs(), &req, Duration::from_secs(5)).unwrap_err();
+            assert!(why.contains("실행 id") && !why.contains("띄우지"), "{id:?}: {why}");
+            assert!(!t.runs().exists(), "{id:?}: 실행 폴더의 부모까지 만들어졌다");
+        }
+        assert_eq!(validate_request(&StartRequest { run_id: long_ok, ..request() }), Ok(()), "120자는 통과");
+    }
+
+    /// 규칙은 통과하지만 윈도우가 따로 읽는 이름(장치 이름·끝 점)은 실제 폴더를 만들 때 정직하게 갈린다:
+    /// 실패하거나, 성공하면 그 이름 그대로의 폴더가 생겨야 한다(다른 이름의 폴더가 몰래 생기면 안 된다)
+    #[cfg(windows)]
+    #[test]
+    fn windows_special_names_either_fail_or_create_exactly_that_folder() {
+        for id in ["CON", "con", "NUL", "AUX", "PRN", "COM1", "LPT1", "NUL.txt", "con.json"] {
+            let t = Temp::new();
+            let req = StartRequest { run_id: id.to_string(), ..request() };
+            assert_eq!(validate_request(&req), Ok(()), "{id} 는 id 규칙을 통과한다");
+            match write_run_folder(&t.runs(), &req) {
+                Err(why) => assert!(!why.is_empty(), "{id}"),
+                Ok(dir) => {
+                    let names: Vec<String> = fs::read_dir(t.runs()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+                    assert_eq!(names, [id.to_string()], "{id}: 실제로 생긴 폴더 이름이 요청과 다르다 ({dir:?})");
+                    assert!(dir.join("run.json").is_file() && dir.join("queue.json").is_file(), "{id}");
+                    discard_run_folder(&dir);
+                }
+            }
+        }
+    }
+
+    /// KNOWN BUG(막아 둠): 끝이 점인 id("a.")는 `valid_run_id` 를 통과하지만 윈도우가 끝 점을 떼어 폴더 이름이 "a" 가 된다.
+    /// 그러면 명령줄은 `runs\a.` 로 id "a." 를, 보드는 폴더 이름으로 id "a" 를 보게 된다. 화면이 만드는 id 는 끝 점이 없어(`slug`) 일상에서는 안 나온다.
+    /// 고치려면 `crates/autopilot/src/cli.rs` 의 `valid_run_id` 가 끝 점(과 장치 이름)을 거절하면 된다. 확인: cargo test -- --ignored trailing_dot_run_id
+    #[cfg(windows)]
+    #[test]
+    fn trailing_dot_run_id_is_refused_or_creates_exactly_that_folder() {
+        for id in ["a.", "a..", "x.log."] {
+            let t = Temp::new();
+            let req = StartRequest { run_id: id.to_string(), ..request() };
+            if validate_request(&req).is_err() {
+                continue;
+            }
+            let dir = write_run_folder(&t.runs(), &req).unwrap();
+            let names: Vec<String> = fs::read_dir(t.runs()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+            assert_eq!(names, [id.to_string()], "{id}: 실제로 생긴 폴더 이름이 요청과 다르다 ({dir:?})");
+        }
+    }
+
+    /// 끝 점만 다른 두 id 는 윈도우에서 같은 폴더가 되므로 둘째는 '이미 있다' 로 거절돼야 하고, 먼저 쓴 파일은 그대로다
+    #[cfg(windows)]
+    #[test]
+    fn ids_differing_only_by_a_trailing_dot_cannot_both_start() {
+        let t = Temp::new();
+        let first = StartRequest { run_id: "same".to_string(), ..request() };
+        let dir = write_run_folder(&t.runs(), &first).unwrap();
+        let before = fs::read(dir.join("run.json")).unwrap();
+        let mut other = request();
+        other.run["title"] = json!("다른 제목");
+        let second = StartRequest { run_id: "same.".to_string(), run: other.run, ..request() };
+        match write_run_folder(&t.runs(), &second) {
+            Err(_) => {}
+            Ok(_) => panic!("같은 폴더로 읽히는 id 를 둘 다 받았다"),
+        }
+        assert_eq!(fs::read(dir.join("run.json")).unwrap(), before, "먼저 쓴 run.json 이 덮였다");
+    }
+
+    /// 동의 기록은 값이 무엇이든(null·false·0·빈 객체·진짜 기록) 있기만 하면 거절한다
+    #[test]
+    fn consent_marker_is_refused_whatever_its_value() {
+        for value in [json!(null), json!(false), json!(true), json!(0), json!(""), json!({}), json!([]), json!({"at": 1.0, "by": "board"})] {
+            let mut req = request();
+            req.run["exec_env"]["unsandboxed_ok"] = value.clone();
+            refused(&req, "동의 기록");
+            let t = Temp::new();
+            let why = start_run(&t.0.join("none.exe"), &t.runs(), &req, Duration::from_secs(5)).unwrap_err();
+            assert!(why.contains("동의 기록") && !why.contains("띄우지"), "{value}: {why}");
+            assert!(!t.runs().exists(), "{value}");
+        }
+        // 동의 표시가 없는 요청은 통과한다(거절이 exec_env 에 아무 키나 있다고 걸리는 것이 아니다)
+        let mut req = request();
+        req.run["exec_env"]["distro"] = json!("Ubuntu");
+        assert_eq!(validate_request(&req), Ok(()));
+        // exec_env 가 객체가 아니어도 이 검사가 죽지 않는다(그 모양은 명령줄이 거절한다)
+        for shape in [json!("pwsh"), json!(null), json!([1]), json!(5)] {
+            let mut req = request();
+            req.run["exec_env"] = shape;
+            assert_eq!(validate_request(&req), Ok(()));
+        }
+    }
+
+    #[test]
+    fn model_must_be_a_string_in_shape() {
+        for bad in [json!(5), json!(null), json!(true), json!(["opus"]), json!({"a": 1}), json!(" opus"), json!("opus "), json!("opus\n"), json!("OPUS")] {
+            let mut req = request();
+            req.run["model"] = bad.clone();
+            refused(&req, "모델");
+        }
+    }
+
+    /// 화면(TypeScript)이 보내는 모양과 이 쪽 역직렬화가 이름까지 같다: runId·run·queue·acceptUnsandboxed(camelCase)
+    #[test]
+    fn request_wire_names_match_the_screen() {
+        let wire = json!({"runId": "20261106-090503-toy", "run": {"model": "opus"}, "queue": [{"id": "u1"}], "acceptUnsandboxed": true});
+        let req: StartRequest = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!((req.run_id.as_str(), req.accept_unsandboxed, req.queue.len()), ("20261106-090503-toy", true, 1));
+        // 한 칸이라도 빠지거나 이름이 snake_case 면 읽지 못한다 — 어느 쪽이 이름을 바꿔도 조용히 기본값으로 가지 않는다
+        for key in ["runId", "run", "queue", "acceptUnsandboxed"] {
+            let mut missing = wire.clone();
+            missing.as_object_mut().unwrap().remove(key);
+            assert!(serde_json::from_value::<StartRequest>(missing).is_err(), "{key} 가 없는데 읽혔다");
+        }
+        let snake = json!({"run_id": "r", "run": {}, "queue": [], "accept_unsandboxed": true});
+        assert!(serde_json::from_value::<StartRequest>(snake).is_err());
+        let result = serde_json::to_value(StartDone { run_id: "r".into(), scheduled: true }).unwrap();
+        assert_eq!(result, json!({"runId": "r", "scheduled": true}));
+    }
+
+    #[test]
+    fn failure_text_edge_cases() {
+        let out = |code, stdout: &str, stderr: &str| CliOutput { code, stdout: stdout.to_string(), stderr: stderr.to_string() };
+        // 문자열이 아닌 항목은 건너뛴다
+        assert_eq!(failure_text(&out(1, r#"{"problems":[1,"가",null,"나",{"a":1}]}"#, "")), "가\n나");
+        // 전부 문자열이 아니면 표준 오류로
+        assert_eq!(failure_text(&out(1, r#"{"problems":[1,2]}"#, "오류")), "오류");
+        // problems 가 배열이 아니면 표준 오류로
+        assert_eq!(failure_text(&out(1, r#"{"problems":"한 줄"}"#, "오류")), "오류");
+        // 공백뿐인 표준 오류는 없는 것으로 보고 종료 코드를 쓴다
+        assert_eq!(failure_text(&out(7, "", " \r\n\t ")), "출발 명령이 실패했습니다(종료 코드 7).");
+        // 표준 출력 앞뒤 공백·줄바꿈은 무시하고 읽는다
+        assert_eq!(failure_text(&out(1, "\r\n  {\"problems\":[\"x\"]}  \r\n", "")), "x");
+        // 문제 글 안의 줄바꿈·따옴표·한글은 그대로 간다
+        assert_eq!(failure_text(&out(1, r#"{"problems":["a\nb \"q\" 한글"]}"#, "")), "a\nb \"q\" 한글");
+        // 음수·큰 종료 코드
+        assert!(failure_text(&out(-1, "", "")).contains("종료 코드 -1"));
+        assert!(failure_text(&out(i32::MAX, "", "")).contains(&i32::MAX.to_string()));
+    }
+
+    /// 가짜 명령줄(배치 파일) — 정해 둔 바이트를 표준 출력·표준 오류로 그대로 내보내고 정해 둔 종료 코드로 끝난다
+    #[cfg(windows)]
+    fn bytes_cli(t: &Temp, out: &[u8], err: &[u8], code: i32) -> PathBuf {
+        fs::write(t.0.join("out.bin"), out).unwrap();
+        fs::write(t.0.join("err.bin"), err).unwrap();
+        let path = t.0.join("bytes-cli.cmd");
+        fs::write(&path, format!("@echo off\r\ntype \"%~dp0out.bin\"\r\ntype \"%~dp0err.bin\" 1>&2\r\nexit /b {code}\r\n")).unwrap();
+        path
+    }
+
+    /// 표준 출력·표준 오류가 모두 비고 종료 코드만 0 이 아닐 때: 종료 코드를 알리고, 만든 폴더는 남기지 않는다
+    #[cfg(windows)]
+    #[test]
+    fn silent_failure_reports_the_exit_code_and_leaves_no_folder() {
+        for code in [1, 2, 255, 3010] {
+            let t = Temp::new();
+            let cli = bytes_cli(&t, b"", b"", code);
+            let why = start_run(&cli, &t.runs(), &request(), Duration::from_secs(20)).unwrap_err();
+            assert_eq!(why, format!("출발 명령이 실패했습니다(종료 코드 {code})."));
+            assert!(!t.runs().join("20261106-090503-toy").exists(), "코드 {code}");
+        }
+    }
+
+    /// 명령줄이 UTF-8 이 아닌 바이트를 내도 죽지 않고 글로 알린다(깨진 글자는 대체 문자로)
+    #[cfg(windows)]
+    #[test]
+    fn non_utf8_output_is_shown_lossily_not_a_panic() {
+        // 표준 오류만 깨짐
+        let t = Temp::new();
+        let cli = bytes_cli(&t, b"", b"bad \xff\xfe byte\r\n", 1);
+        let why = start_run(&cli, &t.runs(), &request(), Duration::from_secs(20)).unwrap_err();
+        assert!(why.starts_with("bad ") && why.contains('\u{fffd}') && why.ends_with("byte"), "{why:?}");
+        // 표준 출력의 JSON 문제 글 안에 깨진 바이트: 글은 살고 깨진 자리만 대체 문자
+        let t = Temp::new();
+        let cli = bytes_cli(&t, b"{\"problems\":[\"a\xffb\",\"ok\"]}", b"", 1);
+        let why = start_run(&cli, &t.runs(), &request(), Duration::from_secs(20)).unwrap_err();
+        assert_eq!(why, "a\u{fffd}b\nok");
+        // 표준 출력 전체가 JSON 이 아닌 바이트: 표준 오류도 없으면 종료 코드
+        let t = Temp::new();
+        let cli = bytes_cli(&t, b"\xff\xfe\xfd", b"", 4);
+        let why = start_run(&cli, &t.runs(), &request(), Duration::from_secs(20)).unwrap_err();
+        assert_eq!(why, "출발 명령이 실패했습니다(종료 코드 4).");
+        // 성공(0)인데 표준 출력이 깨졌거나 비었으면 예약 여부만 거짓으로 두고 성공으로 돌려준다
+        for out in [&b"\xff\xfe"[..], b"", b"not json", b"{\"scheduled\":\"yes\"}", b"{\"scheduled\":true"] {
+            let t = Temp::new();
+            let cli = bytes_cli(&t, out, b"", 0);
+            let done = start_run(&cli, &t.runs(), &request(), Duration::from_secs(20)).unwrap();
+            assert!(!done.scheduled, "{out:?}");
+            assert!(t.runs().join("20261106-090503-toy").join("run.json").is_file(), "성공이면 폴더가 남는다");
+        }
+    }
+
+    /// 표준 출력이 큰 명령줄(관을 비우지 않으면 멈추는 크기)도 끝난다
+    #[cfg(windows)]
+    #[test]
+    fn large_output_does_not_deadlock_the_pipe() {
+        let t = Temp::new();
+        let big = vec![b'x'; 2 << 20];
+        let cli = bytes_cli(&t, &big, &big, 1);
+        let started = Instant::now();
+        let why = start_run(&cli, &t.runs(), &request(), Duration::from_secs(60)).unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(30), "관이 가득 차 멈췄다");
+        assert!(why.len() >= 2 << 20, "표준 오류 전체가 글로 온다: {}", why.len());
+    }
+
+    /// 시간이 지나면 명령줄을 죽이고 곧바로 돌아온다 — 스크립트가 스스로 끝나기를 기다리지 않는다
+    #[cfg(windows)]
+    #[test]
+    fn timeout_returns_at_the_deadline_not_when_the_script_ends() {
+        let t = Temp::new();
+        let path = t.0.join("slow.cmd");
+        fs::write(&path, "@echo off\r\nping -n 7 127.0.0.1 >nul\r\necho reached > \"%~dp0reached.txt\"\r\n").unwrap();
+        let started = Instant::now();
+        let why = start_run(&path, &t.runs(), &request(), Duration::from_secs(1)).unwrap_err();
+        let took = started.elapsed();
+        assert!(took >= Duration::from_secs(1) && took < Duration::from_millis(4500), "{took:?}");
+        assert!(why.contains("1초") && why.contains("멈췄습니다"), "{why}");
+        assert!(!t.runs().join("20261106-090503-toy").exists(), "시간 초과면 쓴 폴더를 치운다");
+        assert!(!t.0.join("reached.txt").exists());
+    }
+
+    /// 명령줄이 이미 끝났는데 그가 띄운 손자 프로세스가 표준 출력을 쥐고 있으면, 출발이 그 손자가 끝날 때까지 돌아오지 못한다.
+    /// 시간 제한(START_TIMEOUT)은 `wait` 에만 걸려 있고 관을 비우는 `join` 에는 걸려 있지 않다.
+    /// 지금 명령줄은 작업 스케줄러에 등록만 하고 손자를 남기지 않아 실제로 일어나지는 않는다. 그래서 막아 두고(ignore) 사유를 남긴다.
+    /// 확인: cargo test -- --ignored grandchild_holding_the_pipe
+    #[cfg(windows)]
+    #[test]
+    fn grandchild_holding_the_pipe_does_not_outlive_the_deadline() {
+        let t = Temp::new();
+        let path = t.0.join("spawner.cmd");
+        fs::write(&path, "@echo off\r\nstart \"\" /b ping -n 9 127.0.0.1\r\nexit /b 0\r\n").unwrap();
+        let started = Instant::now();
+        let _ = start_run(&path, &t.runs(), &request(), Duration::from_secs(2));
+        assert!(started.elapsed() < Duration::from_secs(5), "손자가 관을 쥐어 {:?} 동안 돌아오지 못했다", started.elapsed());
+    }
+
+    /// 실패해도 보드가 쓴 두 파일만 치운다: 명령줄이 폴더에 만든 것·같은 부모의 다른 실행·사용자 파일은 그대로다
+    #[cfg(windows)]
+    #[test]
+    fn failure_cleanup_touches_only_the_two_files_the_board_wrote() {
+        let t = Temp::new();
+        // 부모 폴더에 이미 있던 것: 다른 실행 폴더와 사용자 파일
+        let other = write_run_folder(&t.runs(), &StartRequest { run_id: "older-run".to_string(), ..request() }).unwrap();
+        fs::write(other.join("events.jsonl"), "keep").unwrap();
+        fs::write(t.runs().join("notes.txt"), "mine").unwrap();
+        let older_run_json = fs::read(other.join("run.json")).unwrap();
+        // 명령줄이 자기 폴더 안에 pinned\ 를 만들고 실패한다
+        let cli = t.0.join("makes-files.cmd");
+        // start_args 는 ["start", dir, ...] 라 첫 인자는 'start' 다 — 배치에서 %2 가 폴더
+        fs::write(&cli, "@echo off\r\nmkdir \"%~2\\pinned\"\r\necho x > \"%~2\\pinned\\frozen.json\"\r\necho {\"problems\":[\"rejected\"]}\r\nexit /b 1\r\n").unwrap();
+        let why = start_run(&cli, &t.runs(), &request(), Duration::from_secs(20)).unwrap_err();
+        assert_eq!(why, "rejected");
+        let mine = t.runs().join("20261106-090503-toy");
+        assert!(!mine.join("run.json").exists() && !mine.join("queue.json").exists(), "보드가 쓴 두 파일은 치운다");
+        assert!(mine.join("pinned").join("frozen.json").is_file(), "명령줄이 만든 파일은 보드가 지우지 않는다");
+        assert_eq!(fs::read(other.join("run.json")).unwrap(), older_run_json);
+        assert_eq!(fs::read_to_string(other.join("events.jsonl")).unwrap(), "keep");
+        assert_eq!(fs::read_to_string(t.runs().join("notes.txt")).unwrap(), "mine");
+    }
+
+    /// 이미 있는 실행 폴더는 명령줄을 부르기 전에 거절하고, 그 폴더의 파일·정리는 건드리지 않는다
+    #[cfg(windows)]
+    #[test]
+    fn existing_folder_is_refused_without_calling_the_cli_or_cleaning_it() {
+        let t = Temp::new();
+        let existing = t.runs().join("20261106-090503-toy");
+        fs::create_dir_all(&existing).unwrap();
+        fs::write(existing.join("run.json"), "{\"user\":true}").unwrap();
+        fs::write(existing.join("queue.json"), "[]").unwrap();
+        let cli = fake_cli(&t, r#"{"ok":true}"#, 0);
+        let why = start_run(&cli, &t.runs(), &request(), Duration::from_secs(20)).unwrap_err();
+        assert!(why.contains("이미 있습니다"), "{why}");
+        assert!(!t.0.join("args.txt").exists(), "명령줄을 불렀다");
+        assert_eq!(fs::read_to_string(existing.join("run.json")).unwrap(), "{\"user\":true}");
+        assert_eq!(fs::read_to_string(existing.join("queue.json")).unwrap(), "[]");
+    }
+
+    /// 같은 id 로 동시에 출발하면 하나만 폴더를 얻고, 진 쪽은 이긴 쪽의 파일을 지우거나 덮지 않는다
+    #[test]
+    fn concurrent_starts_with_the_same_run_id_have_exactly_one_winner() {
+        for round in 0..5 {
+            let t = Temp::new();
+            let runs = t.runs();
+            let barrier = Arc::new(std::sync::Barrier::new(8));
+            let handles: Vec<_> = (0..8)
+                .map(|i| {
+                    let (runs, barrier) = (runs.clone(), barrier.clone());
+                    std::thread::spawn(move || {
+                        let mut req = request();
+                        req.run["title"] = json!(format!("스레드 {i}"));
+                        barrier.wait();
+                        write_run_folder(&runs, &req).map(|dir| (i, dir))
+                    })
+                })
+                .collect();
+            let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+            let winners: Vec<_> = results.iter().filter_map(|r| r.as_ref().ok()).collect();
+            assert_eq!(winners.len(), 1, "라운드 {round}: 이긴 쪽이 하나여야 한다 ({} 개)", winners.len());
+            for lost in results.iter().filter_map(|r| r.as_ref().err()) {
+                assert!(lost.contains("이미 있습니다"), "{lost}");
+            }
+            let (i, dir) = winners[0];
+            let run: Value = serde_json::from_slice(&fs::read(dir.join("run.json")).unwrap()).unwrap();
+            assert_eq!(run["title"], json!(format!("스레드 {i}")), "이긴 쪽의 run.json 이 아니다");
+            let queue: Value = serde_json::from_slice(&fs::read(dir.join("queue.json")).unwrap()).unwrap();
+            assert!(queue.is_array());
+        }
+    }
+
+    /// 다른 id 로 동시에 출발하면 모두 자기 폴더를 얻는다(서로 막지 않는다)
+    #[test]
+    fn concurrent_starts_with_different_run_ids_all_succeed() {
+        let t = Temp::new();
+        let runs = t.runs();
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let (runs, barrier) = (runs.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    let req = StartRequest { run_id: format!("r{i}"), ..request() };
+                    barrier.wait();
+                    write_run_folder(&runs, &req)
+                })
+            })
+            .collect();
+        for h in handles {
+            let dir = h.join().unwrap().unwrap();
+            assert!(dir.join("run.json").is_file() && dir.join("queue.json").is_file());
+        }
+    }
+
+    /// 부모(runs)가 폴더가 아니라 파일이면 부모를 못 만든다고 알리고 아무것도 지우지 않는다
+    #[test]
+    fn runs_parent_that_is_a_file_is_reported() {
+        let t = Temp::new();
+        fs::write(t.runs(), "i am a file").unwrap();
+        let why = write_run_folder(&t.runs(), &request()).unwrap_err();
+        assert!(why.contains("부모"), "{why}");
+        assert_eq!(fs::read_to_string(t.runs()).unwrap(), "i am a file");
+    }
+
+    /// 쓴 파일의 모양: 끝 줄바꿈이 있고, 임시 파일(.tmp 등)이 남지 않으며, 다시 읽으면 원래 값이다(한글·이모지·큰따옴표 포함)
+    #[test]
+    fn written_files_round_trip_unicode_and_leave_no_temp_files() {
+        let t = Temp::new();
+        let mut req = request();
+        req.run["title"] = json!("한글 \u{1F600} \"따옴표\" \\ 역슬래시 \n 줄바꿈");
+        req.queue[0]["prompt"] = json!("목표\r\n둘째 줄\t탭 \u{0007}");
+        let dir = write_run_folder(&t.runs(), &req).unwrap();
+        for name in ["run.json", "queue.json"] {
+            let bytes = fs::read(dir.join(name)).unwrap();
+            assert!(bytes.ends_with(b"\n"), "{name}");
+            assert!(!bytes.starts_with(&[0xef, 0xbb, 0xbf]), "{name}: BOM 이 붙었다");
+        }
+        let run: Value = serde_json::from_slice(&fs::read(dir.join("run.json")).unwrap()).unwrap();
+        let queue: Value = serde_json::from_slice(&fs::read(dir.join("queue.json")).unwrap()).unwrap();
+        assert_eq!(run, req.run);
+        assert_eq!(queue, Value::Array(req.queue.clone()));
+        let mut names: Vec<String> = fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        assert_eq!(names, ["queue.json", "run.json"], "임시 파일이 남았다");
+    }
+
+    /// 실행 폴더 경로에 공백이 있어도 명령줄이 한 인자로 받는다
+    #[cfg(windows)]
+    #[test]
+    fn run_folder_path_with_spaces_reaches_the_cli_as_one_argument() {
+        let t = Temp::new();
+        let cli = fake_cli(&t, r#"{"ok":true,"scheduled":true}"#, 0);
+        let runs = t.0.join("my runs dir");
+        start_run(&cli, &runs, &request(), Duration::from_secs(20)).unwrap();
+        let args = fs::read_to_string(t.0.join("args.txt")).unwrap();
+        let want = runs.join("20261106-090503-toy");
+        assert!(args.contains(&format!("\"{}\"", want.display())), "공백이 든 경로가 한 인자로 가지 않았다: {args}");
     }
 
     #[test]

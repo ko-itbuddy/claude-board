@@ -161,6 +161,9 @@ jobs:
         working-directory: windows/app
         run: npm test
 
+      - name: 배포물 목록 일치 시험
+        run: node --test windows/ci/packaging-contract.test.cjs
+
       # 버전은 JSON 파일로 넘긴다 — npx 가 Windows 에서 cmd.exe 를 거치므로 따옴표가 든 JSON 문자열은 깨지기 쉽다
       - name: 앱·설치 프로그램(NSIS) 빌드
         working-directory: windows/app
