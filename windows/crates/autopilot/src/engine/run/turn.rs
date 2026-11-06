@@ -538,11 +538,21 @@ impl<'p> Engine<'p> {
     // ── 끝맺음 ──
 
     /// 프로세스가 끝나거나 `limit` 초가 지날 때까지 줄을 읽으며 기다린다. 끝나면 종료 코드
-    fn wait_exit(&mut self, limit: f64) -> Option<i32> {
+    ///
+    /// `close_on_result` 면 이 턴의 `result` 줄을 읽는 순간 입력을 한 번 닫는다. 진짜 claude 는 interrupt 에 `result`(error_during_execution)로
+    /// 답하고도 다음 입력을 기다리며 살아 있어서, 입력을 닫지 않으면 20초를 꼬박 기다렸다가 자손째 끝내게 된다
+    fn wait_exit(&mut self, limit: f64, close_on_result: bool) -> Option<i32> {
         let start = self.now();
+        let mut closed = false;
         loop {
             if let Some(c) = self.poll_exit() {
                 return Some(c);
+            }
+            if close_on_result && !closed && self.stream.as_ref().is_some_and(|s| s.result_seen) {
+                closed = true;
+                if let Some(c) = self.child.as_mut() {
+                    c.close_stdin();
+                }
             }
             if self.now() - start >= limit {
                 return None;
@@ -558,7 +568,7 @@ impl<'p> Engine<'p> {
         if let Some(c) = self.child.as_mut() {
             c.close_stdin();
         }
-        let code = self.wait_exit(10.0).or_else(|| self.kill_child());
+        let code = self.wait_exit(10.0, false).or_else(|| self.kill_child());
         self.end_turn(code);
     }
 
@@ -570,7 +580,7 @@ impl<'p> Engine<'p> {
         self.poll_exit()
     }
 
-    /// `Interrupt{Claude}` 수행: 점잖게 멈추고 20초 안에 안 끝나면 자손까지 끝낸 뒤 `ClaudeExited` 를 넣는다
+    /// `Interrupt{Claude}` 수행: 점잖게 멈추고(`result` 가 오면 입력을 닫는다) 20초 안에 안 끝나면 자손까지 끝낸 뒤 `ClaudeExited` 를 넣는다
     pub(super) fn interrupt_claude(&mut self) {
         if self.turn.is_none() || self.child.is_none() {
             return self.lost_claude();
@@ -581,7 +591,7 @@ impl<'p> Engine<'p> {
                 self.warn("claude 멈추기", &e);
             }
         }
-        let code = self.wait_exit(20.0).or_else(|| self.kill_child());
+        let code = self.wait_exit(20.0, true).or_else(|| self.kill_child());
         self.end_turn(code);
     }
 

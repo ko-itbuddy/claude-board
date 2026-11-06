@@ -269,13 +269,15 @@ pub struct ChildScript {
     pub on_close: Option<i32>,
     /// 점잖게 멈추라고 하면 이 코드로 끝난다(None 이면 안 끝난다)
     pub on_interrupt: Option<i32>,
+    /// 점잖게 멈추라고 하면 이 줄들이 곧바로 나온다(진짜 claude 는 `result` 로 답하고 입력을 기다리며 산다)
+    pub lines_on_interrupt: Vec<String>,
     /// 띄울 때 stderr.log 에 덧붙일 글
     pub stderr: String,
 }
 
 impl ChildScript {
     pub fn new(steps: Vec<Step>) -> Self {
-        ChildScript { steps, on_close: Some(0), on_interrupt: Some(130), stderr: String::new() }
+        ChildScript { steps, on_close: Some(0), on_interrupt: Some(130), lines_on_interrupt: Vec::new(), stderr: String::new() }
     }
     /// 세션을 열고 한마디 한 뒤 결과를 보내는 정상 턴
     pub fn ok_turn(cost: f64) -> Self {
@@ -336,6 +338,7 @@ struct ChildState {
     exited: Option<i32>,
     on_close: Option<i32>,
     on_interrupt: Option<i32>,
+    lines_on_interrupt: Vec<String>,
     sid: String,
 }
 
@@ -392,6 +395,9 @@ impl ChildProcess for FakeChild {
     fn interrupt(&mut self) -> PortResult<()> {
         lock(&self.events).push("interrupt".into());
         let mut s = lock(&self.state);
+        for line in std::mem::take(&mut s.lines_on_interrupt).into_iter().rev() {
+            s.steps.push_front(Step::Line(line));
+        }
         if s.exited.is_none() {
             s.exited = s.on_interrupt;
         }
@@ -486,6 +492,7 @@ impl ExecEnv for ScriptedEnv {
             exited: None,
             on_close: script.on_close,
             on_interrupt: script.on_interrupt,
+            lines_on_interrupt: script.lines_on_interrupt,
             sid,
         }));
         let sent = Arc::new(Mutex::new(Vec::new()));

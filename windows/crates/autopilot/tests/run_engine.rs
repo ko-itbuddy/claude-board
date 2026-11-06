@@ -354,6 +354,29 @@ fn turn_pause_interrupts_then_paused() {
     assert_eq!(run["control_last"], "stop");
 }
 
+/// 진짜 claude 는 interrupt 에 `result`(error_during_execution)로 답하고도 입력을 기다리며 산다.
+/// 엔진이 그 `result` 를 보고 입력을 닫아야 곧바로 끝난다(안 그러면 20초를 기다렸다가 자손째 끝낸다)
+#[test]
+fn turn_pause_closes_input_when_claude_answers_the_interrupt() {
+    let w = Scenario::new(1).build();
+    let mut script = ChildScript::new(vec![Step::Line(init_line())]);
+    script.on_interrupt = None;
+    script.on_close = Some(0);
+    script.lines_on_interrupt = vec![json!({
+        "type": "result", "subtype": "error_during_execution", "is_error": true, "num_turns": 1,
+        "result": "", "terminal_reason": "aborted_streaming", "total_cost_usd": 0.01, "session_id": "{SID}"
+    })
+    .to_string()];
+    w.env.push_spawn(script);
+    w.control_at(NOW + 3.0, "pause", Some(NOW + 3.0));
+    w.control_at(NOW + 200.0, "stop", Some(NOW + 200.0));
+    assert_eq!(w.run(), RunExit::Finished(RunState::Stopped));
+    assert_eq!(w.env.child_events(0), vec!["interrupt", "close_stdin"], "result 를 읽고 입력을 닫아 스스로 끝나게 한다(자손째 끝내지 않는다)");
+    let texts = w.event_texts();
+    assert_in_order(&texts, &["일시정지 요청을 받았습니다.", "claude 를 멈춥니다.", "일시정지했습니다.", "중단했습니다"]);
+    assert_eq!(w.unit_json(1)["next_message"], MSG_PAUSED);
+}
+
 #[test]
 fn turn_clear_background() {
     let mut s = Scenario::new(1);
