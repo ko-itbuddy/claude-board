@@ -72,7 +72,7 @@ windows/
 
 | 경로 | 내용 |
 |---|---|
-| `%LOCALAPPDATA%\Programs\Claude Board\` | `ClaudeBoard.exe`, `claude-board-hook.exe`(원본), `LICENSE` — install.ps1 로 설치한 경우 |
+| `%LOCALAPPDATA%\Programs\Claude Board\` | `ClaudeBoard.exe`, `claude-board-hook.exe`(원본), 자율주행 `claude-autopilot.exe`·`claude-autopilot-engine.exe`(§12), `LICENSE` — install.ps1 로 설치한 경우 |
 | `%LOCALAPPDATA%\Claude Board\` | setup.exe(NSIS, 사용자 단위)로 설치한 경우 — 위 파일과 `uninstall.exe`, `HKCU\Software\claude\Claude Board`·설정 > 앱 항목. install.ps1 업데이트는 `app-path` 를 따라 이 자리를 바꿔 끼운다 |
 | `%USERPROFILE%\.claude\notifier\` | macOS 와 같은 폴더. `claude-board-hook.exe`(hook 이 실행하는 사본), `app-path`(ClaudeBoard.exe 전체 경로 한 줄), `sessions\`, `mute-all`, `notify-position`, `accounts.json`, 깨진 목록을 옮겨 둔 `accounts.json.broken-<yyyyMMdd-HHmmss>` 파일들(이름이 있으면 뒤에 `-2`·`-3`, §5.5), `accounts\`, `update.log`, `auto-switch.log`, `board.log`, `board-theme`, `context\`(사용자 상태줄이 씀), `context-windows.json`, `plugins\md-render\`(보드가 시작할 때 설치 폴더에서 옮겨 쓴 사본, §5.12.11) |
 | `%USERPROFILE%\.local\bin\` | `claude-board.cmd`(보드 열기), `claude-board-tui.cmd`(TUI) — Claude Code 네이티브 설치가 이 폴더를 PATH 에 넣는다 |
@@ -874,7 +874,7 @@ interface Account { id: string; email: string; org: string; plan: string; expire
 이벤트 `board://confirm-shutdown` `{reason: "quit"|"update"|"cancel", items}`(`cancel` 이면 떠 있는 확인 창을 닫는다).
 이벤트 `board://open-session` `{id, action: "reopen"|"focus", carryOn, projectDir, resumeArgs}`(Rust → 허브, §5.7). 알림 패널 클릭이 거는 `--action focus <id>` 도 이 이벤트로 온다(§5.12.12).
 내장 터미널 명령(`terms.rs`, 모양은 §5.12.1): `term_spawn` · `term_list` · `term_attach` · `term_ack` · `term_write` · `term_write_bin` · `term_resize` · `term_kill`.
-새 탭 셸 명령(§5.12.14): `set_terminal_shell(shell?)` · `list_envs()`(`[{key, label}]`). 자율주행 명령(§12.7): `autopilot_control(id, action: "pause"|"resume"|"stop")`.
+새 탭 셸 명령(§5.12.14): `set_terminal_shell(shell?)` · `list_envs()`(`[{key, label}]`). 자율주행 명령(§12.7): `autopilot_control(id, action: "pause"|"resume"|"stop")` · `autopilot_envs()`(`[{key, label, kind, distro, sandboxCapable}]`, 이 PC 에서 고를 수 있는 실행 환경) · `autopilot_start({runId, run, queue, acceptUnsandboxed})`(`{runId, scheduled}` 를 주고 명령줄이 거절하면 그 글이 `Err`, §12.7.1).
 그룹을 가리키는 명령 인자 `cwd` 는 그룹 id(§5.1 의 묶음 열쇠)다.
 확인 대화상자(계정 전환·세션 중단)는 백엔드가 네이티브 대화상자(`tauri-plugin-dialog`)로 띄운다.
 
@@ -954,9 +954,9 @@ Ctrl+Alt 를 누르는 동안(창이 포커스를 잃으면 해제) 탭의 × �
 
 | 자산 | 내용 |
 |---|---|
-| `ClaudeBoard-windows-x64.zip` | 최상위 `ClaudeBoard.exe`, `claude-board-hook.exe`, `LICENSE`, `README.md`, `THIRD_PARTY_NOTICES.txt` + `plugins\md-render\` 아래 다섯 파일(아래 「md-render 배치」) |
+| `ClaudeBoard-windows-x64.zip` | 최상위 `ClaudeBoard.exe`, `claude-board-hook.exe`, 자율주행 `claude-autopilot.exe`·`claude-autopilot-engine.exe`, `LICENSE`, `README.md`, `THIRD_PARTY_NOTICES.txt` + `plugins\md-render\` 아래 다섯 파일(아래 「md-render 배치」) |
 | `ClaudeBoard-windows-x64.zip.sha256` | `<sha256 16진수>  ClaudeBoard-windows-x64.zip` |
-| `ClaudeBoard-<버전>-setup.exe` | Tauri NSIS 설치 프로그램(사용자 단위 설치, 설치 후 `claude-board-hook.exe setup` 실행). 설치 폴더에 zip 과 같은 배치로 풀린다 |
+| `ClaudeBoard-<버전>-setup.exe` | Tauri NSIS 설치 프로그램(사용자 단위 설치, 설치 후 `claude-board-hook.exe setup` 실행). 설치 폴더에 zip 과 같은 배치로 풀린다. 자율주행 두 exe 는 Tauri `externalBin`(sidecar)이라 설치 폴더 최상위에 놓인다 |
 | `install.ps1`, `uninstall.ps1` | 설치·업데이트·제거 스크립트 |
 | `VERSION` | 버전 한 줄 |
 
@@ -965,7 +965,7 @@ OS 빌드 검사: `ClaudeBoard.exe` 가 `CreatePseudoConsole` 을 정적으로 �
 **md-render 배치.** macOS 앱이 `Contents/Resources/plugins/md-render/` 에 싣는 것과 같은 다섯 파일만 이름으로 골라(`tests\`·Claude Code 가 만드는 `tsconfig.json`·`.claude-plugin\types\` 는 싣지 않는다) 설치 폴더 아래 같은 상대 경로로 둔다. 릴리스 zip 과 setup.exe(Tauri `bundle.resources`)가 똑같다.
 
 ```
-<설치 폴더>\ClaudeBoard.exe, claude-board-hook.exe, LICENSE, README.md, THIRD_PARTY_NOTICES.txt (+ setup.exe 는 uninstall.exe)
+<설치 폴더>\ClaudeBoard.exe, claude-board-hook.exe, claude-autopilot.exe, claude-autopilot-engine.exe, LICENSE, README.md, THIRD_PARTY_NOTICES.txt (+ setup.exe 는 uninstall.exe)
 <설치 폴더>\plugins\md-render\LICENSE
 <설치 폴더>\plugins\md-render\README.md
 <설치 폴더>\plugins\md-render\.claude-plugin\plugin.json
@@ -975,6 +975,7 @@ OS 빌드 검사: `ClaudeBoard.exe` 가 `CreatePseudoConsole` 을 정적으로 �
 
 설치 폴더는 setup.exe 가 `%LOCALAPPDATA%\Claude Board`, `install.ps1` 이 `%LOCALAPPDATA%\Programs\Claude Board`(setup.exe 로 깐 폴더가 있으면 그쪽)다. 보드가 시작할 때 이 폴더를 `%USERPROFILE%\.claude\notifier\plugins\md-render` 로 옮겨 쓰고 그 경로를 `--plugin-dir` 로 넘긴다(§5.12.11). 옮겨 쓰는 까닭은 Claude Code 가 플러그인 폴더에 `tsconfig.json` 등을 쓰기 때문에 설치 폴더 안 경로를 바로 넘기지 않으려는 것이다. 확인 명령: `grep -rn "md-render" windows/app/src-tauri/src` 가 `mdrender.rs`(옮겨 쓰기)와 `settings.rs`(`mdRenderOff` 필드)를 가리킨다.
 setup.exe 의 이 배치는 Tauri `bundle.resources`(`windows/app/src-tauri/tauri.conf.json`)가 정한다. 빌드가 만든 `windows/app/src-tauri/target/release/nsis/x64/installer.nsi` 에서 `$INSTDIR` 아래 `plugins\md-render\` 다섯 파일과 `THIRD_PARTY_NOTICES.txt`·`claude-board-hook.exe` 를 푸는 줄과 제거 구역이 같은 여섯 개를 지우는 줄을 읽어 확인했다(§11.2.1 G10 단계 8). 설치 프로그램을 실제로 실행해 확인한 것은 아니다.
+자율주행 `claude-autopilot.exe`·`claude-autopilot-engine.exe` 는 `bundle.externalBin`(`tauri.windows.conf.json`)으로 `claude-board-hook.exe` 와 같이 `$INSTDIR` 최상위에 풀리고 제거 구역이 함께 지운다. 이 두 파일이 더해진 뒤의 `installer.nsi` 는 읽지 않았고(G10 단계 8 의 줄 번호와 「여섯 개」는 더하기 전 빌드의 값이다) 실제 CI 빌드와 실제 setup.exe 설치로도 확인하지 않았다(`untested:`). `ci/install-checks.ps1` 이 설치 폴더의 두 exe 와 `claude-autopilot.exe`(인자 없음) 종료 코드 2 를 확인하도록 고쳐 두었으나 CI 에서 돌려 보지 않았다.
 `THIRD_PARTY_NOTICES.txt` 의 원본은 저장소의 `windows/packaging/THIRD_PARTY_NOTICES.txt`(xterm.js·애드온 셋·md-render 의 라이선스 원문)다. zip 은 자산 묶기 단계가 최상위에 복사하고, setup.exe 는 `bundle.resources` 에 같은 파일을 넣어 설치 폴더 최상위에 둔다.
 
 setup.exe 메모(실기 확인): `/S` 로 같은 버전을 다시 설치하면 Tauri NSIS 는 옛 제거 프로그램을 부르지 않는다 — PREUNINSTALL 의 제자리 건너뛰기(`$EXEDIR == $INSTDIR`)는 GUI 업그레이드에서 쓰인다(제자리 제거 `uninstall.exe /S _?=<폴더>` 는 금고·hook·자동 실행 값을 남김을 확인). NSIS 제거 프로그램이 스스로 지우는 Run 값 이름은 `Claude Board` 이고 setup 이 쓰는 값은 `ClaudeBoard` 라, 자동 실행 값은 PREUNINSTALL 의 `uninstall` 이 지운다.
@@ -982,13 +983,13 @@ setup.exe 메모(실기 확인): `/S` 로 같은 버전을 다시 설치하면 T
 ### 8.2 `install.ps1`
 
 `irm https://raw.githubusercontent.com/suhojang/claude-board/main/windows/packaging/install.ps1 | iex` (처음 설치·업데이트 같은 명령). 인자 `-Version <v>`(없으면 API 로 최신 `windows-v*`), `-Update`(묻지 않음).
-1) 처음 설치(settings.json 에 `.claude/notifier/` 가 없음)이고 `-Update` 가 아니면 hook 11개와 환경변수를 등록할지 묻는다(Enter = 예). 2) zip·sha256 받기 → 해시 확인(다르면 중단) → 임시 폴더에 풀기. 3) 실행 중인 `ClaudeBoard.exe` 종료 → `%LOCALAPPDATA%\Programs\Claude Board\` 에 바꿔 넣기(실패하면 되돌리기) → `Unblock-File`. 바꿔 넣는 단위는 zip 최상위 파일마다 하나와 `plugins\md-render\` 폴더 하나다. 원래 것은 `.old-<시각>`(폴더는 `plugins\md-render.old-<시각>`)으로 비켜 두었다가 모두 끝나면 지우고, 하나라도 실패하면 거꾸로 되돌린다. 2)가 끝나면 3)에 들어가기 전에 zip 에 `ClaudeBoard.exe`·`claude-board-hook.exe` 와 `plugins\md-render\` 의 다섯 파일이 모두 있는지, `plugins\md-render\` 밖 하위 폴더에 모르는 파일이 없는지 확인해 어긋나면 아무것도 건드리지 않고 `받은 zip 에 <경로> 가 없습니다.` 로 멈춘다. 4) `claude-board-hook.exe setup --app <경로>`. 5) 보드 실행. 6) 처음 설치면 "이미 실행 중인 Claude Code 세션은 다시 시작해야 hook 이 적용됩니다". Windows PowerShell 5.1 에서도 돌게 쓴다.
+1) 처음 설치(settings.json 에 `.claude/notifier/` 가 없음)이고 `-Update` 가 아니면 hook 11개와 환경변수를 등록할지 묻는다(Enter = 예). 2) zip·sha256 받기 → 해시 확인(다르면 중단) → 임시 폴더에 풀기. 3) 실행 중인 `ClaudeBoard.exe` 종료 → `%LOCALAPPDATA%\Programs\Claude Board\` 에 바꿔 넣기(실패하면 되돌리기) → `Unblock-File`. 바꿔 넣는 단위는 zip 최상위 파일마다 하나와 `plugins\md-render\` 폴더 하나다. 원래 것은 `.old-<시각>`(폴더는 `plugins\md-render.old-<시각>`)으로 비켜 두었다가 모두 끝나면 지우고, 하나라도 실패하면 거꾸로 되돌린다. 2)가 끝나면 3)에 들어가기 전에 zip 에 `ClaudeBoard.exe`·`claude-board-hook.exe`·`claude-autopilot.exe`·`claude-autopilot-engine.exe` 와 `plugins\md-render\` 의 다섯 파일이 모두 있는지, `plugins\md-render\` 밖 하위 폴더에 모르는 파일이 없는지 확인해 어긋나면 아무것도 건드리지 않고 `받은 zip 에 <경로> 가 없습니다.` 로 멈춘다. 4) `claude-board-hook.exe setup --app <경로>`. 5) 보드 실행. 6) 처음 설치면 "이미 실행 중인 Claude Code 세션은 다시 시작해야 hook 이 적용됩니다". Windows PowerShell 5.1 에서도 돌게 쓴다.
 `uninstall.ps1`: 보드가 옮겨 쓴 `%USERPROFILE%\.claude\notifier\plugins` 삭제(macOS `Uninstall.command` 가 `plugins` 를 지우는 것과 같고 `claude-board-hook.exe uninstall` 과 같은 범위다. 그 안에는 보드가 옮긴 다섯 파일과 Claude Code 가 플러그인 폴더에 만드는 `tsconfig.json`·`.claude-plugin\types\` 뿐이다. 사용자가 따로 설치한 플러그인은 Claude Code 가 자기 `%USERPROFILE%\.claude\plugins` 에 둔다. 링크(junction)면 가리키는 곳은 지우지 않고 링크만 뗀다. 환경변수 `CLAUDE_BOARD_NOTIFIER_DIR` 로 notifier 를 옮긴 실행에서는 지우지 않는다. `claude-board-hook.exe uninstall` 이 notifier 를 비었을 때만 지우므로 그보다 먼저 한다) → `claude-board-hook.exe uninstall` → 앱 폴더 삭제(`plugins\md-render\` 포함) → 안내. setup.exe 로 제거할 때의 사본 삭제는 `claude-board-hook.exe uninstall` 이 맡는다.
 
 ### 8.3 CI·자동 릴리스 — `.github/workflows/windows.yml`
 
 - 계기: `windows/**`·워크플로 파일이 바뀐 push(모든 브랜치)·pull_request, workflow_dispatch.
-- build 작업(windows-latest): Rust stable, Node 22, `claude plugin validate plugins/md-render --strict`·`claude plugin test plugins/md-render`(Claude Code `@anthropic-ai/claude-code@2.1.288` 고정 설치, 인증 불필요)와 같은 검사를 `C:\Temp\한글 폴더\md-render` 사본에서, `cargo test`(windows 워크스페이스), `cargo build --release -p claude-board-hook`, 앱 `npm ci` → `npx tauri build`(NSIS), 자산 묶기(§8.1), `actions/upload-artifact` 로 올리기.
+- build 작업(windows-latest): Rust stable, Node 22, `claude plugin validate plugins/md-render --strict`·`claude plugin test plugins/md-render`(Claude Code `@anthropic-ai/claude-code@2.1.288` 고정 설치, 인증 불필요)와 같은 검사를 `C:\Temp\한글 폴더\md-render` 사본에서, `cargo test`(windows 워크스페이스), `cargo build --release -p claude-board-hook`, `cargo build --release -p claude-board-autopilot`, 세 exe(`claude-board-hook`·`claude-autopilot`·`claude-autopilot-engine`)를 `app/src-tauri/binaries/<이름>-x86_64-pc-windows-msvc.exe` 로 복사(sidecar 자리), 앱 `npm ci` → `npx tauri build`(NSIS), 자산 묶기(§8.1), `actions/upload-artifact` 로 올리기.
 - smoke 작업(windows-latest, build 뒤): 아티팩트로 실제 설치·화면을 확인한다. 러너는 화면 세션이 있는 Windows Server 2025 이고 기본 터미널이 Windows Terminal 이다.
   `windows/ci/install-checks.ps1`(설치 확인 — 실패하면 작업 실패. 모든 설치 시나리오가 `plugins\md-render\` 다섯 파일의 유무를 확인한다. 시나리오 5 는 zip 에 파일이 빠졌을 때의 거부, 폴더가 막혔을 때의 되돌리기, uninstall.ps1 의 notifier 사본 삭제도 확인한다): setup.exe `/S` 설치 → 등록된 hook 을 가짜 Claude Code(node.exe 를 `claude.exe` 로 복사) 아래에서 그대로 실행 → 같은 버전 재설치·제자리 제거 → `/S` 제거, install.ps1·uninstall.ps1 을 Windows PowerShell 5.1 에서 웹 호출을 같은 이름의 함수로 가로채 실행(처음 설치 거부·`-Update` 설치·틀린 sha256 거부).
   `windows/ci/screen-checks.ps1`(화면 확인 — 정보용, `continue-on-error`): 보드 창·단일 실행·알림 패널의 포커스·확장 스타일·스스로 닫힘, 스크린샷. 결과표·로그·스크린샷은 `smoke-results` 아티팩트.
@@ -1002,7 +1003,7 @@ setup.exe 메모(실기 확인): `/S` 로 같은 버전을 다시 설치하면 T
 - 사용자에게 보이는 기능이 바뀌면 `windows/CHANGELOG.md`·`windows/README.md`·`windows/docs/설치 가이드.md` 를 함께 고친다. 사용자에게 보이는 글자(앱 문자열·README·CHANGELOG·설치 가이드)에는 긴 줄표(—)를 쓰지 않는다.
 - 설정 화면·단축키 바꾸기·로그인할 때 열기·설정 안 계정 추가를 다루는 사용자용 문서는 단축키를 바꾸면 전역 단축키(Ctrl+Alt+B·T)도 따라 바뀌고 다른 앱이 쓰는 키면 등록하지 못한다는 점, 로그인 창이 Google 로그인을 막을 수 있어 다른 브라우저에서 여는 길이 있다는 점을 싣는다.
 - 내장 터미널을 다루는 사용자용 문서(README·설치 가이드)에는 Ctrl+Alt+T 가 JetBrains IDE 의 같은 단축키를 가져가고 AltGr 배열에서는 그 글자를 칠 수 없다는 점, 한국어 키보드에서는 왼쪽 Ctrl+Alt 로 누른다는 점을 싣는다.
-- 자율주행(미리 보기)을 다루는 사용자용 문서는 명령줄로만 시작한다는 점, 엔진 실행 파일이 릴리스 묶음에 없다는 점, WSL 이 아닌 환경에는 샌드박스가 없어 출발할 때 동의가 필요하다는 점, 확인하지 못한 목록(§12.9)을 싣는다.
+- 자율주행(미리 보기)을 다루는 사용자용 문서는 시작 준비 화면과 명령줄 두 길로 시작한다는 점, 명령줄과 엔진 exe 가 릴리스 묶음(zip·setup.exe·install.ps1)에 든다는 점과 PATH 에는 없다는 점, WSL 이 아닌 환경에는 샌드박스가 없어 출발할 때 동의가 필요하다는 점, WSL 작업 폴더는 `\\wsl.localhost\<배포판>\…` 여야 한다는 점, 확인하지 못한 목록(§12.9)을 싣는다.
 
 ## 10. 이 Mac 에서 확인할 수 있는 것과 없는 것
 
@@ -1184,7 +1185,7 @@ G10 나머지 기능(보드는 세 번 띄웠다: 격리 폴더 A, A 를 끄고 
 | 6f | 슬라이더 0.5, 마우스가 창 안이면 불투명, 848x465 창 밖(1200,100)이면 보드가 앞(`document.hasFocus` 참)이어도 문서 불투명도 0.5 | 통과 |
 | 6g | 작업 영역 전체를 덮은 창은 마우스가 작업 표시줄 위(창 밖)여도 불투명 1. 접고 펼치기 4번 모두 1 | 통과. 단 처음 한 번 0.5 로 남은 것을 봤고 같은 조작 4번에서는 다시 나오지 않았다(아래 `untested:`) |
 | 7 | 서브에이전트: 시작 기록 없는 기록만 있으면 세션 상태 `idle`·`subagents` 빈 목록, 시작 기록 있는 것이 더해지면 `working` 과 하위 작업 1(숨은 기록의 글자는 화면에 없음) | 통과 |
-| 8 | 설치 배치: 빌드가 만든 `installer.nsi` 줄 646~667 이 `$INSTDIR` 아래 `plugins\md-render\` 다섯 파일과 `THIRD_PARTY_NOTICES.txt`·`claude-board-hook.exe` 를 풀고, 줄 787~808 의 제거 구역이 같은 여섯 개를 지움. `makensis` 가 성공했으니 원본 파일이 모두 있다 | 통과(스크립트를 읽은 것이고 설치 프로그램을 실행하지 않았다) |
+| 8 | 설치 배치: 빌드가 만든 `installer.nsi` 줄 646~667 이 `$INSTDIR` 아래 `plugins\md-render\` 다섯 파일과 `THIRD_PARTY_NOTICES.txt`·`claude-board-hook.exe` 를 풀고, 줄 787~808 의 제거 구역이 같은 여섯 개를 지움. `makensis` 가 성공했으니 원본 파일이 모두 있다 | 통과(스크립트를 읽은 것이고 설치 프로그램을 실행하지 않았다. 자율주행 sidecar 두 개가 더해지기 전 빌드의 값이다, §8.1) |
 
 G9·G10 이 확인하지 못한 것(`untested:`):
 - 탐색기가 보드로 트레이 아이콘 이벤트를 넘기는 부분과 트레이의 다른 메뉴 항목. 이 PC 에는 승격할 수 있는 트레이 아이콘이 없다(작업 표시줄에 숨겨진 아이콘 단추가 없다).
@@ -1353,7 +1354,7 @@ G7 결과(Windows 11 빌드 26300, 격리한 보드와 키를 받아 적는 가�
 | 진짜 Run 값 | 로그인할 때 열기가 진짜 `HKCU\…\Run` 값을 쓰고 지우는 것을 확인하지 못했다(격리 표지 파일과 가짜 Run 키만) |
 | 전역 단축키 | 보드가 보이는데 포커스가 다른 창에 있는 상태에서는 확인하지 못했다(숨긴 보드만) |
 | 새 탭 셸의 WSL | 인자 만들기 · UNC 변환 · 설정 규칙 · 저장 항목은 단위 시험으로 봤고, 실제 배포판에서 탭을 띄워 보지 않았다(`#[ignore]` 시험 `wsl_tab_starts_in_the_given_folder_and_exits` 가 있다, §5.12.14) |
-| 자율주행 | 시작 준비 화면 · 합치기 / 승격 · Jira · Notion · Figma · 보고서 · 터미널로 이어받기 · 여러 실행 자리가 없고, 실제 WSL · Windows 10 · 재부팅 뒤 재시작 · 진짜 claude 로 단위 통과는 확인하지 못했다(§12.9) |
+| 자율주행 | 합치기 / 승격 · Jira · Notion · Figma · 보고서 · 터미널로 이어받기 · 여러 실행 자리가 없고, 시작 준비 화면은 실제 Tauri 창에서, 엔진은 실제 WSL 끝까지 · Windows 10 · 재부팅 뒤 재시작 · 명령 프롬프트 밖의 진짜 claude 로 확인하지 못했다(§12.9) |
 | 계정 지우기 | 확인 대화상자의 취소만 시험했고 실제로 지우는 것은 시험하지 않았다 |
 | 보드 왼쪽의 설정 화면 전환 | 단위 시험뿐이고 GUI 로 보지 않았다 |
 | 단축키를 바꾼 뒤 안내 글자 | 탭 줄 **+** 와 터미널 토글 글자만 읽었다. 제목 막대·메뉴·트레이는 코드로만 확인했다 |
@@ -1374,8 +1375,8 @@ G7 결과(Windows 11 빌드 26300, 격리한 보드와 키를 받아 적는 가�
 
 ## 12. 자율주행 (미리 보기)
 
-macOS 판 자율주행(`Sources/ClaudeAutopilot`, 설계 `docs/자율주행/설계.md`)의 Windows 판 첫 구현이다. 이 장이 Windows 자율주행의 단일 기준이다. 코드는 `windows/crates/autopilot`(워크스페이스 멤버 `claude-board-autopilot`)와 보드 쪽 읽기 줄(`app/src-tauri/src/autopilot.rs`, `app/src/lib/board/AutopilotLine.svelte`·`autopilotView.ts`)이다.
-범위는 엔진(출발·루프·판정·기록)과 명령줄, 보드의 읽기 전용 줄과 일시정지·재개·중단이다. 시작 준비 화면 등은 없다(§12.9). 설계 원본을 바꾸면 이 장을 먼저 고친다.
+macOS 판 자율주행(`Sources/ClaudeAutopilot`, 설계 `docs/자율주행/설계.md`)의 Windows 판 첫 구현이다. 이 장이 Windows 자율주행의 단일 기준이다. 코드는 `windows/crates/autopilot`(워크스페이스 멤버 `claude-board-autopilot`)와 보드 쪽 읽기 줄(`app/src-tauri/src/autopilot.rs`, `app/src/lib/board/AutopilotLine.svelte`·`autopilotView.ts`)과 시작 준비 화면(`app/src/lib/autopilot/`)이다.
+범위는 엔진(출발·루프·판정·기록)과 명령줄, 보드의 읽기 전용 줄과 일시정지·재개·중단, 그리고 시작 준비 화면(§12.7.1)이다. 합치기 / 승격 화면 등은 없다(§12.9). 설계 원본을 바꾸면 이 장을 먼저 고친다.
 
 ### 12.1 층과 포트 (헥사고날)
 
@@ -1429,7 +1430,8 @@ claude-autopilot unregister (<실행 폴더> | --all) [--dev] [--json]
 - 문턱 1(`choose`, VM 을 깨우지 않는다): 기록 있음 · key 해석 가능 · `kind` 와 key 일치 · WSL 은 배포판 지정 · 이 PC 에 있음 · **샌드박스를 못 거는 환경(`EnvKind::sandbox_capable()` 이 거짓 = WSL 이 아닌 전부)은 `unsandboxed_ok.at > 0` 이 있어야 통과**. `start --accept-unsandboxed` 가 그 동의를 `{at: 지금, by: "cli"}` 로 기록한다. `by` 는 동의한 주체다(명령줄은 `cli`).
 - 문턱 2(`confirm_ready`, 어댑터 `check_ready`): 준비 안 됨이면 거부. 네이티브는 어댑터가 `sandbox: true` 를 줘도 따르지 않고 거짓으로 고정한다. WSL 은 샌드박스가 걸려야 하고 못 걸면 출발하지 않는다.
 - 근거는 Claude Code 공식 문서(sandboxing): 네이티브 Windows 는 샌드박스 없이 돌고, 샌드박스는 Linux · WSL2 에서 bubblewrap 과 socat 이 있을 때만 걸린다(WSL1 불가). WSL 어댑터의 `check_ready` 가 배포판이 WSL2 인지(`wsl -l -v`, 깨우지 않음), 한 번의 탐침으로 `claude` · `--version` · `bwrap`(실제로 한 번 돌려 봄) · `socat` · `/etc/wsl.conf` 의 자동 마운트 뿌리를 본다. 탐침만이 배포판(VM)을 깨운다.
-- 판정 명령(`check_invocation`): cmd `cmd /d /s /c "<글>"`(출력은 OEM 코드 페이지), PowerShell · pwsh 는 `-EncodedCommand` 감싸개(통과 규칙: 잡히지 않은 오류 1, 마지막 네이티브 종료 코드가 0 이 아니면 그 값, 오류 기록이 있으면 1, 아니면 0)와 환경변수 `CLAUDE_BOARD_CHECK`, Git Bash `bash -lc 'eval "$CLAUDE_BOARD_CHECK"'`(`CHERE_INVOKING=1`), WSL `wsl.exe -d <배포판> --cd <폴더> -e timeout -s INT -k 20 <초>s bash -lc …`(`WSLENV` 로 변수 전달, 124 · 137 은 시간 초과). 엔진은 글을 바꾸지 않고 사람이 그 환경의 문법으로 쓴다.
+- 판정 명령(`check_invocation`): cmd `cmd /d /s /c "<글>"`(출력은 OEM 코드 페이지), PowerShell · pwsh 는 `-EncodedCommand` 감싸개(통과 규칙: 잡히지 않은 오류 1, 마지막 네이티브 종료 코드가 0 이 아니면 그 값, 오류 기록이 있으면 1, 아니면 0)와 환경변수 `CLAUDE_BOARD_CHECK`, Git Bash `bash -lc 'eval "$CLAUDE_BOARD_CHECK"'`(`CHERE_INVOKING=1`), WSL `wsl.exe -d <배포판> --cd <폴더> -e sh -c 'exec 2>&1; exec "$@"' sh timeout -s INT -k 20 <초>s bash -lc …`(`WSLENV` 로 변수 전달, 124 · 137 은 시간 초과). 엔진은 글을 바꾸지 않고 사람이 그 환경의 문법으로 쓴다.
+- WSL 호출은 판정 명령과 탐침 모두 `-e` 바로 뒤를 `sh -c 'exec 2>&1; exec "$@"' sh <원래 명령…>`(`MERGE_STDERR_SCRIPT`, `merge_stderr_in_distro`·`probe_command`)으로 감싸 표준 오류를 리눅스 안에서 표준 출력에 합친다. wsl.exe 는 파일로 돌린 표준 출력 · 오류를 한 파일의 서로 다른 위치에 각자 써서 나중에 쓴 글이 앞 글을 덮어쓰는데(실제 배포판에서 발견), 합친 뒤에는 한 설명자만 쓰므로 순서가 지켜진다. 합치는 일은 로그인 셸 프로필이 내는 글까지 덮도록 로그인 셸 바깥에서 한다.
 - WSL 작업 폴더는 `\\wsl.localhost\<배포판>\…` 를 리눅스 경로로 바꾸고, 다른 배포판이면 거부한다(`wsl_cd_arg`). 네이티브는 권한 규칙 꼴(`permission_path`: `C:\work\toy` → `//c/work/toy`, 네트워크 경로 거부)로 바꾼다.
 
 ### 12.5 모델 세션에 거는 거부 목록 (`engine/run/guard`, `turn`)
@@ -1455,6 +1457,16 @@ macOS LaunchAgent(`KeepAlive` · `RunAtLoad`)의 대응이다. COM 이 아니라
 - 카드 짝짓기는 `project_root`(없으면 첫 단위 `cwd`) 경로를 대소문자 · 구분자 무시로 그룹 경로와 견준다. 줄 글: 상태 한국어 이름 · 실행 환경 이름 · `샌드박스 없음` 칩(`env.sandbox` 가 거짓일 때) · `단위 n/전체: 제목` · 쓴 시간 · `이번 단위 … USD` · 풀리는 시각 · `통과 · 미통과 · 상한(· 건너뜀 · 중단)`.
 - 명령 `autopilot_control(id, action)`: `pause` · `resume` · `stop` 만, 상태가 받을 수 있을 때만(`board_can_control`, 일시정지 중에만 재개 · 아닐 때만 일시정지) `control.json` 을 쓴다. 상태의 주인은 엔진이고 보드는 이 파일 하나만 쓴다.
 
+#### 12.7.1 시작 준비 화면 (`app/src/lib/autopilot/`, 백엔드 `autopilot.rs` 의 `autopilot_envs`·`autopilot_start`)
+
+- 열기: 보드 머리 단추 **자율주행**(`data-testid="autopilot-start-open"`, 좁으면 아이콘만). 창 맨 위 가운데에서 내려오는 모달이다. Esc 는 닫기(쓴 칸은 남고 출발에 성공해야 비운다), Ctrl+Enter 는 시작.
+- 칸: ① 프로젝트 폴더(폴더 고르기 대화상자 `tauri-plugin-dialog`)와 실행 이름(비우면 폴더 이름) ② 단위 1~30개(제목 · 목표 · 작업 폴더(비우면 프로젝트 폴더) · 판정 명령 · 시간 상한(분) · 비용 상한(USD), 상한을 비우면 `queue.json` 에 적지 않아 엔진 기본값을 쓴다) ③ 실행 환경(`autopilot_envs()` 가 `core::envs::detect()` 로 준 목록, **기본값 없음**) ④ 모델(기본 `claude-sonnet-5-5`, 제안 이름 넷).
+  네이티브 환경(`sandboxCapable` 거짓)을 고르면 「샌드박스 없이 돌립니다」 확인 칸이 나타나고, 체크해야 시작할 수 있다. 환경을 바꾸면 체크가 내려간다. 고른 환경에 따라 판정 명령 · 작업 폴더 문법 안내가 바뀐다. WSL 은 작업 폴더가 `\\wsl.localhost\<배포판>\…` 여야 한다(§12.4).
+- 입력 모양 검사(`startForm.ts`, 순수, `startForm.test.ts`): 칸이 비었는지 · 길이 · 상한이 0 보다 큰 수인지 · 모델 이름 꼴. 경로 규칙 · 판정 명령 문법 · 환경 문턱은 보지 않는다(명령줄이 소유한다). 단위 수 30 · 요청 크기 1 MiB · 목표 20000자는 보드가 정한 입력 상한이지 명령줄 규칙이 아니다(백엔드 `MAX_UNITS`·`MAX_REQUEST_BYTES` 가 같은 값으로 다시 본다).
+- `autopilot_start({runId, run, queue, acceptUnsandboxed})`: 실행 id = `YYYYMMDD-HHMMSS-<프로젝트 폴더 이름의 ASCII 조각>`(조각이 비면 `run`, 전체 64자 이하). 백엔드가 `runs\<runId>\` 를 새로 만들고(이미 있으면 거부) `queue.json` · `run.json` 을 쓴 뒤 `claude-autopilot start <폴더> --json [--accept-unsandboxed]` 를 부른다(`--dev` · `--no-schedule` 은 붙이지 않는다). `--accept-unsandboxed` 는 확인 칸이 체크된 네이티브 환경에서만 붙고 WSL 에는 붙이지 않는다. 요청 안의 `exec_env.unsandboxed_ok` 는 거부한다(동의는 이 단추로만 `by: "cli"` 로 남는다).
+  명령줄 exe 는 보드 exe 옆에서 찾는다(`cli_exe()`). 출발 명령은 300초 안에 끝나지 않으면 죽이고 실패로 돌려준다(WSL 준비 확인이 배포판을 깨운다). 거절(종료 코드 ≠ 0)이면 `--json` 의 `problems` 를 줄마다(없으면 표준 오류) 시트 아래에 그대로 보이고, 보드가 쓴 두 파일과 비게 된 실행 폴더를 지운다. 성공하면 시트를 닫고 스냅샷을 다시 낸다.
+- 시험: Rust `start_tests`(요청 검사 · 파일 쓰기 · 실패 때 치우기 · 가짜 명령줄 배치 파일로 인자와 거절 글 · 시간 초과, 배치 파일 시험은 `#[cfg(windows)]`)와 프론트 `startForm.test.ts`. 브라우저 개발 화면(`mock.ts`)은 가짜 환경 목록과 가짜 폴더 고르기를 준다.
+
 ### 12.8 시험 도구
 
 | 도구 | 하는 일 |
@@ -1474,14 +1486,18 @@ macOS LaunchAgent(`KeepAlive` · `RunAtLoad`)의 대응이다. COM 이 아니라
 | 출발부터 끝까지(명령 프롬프트 · Git Bash) | 가짜 claude, 실제 어댑터, `start --no-schedule` 뒤 `run` | 모두 통과 |
 | 판정 명령 | 네 셸(cmd · PowerShell 7 · Windows PowerShell · Git Bash)에서 실제 실행 | 통과 |
 | 작업 스케줄러 | 관리자 없이 등록 · 1분 반복 실측 · 지우기 | 통과 |
-| 진짜 claude 2.1.296(haiku) 첫 실행 | 엔진이 넘기는 모든 옵션 수락 · stream-json 해석 · 비용 상한 적용 · 거부 약 110개의 설정 파일 수락 | 통과(단위 하나가 끝까지 통과하지는 않았다: 판정 명령을 잘못 적었다) |
-| WSL 어댑터 | 가짜 `WslRunner` 이음매로 시험(`tests/wsl_env.rs`) | 실제 배포판에서는 한 번도 띄우지 않았다(미확인) |
+| 진짜 claude 2.1.296(haiku) 첫 실행 | 엔진이 넘기는 모든 옵션 수락 · stream-json 해석 · 비용 상한 적용 · 거부 약 110개의 설정 파일 수락 | 통과(옵션 · 출력 · 상한을 본 행이고 단위 통과는 다음 행) |
+| 진짜 claude 2.1.296(haiku), 명령 프롬프트, 단위 하나(`hello.txt` 만들기) 출발부터 `done` 까지 | 실제 어댑터와 실제 `claude-autopilot.exe`, `CLAUDE_BOARD_HOME` 임시 폴더. 시험 `tests/e2e_real_claude.rs`(`#[ignore]`, `cargo test -p claude-board-autopilot --test e2e_real_claude -- --ignored --nocapture`). 첫 단위 전에 계정 사용률을 알아야 해서 캐시 파일을 두므로 단위 `weekly_pp` 상한을 100 으로 열어 둔다 | 통과(0.04 USD, 약 20초) |
+| WSL 어댑터, 가짜 이음매 | 가짜 `WslRunner` 이음매로 시험(`tests/wsl_env.rs`) | 통과 |
+| 실제 WSL Ubuntu-26.04 | 판정 · 탐침 · 경로 변환 · `claude --version` 시험 5개(`tests/wsl_env.rs` 의 `#[ignore]` `real_*`, `cargo test -p claude-board-autopilot --test wsl_env -- --ignored`). 이 시험이 wsl.exe 의 표준 출력 · 오류 덮어쓰기를 찾아냈다(§12.4) | 5개 통과. 배포판에 `socat` 이 없어 `check_ready` 는 준비 안 됨으로 답하고 `start` 는 거부한다 |
 
 ### 12.9 정직한 한계
 
-- 없는 것: 시작 준비 화면(명령줄로만 시작, `run.json` · `queue.json` 을 손으로 적는다) · 합치기 / 승격 화면 · Jira · Notion · Figma 연결 · 보고서 · 터미널로 이어받기(`takeover` · `giveback`) · 여러 실행 자리(슬롯) · 비밀 어댑터(`adapters/secrets`).
-- 배포: 엔진 실행 파일 둘은 릴리스 zip · setup.exe · `install.ps1` 에 들어 있지 않다(소스에서 `cargo build --release -p claude-board-autopilot`). 들어가면 §8.1 과 `packaging` 을 고친다.
+- 없는 것: 합치기 / 승격 화면 · Jira · Notion · Figma 연결 · 보고서 · 터미널로 이어받기(`takeover` · `giveback`) · 여러 실행 자리(슬롯) · 비밀 어댑터(`adapters/secrets`) · 트레이 메뉴 항목(시작 준비 화면은 보드 머리 단추로만 연다).
+- 배포: 명령줄 `claude-autopilot.exe` 와 엔진 `claude-autopilot-engine.exe` 는 릴리스 zip(최상위) · setup.exe(`externalBin` sidecar, 설치 폴더 최상위) · `install.ps1`(zip 필수 파일 목록, 빠지면 아무것도 건드리기 전에 멈춤)에 든다(§8.1·§8.3). 실제 CI 빌드와 실제 setup.exe 설치로는 확인하지 않았다(아래 `untested:`).
+- 설계상 열린 점: 두 exe 는 PATH 에 없다(`.cmd` 껍데기가 없어 터미널에서는 설치 폴더 경로로 부른다). 제거(`uninstall.ps1` · setup.exe 제거)는 앱 폴더만 지우고 작업 스케줄러 등록을 지우지 않으므로, 돌던 실행은 `pinned\` 에 얼린 엔진 사본으로 계속 돈다. 제거 전에 `claude-autopilot unregister --all` 을 먼저 돌려야 한다.
+- 시작 준비 화면의 보드 쪽 상한(단위 30 · 요청 1 MiB · 목표 20000자)은 보드가 정한 입력 상한이지 명령줄 규칙이 아니다. 시간 · 비용 상한 칸을 비우면 엔진 기본값(시간 120분 · 비용 100 USD · 주간 5 퍼센트포인트)이 적용되고 값이 크므로 상한을 적어 두는 편이 안전하다. 화면에는 주간 사용 한도 칸이 없다(기본값 그대로).
 - 규칙은 손으로 옮긴 것이라 macOS 쪽 변경은 `ported.rs` 가 실패해야 알 수 있다. `apAddEvidence`(밖에서 읽은 근거를 비밀값을 가려 기록)는 옮기지 않았다.
 - 네이티브 거부 규칙은 도구 권한만 막는다. Bash 를 허용한 실행에서 Bash 가 하는 일은 막지 못한다. 네이티브 환경은 샌드박스 없음에 동의한 실행에만 쓴다.
-- 확인하지 못한 것(`untested:`): 실제 WSL 배포판에서의 WSL 어댑터와 WSL 샌드박스, 실제 Windows 10, 로그오프 · 재부팅 뒤 작업 스케줄러가 엔진을 다시 띄우는 것, 오래 사람 없이 도는 실행, 진짜 claude 로 단위 하나가 끝까지 통과하는 것.
+- 확인하지 못한 것(`untested:`): ① 실제 WSL 에서 엔진을 처음부터 끝까지 돌리는 것(시험한 배포판에 `socat` 이 없어 `check_ready` 가 준비 안 됨으로 답하고 `start` 가 거부한다) ② WSL 샌드박스가 실제로 걸리는 것 ③ 그 배포판 안의 claude 로그인이 만료돼 stream-json 한 턴 시험(`real_spawn_claude_one_stream_json_turn`)이 OAuth 만료로 실패한다(파이프 경로 자체는 동작) ④ Git Bash · PowerShell 7 · Windows PowerShell 환경에서 진짜 claude 로 도는 것(진짜 claude 단위 통과는 명령 프롬프트 한 번뿐) ⑤ 판정 재시도 · 단위 여럿 · 작업 스케줄러가 띄운 엔진이 진짜 claude 로 도는 것 ⑥ wsl.exe 자신의 시작 메시지가 판정 출력 앞에 섞이는지 ⑦ 실제 Windows 10 ⑧ 로그오프 · 재부팅 뒤 작업 스케줄러가 엔진을 다시 띄우는 것 ⑨ 오래 사람 없이 도는 실행 ⑩ 시작 준비 화면: 실제 Tauri 창에서 돌려 보지 않았다(브라우저 모의 모드와, 화면이 만든 파일로 명령줄을 돌린 것으로만 확인했다). 폴더 고르기 대화상자와 `invoke` → 명령줄 → 작업 스케줄러 전체 경로도 실제 창에서 돌리지 않았다. 실제 WSL 배포판에서 출발해 보지 않았고, 좁은 머리 배치와 트레이 항목은 확인하지 않았다 ⑪ 두 exe 가 든 실제 CI 빌드 · 실제 setup.exe 설치(§8.1).
 - 엔진이 죽은 뒤 다시 뜨기까지는 최대 약 60초다(작업 스케줄러 반복 간격의 한계, macOS 10초).
