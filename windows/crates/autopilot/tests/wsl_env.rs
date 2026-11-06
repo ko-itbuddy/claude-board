@@ -499,6 +499,31 @@ fn check_command_replaces_a_caller_tag_and_keeps_rule_errors() {
     assert_eq!(env().check_command(&run, "t", None).unwrap_err().kind, PortErrorKind::Invalid);
 }
 
+/// 합침 감싸개는 판정 명령의 글과 무관하다 — 글은 환경 변수로만 가고 argv 는 늘 같은 꼴이다(따옴표·`$`·줄바꿈·한글·아주 긴 글도 argv 를 오염시키지 않는다)
+#[test]
+fn check_command_argv_does_not_depend_on_the_command_text() {
+    let base = env().check_command(&check_run(), "t", None).unwrap().args;
+    assert_eq!(base.iter().filter(|a| *a == MERGE_STDERR_SCRIPT).count(), 1, "감싸개 스크립트는 한 번만 든다");
+    let at = base.iter().position(|a| a == "-e").unwrap();
+    assert_eq!(base[at + 1..at + 5], ["sh", "-c", MERGE_STDERR_SCRIPT, "sh"], "-e 바로 뒤에 감싸개");
+    let texts = [
+        "echo \"a b\" && echo 'c'".to_string(),
+        "echo $HOME `date` $(id)".to_string(),
+        "첫 줄\n둘째 줄\r\n셋째".to_string(),
+        "한글 명령 \u{1F600} 이모지".to_string(),
+        "x".repeat(100_000),
+        "-e sh -c evil".to_string(),
+    ];
+    for text in texts {
+        let mut run = check_run();
+        run.command = text.clone();
+        let inv = env().check_command(&run, "t", None).unwrap();
+        assert_eq!(inv.args, base, "명령 글이 argv 에 새어 들었다: {:?}", text.chars().take(30).collect::<String>());
+        let carried = inv.env.iter().find(|(n, _)| n == "CLAUDE_BOARD_CHECK").map(|(_, v)| v.as_str());
+        assert_eq!(carried, Some(text.as_str()), "명령 글은 환경 변수로 그대로 간다");
+    }
+}
+
 // ── 보조 명령(목록·탐침·쓸어내기) ────────────────────
 
 #[test]
@@ -807,6 +832,111 @@ mod git_sh {
         assert_eq!(out.status.code(), Some(3), "안쪽 명령의 종료 코드가 그대로 나온다");
         assert_eq!(String::from_utf8_lossy(&out.stdout), "hello\nerr\nmore\n");
         assert!(out.stderr.is_empty(), "{}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    /// 안쪽 `sh -c <script>` 를 합침 스크립트로 감싸 돌린다
+    fn merge_sh(sh: &Path, script: &str) -> std::process::Output {
+        run_script(sh, MERGE_STDERR_SCRIPT, &["sh", "-c", script], None)
+    }
+
+    /// 종료 코드는 안쪽 명령 것이 그대로 나온다(0·1·2·42·127·255). 표준 오류 쪽에는 아무것도 남지 않는다
+    #[test]
+    fn merge_script_preserves_exit_codes() {
+        let Some(sh) = sh_or_skip() else { return };
+        let table: [(&str, i32); 7] = [
+            ("exit 0", 0),
+            ("exit 1", 1),
+            ("exit 2", 2),
+            ("echo e >&2; exit 42", 42),
+            ("exit 255", 255),
+            ("cb_no_such_command_xyz", 127),
+            ("false", 1),
+        ];
+        for (script, want) in table {
+            let out = merge_sh(&sh, script);
+            assert_eq!(out.status.code(), Some(want), "{script:?}: {}", String::from_utf8_lossy(&out.stdout));
+            assert!(out.stderr.is_empty(), "{script:?}: 표준 오류가 비어 있지 않다: {}", String::from_utf8_lossy(&out.stderr));
+        }
+    }
+
+    /// 실행할 수 없는 프로그램(`sh -c` 를 거치지 않고 바로 `exec`)도 127 이고, 셸이 낸 "없다" 글은 표준 출력으로 나온다
+    #[test]
+    fn merge_script_exec_failure_is_127_and_message_goes_to_stdout() {
+        let Some(sh) = sh_or_skip() else { return };
+        for cmd in [vec!["cb-no-such-program-xyz"], vec!["cb-no-such-program-xyz", "arg one"]] {
+            let out = run_script(&sh, MERGE_STDERR_SCRIPT, &cmd, None);
+            assert_eq!(out.status.code(), Some(127), "{cmd:?}");
+            assert!(out.stderr.is_empty(), "{cmd:?}: {}", String::from_utf8_lossy(&out.stderr));
+            assert!(String::from_utf8_lossy(&out.stdout).contains("cb-no-such-program-xyz"), "{cmd:?}: 오류 글이 표준 출력에 없다");
+        }
+        let out = run_script(&sh, MERGE_STDERR_SCRIPT, &[""], None);
+        assert_eq!(out.status.code(), Some(127), "빈 문자열 명령");
+    }
+
+    /// 명령이 하나도 없으면 `exec` 는 할 일 없이 0 으로 끝난다 — 호출 쪽(check_command·probe_command)은 늘 명령을 붙인다는 전제를 못 박는다
+    #[test]
+    fn merge_script_without_a_command_exits_0_silently() {
+        let Some(sh) = sh_or_skip() else { return };
+        let out = run_script(&sh, MERGE_STDERR_SCRIPT, &[], None);
+        assert_eq!(out.status.code(), Some(0));
+        assert!(out.stdout.is_empty() && out.stderr.is_empty());
+    }
+
+    /// 표준 출력·표준 오류 글이 한 흐름으로, 쓴 순서 그대로 나온다(바이트 그대로 — 줄바꿈 없는 끝, 비 UTF-8 바이트, 큰 양 포함)
+    #[test]
+    fn merge_script_stream_table() {
+        let Some(sh) = sh_or_skip() else { return };
+        let alternating: String = (0..200).map(|i| format!("o{i}\ne{i}\n")).collect();
+        let big = "x".repeat(300_000);
+        let table: Vec<(&str, &str, Vec<u8>)> = vec![
+            ("표준 오류만", "echo e1 >&2; echo e2 >&2", b"e1\ne2\n".to_vec()),
+            ("표준 출력만", "echo o1; echo o2", b"o1\no2\n".to_vec()),
+            ("번갈아", "echo 1; echo 2 >&2; echo 3; echo 4 >&2", b"1\n2\n3\n4\n".to_vec()),
+            ("줄바꿈 없는 끝", "printf a; printf b >&2; printf c", b"abc".to_vec()),
+            ("아무 글도 없음", "true", Vec::new()),
+            ("비 UTF-8 바이트", "printf '\\377\\376'; printf '\\200' >&2", vec![0xff, 0xfe, 0x80]),
+            ("NUL 바이트", "printf 'a\\0b'; printf '\\0c' >&2", b"a\0b\0c".to_vec()),
+            ("자식 프로세스의 표준 오류", "echo a; sh -c 'echo b >&2'; echo c", b"a\nb\nc\n".to_vec()),
+            ("한글", "echo 가; echo 나 >&2", "가\n나\n".as_bytes().to_vec()),
+            ("200번 번갈아", "i=0; while [ $i -lt 200 ]; do echo o$i; echo e$i >&2; i=$((i+1)); done", alternating.into_bytes()),
+            ("표준 오류로 큰 양", "head -c 300000 /dev/zero | tr '\\0' x >&2", big.into_bytes()),
+        ];
+        for (label, script, want) in table {
+            let out = merge_sh(&sh, script);
+            assert!(out.status.success(), "{label}: {:?}", out.status);
+            assert!(out.stderr.is_empty(), "{label}: 표준 오류가 남았다: {}", String::from_utf8_lossy(&out.stderr));
+            let (got, exp) = (&out.stdout, &want);
+            assert!(got == exp, "{label}: 출력이 다르다\n기대 {:?}\n실제 {:?}", String::from_utf8_lossy(&exp[..exp.len().min(80)]), String::from_utf8_lossy(&got[..got.len().min(80)]));
+        }
+    }
+
+    /// 감싸개를 거쳐도 명령 인자는 한 칸도 쪼개지거나 풀리지 않는다(공백·`$`·`;`·`&|`·`-`로 시작하는 글). `*`·`~` 는 msys 가 Windows 에서 온 인자를 먼저 풀어 버려 가르지 못하고, 작은따옴표·큰따옴표·빈 인자·줄바꿈은 Windows 명령줄을 거치며
+    /// Git Bash(msys) 쪽 규칙에 걸려 뒤 인자까지 망가뜨리므로 이 시험으로는 가르지 못한다(`launch_script_...` 와 같은 사정)
+    #[test]
+    fn merge_script_passes_argv_verbatim() {
+        let Some(sh) = sh_or_skip() else { return };
+        let payloads = ["a b", "$HOME", "a;b", "a&b|c", "--", "-n", "\\n", "  lead and trail  ", "한 글"];
+        let mut args = vec!["sh", "-c", "for a in \"$@\"; do printf '[%s]' \"$a\"; done", "x"];
+        args.extend(payloads);
+        let out = run_script(&sh, MERGE_STDERR_SCRIPT, &args, None);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
+        let want: String = payloads.iter().map(|a| format!("[{a}]")).collect();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), want);
+        assert!(out.stderr.is_empty());
+    }
+
+    /// 감싸개는 입력도 가로채지 않는다 — 표준 입력이 안쪽 명령에 닿는다
+    #[test]
+    fn merge_script_keeps_stdin_for_the_inner_command() {
+        let Some(sh) = sh_or_skip() else { return };
+        use std::io::Write;
+        use std::process::Stdio;
+        let mut cmd = Command::new(&sh);
+        cmd.arg("-c").arg(MERGE_STDERR_SCRIPT).arg("sh").arg("cat").env("PATH", sh.parent().unwrap().display().to_string());
+        let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all("들어간 글\n".as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "들어간 글\n");
     }
 
     #[test]

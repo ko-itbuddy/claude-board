@@ -281,11 +281,12 @@ fn panic_text(p: &(dyn Any + Send)) -> String {
 
 // ── 이름 ─────────────────────────────────────────────
 
-/// 실행 id 규칙 `[A-Za-z0-9._-]{1,120}`(점으로만 된 이름 제외)
+/// 실행 id 규칙 `[A-Za-z0-9._-]{1,120}`(점으로만 된 이름과 점으로 끝나는 이름 제외: Windows 가 끝점을 떼어 폴더 이름이 달라진다)
 pub fn valid_run_id(id: &str) -> bool {
     (1..=120).contains(&id.len())
         && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
         && id.chars().any(|c| c != '.')
+        && !id.ends_with('.')
 }
 
 /// 작업 이름: `com.claude.board[.dev].autopilot.<실행 id>`. run.json `launchd_label` 칸에 둔다
