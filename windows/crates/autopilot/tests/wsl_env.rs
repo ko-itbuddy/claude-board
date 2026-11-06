@@ -7,7 +7,7 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use claude_board_autopilot::adapters::wsl_env::*;
 use claude_board_autopilot::ports::*;
@@ -458,7 +458,10 @@ fn check_command_adds_the_tag_to_env_and_wslenv() {
     assert_eq!(inv.program, p(WSL_EXE));
     assert_eq!(
         inv.args,
-        ["-d", DISTRO, "--cd", r"C:\work\toy", "-e", "timeout", "-s", "INT", "-k", "20", "600s", "bash", "-lc", "eval \"$CLAUDE_BOARD_CHECK\""]
+        [
+            "-d", DISTRO, "--cd", r"C:\work\toy", "-e", "sh", "-c", MERGE_STDERR_SCRIPT, "sh", "timeout", "-s", "INT", "-k", "20", "600s", "bash", "-lc",
+            "eval \"$CLAUDE_BOARD_CHECK\""
+        ]
     );
     assert_eq!(inv.outer_timeout, Duration::from_secs(630));
     let get = |name: &str| inv.env.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str());
@@ -504,14 +507,14 @@ fn helper_commands_are_argv_and_one_line_scripts() {
     let r = e.remote();
     assert_eq!(r.list_command().args, ["-l", "-v"]);
     assert_eq!(r.running_command().args, ["-l", "--running", "-q"]);
-    assert_eq!(r.probe_command().args, ["-d", DISTRO, "-e", "sh", "-lc", PROBE_SCRIPT]);
+    assert_eq!(r.probe_command().args, ["-d", DISTRO, "-e", "sh", "-c", MERGE_STDERR_SCRIPT, "sh", "sh", "-lc", PROBE_SCRIPT]);
     assert_eq!(r.sweep_command("cbap-1-a-0").args, ["-d", DISTRO, "-e", "sh", "-c", SWEEP_SCRIPT, "sh", "cbap-1-a-0"]);
     assert_eq!(r.interrupt_command("cbap-1-a-0").args, ["-d", DISTRO, "-e", "sh", "-c", INTERRUPT_SCRIPT, "sh", "cbap-1-a-0"]);
     for c in [r.list_command(), r.running_command(), r.probe_command(), r.sweep_command("t"), r.interrupt_command("t")] {
         assert_eq!(c.program, p(WSL_EXE));
         assert!(c.env.is_empty());
     }
-    for (name, script) in [("launch", LAUNCH_SCRIPT), ("probe", PROBE_SCRIPT), ("interrupt", INTERRUPT_SCRIPT), ("sweep", SWEEP_SCRIPT)] {
+    for (name, script) in [("launch", LAUNCH_SCRIPT), ("probe", PROBE_SCRIPT), ("interrupt", INTERRUPT_SCRIPT), ("sweep", SWEEP_SCRIPT), ("merge", MERGE_STDERR_SCRIPT)] {
         assert!(!script.contains('\n') && !script.contains('\r'), "{name} 은 한 줄");
         assert!(!script.contains("cbap"), "{name} 에 꼬리표가 박혀 있지 않다");
     }
@@ -611,7 +614,7 @@ fn check_ready_ok_walks_list_then_probe() {
     let args = fake.args();
     assert_eq!(args.len(), 2);
     assert_eq!(args[0], ["-l", "-v"], "목록이 먼저(깨우지 않음)");
-    assert_eq!(args[1][..5], ["-d", DISTRO, "-e", "sh", "-lc"], "탐침은 로그인 셸");
+    assert_eq!(args[1][..9], ["-d", DISTRO, "-e", "sh", "-c", MERGE_STDERR_SCRIPT, "sh", "sh", "-lc"], "탐침은 표준 오류를 합친 뒤 로그인 셸");
 }
 
 #[test]
@@ -788,12 +791,22 @@ mod git_sh {
     fn scripts_parse() {
         let Some(sh) = sh_or_skip() else { return };
         let dir = tempfile::tempdir().unwrap();
-        for (name, script) in [("launch", LAUNCH_SCRIPT), ("probe", PROBE_SCRIPT), ("interrupt", INTERRUPT_SCRIPT), ("sweep", SWEEP_SCRIPT)] {
+        for (name, script) in [("launch", LAUNCH_SCRIPT), ("probe", PROBE_SCRIPT), ("interrupt", INTERRUPT_SCRIPT), ("sweep", SWEEP_SCRIPT), ("merge", MERGE_STDERR_SCRIPT)] {
             let file = dir.path().join(format!("{name}.sh"));
             std::fs::write(&file, script).unwrap();
             let out = Command::new(&sh).arg("-n").arg(&file).output().unwrap();
             assert!(out.status.success(), "{name}: {}", String::from_utf8_lossy(&out.stderr));
         }
+    }
+
+    /// 표준 오류가 표준 출력으로 합쳐져 나오고(순서 그대로) 표준 오류 쪽에는 아무것도 남지 않는다 — wsl.exe 가 둘을 같은 파일에 덮어쓰지 못하게 하는 장치
+    #[test]
+    fn merge_script_folds_stderr_into_stdout_in_order() {
+        let Some(sh) = sh_or_skip() else { return };
+        let out = run_script(&sh, MERGE_STDERR_SCRIPT, &["sh", "-c", "echo hello; echo err >&2; echo more; exit 3"], None);
+        assert_eq!(out.status.code(), Some(3), "안쪽 명령의 종료 코드가 그대로 나온다");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "hello\nerr\nmore\n");
+        assert!(out.stderr.is_empty(), "{}", String::from_utf8_lossy(&out.stderr));
     }
 
     #[test]
@@ -891,6 +904,8 @@ fn real_run_check_exit_code_and_cwd() {
     assert!(outcome.tail.contains("hello-r1") && outcome.tail.contains("err"));
     let expected = env.to_env_path(dir.path()).unwrap();
     assert!(outcome.tail.contains(&expected), "{} 가 {} 를 품어야 한다", outcome.tail, expected);
+    // 표준 출력과 오류가 순서 그대로 한 파일에 남는다(wsl.exe 는 둘을 같은 파일에 두면 나중 글이 앞 글을 덮는다)
+    assert_eq!(outcome.tail, format!("hello-r1\n{expected}\nerr\n"));
 }
 
 #[test]
@@ -932,6 +947,8 @@ fn real_path_conversion_matches_wslpath() {
 #[ignore = "WSL VM 을 깨우고 배포판 안에 claude 가 있어야 한다"]
 fn real_spawn_claude_version() {
     let dir = tempfile::tempdir().unwrap();
+    // claude 는 `--settings` 로 받은 파일이 없으면 곧바로 종료 코드 1 로 끝난다. 엔진은 늘 파일을 써 두고 넘긴다
+    std::fs::write(dir.path().join("settings.json"), "{}").unwrap();
     let env = first_real_wsl();
     let l = ClaudeLaunch {
         session: SessionStart::New("00000000-0000-4000-8000-000000000001".into()),
@@ -962,6 +979,53 @@ fn real_spawn_claude_version() {
         std::thread::sleep(Duration::from_millis(100));
     }
     child.kill_tree().unwrap();
-    assert_eq!(exit, Some(0));
-    assert!(lines.iter().any(|l| l.contains("Claude Code")), "{lines:?}");
+    let stderr = std::fs::read_to_string(dir.path().join("stderr.log")).unwrap_or_default();
+    assert_eq!(exit, Some(0), "stderr: {stderr}");
+    assert!(lines.iter().any(|l| l.contains("Claude Code")), "{lines:?} stderr: {stderr}");
+}
+
+#[test]
+#[ignore = "WSL VM 을 깨우고 배포판 안에 로그인한 claude 가 있어야 한다(haiku 한 턴, 약 0.01 USD)"]
+fn real_spawn_claude_one_stream_json_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("settings.json"), "{}").unwrap();
+    let env = first_real_wsl();
+    let l = ClaudeLaunch {
+        session: SessionStart::New("00000000-0000-4000-8000-000000000002".into()),
+        cwd: dir.path().to_path_buf(),
+        model: "haiku".into(),
+        effort: None,
+        settings_file: dir.path().join("settings.json"),
+        system_prompt_file: None,
+        add_dirs: vec![],
+        plugin_dir: None,
+        env: vec![],
+        path_env: vec![],
+        extra_args: vec!["--max-turns".into(), "1".into()],
+        stderr_log: dir.path().join("stderr.log"),
+    };
+    let mut child = env.spawn_claude(&l).unwrap();
+    child.write_line(r#"{"type":"user","message":{"role":"user","content":"Reply with exactly the word pong and nothing else."}}"#).unwrap();
+    let mut lines = Vec::new();
+    let mut result = None;
+    let began = Instant::now();
+    while began.elapsed() < Duration::from_secs(120) {
+        match child.read_line(Duration::from_secs(5)) {
+            Ok(Some(line)) => {
+                let done = line.contains(r#""type":"result""#);
+                lines.push(line.clone());
+                if done {
+                    result = Some(line);
+                    break;
+                }
+            }
+            Ok(None) => break,
+            Err(_) => {}
+        }
+    }
+    child.kill_tree().unwrap();
+    let stderr = std::fs::read_to_string(dir.path().join("stderr.log")).unwrap_or_default();
+    let result = result.unwrap_or_else(|| panic!("result 줄이 없다. 받은 줄 {} 개, stderr: {stderr}", lines.len()));
+    println!("{result}");
+    assert!(result.contains(r#""is_error":false"#) && result.contains("pong"), "{result}");
 }

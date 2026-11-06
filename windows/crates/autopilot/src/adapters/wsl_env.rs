@@ -52,6 +52,11 @@ pub const LAUNCH_SCRIPT: &str = concat!(
     r#"exec claude "$@""#,
 );
 
+/// 표준 오류를 표준 출력과 **리눅스 안에서** 한 파일 설명자로 합친 뒤 나머지 인자를 그대로 `exec` 한다. 위치 매개변수: `$@` 가 띄울 명령.
+/// wsl.exe 는 파일로 돌린 표준 출력·오류를 리눅스 쪽에서 각자 자기 쓰기 위치로 쓴다(Windows 쪽 핸들을 복제해 줘도 위치를 나누지 않는다) —
+/// 둘을 같은 파일에 두면 나중에 쓴 쪽이 앞 글자를 덮는다. 합치는 일은 로그인 셸 프로필이 내는 글까지 덮도록 로그인 셸보다 바깥에서 한다
+pub const MERGE_STDERR_SCRIPT: &str = r#"exec 2>&1; exec "$@""#;
+
 /// 탐침. 출력 줄은 `CB_` 로 시작한다(로그인 셸이 내는 잡글과 섞여도 읽힌다)
 pub const PROBE_SCRIPT: &str = concat!(
     r#"c=$(command -v claude 2>/dev/null); echo "CB_CLAUDE=$c"; "#,
@@ -409,7 +414,7 @@ impl Remote {
 
     /// claude 와 샌드박스 준비물 탐침. **배포판을 깨운다**
     pub fn probe_command(&self) -> WslCommand {
-        self.command(self.in_distro(&["-e", "sh", "-lc", PROBE_SCRIPT]), Vec::new())
+        self.command(self.in_distro(&["-e", "sh", "-c", MERGE_STDERR_SCRIPT, "sh", "sh", "-lc", PROBE_SCRIPT]), Vec::new())
     }
 
     /// 꼬리표를 단 프로세스 쓸어내기
@@ -538,6 +543,7 @@ impl WslEnv {
         let mut run = run.clone();
         run.cwd = strip_verbatim(&run.cwd);
         let mut inv = check_invocation(&self.choice, &self.remote.wsl, &run, inherited_wslenv).map_err(invalid)?;
+        merge_stderr_in_distro(&mut inv.args)?;
         inv.env.retain(|(n, _)| !n.eq_ignore_ascii_case(TAG_ENV));
         inv.env.push((TAG_ENV.to_string(), tag.to_string()));
         match inv.env.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case("WSLENV")) {
@@ -574,6 +580,14 @@ impl WslEnv {
             }
         }
     }
+}
+
+/// `wsl.exe … -e <명령…>` 의 `-e` 뒤를 `sh -c MERGE_STDERR_SCRIPT sh <명령…>` 으로 감싼다(`MERGE_STDERR_SCRIPT` 참고). `-e` 가 없으면 Invalid
+fn merge_stderr_in_distro(args: &mut Vec<String>) -> PortResult<()> {
+    let at = args.iter().position(|a| a == "-e").ok_or_else(|| invalid("판정 호출 꼴에 `-e` 가 없다"))?;
+    let wrapper = ["sh", "-c", MERGE_STDERR_SCRIPT, "sh"].map(String::from);
+    args.splice(at + 1..at + 1, wrapper);
+    Ok(())
 }
 
 /// `launch.env` 이름 → `WSLENV` 값. 이름마다 경로면 `/up`, 아니면 `/u`. 환경 변수가 없으면 None
