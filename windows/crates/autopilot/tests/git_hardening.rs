@@ -258,9 +258,31 @@ fn inherited_git_config_parameters_are_dropped() {
     assert!(marker.exists(), "보호 없는 git 이 GIT_CONFIG_PARAMETERS 의 filter 를 돌리지 않았다 — 시험이 힘이 없다");
     std::fs::remove_file(&marker).unwrap();
 
-    std::env::set_var("GIT_CONFIG_PARAMETERS", &param);
-    let (code, _, err) = guarded(repo, &["status", "--porcelain"]);
-    std::env::remove_var("GIT_CONFIG_PARAMETERS");
-    assert_eq!(code, 0, "{err}");
+    // 프로세스 환경에 심어야 "물려받음" 이 되는데, 이 프로세스의 환경을 바꾸면 병렬로 도는 다른 시험의 git 이 오염된다.
+    // 그래서 시험 바이너리를 자식으로 다시 띄워 그 안에서만 환경을 갖게 한다(아래 `inherited_env_child`)
+    let exe = std::env::current_exe().unwrap();
+    let o = Command::new(exe)
+        .args(["--exact", "inherited_env_child", "--ignored", "--nocapture", "--test-threads=1"])
+        .env("GIT_CONFIG_PARAMETERS", &param)
+        .env("CB_CHILD_REPO", repo)
+        .env("CB_CHILD_MARKER", &marker)
+        .output()
+        .unwrap();
+    let text = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+    assert!(o.status.success(), "자식 시험이 실패했다:\n{text}");
+    assert!(text.contains("inherited_env_child ... ok"), "자식 시험이 실제로 돌지 않았다(필터가 안 맞음):\n{text}");
     assert!(!marker.exists(), "어댑터가 물려받은 GIT_CONFIG_PARAMETERS 의 filter 를 돌렸다");
+}
+
+/// `inherited_git_config_parameters_are_dropped` 가 자식 프로세스로 부르는 몸통. 부모가 환경을 주지 않으면 아무것도 하지 않는다
+#[test]
+#[ignore = "inherited_git_config_parameters_are_dropped 가 자식으로 부른다"]
+fn inherited_env_child() {
+    let (Some(repo), Some(marker)) = (std::env::var_os("CB_CHILD_REPO"), std::env::var_os("CB_CHILD_MARKER")) else {
+        return;
+    };
+    assert!(std::env::var_os("GIT_CONFIG_PARAMETERS").is_some(), "부모가 GIT_CONFIG_PARAMETERS 를 물려주지 않았다");
+    let (code, _, err) = guarded(Path::new(&repo), &["status", "--porcelain"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(!Path::new(&marker).exists(), "어댑터가 물려받은 GIT_CONFIG_PARAMETERS 의 filter 를 돌렸다");
 }

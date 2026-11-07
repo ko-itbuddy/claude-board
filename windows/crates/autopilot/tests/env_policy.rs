@@ -212,11 +212,14 @@ fn wsl_cd_table() {
     // 앞 구분자가 하나여도 같은 뜻으로 읽는다
     ok(r"\wsl.localhost\Ubuntu-26.04\home\u\p", "/home/u/p");
     ok("//wsl$/Ubuntu-26.04/a//b/", "/a/b");
+    // fs::canonicalize 가 돌려주는 \\?\UNC\ 꼴도 같은 경로다
+    ok(r"\\?\UNC\wsl.localhost\Ubuntu-26.04\home\u\p", "/home/u/p");
 
     let err = |p: &str, want: &str| assert_eq!(wsl_cd_arg(Path::new(p), d), Err(want.to_string()), "{p}");
     err(r"\\wsl.localhost\Debian\home", "작업 폴더가 다른 WSL 배포판(Debian)에 있습니다.");
     err(r"work\toy", r"WSL 작업 폴더는 절대 경로여야 합니다: work\toy");
     err(r"\\server\share\x", r"WSL 작업 폴더는 절대 경로여야 합니다: \\server\share\x");
+    err(r"\\?\UNC\server\share\x", r"WSL 작업 폴더는 절대 경로여야 합니다: \\server\share\x");
     err("C:", "WSL 작업 폴더는 절대 경로여야 합니다: C:");
 }
 

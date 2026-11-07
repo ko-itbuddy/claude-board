@@ -175,7 +175,12 @@ fn is_sep(c: char) -> bool {
 /// `wsl.exe --cd` 에 줄 값. 일반 Windows 절대 경로는 그대로(wsl 이 automount 뿌리로 바꾼다),
 /// `\\wsl.localhost\<배포판>\…`·`\\wsl$\<배포판>\…` 은 그 배포판이 `distro` 와 같으면 `/…` 로 바꾼다
 pub fn wsl_cd_arg(cwd: &Path, distro: &str) -> Result<String, String> {
-    let path = cwd.to_string_lossy();
+    let lossy = cwd.to_string_lossy();
+    // `fs::canonicalize` 가 `\\wsl.localhost\…` 를 `\\?\UNC\wsl.localhost\…` 로 돌려준다. 같은 경로이니 앞 `\\?\UNC\` 를 `\\` 로 되돌린다
+    let path: std::borrow::Cow<str> = match lossy.strip_prefix(r"\\?\UNC\") {
+        Some(rest) => std::borrow::Cow::Owned(format!(r"\\{rest}")),
+        None => lossy,
+    };
     let rooted = path.trim_start_matches(is_sep);
     if rooted.len() < path.len() {
         let mut parts = rooted.split(is_sep);
