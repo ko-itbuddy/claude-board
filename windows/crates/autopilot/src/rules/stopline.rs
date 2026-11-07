@@ -31,26 +31,37 @@ pub fn iso_date(s: &str) -> Option<f64> {
 
 /// 사용량 API 응답·보드와 상태줄이 함께 쓰는 캐시(`/tmp/.claude-usage-cache.json` 꼴
 /// `{five_hour:{utilization 84.0, resets_at}, seven_day:{…}}`) → 엔진 run.json usage 꼴
-/// (`{at, from, five_hour 0.84, five_hour_resets, seven_day, seven_day_resets}`). 퍼센트를 비율로 맞춘다. five_hour 가 없으면 None.
-/// 원본: `apUsageFromPercent`
+/// (`{at, from, five_hour 0.84, five_hour_resets, seven_day, seven_day_resets}`). 퍼센트를 비율로 맞춘다.
+/// 5시간 한도가 없는 요금제(Ultra)는 `five_hour` 가 null 로 온다. 객체인 창만 넣고 없는 창은 칸을 넣지 않는다.
+/// 두 창 모두 사용률(`utilization`)을 읽지 못하면 None(사용률을 모름). 원본: `apUsageFromPercent`
 pub fn usage_from_percent(j: &Map<String, Value>, from: &str, at: f64) -> Option<Value> {
-    let five = j.get("five_hour")?.as_object()?;
     let mut u = Map::new();
     u.insert("at".into(), Value::from((at * 1000.0).round() / 1000.0));
     u.insert("from".into(), Value::from(from));
-    let mut add_window = |w: &Map<String, Value>, rate: &str, resets: &str| {
+    let mut read = false;
+    for key in ["five_hour", "seven_day"] {
+        let Some(w) = j.get(key).and_then(Value::as_object) else { continue };
         if let Some(v) = stop_num(w.get("utilization")) {
-            u.insert(rate.into(), Value::from(v / 100.0));
+            u.insert(key.into(), Value::from(v / 100.0));
+            read = true;
         }
         if let Some(r) = w.get("resets_at").and_then(Value::as_str).and_then(iso_date) {
-            u.insert(resets.into(), Value::from(r));
+            u.insert(format!("{key}_resets"), Value::from(r));
         }
-    };
-    add_window(five, "five_hour", "five_hour_resets");
-    if let Some(seven) = j.get("seven_day").and_then(Value::as_object) {
-        add_window(seven, "seven_day", "seven_day_resets");
     }
-    Some(Value::Object(u))
+    read.then_some(Value::Object(u))
+}
+
+/// 5시간 칸(사용률 막대·멈출 선 고르기·status 줄)을 보일까 — 사용률을 읽었는데(`known`) 5시간 값이 없으면
+/// 그 계정은 5시간 한도가 없는 요금제라 숨긴다. 아직 읽지 못했으면 보인다(모름). 원본: `apShowFiveHour(known:hasFive:)`
+pub fn show_five_hour(known: bool, has_five: bool) -> bool {
+    !known || has_five
+}
+
+/// run.json usage 꼴로 — 주간이나 5시간 사용률 가운데 하나라도 수면 읽은 것. 원본: `apShowFiveHour(usage:)`
+pub fn show_five_hour_usage(usage: Option<&Map<String, Value>>) -> bool {
+    let five = stop_num(usage.and_then(|u| u.get("five_hour"))).is_some();
+    show_five_hour(five || stop_num(usage.and_then(|u| u.get("seven_day"))).is_some(), five)
 }
 
 /// 글로 적는 시각의 시간대. 규칙은 시스템 시계를 직접 부르지 않으므로 호출자가 고른다(시험은 `Utc`).
@@ -102,6 +113,7 @@ pub struct StoplineWait {
 /// 새 단위를 시작해도 되는가(엔진 stoplineGate 의 판정). usage 는 run.json usage 꼴(비율, None 이면 사용률을 모름),
 /// stopline 은 고정 설정의 멈출 선(`{seven_day 0.80, five_hour 0.95}` 이 기본). 초기화 시각이 지난 창은 0 으로 본다.
 /// 주간이 먼저, 그다음 5시간. 넘으면 초기화 시각(지났거나 없으면 10분 뒤) + 2분까지. 사용률을 모르면 10분 뒤 다시.
+/// usage 에 5시간 칸이 없으면(5시간 한도가 없는 요금제, `usage_from_percent`) 5시간 선은 보지 않고 주간 선만 본다(판정은 그대로).
 /// 시작해도 되면 None. 원본: `apStoplineWait`
 pub fn stopline_wait(
     usage: Option<&Map<String, Value>>,

@@ -42,7 +42,7 @@ fn 옛판_저장소를_올리면_행은_그대로이고_판정_놓침_표가_생
     }
     let db = Connection::open(&path).unwrap();
     assert_eq!(migrate(&db), RECORDS_VERSION);
-    assert_eq!(RECORDS_VERSION, 4); // 판 3(자리 표 둘), 판 4(가져오기 줄 칸 넷)
+    assert_eq!(RECORDS_VERSION, 5); // 판 3(자리 표 둘), 판 4(가져오기 줄 칸 넷), 판 5(단위 커밋 기록)
     let state: String = db.query_row("SELECT state FROM runs WHERE id='r1'", [], |r| r.get(0)).unwrap();
     assert_eq!(state, "done");
     db.execute_batch(
@@ -53,14 +53,14 @@ fn 옛판_저장소를_올리면_행은_그대로이고_판정_놓침_표가_생
         .query_row("SELECT COUNT(*) FROM judge_misses WHERE project_id='zz-toy' AND state='open'", [], |r| r.get(0))
         .unwrap();
     assert_eq!(n, 1);
-    assert!(records_steps(4).is_empty());
+    assert!(records_steps(5).is_empty());
 }
 
 #[test]
-fn 빈_저장소는_판_1_2_3_4_를_차례로() {
+fn 빈_저장소는_판_1_2_3_4_5_를_차례로() {
     let db = Connection::open_in_memory().unwrap();
-    assert_eq!(versions(&records_steps(0)), vec![1, 2, 3, 4]);
-    assert_eq!(migrate(&db), 4);
+    assert_eq!(versions(&records_steps(0)), vec![1, 2, 3, 4, 5]);
+    assert_eq!(migrate(&db), 5);
     for t in RECORDS_TABLES {
         let found: String = db
             .query_row("SELECT name FROM sqlite_master WHERE type='table' AND name=?1", [t], |r| r.get(0))
@@ -77,7 +77,7 @@ fn 판2_저장소를_판3으로_올리면_행은_그대로이고_자리_표_둘�
     }
     db.execute_batch("PRAGMA user_version=2; INSERT INTO runs(id,state) VALUES('r1','done'); INSERT INTO units(run_id,n,status) VALUES('r1',1,'done')")
         .unwrap();
-    assert_eq!(records_steps(2).first().map(|s| s.version), Some(3)); // 판 4 는 판4 시험
+    assert_eq!(records_steps(2).first().map(|s| s.version), Some(3)); // 판 4 이후는 판4·판5 시험
     for s in records_steps(2).iter().filter(|s| s.version <= 3) {
         db.execute_batch(s.sql).unwrap();
         db.execute_batch(&format!("PRAGMA user_version={}", s.version)).unwrap();
@@ -105,8 +105,8 @@ fn 판3_저장소를_판4로_올리면_대기열_줄은_그대로이고_가져�
     }
     db.execute_batch("PRAGMA user_version=3; INSERT INTO queue_items(project_id,source_key,title,state) VALUES('zz-toy','todo:a#b','가','open')")
         .unwrap();
-    assert_eq!(versions(&records_steps(3)), vec![4]);
-    for s in records_steps(3) {
+    assert_eq!(versions(&records_steps(3)), vec![4, 5]); // 판 5 는 판5 시험
+    for s in records_steps(3).iter().filter(|s| s.version <= 4) {
         db.execute_batch(s.sql).unwrap();
         db.execute_batch(&format!("PRAGMA user_version={}", s.version)).unwrap();
     }
@@ -121,10 +121,35 @@ fn 판3_저장소를_판4로_올리면_대기열_줄은_그대로이고_가져�
 }
 
 #[test]
+fn 판4_저장소를_판5로_올리면_행은_그대로이고_단위_커밋_표가_생긴다_같은_커밋_종류는_한_줄만() {
+    let db = Connection::open_in_memory().unwrap();
+    for s in records_steps(0).iter().filter(|s| s.version <= 4) {
+        db.execute_batch(s.sql).unwrap();
+    }
+    db.execute_batch("PRAGMA user_version=4; INSERT INTO runs(id,state) VALUES('r1','done')").unwrap();
+    assert_eq!(versions(&records_steps(4)), vec![5]);
+    for s in records_steps(4) {
+        db.execute_batch(s.sql).unwrap();
+        db.execute_batch(&format!("PRAGMA user_version={}", s.version)).unwrap();
+    }
+    assert_eq!(user_version(&db), 5);
+    let state: String = db.query_row("SELECT state FROM runs WHERE id='r1'", [], |r| r.get(0)).unwrap();
+    assert_eq!(state, "done");
+    db.execute_batch("INSERT INTO unit_commits(run_id,unit_n,repo,sha,kind) VALUES('r1',1,'/w/a','abc','unit')").unwrap();
+    // (실행, 저장소, 커밋, 종류) 가 키다
+    assert!(db.execute_batch("INSERT INTO unit_commits(run_id,unit_n,repo,sha,kind) VALUES('r1',2,'/w/a','abc','unit')").is_err());
+    db.execute_batch("INSERT INTO unit_commits(run_id,unit_n,repo,sha,kind) VALUES('r1',1,'/w/a','abc','promote')").unwrap();
+    let idx: String = db
+        .query_row("SELECT name FROM sqlite_master WHERE type='index' AND name='unit_commits_sha'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(idx, "unit_commits_sha");
+}
+
+#[test]
 fn 판_차례는_오름차순이고_마지막_판이_지금_판과_맞는다() {
-    assert_eq!(versions(&RECORDS_MIGRATIONS), vec![1, 2, 3, 4]);
+    assert_eq!(versions(&RECORDS_MIGRATIONS), vec![1, 2, 3, 4, 5]);
     assert_eq!(RECORDS_MIGRATIONS.last().map(|m| m.version), Some(RECORDS_VERSION));
-    assert_eq!(versions(&records_steps(2)), vec![3, 4]);
+    assert_eq!(versions(&records_steps(2)), vec![3, 4, 5]);
     assert!(records_steps(RECORDS_VERSION).is_empty());
 }
 

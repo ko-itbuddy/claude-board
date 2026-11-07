@@ -1,5 +1,5 @@
 //! control.json 규칙(`rules::control`)과 계정 멈출 선 규칙(`rules::stopline`) 시험.
-//! 원본: `Tests/AutopilotRulesTests/ControlTests.swift`(표 9+13+15 줄과 이름 시험 1) · `StoplineTests.swift`(표 13+5 줄).
+//! 원본: `Tests/AutopilotRulesTests/ControlTests.swift`(표 9+13+15 줄과 이름 시험 1) · `StoplineTests.swift`(표 15+9+5 줄).
 //! Swift 표의 줄을 같은 입력·같은 기대값으로 옮겼다. 표 길이를 세어 줄이 빠지면 실패한다.
 //! 끝의 "추가" 절은 Swift 시험에 없는 함수(`control_outcome_mode`·재출발 함수)를 이 이식이 따로 지키는 것이다.
 
@@ -8,7 +8,7 @@ use claude_board_autopilot::rules::control::{
     restart_plan, restart_stops_before, restart_text, run_ended, ControlMode, ControlOutcome, ControlStep,
     RestartPlan, CONTROL_ACTIONS, RESTART_REASON, TAKEN_OVER_STATE,
 };
-use claude_board_autopilot::rules::stopline::{stopline_wait, usage_from_percent, when_text, Tz};
+use claude_board_autopilot::rules::stopline::{show_five_hour, show_five_hour_usage, stopline_wait, usage_from_percent, when_text, Tz};
 use serde_json::{Map, Value};
 
 // ── control.json ─────────────────────────────────────
@@ -163,13 +163,18 @@ fn stop_wait_rows() -> Vec<StopWaitRow> {
             format!("{} 계정 주간 사용률 90% 가 멈출 선 80% 에 닿아 새 단위를 시작하지 않고 10월 26일 07:45 까지 기다립니다.", num(T + 720.0))),
         row("5시간 창이 초기화됐으면 0", Some(&[("five_hour", 0.97), ("five_hour_resets", T - 5.0)]), &[], "go".into()),
         row("멈출 선 100% 는 사용률 100% 에서만", Some(&[("seven_day", 0.99)]), &[("seven_day", 1.0), ("five_hour", 1.0)], "go".into()),
+        row("5시간 칸이 없는 계정(Ultra)은 주간 선만 본다: 선 아래면 지나간다(2026-11)",
+            Some(&[("seven_day", 0.26), ("seven_day_resets", T + 86_400.0)]), &[("seven_day", 0.8), ("five_hour", 0.95)], "go".into()),
+        row("5시간 칸이 없는 계정(Ultra)도 주간 선에 닿으면 기다린다(2026-11)",
+            Some(&[("seven_day", 0.85), ("seven_day_resets", T + 86_400.0)]), &[("seven_day", 0.8), ("five_hour", 0.95)],
+            format!("{} 계정 주간 사용률 85% 가 멈출 선 80% 에 닿아 새 단위를 시작하지 않고 10월 27일 07:35 까지 기다립니다.", num(T + 86_400.0 + 120.0))),
     ]
 }
 
 #[test]
 fn stopline_wait_rows() {
     let rows = stop_wait_rows();
-    assert_eq!(rows.len(), 13, "Swift stopWaitRows 줄 수");
+    assert_eq!(rows.len(), 15, "Swift stopWaitRows 줄 수");
     for r in &rows {
         let usage = r.usage.map(obj);
         let got = stopline_wait(usage.as_ref(), &obj(r.line), T, Tz::Utc)
@@ -185,9 +190,33 @@ struct PercentRow {
     want: &'static str, // "nil" 이거나 Swift 가 쓴 JSON 글자 그대로
 }
 
-const PERCENT_ROWS: [PercentRow; 5] = [
-    PercentRow { note: "five_hour 가 없으면 풀지 않는다", json: r#"{"seven_day":{"utilization":50}}"#, want: "nil" },
-    PercentRow { note: "빈 five_hour 는 시각과 출처만", json: r#"{"five_hour":{}}"#, want: r#"{"at":1793000000,"from":"cache"}"# },
+const PERCENT_ROWS: [PercentRow; 9] = [
+    PercentRow {
+        note: "five_hour 가 없으면 주간만 푼다(2026-11 5시간은 있을 때만, 그 전에는 nil)",
+        json: r#"{"seven_day":{"utilization":50}}"#,
+        want: r#"{"at":1793000000,"from":"cache","seven_day":0.5}"#,
+    },
+    PercentRow {
+        note: "5시간 한도가 없는 요금제(Ultra) 꼴: five_hour null, 5시간 칸은 넣지 않는다(2026-11)",
+        json: r#"{"five_hour":null,"seven_day":{"utilization":26,"resets_at":"2026-11-05T06:59:59.717902+00:00"},"seven_day_opus":null,"limits":[{"kind":"weekly_all","percent":26}]}"#,
+        want: r#"{"at":1793000000,"from":"cache","seven_day":0.26000000000000001,"seven_day_resets":1793861999}"#,
+    },
+    PercentRow { note: "두 창 모두 null 이면 사용률을 모른다(2026-11)", json: r#"{"five_hour":null,"seven_day":null}"#, want: "nil" },
+    PercentRow {
+        note: "빈 five_hour 만 있으면 사용률을 모른다(2026-11, 그 전에는 시각과 출처만이라 0 으로 지나갔다)",
+        json: r#"{"five_hour":{}}"#,
+        want: "nil",
+    },
+    PercentRow {
+        note: "사용률 없이 시각만 있는 창도 모른다(2026-11)",
+        json: r#"{"seven_day":{"resets_at":"2026-11-02T00:00:00Z"}}"#,
+        want: "nil",
+    },
+    PercentRow {
+        note: "주간 사용률이 null 이고 5시간만 있으면 5시간만(2026-11)",
+        json: r#"{"five_hour":{"utilization":40},"seven_day":{"utilization":null}}"#,
+        want: r#"{"at":1793000000,"five_hour":0.40000000000000002,"from":"cache"}"#,
+    },
     PercentRow {
         note: "퍼센트를 비율로, 소수 초가 긴 시각도 읽는다",
         json: r#"{"five_hour":{"utilization":84.0,"resets_at":"2026-10-30T15:00:00.318890+00:00"}}"#,
@@ -216,6 +245,7 @@ fn normalize(v: Value) -> Value {
 
 #[test]
 fn usage_from_percent_rows() {
+    assert_eq!(PERCENT_ROWS.len(), 9, "Swift percentRows 줄 수");
     for r in &PERCENT_ROWS {
         let j: Map<String, Value> = match serde_json::from_str(r.json) {
             Ok(Value::Object(m)) => m,
@@ -225,6 +255,39 @@ fn usage_from_percent_rows() {
         let want = (r.want != "nil").then(|| normalize(serde_json::from_str(r.want).expect("기대값 JSON")));
         assert_eq!(got, want, "{}", r.note);
     }
+}
+
+struct ShowFiveRow {
+    note: &'static str,
+    usage: Option<&'static [(&'static str, f64)]>,
+    want: bool,
+}
+
+const SHOW_FIVE_ROWS: [ShowFiveRow; 5] = [
+    ShowFiveRow { note: "아직 사용률을 읽지 못했으면 보인다(모름)", usage: None, want: true },
+    ShowFiveRow { note: "시각만 있는 빈 사용량도 모름이라 보인다", usage: Some(&[("at", T)]), want: true },
+    ShowFiveRow { note: "5시간 값이 있으면 보인다", usage: Some(&[("five_hour", 0.1), ("seven_day", 0.3)]), want: true },
+    ShowFiveRow { note: "5시간만 읽었어도 보인다", usage: Some(&[("five_hour", 0.0)]), want: true },
+    ShowFiveRow {
+        note: "주간은 읽었는데 5시간 값이 없으면(5시간 한도가 없는 요금제) 숨긴다",
+        usage: Some(&[("seven_day", 0.26), ("seven_day_resets", T + 30.0)]),
+        want: false,
+    },
+];
+
+#[test]
+fn 오시간칸() {
+    for r in &SHOW_FIVE_ROWS {
+        let usage = r.usage.map(obj);
+        assert_eq!(show_five_hour_usage(usage.as_ref()), r.want, "{}", r.note);
+    }
+}
+
+#[test]
+fn 오시간칸_한도목록() {
+    assert!(show_five_hour(false, false));
+    assert!(show_five_hour(true, true));
+    assert!(!show_five_hour(true, false));
 }
 
 // ── 추가: Swift 시험에 없는 함수 ─────────────────────

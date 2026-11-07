@@ -574,7 +574,7 @@ fn check_records(c: &mut Checks, fx: &Fx, id: &str, dir: &Path, toy: &Path) {
         }
     };
     let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-    c.that(version == 4, &format!("기록 저장소 user_version 4 (실제 {version})"), &dbp.display().to_string());
+    c.that(version == 5, &format!("기록 저장소 user_version 5 (실제 {version})"), &dbp.display().to_string());
 
     let dump = |sql: &str| format!("{sql}\n{:#?}", sql_rows(&db, sql));
     let toy_s = toy.to_string_lossy().into_owned();

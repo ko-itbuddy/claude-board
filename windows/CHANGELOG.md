@@ -15,7 +15,8 @@ CI(`.github/workflows/windows.yml`)가 그 항목을 `windows-v<버전>` GitHub 
   탭을 저장하면 셸도 함께 기억해 다시 켤 때 같은 셸로 돌아옵니다. WSL 탭은 명령 없이 셸로만 돌아옵니다.
 - 자율주행(미리 보기): 정해 둔 단위 작업을 사람이 자리를 비운 사이 Claude Code 로 차례로 돌리고, 판정 명령이 통과하면 단위를 마치는 기능의 Windows 판 첫 모습입니다. 보드 머리의 **자율주행** 단추로 여는 시작 준비 화면이나 명령줄로 시작합니다.
   - 명령 `claude-autopilot.exe`(`start` · `run` · `control` · `status` · `unregister` 다섯 가지)와, 작업 스케줄러가 1분마다 띄우는 창 없는 엔진 `claude-autopilot-engine.exe` 가 생겼습니다. 관리자 권한이 필요 없습니다. 엔진이 죽으면 최대 1분 뒤 다시 뜹니다(macOS 판은 10초).
-  - 실행 폴더는 `%LOCALAPPDATA%\Claude Board\autopilot\runs\<실행 id>` 입니다. 파일은 macOS 판 실행 폴더와 호환되고 Windows 만 `run.json` 에 `exec_env`(고른 실행 환경) 칸이 더 있습니다. 기록 저장소는 `private\records.sqlite`(판 4)입니다.
+  - 실행 폴더는 `%LOCALAPPDATA%\Claude Board\autopilot\runs\<실행 id>` 입니다. 파일은 macOS 판 실행 폴더와 호환되고 Windows 만 `run.json` 에 `exec_env`(고른 실행 환경) 칸이 더 있습니다. 기록 저장소는 `private\records.sqlite`(판 5)입니다.
+  - 5시간 한도가 없는 요금제에서도 멈출 선 사용률을 읽습니다. 주간 사용률만으로 새 단위를 시작해도 되는지 정합니다.
   - 보드의 경로 카드 안에 실행 줄이 생겼습니다: 상태 · 실행 환경 · **샌드박스 없음** 칩 · 지금 단위 · 쓴 시간 · 비용 · 통과 수와 일시정지 · 재개 · 중단 단추.
   - 실행 환경은 실행마다 WSL · PowerShell 7 · Windows PowerShell · 명령 프롬프트 · Git Bash 중에서 고르고 **기본값이 없습니다.** WSL 이 아닌 환경에서는 Claude Code 샌드박스가 없으므로 출발할 때 `--accept-unsandboxed` 로 명시 동의해야 합니다.
     그런 환경에서도 엔진은 하네스 파일 · `.git/config` 와 `.git/hooks` · 로그인 정보 파일 · 시작 프로그램 폴더 · `git push` 를 늘 거부 목록에 넣고, 실행이 `Bash(<앞부분> *)` 규칙을 적어 주지 않으면 Bash 를 켜지 않습니다. 샌드박스는 WSL2 에 bubblewrap 과 socat 이 있을 때만 걸리며 VM 이라 메모리를 더 쓰므로 선택 사항입니다.
@@ -27,6 +28,7 @@ CI(`.github/workflows/windows.yml`)가 그 항목을 `windows-v<버전>` GitHub 
 ### 알려진 한계
 - 자율주행에 아직 없는 것: 합치기 / 승격 화면 · Jira · Notion · Figma 연결 · 보고서 · 터미널로 이어받기 · 여러 실행 자리(슬롯).
 - macOS 규칙은 손으로 옮긴 것입니다. 옮긴 원본 파일마다 지문(`windows/crates/autopilot/PORTED.json`)을 두고 시험이 비교하므로, macOS 규칙이 바뀌면 시험이 실패해 알려 줍니다. 밖에서 읽은 근거를 비밀값을 가려 남기는 `apAddEvidence` 는 옮기지 않았습니다.
+- macOS 자율주행 규칙 가운데 아직 옮기지 않은 것: 출발 준비 git 자리 확인 · 단위 커밋 기록과 승격 뒤 되돌림 신호 · 엔진 git 보호 값 보강(늦은 받기 · 전송 프로토콜 · 서명 표시 끄기) · 보고서 창 콘텐츠 규칙 차례 · 멈출 선 자리 표 · 출발 때 Jira 티켓 나무 · 빠진 단위 보고서 찾기 · 초안 세션의 경로 권한 규칙 절대 경로 꼴 · 출발 확인 설정 줄 안내 글. 기록 저장소 판 5 의 `unit_commits` 표는 만들어 두지만 Windows 엔진은 아직 쓰지 않습니다.
 - 네이티브 환경의 거부 규칙은 도구 권한만 막습니다. Bash 를 허용한 실행에서 Bash 가 하는 일은 막지 못합니다(샌드박스가 없기 때문입니다).
 - 확인한 것: 가짜 claude 로 명령 프롬프트와 Git Bash 에서 출발부터 끝까지(모두 통과), 판정 명령 4개 셸 실행, 작업 스케줄러 등록(관리자 없이)과 1분 반복 실측(모두 이 PC), 진짜 claude 2.1.296(haiku) 첫 실행에서 엔진이 넘기는 모든 옵션 수락 · stream-json 해석 · 비용 상한 적용 · 거부 항목 약 110개의 설정 파일 수락.
 - 확인한 것(더): 진짜 claude 2.1.296(haiku)로 명령 프롬프트에서 단위 하나(`hello.txt` 만들기)가 출발부터 끝까지 통과(0.04 USD, 약 20초). 실제 WSL(Ubuntu-26.04)에서 판정 · 준비 확인 · 경로 변환 · `claude --version` 시험 5개 통과.

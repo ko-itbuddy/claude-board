@@ -222,6 +222,33 @@ fn null_five_hour_is_zero_and_weekly_is_required() {
     }
 }
 
+/// 5시간 한도가 없는 요금제(Ultra)도 멈출 선 판정이 주간 선만 본다(맥 `apUsageFromPercent` 5시간은 있을 때만과 같은 판정).
+#[test]
+fn null_five_hour_plan_is_judged_by_the_weekly_stopline_only() {
+    use claude_board_autopilot::rules::stopline::{stopline_wait, Tz};
+    use serde_json::{json, Map, Value};
+    let line: Map<String, Value> = json!({"seven_day": 0.8, "five_hour": 0.95}).as_object().unwrap().clone();
+    for (weekly, waits) in [(26, false), (85, true)] {
+        let env = Env::new();
+        let body = format!(r#"{{"five_hour":null,"seven_day":{{"utilization":{weekly},"resets_at":"2027-01-18T00:00:00Z"}}}}"#);
+        env.write_cache(&body, 5.0);
+        let http = FakeHttp::new(Reply::Fail(PortErrorKind::Io));
+        let s = env.usage(&http).fallback(NOW).unwrap().unwrap();
+        let usage: Map<String, Value> = json!({
+            "five_hour": s.five_hour, "seven_day": s.seven_day,
+            "seven_day_resets": s.seven_day_resets, "five_hour_resets": s.five_hour_resets,
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let wait = stopline_wait(Some(&usage), &line, NOW, Tz::Utc);
+        assert_eq!(wait.is_some(), waits, "주간 {weekly}%");
+        if let Some(w) = wait {
+            assert!(w.reason.contains("주간 사용률 85%"), "{}", w.reason);
+        }
+    }
+}
+
 #[test]
 fn malformed_five_hour_is_not_read_as_zero() {
     let env = Env::new();

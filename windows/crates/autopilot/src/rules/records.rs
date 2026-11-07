@@ -1,12 +1,12 @@
 //! 실행 기록 저장소(SQLite)의 표 꼴과 판 올리기 차례(설계 5장 7절). 원본: `Sources/AutopilotRules/Records.swift`.
-//! 저장소 파일은 macOS 판과 같은 약속이다(records store version 4, `PRAGMA user_version` = 4).
+//! 저장소 파일은 macOS 판과 같은 약속이다(records store version 5, `PRAGMA user_version` = 5).
 //! 아래 DDL 글은 원본과 글자 하나까지 같아야 한다 — 고치지 않는다. SQLite 는 부르지 않는다(어댑터 몫).
 
 /// 원본: `apRecordsVersion`. `PRAGMA user_version` 에 적는 지금 판
-pub const RECORDS_VERSION: i32 = 4;
+pub const RECORDS_VERSION: i32 = 5;
 
 /// 원본: `apRecordsTables`
-pub const RECORDS_TABLES: [&str; 12] = [
+pub const RECORDS_TABLES: [&str; 13] = [
     "projects",
     "runs",
     "units",
@@ -19,6 +19,7 @@ pub const RECORDS_TABLES: [&str; 12] = [
     "judge_misses",
     "path_claims",
     "stopline_slots",
+    "unit_commits",
 ];
 
 /// 원본: `apRecordsSchemaV1`
@@ -61,6 +62,13 @@ ALTER TABLE queue_items ADD COLUMN summary TEXT;
 ALTER TABLE queue_items ADD COLUMN source TEXT;
 ALTER TABLE queue_items ADD COLUMN def TEXT;";
 
+/// 판 5: 단위 커밋 기록(실행·단위·저장소·커밋 이름·종류·든 가지·합칠 쪽·때). 원본: `apRecordsSchemaV5`.
+/// macOS 의 승격 뒤 되돌림 짝짓기(`UnitCommits.swift`)가 쓰는 표다. Windows 엔진은 아직 이 표에 쓰지 않는다
+/// (저장소 판만 macOS 와 맞춰 두어, 같은 판의 저장소를 서로 열 수 있다).
+pub const RECORDS_SCHEMA_V5: &str = r"CREATE TABLE unit_commits (run_id TEXT NOT NULL, unit_n INTEGER, repo TEXT NOT NULL, sha TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT, source TEXT, at REAL,
+  PRIMARY KEY (run_id, repo, sha, kind));
+CREATE INDEX unit_commits_sha ON unit_commits(repo, sha);";
+
 /// 판 `version` 으로 올리는 SQL 한 묶음
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecordsMigration {
@@ -69,11 +77,12 @@ pub struct RecordsMigration {
 }
 
 /// 원본: `apRecordsMigrations`. 판 번호 오름차순
-pub const RECORDS_MIGRATIONS: [RecordsMigration; 4] = [
+pub const RECORDS_MIGRATIONS: [RecordsMigration; 5] = [
     RecordsMigration { version: 1, sql: RECORDS_SCHEMA_V1 },
     RecordsMigration { version: 2, sql: RECORDS_SCHEMA_V2 },
     RecordsMigration { version: 3, sql: RECORDS_SCHEMA_V3 },
     RecordsMigration { version: 4, sql: RECORDS_SCHEMA_V4 },
+    RecordsMigration { version: 5, sql: RECORDS_SCHEMA_V5 },
 ];
 
 /// 원본: `apRecordsSteps`. 지금 판 `from` 보다 높은 판을 차례로 돌려준다
