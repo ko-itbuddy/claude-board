@@ -1395,6 +1395,14 @@ macOS 판 자율주행(`Sources/ClaudeAutopilot`, 설계 `docs/자율주행/설�
 | 실행 파일 | `claude-autopilot.exe`(콘솔, `cli::main`) · `claude-autopilot-engine.exe`(콘솔 창 없는 하위 시스템, `run` 만) | |
 | core | `core::envs`(실행 환경 목록, §5.12.14 와 공유) · `core::test_claude`(시험용 claude 판정, 보드와 공유) · `core::paths::autopilot_root(dev)` | |
 
+엔진 git 보호(`adapters/git`, macOS `EngineGit.swift` 를 옮긴 것이고 지문이 `PORTED.json` 에 있다): 엔진은 git 을 이 어댑터로만 부른다(`git -C <저장소>`, 늘 `git.exe`).
+- 환경: 물려받은 `GIT_*` 는 `GIT_CONFIG_*` · `GIT_SSH*` · `GIT_ALLOW_PROTOCOL` · `GIT_EXEC_PATH` 까지 모두 빼고(대소문자 가리지 않음) `GIT_CONFIG_NOSYSTEM=1` · `GIT_CONFIG_GLOBAL=NUL` · `GIT_ATTR_NOSYSTEM=1` · `GIT_NO_REPLACE_OBJECTS=1` · `GIT_NO_LAZY_FETCH=1` 만 건다(`ENGINE_GIT_HARDEN_ENV`, 순수 함수 `engine_git_env`). Windows 어댑터는 여기에 `GIT_PAGER=cat` · `GIT_TERMINAL_PROMPT=0` · `GIT_OPTIONAL_LOCKS=0` 을 더 건다.
+- 명령줄 `-c`(저장소 설정보다 센 자리): `core.fsmonitor=false` · `core.hooksPath` · `core.attributesFile` · `core.excludesFile` · `diff.external` · `core.pager=cat` · `protocol.ext.allow=never` · `commit.gpgsign=false`. 여기에 macOS 와 같은 값 네 개 `safe.bareRepository=explicit` · `diff.ignoreSubmodules=all` · `protocol.allow=never` · `log.showSignature=false` 가 이 차례로 더해진다. 저장소가 이름을 붙인 `filter.<이름>.*` · `diff.<이름>.textconv` · `merge.<이름>.driver` 는 `git config --list` 로 찾아 비운다(Windows 어댑터에만 있다).
+- 늦은 받기 끄기: 부분 복제 저장소에서 빠진 객체를 읽으면 git 이 `core.sshCommand` · `remote.*.uploadpack` 을 부른다. `GIT_NO_LAZY_FETCH=1` 과 `protocol.allow=never` 둘 다 이것을 막고(하나만 있어도 막힌다), 빠진 객체가 필요한 걸음은 실패한다(닫힌 쪽). 엔진은 `fetch` · `push` · `clone` · `ls-remote` 를 부르지 않는다.
+- Windows 엔진이 부르는 git 은 `rev-parse` · `symbolic-ref` · `status` · `diff --stat` · `switch` · `branch -D` 다. `git log` 는 부르지 않지만(단위 커밋 되돌림 훑기 `UnitCommits` 가 아직 없다) `log.showSignature=false` 는 어댑터가 모든 호출에 걸어 둔다.
+- 확인(`tests/git_hardening.rs`, 진짜 git 2.54 · 임시 저장소): 보호 없는 git 으로는 표식 파일이 생기고(대조군) 어댑터로는 생기지 않는다 — 부분 복제 늦은 받기(ssh 명령 · uploadpack 둘), 서명된 커밋의 `gpg.program`, 하위 모듈로 올린 중첩 git 의 clean filter, 물려받은 `GIT_CONFIG_PARAMETERS`. bare 꼴 폴더는 보호 없는 git 이 저장소로 쓰고 어댑터는 거절하며, `refs/replace` 는 보호 없는 git 만 따른다. 보호 값을 하나씩 빼면 해당 시험이 실패하는 것도 확인했다.
+- 미확인: bare 저장소 꼴 폴더로는 코드 실행 공격을 세우지 못했다(`-C` 로 가리킨 bare 저장소에서 도는 filter · hook 이 없어 동작 차이만 확인). 엔진 쪽 git 은 늘 Windows `git.exe` 라서 WSL 안에서 모델 세션이 부르는 git 은 이 어댑터의 몫이 아니다.
+
 ### 12.2 명령줄 (`claude-autopilot.exe`)
 
 ```
@@ -1473,7 +1481,7 @@ macOS LaunchAgent(`KeepAlive` · `RunAtLoad`)의 대응이다. COM 이 아니라
 | 도구 | 하는 일 |
 |---|---|
 | `crates/autopilot/tests/*.rs` | 규칙 · 상태 기계 · 어댑터 · 엔진 루프(가짜 포트 `tests/fakes`) · 명령줄(`cli.rs`, 실제 `claude-autopilot.exe` 를 `CLAUDE_BOARD_HOME`=임시 폴더로) · 종단(`e2e_fake.rs`) |
-| `tests/ported.rs` + `PORTED.json` | 옮긴 macOS 원본 파일(`rules/*` 다섯)과 그 시험 파일의 sha256 을 비교한다. macOS 규칙이 바뀌면 이 시험이 실패해 옮길 일을 알려 준다. 원본은 `Sources/AutopilotRules` |
+| `tests/ported.rs` + `PORTED.json` | 옮긴 macOS 원본 파일(`rules/*` 다섯과 엔진 git 보호 `EngineGit`, 옮긴 곳 `adapters/git`)과 그 시험 파일의 sha256 을 비교한다. macOS 규칙이 바뀌면 이 시험이 실패해 옮길 일을 알려 준다. 원본은 `Sources/AutopilotRules` |
 | `ci/fake-claude-stream.cjs` (+ `.test.cjs`) | `claude -p --input-format stream-json --output-format stream-json` 를 흉내 내는 가짜(모델 비용 0, 네트워크 없음). `FAKE_CLAUDE_*` 환경변수로 턴별 동작을 준다. `start` 가 `FAKE_CLAUDE_` 변수를 고정 설정 `claude_env` 에 얼린다 |
 | `tests/fixtures/mac-run/` | macOS 가 쓴 실행 폴더 사본. 파일 호환 시험(`tests/model.rs`)이 읽고 다시 써 본다 |
 | `#[ignore] measured_start_registers_and_unregister_all` | 실제 작업 스케줄러에 등록 · 지우기. `cargo test -p claude-board-autopilot --test cli -- --ignored` |
@@ -1500,7 +1508,7 @@ macOS LaunchAgent(`KeepAlive` · `RunAtLoad`)의 대응이다. COM 이 아니라
 - 시작 준비 화면의 보드 쪽 상한(단위 30 · 요청 1 MiB · 목표 20000자)은 보드가 정한 입력 상한이지 명령줄 규칙이 아니다. 시간 · 비용 상한 칸을 비우면 엔진 기본값(시간 120분 · 비용 100 USD · 주간 5 퍼센트포인트)이 적용되고 값이 크므로 상한을 적어 두는 편이 안전하다. 화면에는 주간 사용 한도 칸이 없다(기본값 그대로).
 - 규칙은 손으로 옮긴 것이라 macOS 쪽 변경은 `ported.rs` 가 실패해야 알 수 있다. `apAddEvidence`(밖에서 읽은 근거를 비밀값을 가려 기록)는 옮기지 않았다.
 - 옮긴 지점: `Stopline.swift`(5시간 한도가 없는 요금제에서 `apUsageFromPercent` 가 주간만 풀고, 두 창 모두 사용률을 읽지 못하면 모름으로 답하며, `apShowFiveHour` 를 더한 것)와 `Records.swift`(판 5, `unit_commits` 표). Windows 사용률 어댑터(`adapters/usage`)는 원래부터 `five_hour` null 을 한도 없음(0.0)으로 읽어 같은 판정이 되고, `tests/usage.rs` 가 그 판정을 지킨다.
-- macOS 에서 옮기기 뒤에 늘어난 자율주행 규칙 가운데 아직 옮기지 않은 것(기능 이름): 출발 준비 git 자리 확인(`PrepGit`) · 단위 커밋 기록과 승격 뒤 되돌림 신호(`UnitCommits`) · 엔진 git 보호 값(`EngineGit`, Windows 의 `adapters/git` 는 같은 목적의 보호를 따로 갖고 있으나 늦은 받기 끄기 · 전송 프로토콜 끄기 · 서명 표시 끄기 · 중첩 bare 저장소 · 하위 모듈 무시는 아직 없다) · 보고서 창 콘텐츠 규칙 차례(`ReportGate`) · 멈출 선 자리 표(`SlotTable`) · 출발 때 Jira 티켓 나무(`Tickets`) · 빠진 단위 보고서 찾기(`Report`) · 초안 세션의 경로 권한 규칙 절대 경로 꼴(`Draft`) · 출발 확인 설정 줄 안내 글(`StartSettings`).
+- macOS 에서 옮기기 뒤에 늘어난 자율주행 규칙 가운데 아직 옮기지 않은 것(기능 이름): 출발 준비 git 자리 확인(`PrepGit`) · 단위 커밋 기록과 승격 뒤 되돌림 신호(`UnitCommits`) · 보고서 창 콘텐츠 규칙 차례(`ReportGate`) · 멈출 선 자리 표(`SlotTable`) · 출발 때 Jira 티켓 나무(`Tickets`) · 빠진 단위 보고서 찾기(`Report`) · 초안 세션의 경로 권한 규칙 절대 경로 꼴(`Draft`) · 출발 확인 설정 줄 안내 글(`StartSettings`).
 - 네이티브 거부 규칙은 도구 권한만 막는다. Bash 를 허용한 실행에서 Bash 가 하는 일은 막지 못한다. 네이티브 환경은 샌드박스 없음에 동의한 실행에만 쓴다.
 - 확인하지 못한 것(`untested:`): ① 실제 WSL 에서 엔진을 처음부터 끝까지 돌리는 것(시험한 배포판에 `socat` 이 없어 `check_ready` 가 준비 안 됨으로 답하고 `start` 가 거부한다) ② WSL 샌드박스가 실제로 걸리는 것 ③ 그 배포판 안의 claude 로그인이 만료돼 stream-json 한 턴 시험(`real_spawn_claude_one_stream_json_turn`)이 OAuth 만료로 실패한다(파이프 경로 자체는 동작) ④ Git Bash · PowerShell 7 · Windows PowerShell 환경에서 진짜 claude 로 도는 것(진짜 claude 단위 통과는 명령 프롬프트 한 번뿐) ⑤ 판정 재시도 · 단위 여럿 · 작업 스케줄러가 띄운 엔진이 진짜 claude 로 도는 것 ⑥ wsl.exe 자신의 시작 메시지가 판정 출력 앞에 섞이는지 ⑦ 실제 Windows 10 ⑧ 로그오프 · 재부팅 뒤 작업 스케줄러가 엔진을 다시 띄우는 것 ⑨ 오래 사람 없이 도는 실행 ⑩ 시작 준비 화면: 실제 Tauri 창에서 돌려 보지 않았다(브라우저 모의 모드와, 화면이 만든 파일로 명령줄을 돌린 것으로만 확인했다). 폴더 고르기 대화상자와 `invoke` → 명령줄 → 작업 스케줄러 전체 경로도 실제 창에서 돌리지 않았다. 실제 WSL 배포판에서 출발해 보지 않았고, 좁은 머리 배치와 트레이 항목은 확인하지 않았다 ⑪ 두 exe 가 든 실제 CI 빌드 · 실제 setup.exe 설치(§8.1).
 - 엔진이 죽은 뒤 다시 뜨기까지는 최대 약 60초다(작업 스케줄러 반복 간격의 한계, macOS 10초).

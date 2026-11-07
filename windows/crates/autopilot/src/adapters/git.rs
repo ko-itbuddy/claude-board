@@ -89,7 +89,40 @@ fn static_config() -> Vec<(&'static str, &'static str)> {
         ("core.pager", "cat"),
         ("protocol.ext.allow", "never"),
         ("commit.gpgsign", "false"),
+        // macOS 엔진 git 보호(EngineGit.swift `apEngineGitHardenC`)와 같은 값, 같은 차례
+        // 작업 폴더가 bare 저장소 꼴(HEAD·objects·refs)이어도 git 이 스스로 저장소로 쓰지 않게
+        ("safe.bareRepository", "explicit"),
+        // 모델이 심은 중첩 git(gitlink)으로 status·diff·switch 가 들어가 그 저장소의 filter 를 돌리지 않게
+        ("diff.ignoreSubmodules", "all"),
+        // 모든 전송 프로토콜을 끈다(명령줄 무게라 저장소 설정이 덮지 못함). 엔진은 fetch·push·clone 을 부르지 않는다
+        ("protocol.allow", "never"),
+        // git log 가 저장소 설정의 gpg.program 을 부르지 않게
+        ("log.showSignature", "false"),
     ]
+}
+
+/// 엔진 git 에 박는 환경 값(EngineGit.swift `apEngineGitHardenEnv` 와 같은 이름·값, 설정 파일 자리는 Windows 빈 장치).
+/// 모델이 저장소 설정·attributes·replace 객체에 명령을 심어도 밖의 git 이 실행하지 않게 하고,
+/// 부분 복제 저장소에서 빠진 객체를 받으려고 원격 명령(`remote.*.uploadpack`·`core.sshCommand`)을 부르지 않게 한다
+pub const ENGINE_GIT_HARDEN_ENV: [(&str, &str); 5] = [
+    ("GIT_CONFIG_NOSYSTEM", "1"),
+    ("GIT_CONFIG_GLOBAL", NULL_DEVICE),
+    ("GIT_ATTR_NOSYSTEM", "1"),
+    ("GIT_NO_REPLACE_OBJECTS", "1"),
+    ("GIT_NO_LAZY_FETCH", "1"),
+];
+
+/// `GIT_` 로 시작하는 환경 변수 이름인가(Windows 는 이름의 대소문자를 가리지 않는다)
+fn is_git_var(name: &str) -> bool {
+    name.to_ascii_uppercase().starts_with("GIT_")
+}
+
+/// 엔진 git 의 프로세스 환경(EngineGit.swift `apEngineGitEnv`): 물려받은 환경에서 `GIT_*` 를 모두 빼고 보호 값만 넣는다.
+/// 물려받은 `GIT_CONFIG_PARAMETERS`·`GIT_CONFIG_COUNT/KEY/VALUE`·`GIT_SSH*`·`GIT_ALLOW_PROTOCOL`·`GIT_DIR`·`GIT_INDEX_FILE` 등이 남아 있으면 안 된다
+pub fn engine_git_env(inherited: &[(String, String)]) -> Vec<(String, String)> {
+    let mut env: Vec<(String, String)> = inherited.iter().filter(|(k, _)| !is_git_var(k)).cloned().collect();
+    env.extend(ENGINE_GIT_HARDEN_ENV.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+    env
 }
 
 /// 저장소가 이름을 붙인 코드 실행 칸(`filter.x.clean` 처럼)을 찾아 비우는 설정 쌍.
@@ -198,40 +231,19 @@ fn exec(mut cmd: Command, what: &str, timeout: Duration) -> PortResult<GitOutput
 
 /// 상속된 git 환경을 걷어내고 보호 값을 건다.
 fn apply_env(cmd: &mut Command) {
-    // GIT_DIR 등이 남아 있으면 -C 와 상관없이 엉뚱한 저장소를 만진다. GIT_CONFIG_* 는 COUNT/KEY_n/VALUE_n 도 포함한다.
-    // 외부 diff·속성 원본·편집기·pager·ssh·인증 도우미를 가리키는 변수도 코드를 돌릴 수 있어 걷어낸다
-    const STRIPPED: [&str; 14] = [
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_EXTERNAL_DIFF",
-        "GIT_ATTR_SOURCE",
-        "GIT_PAGER",
-        "GIT_EDITOR",
-        "GIT_SEQUENCE_EDITOR",
-        "GIT_SSH",
-        "GIT_SSH_COMMAND",
-        "GIT_ASKPASS",
-        "GIT_PROXY_COMMAND",
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_OBJECT_DIRECTORY",
-    ];
-    let stripped: Vec<OsString> = std::env::vars_os()
-        .map(|(k, _)| k)
-        .filter(|k| {
-            let up = k.to_string_lossy().to_ascii_uppercase();
-            STRIPPED.contains(&up.as_str()) || up.starts_with("GIT_CONFIG")
-        })
-        .collect();
+    // 물려받은 GIT_* 는 모두 뺀다 — GIT_DIR 등이 남아 있으면 -C 와 상관없이 엉뚱한 저장소를 만지고,
+    // GIT_CONFIG_*(PARAMETERS·COUNT/KEY/VALUE 포함)·GIT_SSH*·GIT_ALLOW_PROTOCOL·GIT_EXTERNAL_DIFF·GIT_ATTR_SOURCE·GIT_PAGER·GIT_EDITOR·
+    // GIT_ASKPASS·GIT_PROXY_COMMAND·GIT_EXEC_PATH 같은 변수는 코드를 돌리거나 보호를 풀 수 있다
+    let stripped: Vec<OsString> =
+        std::env::vars_os().map(|(k, _)| k).filter(|k| is_git_var(&k.to_string_lossy())).collect();
     for k in stripped {
         cmd.env_remove(k);
     }
-    cmd.env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", NULL_DEVICE)
-        .env("GIT_ATTR_NOSYSTEM", "1")
-        .env("GIT_PAGER", "cat")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_OPTIONAL_LOCKS", "0");
+    for (k, v) in ENGINE_GIT_HARDEN_ENV {
+        cmd.env(k, v);
+    }
+    // Windows 어댑터가 더하는 값: 쪽수 넘김·입력 물음·선택적 잠금 끄기
+    cmd.env("GIT_PAGER", "cat").env("GIT_TERMINAL_PROMPT", "0").env("GIT_OPTIONAL_LOCKS", "0");
 }
 
 #[cfg(windows)]
@@ -317,6 +329,74 @@ pub fn autopilot_branch_name(run_id: &str) -> PortResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── 엔진 git 보호(EngineGitTests.swift 이름을 따른다) ──
+
+    fn harden_c_args() -> Vec<String> {
+        static_config().iter().flat_map(|(k, v)| ["-c".to_string(), format!("{k}={v}")]).collect()
+    }
+
+    #[test]
+    fn engine_git_옮기기_macos_값과_같은_글자() {
+        assert_eq!(
+            ENGINE_GIT_HARDEN_ENV[..4],
+            [
+                ("GIT_CONFIG_NOSYSTEM", "1"),
+                ("GIT_CONFIG_GLOBAL", NULL_DEVICE),
+                ("GIT_ATTR_NOSYSTEM", "1"),
+                ("GIT_NO_REPLACE_OBJECTS", "1")
+            ]
+        );
+        let c = harden_c_args().join(" ");
+        for want in [
+            "-c core.fsmonitor=false",
+            &format!("-c core.hooksPath={NULL_DEVICE}"),
+            "-c commit.gpgsign=false",
+            &format!("-c core.attributesFile={NULL_DEVICE}"),
+            "-c safe.bareRepository=explicit",
+            "-c diff.ignoreSubmodules=all",
+        ] {
+            assert!(c.contains(want), "{want} 가 없다: {c}");
+        }
+    }
+
+    #[test]
+    fn engine_git_늦은받기_전송프로토콜_서명확인을_끈다() {
+        assert!(ENGINE_GIT_HARDEN_ENV.contains(&("GIT_NO_LAZY_FETCH", "1")));
+        let c = harden_c_args();
+        assert_eq!(c[c.len() - 4..], ["-c", "protocol.allow=never", "-c", "log.showSignature=false"]);
+    }
+
+    #[test]
+    fn engine_git_물려받은_git_변수는_모두_빠지고_보호_값만_남는다() {
+        for k in [
+            "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_SSH", "GIT_SSH_COMMAND",
+            "GIT_ALLOW_PROTOCOL", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_EXEC_PATH", "GIT_ASKPASS", "GIT_PROTOCOL_FROM_USER", "git_dir",
+        ] {
+            let inherited = vec![
+                ("PATH".to_string(), "C:/bin".to_string()),
+                ("USERPROFILE".to_string(), "C:/Users/toy".to_string()),
+                (k.to_string(), "planted".to_string()),
+                ("GIT_CONFIG_GLOBAL".to_string(), "C:/w/planted.cfg".to_string()),
+            ];
+            let e = engine_git_env(&inherited);
+            let get = |n: &str| e.iter().find(|(key, _)| key == n).map(|(_, v)| v.as_str());
+            assert_eq!(get(k), if k == "GIT_CONFIG_GLOBAL" { Some(NULL_DEVICE) } else { None }, "{k}");
+            assert_eq!(get("PATH"), Some("C:/bin"));
+            assert_eq!(get("USERPROFILE"), Some("C:/Users/toy"));
+            assert_eq!(get("GIT_CONFIG_GLOBAL"), Some(NULL_DEVICE));
+            assert_eq!(get("GIT_NO_LAZY_FETCH"), Some("1"));
+            assert_eq!(get("GIT_NO_REPLACE_OBJECTS"), Some("1"));
+            let mut git_keys: Vec<&str> = e.iter().map(|(key, _)| key.as_str()).filter(|n| is_git_var(n)).collect();
+            git_keys.sort_unstable();
+            assert_eq!(
+                git_keys,
+                ["GIT_ATTR_NOSYSTEM", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_NO_LAZY_FETCH", "GIT_NO_REPLACE_OBJECTS"],
+                "{k}"
+            );
+        }
+    }
 
     #[test]
     fn porcelain_basic_and_rename() {
