@@ -3,9 +3,9 @@
 // 규칙 라이브러리에 두어 Tests/AutopilotRulesTests 가 SQLite 로 직접 건다(라이브러리는 Foundation 만, SQLite 는 엔진·보드·시험이)
 import Foundation
 
-public let apRecordsVersion: Int32 = 4
+public let apRecordsVersion: Int32 = 5
 public let apRecordsTables = ["projects", "runs", "units", "queue_items", "cards", "carry", "sets", "tickets", "imports", "judge_misses",
-                                 "path_claims", "stopline_slots"]
+                                 "path_claims", "stopline_slots", "unit_commits"]
 public let apRecordsSchemaV1 = """
 CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, root TEXT UNIQUE, kind TEXT, repos TEXT, created REAL, updated REAL);
 CREATE TABLE runs (id TEXT PRIMARY KEY, project_id TEXT, title TEXT, source TEXT, continues TEXT, state TEXT, reason TEXT, model TEXT,
@@ -56,6 +56,14 @@ ALTER TABLE queue_items ADD COLUMN source TEXT;
 ALTER TABLE queue_items ADD COLUMN def TEXT;
 """
 
+// 판 5(다듬기 ⑬-2, 2026-11-05): 단위 커밋 기록(설계 5장 7절, 규칙 UnitCommits.swift). 실행·단위(finish 병합은 단위 없음)·저장소·커밋 이름·종류
+// (unit 단위가 만든 커밋·story_merge 스토리로 합친 병합·finish_merge 합치기 병합·promote 승격 병합)·든 가지·합칠 쪽·때. 승격 뒤 되돌림을 커밋으로만 짝짓는다
+public let apRecordsSchemaV5 = """
+CREATE TABLE unit_commits (run_id TEXT NOT NULL, unit_n INTEGER, repo TEXT NOT NULL, sha TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT, source TEXT, at REAL,
+  PRIMARY KEY (run_id, repo, sha, kind));
+CREATE INDEX unit_commits_sha ON unit_commits(repo, sha);
+"""
+
 // 판 올리기 차례: 판 n 으로 올리는 SQL. 엔진이 열 때 지금 판보다 높은 것을 차례로(한 transaction 안에서, 잠금을 잡은 뒤 판을 다시 보고) 건다
-public let apRecordsMigrations: [(version: Int32, sql: String)] = [(1, apRecordsSchemaV1), (2, apRecordsSchemaV2), (3, apRecordsSchemaV3), (4, apRecordsSchemaV4)]
+public let apRecordsMigrations: [(version: Int32, sql: String)] = [(1, apRecordsSchemaV1), (2, apRecordsSchemaV2), (3, apRecordsSchemaV3), (4, apRecordsSchemaV4), (5, apRecordsSchemaV5)]
 public func apRecordsSteps(from v: Int32) -> [(version: Int32, sql: String)] { apRecordsMigrations.filter { $0.version > v } }

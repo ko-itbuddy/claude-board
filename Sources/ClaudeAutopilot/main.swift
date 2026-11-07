@@ -10,6 +10,7 @@
 //        claude-autopilot takeover-check <실행 폴더>                  이어받은 실행의 작업 트리 git 확인(보드가 이어받기 탭을 열기 직전, JSON {ok, why})
 //        claude-autopilot records import [--dev|--db <파일>] [--project <이름>] [--unit-key <칸 경로>] <원본…>
 //                                                                   실행 기록 저장소(SQLite)에 실행 폴더·일반 꼴 대기열을 옮겨 담기
+//        claude-autopilot records scan-reverts <프로젝트> [--dev] [--json]   승격 뒤 되돌림 훑기(다듬기 ⑬-2, 판정 놓침 revert. misses·start 도 부름)
 //        claude-autopilot prerun <실행 폴더> [--dev]                  출발 전 판정 미리 돌리기(prerun.json)
 //        claude-autopilot report <실행 폴더> [--out <파일>|-]         보고서 다시 그리기(report.html·units/<n>/report.html, 모델을 부르지 않음).
 //                                                                   도는 엔진은 단위 판정 뒤·건너뛴 뒤·끝 정리 때 같은 틀(AutopilotRules)로 스스로 그린다
@@ -178,7 +179,7 @@ func seedOf(_ f: [String: Any]) -> APSeed? { apSeedParse(f["seed"]) }
 func seededRepo(_ f: [String: Any], _ r: String) -> APSeed? { seedOf(f).flatMap { canonical($0.repo) == r ? $0 : nil } }
 // 표준 출력을 다듬지 않는 git(파일 글을 그대로 받을 때)
 func gitRaw(_ args: [String], cwd: String) -> (code: Int32, out: String) {
-    runTool("/usr/bin/env", gitHardenEnv + ["/usr/bin/git", "--no-optional-locks"] + gitHardenC + args, cwd: cwd, timeout: 60)
+    runTool("/usr/bin/env", gitHardenEnv + ["/usr/bin/git", "--no-optional-locks"] + gitHardenC + args, cwd: cwd, timeout: 60, environment: gitProcessEnv)
 }
 // 시나리오 글: 출발 전 자율주행 가지가 있으면 그 가지 머리의 파일(git 객체)을 먼저 읽고(출발하면 그 가지에서 돌므로. 7단계 ⑫-7b: 이어 가기·가져오기도
 // 그 가지에 고친·되살린 시나리오를 커밋한다), 그 가지에 없으면 작업 폴더. 보통 파일(100644·100755)만, 1 MB 까지, 경로는 시나리오 경로 꼴만(링크·폴더 밖 못 가리킴)
@@ -278,11 +279,12 @@ func lockEvidence(_ dir: String) {
 
 // 짧은 명령(ps·git·launchctl·security)을 돌려 표준 출력을 받는다
 @discardableResult
-func runTool(_ path: String, _ args: [String], cwd: String? = nil, timeout: Double = 30, withErr: Bool = false) -> (code: Int32, out: String) {
+func runTool(_ path: String, _ args: [String], cwd: String? = nil, timeout: Double = 30, withErr: Bool = false, environment: [String: String]? = nil) -> (code: Int32, out: String) {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: path)
     p.arguments = args
     if let cwd { p.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+    if let environment { p.environment = environment }
     let pipe = Pipe()
     p.standardOutput = pipe
     p.standardError = withErr ? pipe : FileHandle.nullDevice
@@ -312,30 +314,28 @@ func mkdirPrivate(_ p: String) {
     chmod(p, 0o700)
 }
 
-// 엔진이 샌드박스 밖에서 부르는 git 의 보호(보안 검토 2026-10-22 둘째): 저장소 설정의 fsmonitor·hooks·attributesFile·gpgsign 을 쓰지 않고,
-// 시스템·전역 설정과 전역 attributes·replace 객체도 읽지 않는다 — 모델이 저장소 설정·attributes·replace 에 명령을 심어도 밖의 git 이 실행하지 않게
-let gitHardenEnv = ["GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_ATTR_NOSYSTEM=1", "GIT_NO_REPLACE_OBJECTS=1"]
-// safe.bareRepository=explicit(2026-10-30 5-4 보안): 작업 폴더가 bare 저장소 꼴(HEAD·objects·refs)이어도 git 이 스스로 그것을 저장소로 쓰지 않게
-// diff.ignoreSubmodules=all(2026-10-30 ⑦ 보안): 모델이 작업 폴더에 심은 중첩 git(gitlink)으로 status·diff·switch 가 들어가 그 저장소의 filter 를
-// 돌리지 않게(Gitlinks.swift). 자율주행은 git 하위 모듈을 쓰지 않아 통째로 무시해도 된다. add·stash 는 경로를 빼는 pathspec 으로 따로 막는다
-let gitHardenC = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-c", "core.attributesFile=/dev/null",
-                  "-c", "safe.bareRepository=explicit", "-c", "diff.ignoreSubmodules=all"]
+// 엔진이 샌드박스 밖에서 부르는 git 의 보호 — 값과 까닭은 규칙 AutopilotRules/EngineGit.swift(다듬기 ⑬-2 ⑥ 에서 옮김, 같은 글자)
+let gitHardenEnv = apEngineGitHardenEnv
+let gitHardenC = apEngineGitHardenC
+// 엔진 git 의 프로세스 환경(다듬기 ⑬-2 ⑥, 규칙 apEngineGitEnv): 물려받은 GIT_*(GIT_CONFIG_PARAMETERS·GIT_CONFIG_COUNT·GIT_SSH* 등)를 뺀 엔진 환경에 보호 값.
+// 명령줄 출발·출발 전 명령은 부른 쪽(보드·터미널)의 환경을 물려받는다 — 거기 심은 설정이 엔진 git 의 박은 값을 흐리지 않게
+let gitProcessEnv = apEngineGitEnv(inherited: ProcessInfo.processInfo.environment)
 // env: 더 넣을 환경 변수("이름=값") — 모델이 쓸 수 있던 자리에서 도는 git 은 엔진이 GIT_DIR·GIT_WORK_TREE 를 출발 때 기록한 자리로 박는다(Engine.pin)
 func safeGit(_ args: [String], cwd: String, env: [String] = []) -> String {
-    runTool("/usr/bin/env", gitHardenEnv + env + ["/usr/bin/git", "--no-optional-locks"] + gitHardenC + args, cwd: cwd).out
+    runTool("/usr/bin/env", gitHardenEnv + env + ["/usr/bin/git", "--no-optional-locks"] + gitHardenC + args, cwd: cwd, environment: gitProcessEnv).out
 }
 // 엔진이 가지를 바꾸는 git(만들기·바꾸기·병합 커밋·ref 올리기): safeGit 과 같은 보호에 종료 코드와 오류 출력까지 돌려준다.
 // 전역 설정을 읽지 않으므로 엔진이 만드는 커밋에는 사용자 신원을 명령줄로 붙인다(없으면 "Please tell me who you are")
 func gitRun(_ args: [String], cwd: String, commit: Bool = false, withErr: Bool = true, env: [String] = []) -> (code: Int32, out: String) {
     var a = gitHardenEnv + env + ["/usr/bin/git"] + gitHardenC
     if commit { let i = gitIdentity(cwd); a += ["-c", "user.name=\(i.name)", "-c", "user.email=\(i.email)"] }
-    let r = runTool("/usr/bin/env", a + args, cwd: cwd, timeout: 120, withErr: withErr)
+    let r = runTool("/usr/bin/env", a + args, cwd: cwd, timeout: 120, withErr: withErr, environment: gitProcessEnv)
     return (r.code, r.out.trimmingCharacters(in: .whitespacesAndNewlines))
 }
 // 사용자 git 신원(값만 읽는다 — git config --get 은 아무것도 실행하지 않는다). 없으면 엔진 이름
 func gitIdentity(_ cwd: String) -> (name: String, email: String) {
     func get(_ k: String) -> String? {
-        let v = runTool("/usr/bin/git", ["config", "--get", k], cwd: cwd).out.trimmingCharacters(in: .whitespacesAndNewlines)
+        let v = runTool("/usr/bin/git", ["config", "--get", k], cwd: cwd, environment: apEngineGitIdentityEnv(inherited: ProcessInfo.processInfo.environment)).out.trimmingCharacters(in: .whitespacesAndNewlines)
         return v.isEmpty ? nil : v
     }
     return (get("user.name") ?? "Claude Board autopilot", get("user.email") ?? "autopilot@claude-board.invalid")
@@ -795,7 +795,9 @@ func scanHarness(_ folders: [String]) -> HarnessScan {
 func harnessFolders(_ cwds: [String]) -> [String] {
     var out: [String] = []
     for c in cwds {
-        let top = safeGit(["rev-parse", "--show-toplevel"], cwd: c).trimmingCharacters(in: .whitespacesAndNewlines)
+        // 뿌리는 git 자리 확인(prepGit)으로(보안 검토 고침, 다듬기 ⑬-2). 출발 전 확인을 지난 뒤라 걸린 저장소는 없다 — 걸리면 그 폴더 그대로
+        let g = prepGit(c)
+        let top = g.block == nil ? g.top ?? "" : ""
         let f = top.hasPrefix("/") && isDir(top) ? canonical(top) : c
         if !out.contains(f) { out.append(f) }
     }
@@ -852,16 +854,92 @@ func harnessCheck(manifestDir dir: String) -> [String: Any]? {
 // 끝에 깨끗하면 출발 때 가지로 되돌린다. 엔진이 스스로 움직이는 가지는 이 실행이 만든 autopilot/<실행 id> 와 Jira 스토리·작업 가지뿐이다.
 // 따로 작업 트리(단일 저장소)는 다음 차례라 아직 없다
 
-// 단위 작업 폴더·쓰기 범위가 든 git 저장소의 뿌리(같은 저장소는 한 번만). 저장소가 아닌 폴더(~/.gradle 등)는 뺀다
+// 단위 작업 폴더·쓰기 범위가 든 git 저장소의 뿌리(같은 저장소는 한 번만). 저장소가 아닌 폴더(~/.gradle 등)는 뺀다.
+// 다듬기 ⑬-2 ⑥: 뿌리는 git 을 부르지 않고 파일 시스템으로 찾고(rev-parse 도 그 .git 의 설정·commondir 를 따른다), git 자리 확인(규칙 apPrepGitCheck,
+// ⑬-1 보드 출발 준비와 같은 규칙)에 걸린 저장소는 빼고 gitGateBlocked 에 까닭을 남긴다 — 부르는 쪽(출발 전 확인·하네스·시나리오 커밋)이 멈춘다
 func gitRepos(_ paths: [String]) -> [String] {
     var out: [String] = []
     for p in paths {
-        guard let top = gitOut(["rev-parse", "--show-toplevel"], cwd: p), top.hasPrefix("/") else { continue }
+        let g = prepGit(p)
+        guard let top = g.top else { continue }
+        if g.block != nil { continue }
         let c = canonical(top)
         if !out.contains(c) { out.append(c) }
     }
     return out
 }
+
+// MARK: - 사람 저장소의 git 자리 확인 (다듬기 ⑬-2 ⑥, 규칙 AutopilotRules/PrepGit.swift)
+// 엔진이 사람 저장소(출발 전 확인·출발·판정 미리 돌리기·뼈대·가져오기·하네스·되돌림 훑기)에 git 을 부르기 전에 ⑬-1 보드 출발 준비와 같은 확인을 한다:
+// 고른 폴더 위 중첩 git·.git 이 가리키는 임시·작업 트리 안·떨어진 git 폴더·따로 작업 트리가 아닌 git 폴더의 commondir·명령인 core.fsmonitor·
+// filter 명령(include 로 끌어온 파일까지)·저장소·임시 폴더 안을 가리키거나 git 과 같게 풀 수 없는(~<사용자>·%(prefix)) include·하위 모듈.
+// 걸리면 그 저장소에서 git 을 하나도 돌리지 않고 까닭을 낸다(엔진이 출발 뒤 단위마다 보는 확인 unitGitOK·gitDirChange·checkGitPlaces 는 출발 때 기록과
+// 견주는 다른 기준이라 그대로 둔다 — 설계 4장 "다듬기 ⑬-2 판단")
+struct EnginePrepGitWorld: APPrepGitWorld {
+    private func mode(_ p: String) -> mode_t? { var st = stat(); return lstat(p, &st) == 0 ? st.st_mode & S_IFMT : nil }
+    func entry(_ dir: String) -> APGitEntry? {
+        let p = (dir == "/" ? "" : dir) + "/.git"
+        guard let m = mode(p) else { return nil }
+        switch m {
+        case S_IFDIR: return .dir
+        case S_IFLNK: return .link
+        case S_IFREG:
+            guard let t = text(p), t.hasPrefix("gitdir:") else { return .file(nil) }
+            return .file(String(t.dropFirst(7)))
+        default: return .other
+        }
+    }
+    func real(_ path: String) -> String? {
+        guard let r = realpath(path, nil) else { return nil }
+        defer { free(r) }
+        return String(cString: r)
+    }
+    func text(_ path: String) -> String? {
+        var st = stat()
+        guard lstat(path, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG, st.st_size <= 65_536 else { return nil }
+        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+        guard fd >= 0 else { return nil }
+        let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        return String(data: (try? h.read(upToCount: 65_536)) ?? Data(), encoding: .utf8)
+    }
+    func isFile(_ path: String) -> Bool { mode(path) == S_IFREG }
+    func isDir(_ path: String) -> Bool { mode(path) == S_IFDIR }
+    func stamp(_ path: String) -> String? { gitStat(path) }
+    func config(_ file: String) -> [APConfigEntry]? {
+        guard let m = mode(file) else { return [] }
+        guard m == S_IFREG else { return nil }
+        // 저장소를 찾지 않게 / 에서, 물려받은 GIT_* 없이(apPrepGitEnv), 표준 오류는 섞지 않는다
+        let r = runTool("/usr/bin/git", ["config", "--file", file, "--no-includes", "--null", "--list"], cwd: "/",
+                        environment: apPrepGitEnv(inherited: ProcessInfo.processInfo.environment, extra: []))
+        guard r.code == 0 else { return nil }
+        return r.out.split(separator: "\0").map { (e: Substring) -> APConfigEntry in
+            guard let nl = e.firstIndex(of: "\n") else { return APConfigEntry(key: String(e), value: nil) }
+            return APConfigEntry(key: String(e[..<nl]), value: String(e[e.index(after: nl)...]))
+        }
+    }
+    func submodules(top: String, pin: [String]) -> (gitlinks: [String], gitmodules: Bool)? {
+        // pin: 확인한 git 폴더·공통 git 폴더·작업 트리와 늦은 받기·전송 프로토콜 막음(APPrepGit.pin)
+        let ls = gitRun(["-c", "core.quotePath=false", "ls-files", "-s", "-z"], cwd: top, withErr: false, env: pin)
+        guard ls.code == 0 else { return nil }
+        let gm = mode(top + "/.gitmodules") != nil
+            || !(gitOut(["ls-files", "-s", "-z", "--", ".gitmodules"], cwd: top, env: pin) ?? "").isEmpty
+            || !(gitOut(["ls-tree", "HEAD", "--", ".gitmodules"], cwd: top, env: pin) ?? "").isEmpty
+        return (apGitlinkPaths(lsFilesZ: ls.out), gm)
+    }
+}
+// 경로 하나의 확인(같은 실제 경로는 한 번). 걸린 저장소는 gitGateBlocked 에(뿌리 → 까닭)
+var prepGitMemo: [String: APPrepGit] = [:]
+var gitGateBlocked: [String: String] = [:]
+func prepGit(_ path: String, records: [String: APGitRecord] = [:]) -> APPrepGit {
+    let key = realPathLoose(path) + (records.isEmpty ? "" : "\u{0}r")
+    if let g = prepGitMemo[key] { return g }
+    let g = apPrepGitCheck(path, world: EnginePrepGitWorld(), records: records, home: home)
+    prepGitMemo[key] = g
+    if let t = g.top, let why = g.block { gitGateBlocked[t] = why }
+    return g
+}
+// 걸린 저장소의 글(보드 출발 준비와 같은 꼴, 규칙 apPrepGitBlockText)
+func gitGateProblems() -> [String] { gitGateBlocked.keys.sorted().map { apPrepGitBlockText(top: $0, why: gitGateBlocked[$0]!, home: home) } }
 // 가지 이름 → 머리 커밋(refname:short 는 같은 이름의 태그가 있으면 heads/ 를 붙이므로 전체 이름에서 뗀다)
 func branchHeads(_ repo: String) -> [String: String] {
     var m: [String: String] = [:]
@@ -879,7 +957,7 @@ func isAncestor(_ repo: String, _ a: String, _ b: String, env: [String] = []) ->
 // 줄 앞 빈칸이 상태 글자라("XY 경로") 출력 전체를 다듬지 않는다 — gitOut 은 다듬어 첫 줄의 " M" 이 "M" 이 됐다(5-3b ①, 경로만 보관할 때 경로가 어긋남)
 func porcelain(_ repo: String, env: [String] = []) -> [String] {
     // --ignore-submodules=all 은 명령줄 플래그라 .gitmodules 의 ignore 설정을 이긴다(⑦ 보안 검토 2) — 하위 모듈로 status 가 들어가지 않는다
-    let r = runTool("/usr/bin/env", gitHardenEnv + env + ["/usr/bin/git"] + gitHardenC + ["--no-optional-locks", "status", "--porcelain", "--ignore-submodules=all"], cwd: repo)
+    let r = runTool("/usr/bin/env", gitHardenEnv + env + ["/usr/bin/git"] + gitHardenC + ["--no-optional-locks", "status", "--porcelain", "--ignore-submodules=all"], cwd: repo, environment: gitProcessEnv)
     return r.code == 0 ? r.out.split(separator: "\n").map(String.init).filter { !$0.isEmpty } : []
 }
 // 가지가 걸려 있는 작업 트리(가지 이름 → 작업 트리 경로)
@@ -1727,6 +1805,19 @@ extension RecordsDB {
                 }
             }
         }
+        // 단위 커밋 기록(판 5, 다듬기 ⑬-2, 규칙 apUnitCommitRows·apFinishCommitRows): 단위가 만든 커밋·스토리로 합친 병합 커밋(엔진 비공개 단위 기록 먼저 —
+        // 단위 폴더 사본은 보드가 그리라고 내놓는 것)과 finish merge·promote 의 병합 커밋(run.json branches.promoted). 같은 줄은 다시 쓰지 않는다
+        for i in q.indices {
+            let n = i + 1
+            guard let e = (readJSON(dir + "/engine/unit-\(n).json") as? [String: Any]) ?? eng[n] else { continue }
+            for c in apUnitCommitRows(run: runId, n: n, engine: e) { written += try putCommit(c) }
+        }
+        for c in apFinishCommitRows(run: runId, promoted: (r["branches"] as? [String: Any])?["promoted"] as? [[String: Any]] ?? []) { written += try putCommit(c) }
+        // 만든 티켓(tickets 표, 다듬기 ⑬-2): 출발 확인의 티켓 나무(tickets-plan.json·tickets.json)와 실행 중에 새로 필요해져 검수 뒤 올린 티켓(outbox kind ticket)
+        if let project { written += try putTickets(dir: dir, project: project, run: runId, unitSources: Dictionary(q.indices.compactMap { i -> (String, String)? in
+            guard let uid = def(i)["id"] as? String ?? q[i]["id"] as? String, let k = def(i)["source_key"] as? String else { return nil }
+            return (uid, k)
+        }, uniquingKeysWith: { a, _ in a })) }
         // 출발 카드와 고른 답
         let cardsAny = readJSON(dir + "/cards.json")
         if let cards = cardsAny as? [[String: Any]] ?? (cardsAny as? [String: Any])?["cards"] as? [[String: Any]] {
@@ -1742,6 +1833,36 @@ extension RecordsDB {
             }
         }
         return written
+    }
+
+    // 단위 커밋 한 줄(판 5) — 같은 실행·저장소·이름·종류는 한 줄
+    func putCommit(_ c: APUnitCommit) throws -> Int {
+        try run("""
+            INSERT INTO unit_commits(run_id,unit_n,repo,sha,kind,ref,source,at) VALUES(?,?,?,?,?,?,?,?)
+            ON CONFLICT(run_id,repo,sha,kind) DO NOTHING
+            """, [c.run, c.unitN, c.repo, c.sha, c.kind.rawValue, c.ref.isEmpty ? nil : c.ref, c.source, r3(c.at)])
+    }
+    // 만든 티켓(tickets 표, 다듬기 ⑬-2, 규칙 apTicketRows·apOutboxTicketRows) — 이미 있는 키는 다시 쓰지 않는다(처음 남긴 실행·때를 지킴).
+    // 파일은 보통 파일·상한 아래만(티켓 상태는 엔진만 쓰고, 올릴 글은 엔진이 만든 꼴만 읽힘)
+    func putTickets(dir: String, project: String, run runId: String, unitSources: [String: String]) throws -> Int {
+        var rows: [APTicketRow] = []
+        if let pd = plainFile(dir + "/tickets-plan.json") {
+            rows += apTicketRows(plan: apTicketPlanParse(pd).plan, book: apTicketBookParse(plainFile(dir + "/tickets.json")), unitSources: unitSources, run: runId)
+        }
+        let box = dir + "/outbox"
+        if isDir(box), !isLink(box) {
+            let items = ((try? fm.contentsOfDirectory(atPath: box)) ?? []).filter { $0.hasSuffix(".json") && apOutboxIDOK(String($0.dropLast(5))) }.sorted()
+                .compactMap { plainFile(box + "/" + $0, max: apOutboxMaxBytes).flatMap(apOutboxParse) }
+            rows += apOutboxTicketRows(items, run: runId).filter { x in !rows.contains { $0.key == x.key } }
+        }
+        var n = 0
+        for t in rows {
+            n += try run("""
+                INSERT INTO tickets(project_id,key,kind,parent_key,title,url,source_key,created_run,created) VALUES(?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(project_id,key) DO NOTHING
+                """, [project, t.key, t.kind, t.parent.isEmpty ? nil : t.parent, t.title, t.url.isEmpty ? nil : t.url, t.sourceKey, t.run, r3(t.created)])
+        }
+        return n
     }
 
     // 판정 놓침(5단계 ⑪-3, 규칙 Misses.swift): 같은 id 면 다시 쓰지 않는다(상태 used·fixed 를 지키려고). 프로젝트마다 apMissKeepPerProject 줄까지(오래된 것부터 지움)
@@ -1832,6 +1953,95 @@ extension RecordsDB {
             """, [project])
         return written
     }
+}
+
+// MARK: - 승격 뒤 되돌림 훑기 (다듬기 ⑬-2 ③, 규칙 AutopilotRules/UnitCommits.swift)
+
+// git 어댑터 — 사람 저장소 git 자리 확인(prepGit, 지난 실행의 git 폴더 기록과도 견줌)을 지난 저장소만, 확인한 git 폴더·공통 git 폴더·작업 트리로 박고
+// 늦은 받기·전송을 막은 env 로 읽기만 한다(가지·ref 쓰기 0). log 는 서명 확인·notes·mailmap 을 끄고 커밋마다 NUL 로 가른다
+struct EngineRevertWorld: APRevertWorld {
+    let pins: [String: [String]]
+    func commits(repo: String, into: String, from: String, max: Int) -> [APScannedCommit]? {
+        guard let pin = pins[repo], apRefNameOK(into), apFullSHA(from) != nil else { return nil }
+        let r = gitRun(["log", "--no-show-signature", "--no-color", "--no-notes", "--no-mailmap", "-z", "--format=%H%n%B", "--max-count=\(max)",
+                        "\(from)..refs/heads/\(into)", "--"], cwd: repo, withErr: false, env: pin)
+        guard r.code == 0 else { return nil }
+        return r.out.split(separator: "\0", omittingEmptySubsequences: true).compactMap { rec -> APScannedCommit? in
+            let t = String(rec.drop { $0 == "\n" })
+            let parts = t.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+            guard let first = parts.first, let sha = apFullSHA(String(first)) else { return nil }
+            return APScannedCommit(sha: sha, message: parts.count > 1 ? String(parts[1]) : "")
+        }
+    }
+    func introduced(repo: String, merge: String, max: Int) -> [String]? {
+        guard let pin = pins[repo], let m = apFullSHA(merge) else { return nil }
+        let r = gitRun(["rev-list", "--max-count=\(max)", "\(m)^1..\(m)", "--"], cwd: repo, withErr: false, env: pin)
+        return r.code == 0 ? r.out.split(separator: "\n").compactMap { apFullSHA(String($0)) } : nil
+    }
+}
+
+struct RevertScanOutcome {
+    var scanned = 0, hits = 0, added = 0, dropped = 0
+    var notes: [String] = []
+    var failed = false
+    var json: [String: Any] { ["scanned": scanned, "hits": hits, "added": added, "dropped": dropped, "notes": notes, "ok": !failed] }
+}
+// 그 프로젝트의 실행들이 승격한 가지(runs.branches.promoted)를 훑어 판정 놓침 revert 를 남기고 거둔다(쓰는 것은 기록 저장소 judge_misses 뿐, git 은 읽기만)
+func scanReverts(project: String, dev: Bool) -> RevertScanOutcome {
+    var o = RevertScanOutcome()
+    let path = recordsPath(dev: dev)
+    guard fm.fileExists(atPath: path) else { o.notes.append("실행 기록 저장소가 아직 없습니다"); return o }
+    let db: RecordsDB
+    do { db = try RecordsDB(path) } catch { o.notes.append("실행 기록 저장소를 열지 못했습니다: \(error)"); o.failed = true; return o }
+    defer { db.close() }
+    do {
+        var promoted: [[String: Any]] = [], records: [String: APGitRecord] = [:], setOf: [String: String] = [:], dirOf: [String: String] = [:]
+        for r in try db.rows("SELECT id, branches, set_id, run_dir FROM runs WHERE project_id=? ORDER BY started", [project]) {
+            guard let id = r[0] as? String else { continue }
+            setOf[id] = r[2] as? String; dirOf[id] = r[3] as? String
+            guard let b = (r[1] as? String).flatMap({ try? JSONSerialization.jsonObject(with: Data($0.utf8)) }) as? [String: Any] else { continue }
+            promoted += b["promoted"] as? [[String: Any]] ?? []
+            for (repo, v) in b["repos"] as? [String: Any] ?? [:] {
+                guard let i = v as? [String: Any], let c = i["common_dir"] as? String else { continue }
+                records[repo] = APGitRecord(commonDir: c, commonIno: i["common_ino"] as? String, workGitDir: nil, workGitIno: nil)   // 뒤(최근) 실행의 기록이 이김
+            }
+        }
+        let ranges = apRevertRanges(promoted: promoted)
+        guard !ranges.isEmpty else { return o }
+        // 저장소마다 git 자리 확인(⑬-2 ⑥, 지난 실행이 출발할 때 적은 공통 git 폴더와도 견줌) — 걸리면 그 저장소는 git 을 부르지 않는다
+        var pins: [String: [String]] = [:], blocked: [String: String] = [:]
+        for repo in Set(ranges.map(\.repo)) {
+            guard isDir(repo) else { blocked[repo] = "저장소 자리가 없어"; continue }
+            let g = prepGit(repo, records: records[repo].map { [realPathLoose(repo): $0] } ?? [:])
+            if let why = g.block { blocked[repo] = "보안: " + why }
+            else if g.top.map(canonical) != canonical(repo) { blocked[repo] = "그 자리가 저장소 뿌리가 아니라" }
+            else { pins[repo] = g.pin }
+        }
+        let recorded = try db.rows("SELECT run_id, unit_n, repo, sha, kind, ref, source, at FROM unit_commits WHERE run_id IN (SELECT id FROM runs WHERE project_id=?)", [project])
+            .compactMap { r -> APUnitCommit? in
+                guard let run = r[0] as? String, let repo = r[2] as? String, let sha = (r[3] as? String).flatMap(apFullSHA),
+                      let kind = (r[4] as? String).flatMap(APCommitKind.init(rawValue:)) else { return nil }
+                return APUnitCommit(run: run, unitN: inum(r[1]), repo: repo, sha: sha, kind: kind, ref: r[5] as? String ?? "", source: r[6] as? String, at: num(r[7]) ?? 0)
+            }
+        let scan = apScanReverts(ranges: ranges, recorded: recorded, world: EngineRevertWorld(pins: pins), blocked: blocked)
+        o.scanned = scan.scanned; o.hits = scan.hits.count; o.notes = scan.notes
+        // 단위 기록(상태·제목·원천 키)과 판정 글(고정 설정, 실행 폴더가 남아 있으면)
+        var units: [String: APRevertUnit] = [:], frozenUnits: [String: [[String: Any]]] = [:]
+        for r in try db.rows("SELECT run_id, n, unit_id, source_key, title, status FROM units WHERE run_id IN (SELECT id FROM runs WHERE project_id=?)", [project]) {
+            guard let run = r[0] as? String, let n = inum(r[1]) else { continue }
+            if frozenUnits[run] == nil { frozenUnits[run] = dirOf[run].flatMap { (readJSON($0 + "/pinned/frozen.json") as? [String: Any])?["units"] as? [[String: Any]] } ?? [] }
+            let fu = frozenUnits[run] ?? []
+            let label = fu.indices.contains(n - 1) ? judgeLabelOf(fu[n - 1]) : ""
+            units["\(run)/\(n)"] = APRevertUnit(status: r[5] as? String ?? "", unitId: r[2] as? String, sourceKey: r[3] as? String, title: r[4] as? String ?? "",
+                                                judge: label.isEmpty ? nil : label, judgeDigest: label.isEmpty ? nil : sha256(Data(label.utf8)), setId: setOf[run])
+        }
+        let (put, drop) = apRevertMisses(scan, project: project, units: units, repoName: repoName, at: r3(now()))
+        try db.transaction {
+            o.added = put.isEmpty ? 0 : try db.putMisses(put)
+            for id in drop { o.dropped += try db.run("DELETE FROM judge_misses WHERE id=? AND project_id=? AND state='open'", [id, project]) }
+        }
+    } catch { o.notes.append("되돌림을 훑지 못했습니다: \(error)"); o.failed = true }
+    return o
 }
 
 // MARK: - 엔진
@@ -2421,6 +2631,7 @@ final class Engine {
             event("engine", "엔진이 다시 떴습니다. 직전에 비정상으로 끝나 하던 자리에서 잇습니다.")
             saveRun()
         }
+        if !first { redrawMissingReports("엔진이 다시 떠서") }   // 단위 판정 뒤 보고서를 그리기 전에 죽었으면(다듬기 ⑬-2 ④)
         while true {
             if state == "paused" { pausedLoop(); continue }
             if state == apTakenOverState { takenOverLoop(); continue }
@@ -2489,6 +2700,21 @@ final class Engine {
         return d
     }
 
+    // 빠진 단위 보고서(다듬기 ⑬-2 ④, 규칙 apMissingUnitReports): 끝난 단위인데 단위 폴더의 report.html(보통 파일)이 없는 것 — 엔진이 단위 판정 뒤
+    // 기록 저장소에 쓴 다음 보고서를 그리기 전에 죽으면 생긴다. 바로 가기는 없는 것으로 본다(EngineReportSink 가 rename 으로 바꿔 끼운다)
+    func missingUnitReports() -> [Int] {
+        apMissingUnitReports(statuses: statuses, hasDir: { n in isDir(self.unitDir(n)) && !isLink(self.unitDir(n)) }, hasReport: { n in
+            var st = stat()
+            return lstat(self.unitDir(n) + "/report.html", &st) == 0 && st.st_mode & S_IFMT == S_IFREG
+        })
+    }
+    func redrawMissingReports(_ when: String) {
+        let m = missingUnitReports()
+        guard !m.isEmpty else { return }
+        let d = drawReports(m)
+        event("engine", "\(when) 보고서가 빠진 단위 \(m.count)개(\(m.map(String.init).joined(separator: "·")))를 다시 그렸습니다(\(d.written.filter { $0 != .run }.count)개, 모델 0).")
+    }
+
     // 끝(완료·중단·오류)의 정리: 하네스를 다시 재어 출발 때와 같은지 적고, 출발 때 없던 빈 .claude/.cc-writes 를 치우고, 기록 저장소에 끝을 쓴다.
     // 출발 때 남긴 지문(manifest.json)만 읽으므로 고정 설정을 못 읽은 오류 끝에서도 돈다
     // 차례(설계 4장 시작과 끝): 하네스 끝 검사·빈 자리 치우기 → 가지 끝 머리 → 기록 저장소 → 출발 때 가지로 되돌리기 → 한 번 더 기록 → wrapped.
@@ -2527,7 +2753,12 @@ final class Engine {
         saveRun()
         record("끝")
         if restoreBranches() { record("되돌린 뒤") }
-        let rep = drawReports([])
+        // 끝난 단위 가운데 보고서가 빠진 것도 실행 보고서와 함께 다시 그린다(다듬기 ⑬-2 ④, 모델 0)
+        let miss = missingUnitReports()
+        let rep = drawReports(miss)
+        if !miss.isEmpty {
+            event("engine", "끝 정리: 보고서가 빠진 단위 \(miss.count)개(\(miss.map(String.init).joined(separator: "·")))를 다시 그렸습니다(\(rep.written.filter { $0 != .run }.count)개).")
+        }
         if rep.written.contains(.run) {
             event("engine", "실행 보고서를 그렸습니다(실행 폴더의 report.html, 단위 \(total)개). 보드의 지난 실행에서 봅니다.")
         } else {
@@ -2852,6 +3083,29 @@ final class Engine {
         guard let c = repoInfo(r)["common_dir"] as? String else { return [] }
         return ["GIT_DIR=" + c]
     }
+    // 단위 커밋 기록(다듬기 ⑬-2): 저장소마다 지금 걸린 가지(repoInfo on)의 머리. 가지·커밋만 읽는 git 이라 공통 git 폴더로 박는다(pinRefs).
+    // git 폴더가 출발 때와 다르면(바꿔치기 의심) 그 저장소는 읽지 않는다(gitDirChange, 진행 기록은 그 저장소를 쓰는 다른 걸음이 남김)
+    func unitHeads() -> [String: Any] {
+        var out: [String: Any] = [:]
+        for r in repos {
+            let on = repoInfo(r)["on"] as? String ?? ""
+            guard !on.isEmpty, gitDirChange(repoInfo(r), at: wt(r)) == nil, let h = headOf(r, "refs/heads/" + on, env: pinRefs(r)) else { continue }
+            out[r] = ["branch": on, "head": h]
+        }
+        return out
+    }
+    // 단위가 끝날 때: 시작 때 가지의 머리가 움직였으면 그 사이 커밋(rev-list 시작..끝, 새것부터 apUnitCommitMax 개, 넘으면 more)
+    func unitCommits(_ start: [String: Any]) -> [[String: Any]] {
+        var out: [[String: Any]] = []
+        for r in repos {
+            guard let s = start[r] as? [String: Any], let b = s["branch"] as? String, let h0 = s["head"] as? String, apFullSHA(h0) != nil else { continue }
+            guard gitDirChange(repoInfo(r), at: wt(r)) == nil else { out.append(["repo": r, "branch": b, "from": h0, "shas": [] as [Any], "note": "git 폴더가 출발 때와 달라 읽지 않음"]); continue }
+            guard let h1 = headOf(r, "refs/heads/" + b, env: pinRefs(r)), h1 != h0 else { continue }
+            let list = (gitOut(["rev-list", "--max-count=\(apUnitCommitMax + 1)", "\(h0)..\(h1)"], cwd: r, env: pinRefs(r)) ?? "").split(separator: "\n").compactMap { apFullSHA(String($0)) }
+            out.append(["repo": r, "branch": b, "from": h0, "to": h1, "shas": Array(list.prefix(apUnitCommitMax)), "more": list.count > apUnitCommitMax])
+        }
+        return out
+    }
     // 작업 트리 안 git 꼴 자리를 출발 때 집합(branches.git_places)과 견주어 새로 생기거나 설정이 바뀐 것을 알린다(알림용 받침, gitPlaces 의 주석).
     // 찾은 것은 branches.git_places_changed 에 쌓고(같은 자리·같은 지문은 한 번), 훑기를 다 하지 못하면 branches.git_places_scan 에 적고 알린다
     // 돌려주는 값(⑫-8 보안 검토 고침, 이어받기 전 막기): 출발 때와 다른 git 자리 모두(이미 알린 것도)·훑기를 다 했는지·못 한 까닭
@@ -3170,7 +3424,7 @@ final class Engine {
         guard let k = def(n)["story"] as? String, let task = def(n)["branch"] as? String, let sb = def(n)["story_branch"] as? String,
               let r = repoOf(cwd(n)) else { return [:] }
         guard gitDirOK(r) else { return ["story": k, "task": task, "branch": sb, "state": "not_merged", "why": "git 폴더가 바뀌어 합치지 않았습니다", "at": r3(now())] }
-        var m: [String: Any] = ["story": k, "task": task, "branch": sb, "at": r3(now())]
+        var m: [String: Any] = ["story": k, "task": task, "branch": sb, "repo": r, "at": r3(now())]   // repo: 병합 커밋 기록(⑬-2 unit_commits)
         let rp = pinRefs(r)   // 이 저장소의 git 폴더로 박는다(5-4 보안)
         let th = headOf(r, "refs/heads/" + task, env: rp), sh = headOf(r, "refs/heads/" + sb, env: rp)
         func no(_ why: String) { m["state"] = "not_merged"; m["why"] = why }
@@ -3417,6 +3671,7 @@ final class Engine {
         for f in (fm.enumerator(atPath: dst)?.allObjects as? [String] ?? []) where !isDir(dst + "/" + f) { chmod(dst + "/" + f, 0o444) }
         let first = firstMessage(n, directions: directions)
         let u: [String: Any] = [
+            "heads_start": unitHeads(),   // 단위 커밋 기록(⑬-2): 저장소마다 지금 걸린 가지와 그 머리 — 끝날 때 이 머리 → 끝 머리 사이를 이 단위의 커밋으로
             "unit": n, "id": def(n)["id"] as? String ?? "u\(n)", "title": title(n), "status": "running",
             "phase": (def(n)["action"] as? String ?? "").isEmpty ? "model" : "action",
             "started": r3(now()), "active_sec": 0, "cost_usd": 0, "cost_done": 0, "turns": 0, "caps": caps(n),
@@ -3448,6 +3703,8 @@ final class Engine {
                 u["git"] = ["note": "작업 폴더가 git 저장소가 아니라 git 기록이 없습니다"]
             }
         }
+        // 단위 커밋 기록(판 5, 다듬기 ⑬-2): 시작 때 머리 → 지금 머리 사이 커밋(저장소마다). 기록 저장소에는 다음 record 가 옮긴다
+        if let hs = u["heads_start"] as? [String: Any], u["commits"] == nil { u["commits"] = unitCommits(hs) }
         // 결과 기록은 모델이 쓰는 자리라 FIFO·큰 파일이어도 엔진이 멈추지 않게 읽는다(5-4 보안)
         let ok = modelFileData(unitDir(n) + "/result.json").flatMap { try? JSONSerialization.jsonObject(with: $0) } is [String: Any]
         u["result_ok"] = ok
@@ -4328,6 +4585,9 @@ func usage() -> Never {
              출발 전 --json: 보드가 읽는 확인 결과(고칠 것·어디서·저장소·Jira 단위의 가지)
            claude-autopilot records import [--dev | --db <파일>] [--project <이름>] [--unit-key <칸 경로>] <원본…>
              원본: 실행 폴더(run.json·queue.json 이 있는 폴더) 또는 일반 꼴 대기열 파일(format "claude-board-queue")
+           claude-autopilot records scan-reverts <프로젝트> [--dev] [--json]
+             승격 뒤 되돌림 훑기(읽기만): 그 프로젝트 실행들이 승격한 가지를 승격 머리 뒤로만 읽어 "This reverts commit <sha>" 가 기록된 단위 커밋·병합 커밋과
+             같을 때만 판정 놓침(revert)으로 남긴다. 되돌림을 다시 되돌렸으면 열린 줄을 거둔다. 출발 준비의 misses 와 start 도 같은 훑기를 한다
            claude-autopilot report <실행 폴더> [--out <파일>|-]
              보고서 다시 그리기(모델 0): 실행 폴더의 report.html·units/<n>/report.html. --out 이면 실행 보고서 하나만 그 파일에(- 는 표준 출력)
            claude-autopilot finish <실행 폴더> merge --into <가지> [--story <키>]
@@ -4505,6 +4765,11 @@ func prepare(_ dir: String, dev: Bool) -> (problems: [String], frozen: [String: 
         if !dev { problems.append("transcripts_dir 는 시험용 칸이라 --dev 출발에서만 씁니다") }
         else if let t = v as? String, t.hasPrefix("/") { f["transcripts_dir"] = t } else { problems.append("run.json 의 transcripts_dir 는 절대 경로 글자입니다") }
     }
+    // 사람 저장소의 git 자리 확인(다듬기 ⑬-2 ⑥): 단위 작업 폴더·쓰기 범위·출발 전 자율주행 가지의 저장소에 git(시나리오 읽기·뿌리 찾기·가지·색인)을
+    // 하나라도 부르기 전에. 걸리면 그 까닭만 내고 더 보지 않는다(닫힌 쪽 — 출발하지 않음)
+    let gatePaths = queue.compactMap { $0["cwd"] as? String }.filter { $0.hasPrefix("/") && isDir($0) } + roots + [(f["seed"] as? [String: Any])?["repo"] as? String].compactMap { $0 }.filter { isDir($0) }
+    for p in gatePaths { _ = prepGit(p) }
+    if !gitGateBlocked.isEmpty { return (problems + gitGateProblems(), f, queue) }
     let answers = readJSON(dir + "/answers.json") as? [String: Any] ?? [:]
     prepareEnvRows = []; prepareGaps = []
     var units: [[String: Any]] = []
@@ -4965,6 +5230,11 @@ func cmdStart(_ args: [String]) -> Never {
         } catch { print("가져오기 줄을 기록 저장소에 쓰지 못했습니다: \(error)") }
     }
     print("출발했습니다: \(label)\n상태 보기: \(pinned) status \(dir)")
+    // 같은 프로젝트의 지난 실행이 승격한 가지에서 되돌림을 훑는다(다듬기 ⑬-2 ③, 명령줄 출발에도 — 보드 출발 준비는 misses 가 먼저 함). 못 해도 출발은 그대로
+    if let p = frozen["project"] as? String, validName(p) {
+        let rs = scanReverts(project: p, dev: dev)
+        if rs.added > 0 || rs.dropped > 0 || rs.failed { print("승격 뒤 되돌림: 새로 남긴 판정 놓침 \(rs.added)줄 · 거둔 줄 \(rs.dropped)줄\(rs.failed ? " · " + (rs.notes.last ?? "") : "")") }
+    }
     exit(0)
 }
 
@@ -5187,7 +5457,9 @@ func cmdStatus(_ args: [String]) -> Never {
     }
     if let u = run["usage"] as? [String: Any] {
         let p = { (k: String) in num(u[k]).map { "\(Int(($0 * 100).rounded()))%" } ?? "?" }
-        out += "계정 사용률: 5시간 \(p("five_hour")) · 주간 \(p("seven_day"))\((u["from"] as? String).map { " (\($0))" } ?? "")\n"
+        // 5시간 한도가 없는 요금제(Ultra)는 5시간 칸이 없다 — 주간만 쓴다(규칙 apShowFiveHour, 2026-11)
+        let five = apShowFiveHour(usage: u) ? "5시간 \(p("five_hour")) · " : ""
+        out += "계정 사용률: \(five)주간 \(p("seven_day"))\((u["from"] as? String).map { " (\($0))" } ?? "")\n"
     }
     // 여러 실행 함께 돌리기(6단계 ⑫-6): 기록 저장소의 멈출 선 자리와 같은 경로 자리를 읽기만 한다
     let id = (dir as NSString).lastPathComponent, dbPath = recordsPath(dev: run["dev"] as? Bool ?? args.contains("--dev"))
@@ -5293,6 +5565,16 @@ func sourceDigest(_ p: String) -> String {
 
 // 실행 기록 저장소에 지난 기록을 옮겨 담는다. 원본은 읽기만 한다. 일반 꼴 대기열을 먼저 옮기고(단위의 예상을 대기열 항목에서 찾아 붙이므로) 실행 폴더를 옮긴다
 func cmdRecords(_ args: [String]) -> Never {
+    if args.first == "scan-reverts" {
+        guard let project = args.dropFirst().first(where: { !$0.hasPrefix("--") }), validName(project) else { usage() }
+        let o = scanReverts(project: project, dev: args.contains("--dev"))
+        if args.contains("--json") { print(jsonText(o.json)) }
+        else {
+            print("승격 뒤 되돌림: 훑은 커밋 \(o.scanned)개 · 짝지은 되돌림 \(o.hits)건 · 새로 남긴 판정 놓침 \(o.added)줄 · 거둔 줄 \(o.dropped)줄")
+            for n in o.notes { print("  " + n) }
+        }
+        exit(o.failed ? 1 : 0)
+    }
     guard args.first == "import" else { usage() }
     var dev = false, dbArg: String?, project: String?, unitKey: String?, sources: [String] = []
     var i = 1
@@ -5397,7 +5679,10 @@ final class ProbeTrees: APProbeWorkspace {
     }
     func repo(_ n: Int) -> String? {
         guard orig.indices.contains(n - 1), let c = orig[n - 1]["cwd"] as? String, isDir(c) else { return nil }
-        return gitOut(["rev-parse", "--show-toplevel"], cwd: c).flatMap { $0.hasPrefix("/") ? canonical($0) : nil }
+        // 저장소 뿌리는 git 이 찾게 두지 않고 git 자리 확인(prepGit)을 지난 뿌리만(보안 검토 고침, 다듬기 ⑬-2 — rev-parse 는 확인하지 않은 .git 을 고를 수 있다)
+        let g = prepGit(c)
+        guard g.block == nil, let t = g.top else { return nil }
+        return canonical(t)
     }
     func basePoint(_ r: String) -> String? {
         seededRepo(f, r)?.head ?? baseBranch(f, r).flatMap { headOf(r, "refs/heads/" + $0) } ?? headOf(r, "HEAD")
@@ -5672,7 +5957,9 @@ func cmdFinish(_ args: [String]) -> Never {
     for r in info.keys.sorted() {
         guard var i = info[r] as? [String: Any], isDir(r) else { continue }
         let w = (i["work_tree"] as? String).flatMap { isDir($0) ? $0 : nil } ?? r
-        if w == r { i["work_git_dir"] = nil }
+        // 따로 작업 트리를 이미 지웠으면(finish merge 가 합친 뒤 지움) 그 작업 트리 git 폴더(git_dir·work_git_dir)는 없다 — 공통 git 폴더(자리·inode)만 본다.
+        // 다듬기 ⑬-2 ⑤: 전에는 git_dir 을 남겨 원래 저장소의 git 폴더와 견주어, 합친 뒤의 promote·cleanup·discard 가 "다른 자리로 풀려" 로 늘 거부됐다
+        if w == r { i["work_git_dir"] = nil; if (i["work_tree"] as? String) != nil { i["git_dir"] = nil } }
         if let why = gitDirChange(i, at: w) { fail("보안: \(repoName(r)) 의 \(why) 합치거나 버리지 않습니다(바꿔치기 의심). 사람이 확인하세요.") }
     }
     var promoted = b["promoted"] as? [[String: Any]] ?? []
@@ -6221,6 +6508,16 @@ func cmdOutbox(_ args: [String]) {
         for id in ids {
             add(apPostItem(id, store: store, trigger: .press, connections: conns, dev: root.dev, secrets: secrets, http: EngineHTTP(),
                            clock: EngineClock(), waiter: EngineWaiter(), tz: .current), id)
+        }
+        // 실행 중에 새로 필요해진 티켓을 올렸으면 기록 저장소 tickets 표에도(다듬기 ⑬-2). 못 써도 올린 것은 그대로(다음 기록 때 다시 옮김)
+        if ids.contains(where: { store.read($0)?.kind == "ticket" && store.read($0)?.state == .posted }), let project = run["project"] as? String, validName(project) {
+            do {
+                let db = try RecordsDB(recordsPath(dev: root.dev))
+                let defs = (readJSON(dir + "/pinned/frozen.json") as? [String: Any])?["units"] as? [[String: Any]] ?? []
+                let src = Dictionary(defs.compactMap { d -> (String, String)? in (d["id"] as? String).flatMap { i in (d["source_key"] as? String).map { (i, $0) } } }, uniquingKeysWith: { a, _ in a })
+                try db.transaction { _ = try db.putTickets(dir: dir, project: project, run: (dir as NSString).lastPathComponent, unitSources: src) }
+                db.close()
+            } catch { if !asJSON { print("만든 티켓을 기록 저장소에 쓰지 못했습니다: \(error)") } }
         }
     case "skip", "later", "unskip":
         for id in ids { add(apMarkItem(id, verb, store: store, clock: EngineClock()), id) }
@@ -6873,6 +7170,7 @@ func cmdHarness(_ args: [String]) -> Never {
     } else {
         roots = gitRepos((readJSON(dir + "/queue.json") as? [[String: Any]] ?? []).compactMap { $0["cwd"] as? String }.filter { $0.hasPrefix("/") && isDir($0) })
     }
+    if !gitGateBlocked.isEmpty { fail(gitGateProblems().joined(separator: "\n")) }   // git 자리 확인(다듬기 ⑬-2 ⑥)
     guard !roots.isEmpty else { fail("하네스를 읽을 저장소가 없습니다(작업 경로·대기열 단위의 작업 폴더)") }
     let o = harnessReadPrep(dir: dir, roots: roots, project: run["project"] as? String, dev: dev)
     print(jsonText(o)); exit(0)
@@ -6904,7 +7202,9 @@ func topicPrep(_ args: [String]) -> TopicPrep {
     }
     guard let topic = readJSON(dir + "/topic.json") as? [String: Any] else { fail("topic.json(주제로 시작 입력)을 읽지 못했습니다") }
     guard let r0 = topic["repo"] as? String, r0.hasPrefix("/"), isDir(r0) else { fail("topic.json 의 repo 는 있는 폴더의 절대 경로여야 합니다") }
-    let repo = canonical(gitOut(["rev-parse", "--show-toplevel"], cwd: r0) ?? r0)
+    let g = prepGit(r0)   // git 자리 확인(다듬기 ⑬-2 ⑥) — 걸리면 git 을 부르지 않고 멈춘다
+    if let t = g.top, let why = g.block { fail(apPrepGitBlockText(top: t, why: why, home: home)) }
+    let repo = canonical(g.top ?? r0)
     guard repo == canonical(r0) else { fail("topic.json 의 repo 는 git 저장소 뿌리여야 합니다(\(r0))") }
     let base = (run["base_branch"] as? String) ?? (topic["base"] as? String) ?? ""
     guard !base.isEmpty, branchExists(repo, base) else { fail("출발 가지(\(base.isEmpty ? "정하지 않음" : base))가 저장소에 없습니다") }
@@ -6920,6 +7220,7 @@ func seedPrepOf(dir: String, run: [String: Any], dev: Bool) -> SeedPrepResult {
     var repos: [String] = []
     if let c = readJSON(dir + "/import.json") as? [String: Any], let r = c["repo"] as? String, r.hasPrefix("/"), isDir(r) { repos = gitRepos([r]) }
     else { repos = gitRepos((readJSON(dir + "/queue.json") as? [[String: Any]] ?? []).compactMap { $0["cwd"] as? String }.filter { $0.hasPrefix("/") && isDir($0) }) }
+    if !gitGateBlocked.isEmpty { return .bad(gitGateProblems().joined(separator: " · ")) }   // git 자리 확인(다듬기 ⑬-2 ⑥)
     guard repos.count == 1, let repo = repos.first else { return .bad(repos.isEmpty ? "단위의 저장소를 찾지 못했습니다" : "저장소가 둘 이상인 묶음은 출발 전 자율주행 가지에 시나리오를 커밋하지 않습니다") }
     guard let base = run["base_branch"] as? String, !base.isEmpty, branchExists(repo, base) else { return .bad("출발 가지(run.json base_branch)가 정해지지 않았거나 저장소에 없습니다") }
     if !dev, run["tool_path"] != nil || run["external_generators"] != nil { return .bad("tool_path·external_generators 는 시험 빌드(--dev)에서만 받습니다") }
@@ -7510,6 +7811,8 @@ func cmdMisses(_ args: [String]) -> Never {
         writeJSON(dir + "/misses.json", o); print(jsonText(o)); exit(0)
     }
     mkdirPrivate(privateRoot(dev: dev))
+    // 승격 뒤 되돌림을 먼저 훑는다(다듬기 ⑬-2 ③) — 출발 준비의 이 줄에 그 신호가 함께 보이게. 못 훑어도 놓침 읽기는 한다
+    let rs = scanReverts(project: project, dev: dev)
     let db: RecordsDB
     do { db = try RecordsDB(recordsPath(dev: dev)) } catch { fail("실행 기록 저장소를 열지 못했습니다: \(error)") }
     let open = (try? db.misses(project: project, openOnly: true)) ?? []
@@ -7520,7 +7823,7 @@ func cmdMisses(_ args: [String]) -> Never {
          "label": apMissLabel(m.signal), "side": m.side, "judge": m.judge ?? NSNull(), "why": m.why, "created": m.created]
     }
     let o: [String: Any] = ["project": project, "open": open.count, "open_judge": open.filter { $0.side == "judge" }.count, "total": all.count, "rows": rows,
-                            "digest": apMissDigest(all), "at": r3(now())]
+                            "digest": apMissDigest(all), "revert_scan": rs.json, "at": r3(now())]
     writeJSON(dir + "/misses.json", o)
     print(jsonText(o)); exit(0)
 }
@@ -7655,7 +7958,9 @@ func importPrep(_ args: [String]) -> ImportPrep {
     guard let cfg = readJSON(dir + "/import.json") as? [String: Any] else { fail("import.json(가져오기 입력)을 읽지 못했습니다") }
     guard let src = (cfg["source"] as? String).flatMap(APImportSource.init(rawValue:)) else { fail("import.json 의 source 는 todo·list·legacy 가운데 하나입니다") }
     guard let r0 = cfg["repo"] as? String, r0.hasPrefix("/"), isDir(r0) else { fail("import.json 의 repo 는 있는 폴더의 절대 경로여야 합니다") }
-    let repo = canonical(gitOut(["rev-parse", "--show-toplevel"], cwd: r0) ?? r0)
+    let g = prepGit(r0)   // git 자리 확인(다듬기 ⑬-2 ⑥) — 걸리면 git 을 부르지 않고 멈춘다
+    if let t = g.top, let why = g.block { fail(apPrepGitBlockText(top: t, why: why, home: home)) }
+    let repo = canonical(g.top ?? r0)
     guard repo == canonical(r0) else { fail("import.json 의 repo 는 git 저장소 뿌리여야 합니다(\(r0))") }
     guard let project = cfg["name"] as? String, validName(project) else { fail("import.json 의 name(프로젝트)은 영문·숫자·.-_ 로 씁니다") }
     return ImportPrep(dir: dir, id: id, run: run, cfg: cfg, repo: repo, project: project, source: src, dev: dev)

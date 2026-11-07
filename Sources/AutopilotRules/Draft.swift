@@ -116,14 +116,20 @@ public struct APDraftPaths: Equatable, Sendable {
 }
 
 public let apDraftTools = ["Read", "Glob", "Grep", "Write", "Edit"]
+// 경로가 든 권한 규칙 — Claude Code 규칙에서 절대 경로는 빗금 둘(`Edit(//Users/…/**)`)이고, 빗금 하나(`/Users/…`)는 설정 파일 기준
+// 상대 경로로 읽혀 맞지 않는다(2026-11-05 진짜 claude 실측: 결과 폴더 Write 가 dontAsk 로 거부되어 초안 세션이 아무것도 쓰지 못함).
+// 엔진 단위 세션의 `Edit(/\(절대 경로)/**)` 와 같은 꼴
+public func apPathRule(_ tool: String, _ path: String) -> String {
+    "\(tool)(\(path.hasPrefix("/") ? "/" : "")\(path)/**)"
+}
 public func apDraftAllowRules(_ p: APDraftPaths) -> [String] {
-    ([p.out] + p.reads).flatMap { d in ["Read(\(d)/**)", "Glob(\(d)/**)", "Grep(\(d)/**)"] } + ["Write(\(p.out)/**)", "Edit(\(p.out)/**)"]
+    ([p.out] + p.reads).flatMap { d in ["Read", "Glob", "Grep"].map { apPathRule($0, d) } } + ["Write", "Edit"].map { apPathRule($0, p.out) }
 }
 public func apDraftDenyRules(_ p: APDraftPaths) -> [String] {
     ["Bash", "Bash(*)", "WebFetch", "WebSearch", "Task", "Agent", "NotebookEdit", "mcp__*",
      "Edit(**/CLAUDE.md)", "Edit(.claude/**)", "Edit(**/.claude/**)", "Edit(~/.claude/**)", "Edit(~/Library/LaunchAgents/**)"]
-        + p.reads.flatMap { ["Write(\($0)/**)", "Edit(\($0)/**)"] }
-        + p.denyRead.map { "Read(\($0)/**)" }
+        + p.reads.flatMap { d in ["Write", "Edit"].map { apPathRule($0, d) } }
+        + p.denyRead.map { apPathRule("Read", $0) }
 }
 public func apDraftSettingsJSON(_ p: APDraftPaths) -> [String: Any] {
     ["disableAllHooks": true,
