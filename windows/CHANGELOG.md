@@ -5,7 +5,7 @@ Claude Board for Windows 의 버전별 변경입니다. macOS 판의 변경은 [
 새 버전을 올릴 때 맨 위에 `## <버전> — <날짜>` 항목을 먼저 쓰고 `windows/VERSION` 을 그 버전으로 바꿔 main 에 push 합니다.
 CI(`.github/workflows/windows.yml`)가 그 항목을 `windows-v<버전>` GitHub 릴리스 설명으로 그대로 씁니다. 항목이 없으면 릴리스가 실패합니다.
 
-## 다음 버전
+## 3.2.4 — 2026-11-07
 
 ### 추가
 - 내장 터미널 새 탭 셸 고르기: 기존 세 가지(PowerShell 7 · Windows PowerShell · 명령 프롬프트)에 **Git Bash** 와 **WSL**(배포판마다 한 줄, WSL 이 없는 PC 에서는 보이지 않음)이 더해졌습니다.
