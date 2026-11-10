@@ -129,7 +129,7 @@ export function syntaxHint(env: AutopilotEnvOption | null): string {
   if (env === null) return "실행 환경을 고르면 그 환경의 문법으로 씁니다.";
   switch (env.kind) {
     case "wsl":
-      return `bash 문법으로 씁니다. 작업 폴더는 \\\\wsl.localhost\\${env.distro ?? "배포판"}\\ 아래 경로여야 합니다.`;
+      return `bash 문법으로 씁니다. 작업 폴더는 \\\\wsl.localhost\\${env.distro ?? "배포판"}\\ 아래 경로이거나 Windows 폴더(WSL 안에서는 /mnt/c/… 로 열립니다)여야 합니다.`;
     case "git-bash":
       return "bash 문법으로 씁니다(Git Bash).";
     case "cmd":

@@ -189,5 +189,13 @@ test("판정 명령 문법 안내는 고른 환경을 따른다", () => {
   assert.match(syntaxHint(PWSH), /^PowerShell/);
   assert.match(syntaxHint(CMD), /^명령 프롬프트/);
   assert.match(syntaxHint({ ...PWSH, kind: "git-bash" }), /^bash.*Git Bash/);
-  assert.equal(syntaxHint(WSL), "bash 문법으로 씁니다. 작업 폴더는 \\\\wsl.localhost\\Ubuntu-24.04\\ 아래 경로여야 합니다.");
+  assert.equal(syntaxHint(WSL), "bash 문법으로 씁니다. 작업 폴더는 \\\\wsl.localhost\\Ubuntu-24.04\\ 아래 경로이거나 Windows 폴더(WSL 안에서는 /mnt/c/… 로 열립니다)여야 합니다.");
+});
+
+test("WSL 작업 폴더 안내는 두 가지 폴더 형태를 모두 말한다", () => {
+  const hint = syntaxHint(WSL);
+  assert.ok(hint.includes("\\\\wsl.localhost\\Ubuntu-24.04\\"));
+  assert.ok(hint.includes("Windows 폴더"));
+  assert.ok(hint.includes("/mnt/c/"));
+  assert.ok(!hint.includes("—"));
 });

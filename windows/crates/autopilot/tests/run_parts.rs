@@ -607,3 +607,38 @@ fn rows_accepted_by_sqlite() {
     let u = db.select("SELECT unit_id, status, active_sec FROM units WHERE run_id=? AND n=1", &[json!("r1")]).unwrap();
     assert_eq!((u[0]["unit_id"].as_str(), u[0]["status"].as_str(), u[0]["active_sec"].as_f64()), (Some("a"), Some("done"), Some(10.5)));
 }
+
+#[test]
+fn normalize_root_forms() {
+    for (raw, want) in [
+        (r"C:\repo", r"C:\repo"),
+        (r"c:\repo", r"C:\repo"),
+        (r"C:\repo\", r"C:\repo"),
+        (r"C:\repo\sub", r"C:\repo\sub"),
+        ("C:/repo/sub/", r"C:\repo\sub"),
+        (r"\\?\C:\repo", r"C:\repo"),
+        (r"\\?\UNC\srv\share\x", r"\\srv\share\x"),
+        (r"C:\", r"C:\"),
+        ("C:", r"C:\"),
+        (r"\\srv\share\", r"\\srv\share"),
+        ("/w/p/", "/w/p/"),
+    ] {
+        assert_eq!(normalize_root(raw), want, "{raw}");
+    }
+    assert_eq!(root_key(r"C:\Work\Repo"), root_key("c:/work/repo/"));
+    assert_ne!(root_key(r"C:\work\repo"), root_key(r"C:\work\repo2"));
+    assert_ne!(root_key(r"C:\a"), root_key(r"D:\a"));
+}
+
+#[test]
+fn claim_root_rules() {
+    let others = vec![("x".to_string(), r"c:\repo\".to_string())];
+    // 다른 프로젝트가 갖고 있으면 이 프로젝트의 이전 root(없으면 None)를 둔다
+    assert_eq!(claim_root(Some(r"C:\Repo"), None, &others), None);
+    assert_eq!(claim_root(Some(r"C:\Repo"), Some(r"C:\old"), &others), Some(r"C:\old".to_string()));
+    // 비어 있으면 정리한 글로 차지한다
+    assert_eq!(claim_root(Some("C:/new/"), None, &others), Some(r"C:\new".to_string()));
+    // 정하지 않았으면 이전 root 를 잇는다
+    assert_eq!(claim_root(None, Some(r"C:\old"), &others), Some(r"C:\old".to_string()));
+    assert_eq!(claim_root(None, None, &others), None);
+}

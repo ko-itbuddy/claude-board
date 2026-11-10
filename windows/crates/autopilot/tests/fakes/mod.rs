@@ -574,8 +574,16 @@ impl Records for MemRecords {
         lock(&self.upserts).push((table.to_string(), row.clone()));
         Ok(())
     }
-    fn select(&self, _sql: &str, _args: &[Value]) -> PortResult<Vec<Row>> {
-        Ok(lock(&self.existing).clone())
+    fn select(&self, sql: &str, args: &[Value]) -> PortResult<Vec<Row>> {
+        let all = lock(&self.existing).clone();
+        // 프로젝트 행을 묻는 두 질의만 흉내 낸다: `id = ?`(이 프로젝트의 행) 와 `id <> ?`(다른 프로젝트의 행)
+        let id_of = |r: &Row| r.get("id").and_then(Value::as_str).map(str::to_string);
+        let arg = args.first().and_then(Value::as_str).map(str::to_string);
+        Ok(match (sql.contains("id <> ?"), sql.contains("id = ?")) {
+            (true, _) => all.into_iter().filter(|r| id_of(r) != arg).collect(),
+            (_, true) => all.into_iter().filter(|r| id_of(r) == arg).collect(),
+            _ => all,
+        })
     }
 }
 
@@ -692,6 +700,16 @@ impl World {
         Engine::open(self.ports(false), self.cfg())
     }
 
+    /// 가짜 기록 저장소 대신 `records`(진짜 SQLite 어댑터 등)를 끼워 끝까지 돌린다
+    pub fn run_with(&self, records: &dyn Records) -> RunExit {
+        let mut ports = self.ports(false);
+        ports.records = Some(records);
+        match Engine::open(ports, self.cfg()) {
+            Ok(e) => e.run(),
+            Err(x) => x,
+        }
+    }
+
     /// 열어서 끝까지 돌린다(기록 저장소 있음)
     pub fn run(&self) -> RunExit {
         match self.open() {
@@ -768,6 +786,8 @@ pub struct Scenario {
     pub queue: Value,
     pub frozen: Value,
     pub extra_files: Vec<(String, String)>,
+    /// 실행 폴더 이름 = 실행 id (기본 `r1`)
+    pub run_id: String,
 }
 
 impl Scenario {
@@ -804,6 +824,7 @@ impl Scenario {
                 "units": units,
             }),
             extra_files: Vec::new(),
+            run_id: "r1".to_string(),
         }
     }
 
@@ -819,7 +840,7 @@ impl Scenario {
     pub fn build(self) -> World {
         let journal = Arc::new(Journal::default());
         let clock = FakeClock::new(NOW);
-        let base = "/runs/r1".to_string();
+        let base = format!("/runs/{}", self.run_id);
         let files = Arc::new(MemFiles {
             base: base.clone(),
             clock: clock.clone(),
@@ -868,7 +889,7 @@ impl Scenario {
                 true
             }),
             dir: PathBuf::from(base),
-            private: PathBuf::from("/private/r1"),
+            private: PathBuf::from(format!("/private/{}", self.run_id)),
             frozen_hash,
             tick: Duration::from_secs(1),
             pid: 77,

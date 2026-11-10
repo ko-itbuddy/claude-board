@@ -36,7 +36,7 @@ pub use load::{
     abnormal_recent, caps_of, frozen_digest, is_abnormal, load_state, next_from, next_text, session_uuid, starts_line, Loaded,
 };
 pub use prompt::{first_message, is_under, PromptUnit, RESULT_FORMAT, SYSTEM_PROMPT};
-pub use rows::{project_row, run_row, unit_row};
+pub use rows::{claim_root, normalize_root, project_row, root_key, run_row, unit_row};
 
 /// 모델이 쓸 수 있는 폴더의 파일(`result.json`·단위 `engine.json`·`control.json`)을 엔진이 통째로 읽어도 되는 크기.
 /// 넘으면 읽지 않고 "쓸 수 있는 내용이 없다"로 본다(모델이 거대한 파일을 두어 엔진의 메모리를 쓰게 하지 못하게)
@@ -653,8 +653,15 @@ impl<'p> Engine<'p> {
             self.save_unit(n);
         }
         if let Some(project) = self.frozen.project.get().or_else(|| self.run.project.get()).cloned() {
-            let row = self.project_row_for(records, &project, now)?;
-            records.upsert("projects", &row).map_err(|e| e.to_string())?;
+            let row = self.project_row_for(records, &project, now, false)?;
+            if let Err(first) = records.upsert("projects", &row) {
+                // 읽은 뒤 쓰기 전에 다른 엔진이 같은 폴더를 먼저 잡은 경우: 그 자리를 내주고 이전 root 로 다시 쓴다
+                if !first.to_string().contains("projects.root") {
+                    return Err(first.to_string());
+                }
+                let row = self.project_row_for(records, &project, now, true)?;
+                records.upsert("projects", &row).map_err(|e| e.to_string())?;
+            }
         }
         let engs: Vec<Option<UnitProgressFile>> = (1..=self.queue.len())
             .map(|n| {
@@ -686,7 +693,7 @@ impl<'p> Engine<'p> {
 
     /// 프로젝트 행. 저장소 목록은 가지 기록의 저장소(없으면 하네스 폴더, 그것도 없으면 단위 작업 폴더)이고,
     /// 이미 있는 행의 root·repos 는 이어받는다(root 가 None 이면 저장된 root 가 지워진다)
-    fn project_row_for(&self, records: &dyn Records, project: &str, now: f64) -> Result<Row, String> {
+    fn project_row_for(&self, records: &dyn Records, project: &str, now: f64, lost_root_race: bool) -> Result<Row, String> {
         let old = records
             .select("SELECT root, repos FROM projects WHERE id = ?", &[Value::from(project)])
             .map_err(|e| e.to_string())?;
@@ -720,7 +727,19 @@ impl<'p> Engine<'p> {
                 repos.push(r);
             }
         }
-        let root = self.run.project_root.get().cloned().or(old_root);
+        // `projects.root` 는 UNIQUE: 같은 폴더(대소문자·`\\?\`·`/`·끝 `\` 만 다른 글 포함)를 다른 프로젝트가 갖고 있으면 그 자리를 뺏지 않는다(원본 `upsertProject`)
+        let want = if lost_root_race { None } else { self.run.project_root.get().map(String::as_str) };
+        let others: Vec<(String, String)> = if want.is_some() {
+            records
+                .select("SELECT id, root FROM projects WHERE root IS NOT NULL AND id <> ?", &[Value::from(project)])
+                .map_err(|e| e.to_string())?
+                .iter()
+                .filter_map(|r| Some((r.get("id")?.as_str()?.to_string(), r.get("root")?.as_str()?.to_string())))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let root = claim_root(want, old_root.as_deref(), &others);
         Ok(project_row(project, root.as_deref(), &repos, old.is_some(), now))
     }
 }

@@ -160,6 +160,64 @@ pub fn unit_row(
     ])
 }
 
+/// 프로젝트 작업 경로의 꼴을 한 가지로 맞춘 글(저장하는 글). `\\?\` 머리를 떼고, 드라이브 글자·UNC 꼴이면 `/` 를 `\` 로,
+/// 겹친 `\` 를 하나로, 끝의 `\` 를 뗀다(`C:\` 뿌리는 그대로). 드라이브 글자는 대문자로 쓴다. 그 밖의 글(POSIX 꼴)은 그대로 둔다.
+/// 폴더를 열어 보지 않는 글자 규칙이다 — 짧은 이름(8.3)·심볼릭 링크·접합(junction)은 풀지 못한다.
+pub fn normalize_root(raw: &str) -> String {
+    let mut t = raw.trim().to_string();
+    if let Some(rest) = t.strip_prefix(r"\\?\UNC\") {
+        t = format!(r"\\{rest}");
+    } else if let Some(rest) = t.strip_prefix(r"\\?\") {
+        t = rest.to_string();
+    }
+    let drive = t.len() >= 2 && t.as_bytes()[0].is_ascii_alphabetic() && t.as_bytes()[1] == b':';
+    if !(drive || t.starts_with(r"\\") || t.starts_with("//")) {
+        return t;
+    }
+    let unc = t.starts_with(r"\\") || t.starts_with("//");
+    let body: String = t.replace('/', "\\");
+    let mut out = String::new();
+    let mut prev_sep = false;
+    for (i, c) in body.chars().enumerate() {
+        let sep = c == '\\';
+        if sep && prev_sep && !(unc && i == 1) {
+            continue;
+        }
+        prev_sep = sep;
+        out.push(c);
+    }
+    let floor = if drive { 3 } else { 2 };
+    while out.ends_with('\\') && out.len() > floor {
+        out.pop();
+    }
+    if drive && out.len() == 2 {
+        out.push('\\');
+    }
+    if drive {
+        let first = out.remove(0).to_ascii_uppercase();
+        out.insert(0, first);
+    }
+    out
+}
+
+/// 두 작업 경로가 같은 폴더를 가리키는지 견주는 열쇠. Windows 는 대소문자를 가리지 않으므로 소문자로 낮춘다.
+/// 저장된 옛 글(`/` 꼴·끝 `\`)도 같은 열쇠가 되게 `normalize_root` 를 거친다
+pub fn root_key(raw: &str) -> String {
+    normalize_root(raw).to_lowercase()
+}
+
+/// 이 프로젝트가 쓸 `root` 칸. 원본 `upsertProject` 의 「다른 프로젝트의 자리」 규칙: `projects.root` 는 UNIQUE 라
+/// 같은 폴더를 다른 프로젝트가 이미 갖고 있으면(`others` = 다른 프로젝트의 (id, root)) 그 자리를 뺏지 않고 이 프로젝트의 이전 root(없으면 null)를 둔다.
+/// `want` 가 없으면 이전 root 를 그대로 잇는다
+pub fn claim_root(want: Option<&str>, old_root: Option<&str>, others: &[(String, String)]) -> Option<String> {
+    let Some(w) = want else { return old_root.map(str::to_string) };
+    let key = root_key(w);
+    if others.iter().any(|(_, r)| root_key(r) == key) {
+        return old_root.map(str::to_string);
+    }
+    Some(normalize_root(w))
+}
+
 /// `projects` 행. 이미 있는 행이면 `created` 를 넣지 않아(일반 upsert 가 `created` 를 덮지 않게) 처음 만든 때가 남는다.
 /// `root` 가 None 이면 null 이 되어 이미 있던 root 를 지우므로, 부르는 쪽이 기존 root 를 읽어 넘긴다.
 /// 원본: `upsertProject`. 이름은 id 와 같고, 저장소가 둘 이상이면 `bundle`
