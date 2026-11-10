@@ -1352,7 +1352,7 @@ struct HubTabs: BoardTabs {
     // 답변 꾸미기는 기본으로 켠다(보드 밖에서 시작한 세션도) — 새 세션 창에서 끄고 띄운 세션만 끈 채로
     func claudeCommand(_ base: String, session: String) -> (command: String, mdRenderOff: Bool) {
         let off = isMdRenderOff(session)
-        return (mdRenderCommand(base, args: sessionRecord(session)?["args"] as? [String], off: off), off)
+        return (mdRenderCommand(base, off: off), off)
     }
 
     func mode(_ s: Session) -> String? { MainActor.assumeIsolated { TerminalHub.shared.mode(s) } }

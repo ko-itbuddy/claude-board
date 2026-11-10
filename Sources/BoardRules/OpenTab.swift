@@ -2,57 +2,11 @@
 // 다른 프로그램(다른 Claude Code 세션의 스킬 등)이 보드 탭에 claude 를 띄우는 입구다. 명령줄 도구(같은 실행 파일)가 요청을 사용자만 쓰는 폴더에
 // 파일로 남기고 분산 알림으로 보드를 깨우면, 보드가 그 파일을 읽어 보드가 직접 연 탭과 같은 길(TerminalHub.run)로 연다.
 // 분산 알림에는 내용을 싣지 않는다 — 알림은 같은 로그인의 어떤 프로세스든 보낼 수 있지만 요청 파일은 그 사용자만 쓸 수 있는 폴더에 있어야 읽는다.
-// 셸 명령이 아니라 claude 인자 목록만 받는다(첫 인자가 claude 가 아니면 거절, 보드가 따옴표로 묶어 셸에 친다).
+// 셸 명령이 아니라 claude 인자 목록만 받는다(첫 인자가 claude 가 아니면 거절, 보드가 따옴표로 묶어 셸에 치고 다시 읽어 확인한다).
 // 파일·시각·프로세스는 앱이 읽어 값으로 넘긴다(이 파일은 Foundation 만)
 import Foundation
 
-// MARK: - 셸 따옴표
-
-/// state.py 가 resume_cmd 를 만들 때 쓰는 shlex.quote 와 같은 인용(보드 EmbeddedTerminal.swift 에서 옮김) — resume_cmd 안의 토큰을 그대로 찾고,
-/// 보드가 셸에 치는 인자를 안전하게 넘긴다
-public func shlexQuote(_ s: String) -> String {
-    if !s.isEmpty, s.range(of: "[^A-Za-z0-9_@%+=:,./-]", options: .regularExpression) == nil { return s }
-    return "'" + s.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
-}
-
-/// 셸 명령 글자를 낱말로 — 보드가 남긴 명령(shlex.quote 꼴)과 사람이 적은 명령의 흔한 꼴만: 공백으로 나누고 '…'(그대로)·"…"(\ 는 " \ $ ` 줄바꿈 앞에서만)·
-/// 따옴표 밖 \ 를 푼다. 따옴표가 닫히지 않았으면 nil. 변수·명령 치환은 풀지 않는다(글자 그대로)
-public func shellWords(_ s: String) -> [String]? {
-    var words: [String] = [], cur = "", inWord = false
-    let it = Array(s)
-    var i = 0
-    while i < it.count {
-        let c = it[i]
-        switch c {
-        case " ", "\t", "\n":
-            if inWord { words.append(cur); cur = ""; inWord = false }
-        case "'":
-            inWord = true
-            guard let end = it[(i + 1)...].firstIndex(of: "'") else { return nil }
-            cur += String(it[(i + 1)..<end])
-            i = end
-        case "\"":
-            inWord = true
-            i += 1
-            while true {
-                guard i < it.count else { return nil }
-                if it[i] == "\"" { break }
-                if it[i] == "\\", i + 1 < it.count, "\"\\$`\n".contains(it[i + 1]) { i += 1 }
-                cur.append(it[i])
-                i += 1
-            }
-        case "\\":
-            inWord = true
-            if i + 1 < it.count { i += 1; if it[i] != "\n" { cur.append(it[i]) } }
-        default:
-            inWord = true
-            cur.append(c)
-        }
-        i += 1
-    }
-    if inWord { words.append(cur) }
-    return words
-}
+// 셸 따옴표(shlexQuote)·낱말 읽기(shellWords)·낱말 단위 고치기는 ShellCommand.swift
 
 // MARK: - 명령줄
 
@@ -231,7 +185,7 @@ public struct OpenTabPlanInput: Equatable, Sendable {
     public var sessionId: String?  // 이 탭의 세션 id(이어 여는 세션·--session-id·새로 붙인 id), 모르면 nil
     public var resumes = false     // sessionId 가 --resume 으로 이어 여는 세션이다(대화 기록이 있어야 뜬다)
     public var name: String?       // 탭 이름이자 세션 이름(--name 이 없으면 --title)
-    public var command: String     // 셸에 칠 명령(인자마다 shlexQuote)
+    public var command: String     // 셸에 칠 명령(인자마다 shellArg, 다시 읽어 argv 그대로인 것만)
 }
 
 /// 글자가 셸에 붙여넣기 안전한가 — 제어 문자(줄바꿈·탭은 됨)는 붙여넣기를 끊고 키로 들어갈 수 있어 거절한다
@@ -275,8 +229,20 @@ public func openTabPrepare(cwd: String, title: String?, argv: [String], newID: S
         out.insert(contentsOf: ["--session-id", newID], at: 1)
         sessionId = newID
     }
-    return .success(OpenTabPlanInput(argv: out, sessionId: sessionId, resumes: resumes, name: info.name ?? title,
-                                     command: out.map(shlexQuote).joined(separator: " ")))
+    // 인자마다 따옴표로 묶어 잇고, 다시 읽어 그 인자 그대로가 아니면 거절한다(보안 검토 고침 — 셸이 다르게 읽을 글자를 치지 않게)
+    guard let command = shellCommand(out) else { return .failure(openTabUnreadable) }
+    return .success(OpenTabPlanInput(argv: out, sessionId: sessionId, resumes: resumes, name: info.name ?? title, command: command))
+}
+
+private let openTabUnreadable = OpenTabFailure.refused("셸에 칠 명령이 요청한 인자 그대로 읽히지 않아 띄우지 않습니다")
+
+/// 보드가 그 탭 셸에 칠 명령 — 요청 인자(openTabPrepare 의 argv)에서 답변 꾸미기(md-render)의 --plugin-dir 을 빼고, 켜져 있으면(mdRenderDir)
+/// 보드 경로를 끝에 붙여 인자마다 묶는다. 글자 위에서 고치지 않고 인자 목록에서 고친 뒤 묶으며, 다시 읽어 그 인자 그대로가 아니면 거절한다
+public func openTabCommand(_ argv: [String], mdRenderDir: String?) -> Result<String, OpenTabFailure> {
+    let drop = mdRenderArgIndices(argv)
+    let out = argv.enumerated().filter { !drop.contains($0.offset) }.map(\.element) + (mdRenderDir.map { ["--plugin-dir", $0] } ?? [])
+    guard let command = shellCommand(out) else { return .failure(openTabUnreadable) }
+    return .success(command)
 }
 
 // MARK: - 이미 있는 탭

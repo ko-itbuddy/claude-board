@@ -12,7 +12,8 @@
   "패널의 --session 이 빈 값: macOS 는 빈 문자열로 늘 넘기고 Windows 는 빼지만, 패널은 둘 다 '세션 없음'으로 본다. 표에는 null",
   "경로 구분자가 든 session_id: Windows 판만 받지 않는다(sessions 밖에 쓰지 않게). 표에 넣지 않는다",
   "세션 파일의 키 순서: 표는 키를 정렬해 적는다(키 순서는 windows/crates/core/tests/state_sequence.rs 가 본다)",
-  "hook 입력 앞의 UTF-8 BOM·notify 의 깨진 입력: Windows 는 hook 실행 파일(crates/hook main.rs)이 코어를 부르기 전에 다룬다. 표는 코어만 본다"
+  "hook 입력 앞의 UTF-8 BOM·notify 의 깨진 입력: Windows 는 hook 실행 파일(crates/hook main.rs)이 코어를 부르기 전에 다룬다. 표는 코어만 본다",
+  "리모트 컨트롤 이름 넘기기(carry_args 의 --remote-control·--rc, 값은 생략할 수 있음): macOS 3.3.3 에서 더했고 Windows 판은 아직이다. 표에 넣지 않고 gen.py 의 check_mac_only 가 macOS 쪽만 확인한다(Windows 가 따라오면 시나리오로 옮긴다)"
  ],
  "fallback_cwd": "/hook-table/cwd",
  "markers": {

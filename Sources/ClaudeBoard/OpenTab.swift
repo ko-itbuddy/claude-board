@@ -164,7 +164,12 @@ private func writeNew(_ path: String, _ data: Data) -> Bool {
             return OpenTabFailure.badArgs("폴더가 없습니다: \(cwd)").reply
         }
         let off = isMdRenderOff(prep.sessionId)
-        let command = mdRenderCommand(prep.command, off: off)
+        // 셸에 칠 명령은 요청 인자에서 고쳐 묶는다(답변 꾸미기를 빼고 붙이기) — 묶은 글자 위에서 고치지 않는다(BoardRules openTabCommand, 3.3.3 보안 고침)
+        let command: String
+        switch openTabCommand(prep.argv, mdRenderDir: off ? nil : mdRenderDir) {
+        case .success(let c): command = c
+        case .failure(let e): return e.reply
+        }
         switch planOpenTab(sessionId: prep.sessionId, name: prep.name, cwd: realDir(cwd), screens: hub.openTabScreens,
                            live: liveClaudes(session: prep.sessionId)) {
         case .refuse(let why):
