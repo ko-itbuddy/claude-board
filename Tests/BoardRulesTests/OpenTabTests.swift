@@ -54,6 +54,15 @@ struct OpenTabTests {
         ArgsRow(note: "값 없는 --cwd", args: ["--cwd", "--", "claude"], want: nil, why: "값이 없습니다"),
         ArgsRow(note: "--timeout 범위", args: ["--cwd", "/w", "--timeout", "0", "--", "claude"], want: nil, why: "1~600"),
         ArgsRow(note: "--launch=값", args: ["--cwd", "/w", "--launch=1", "--", "claude"], want: nil, why: "값을 받지 않습니다"),
+        ArgsRow(note: "--no-focus 면 선택지 켜짐", args: ["--cwd", "/w", "--title", "역할", "--no-focus", "--", "claude"],
+                want: OpenTabOptions(cwd: "/w", title: "역할", launch: false, timeout: 20, argv: ["claude"], noFocus: true), why: nil),
+        ArgsRow(note: "--launch --no-focus 함께", args: ["--launch", "--no-focus", "--cwd=/w", "--", "claude"],
+                want: OpenTabOptions(cwd: "/w", title: nil, launch: true, timeout: 40, argv: ["claude"], noFocus: true), why: nil),
+        ArgsRow(note: "--no-focus 가 없으면 꺼짐(기본값)", args: ["--cwd", "/w", "--", "claude"],
+                want: OpenTabOptions(cwd: "/w", title: nil, launch: false, timeout: 20, argv: ["claude"], noFocus: false), why: nil),
+        ArgsRow(note: "-- 뒤의 --no-focus 는 claude 인자", args: ["--cwd", "/w", "--", "claude", "--no-focus"],
+                want: OpenTabOptions(cwd: "/w", title: nil, launch: false, timeout: 20, argv: ["claude", "--no-focus"]), why: nil),
+        ArgsRow(note: "--no-focus=값", args: ["--cwd", "/w", "--no-focus=1", "--", "claude"], want: nil, why: "값을 받지 않습니다"),
     ])
     func args(_ r: ArgsRow) {
         switch parseOpenTabArgs(r.args, here: "/here") {
@@ -194,6 +203,40 @@ struct OpenTabTests {
         #expect(r.line == #"{"ok":true,"session":"0f0e1d2c-3b4a-5968-7766-554433221100","status":"opened","tab":"역할/2"}"#)
         #expect(OpenTabFailure.boardOff("꺼짐").reply.line == #"{"ok":false,"status":"board-off","why":"꺼짐"}"#)
         #expect(OpenTabReply(ok: true, status: "exists", pid: 42).line == #"{"ok":true,"pid":42,"status":"exists"}"#)
+    }
+
+    // 3.3.3 의 요청 꼴 — 옛 보드가 읽는 칸만 가진 구조체(옛 보드가 새 칸을 무시함을 고정한다)
+    struct Request333: Codable, Equatable {
+        var id: String
+        var cwd: String
+        var title: String?
+        var argv: [String]
+        var at: Double
+    }
+
+    @Test("뒤에서 열기(--no-focus) 요청 칸 — 꺼지면 키가 없고, 옛 요청은 nil, 옛 보드는 새 칸을 무시한다")
+    func noFocusRequest() throws {
+        let e = JSONEncoder()
+        e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let off = OpenTabRequest(id: Self.newID, cwd: "/w", title: "역할", argv: ["claude"], at: 1000)
+        let old = Request333(id: Self.newID, cwd: "/w", title: "역할", argv: ["claude"], at: 1000)
+        // 꺼진 요청은 3.3.3 과 같은 JSON(칸 없음)
+        #expect(try e.encode(off) == (try e.encode(old)))
+        #expect(!String(decoding: try e.encode(off), as: UTF8.self).contains("noFocus"))
+        #expect(off.noFocus == nil && off.reveals)
+        // 켜진 요청은 칸이 들어간다
+        let on = OpenTabRequest(id: Self.newID, cwd: "/w", title: "역할", argv: ["claude"], at: 1000, noFocus: true)
+        #expect(String(decoding: try e.encode(on), as: UTF8.self)
+                == #"{"argv":["claude"],"at":1000,"cwd":"/w","id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","noFocus":true,"title":"역할"}"#)
+        #expect(!on.reveals)
+        // 칸이 없는 옛 요청 JSON 을 새 타입으로 풀면 nil(지금 동작 — 앞으로 가져온다)
+        let fromOld = try JSONDecoder().decode(OpenTabRequest.self, from: try e.encode(old))
+        #expect(fromOld.noFocus == nil && fromOld.reveals)
+        #expect(fromOld == off)
+        // 칸이 든 새 요청 JSON 을 3.3.3 꼴로 풀면 풀린다(옛 보드는 선택지만 무시하고 연다)
+        #expect(try JSONDecoder().decode(Request333.self, from: try e.encode(on)) == old)
+        // 거짓을 적어 보내도 앞으로 가져온다(켤 때만 true 를 싣는다)
+        #expect(OpenTabRequest(id: "x", cwd: "/w", title: nil, argv: [], at: 0, noFocus: false).reveals)
     }
 
     @Test("요청 폴더는 설치판·시험 빌드가 따로, 오래된 요청은 받지 않는다")

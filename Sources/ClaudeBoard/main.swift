@@ -14,6 +14,8 @@ import WebKit
 // 바깥에서 보드 탭 열기(OpenTab.swift: --open-tab --cwd <폴더> … -- claude <인자…>) — 첫 인자일 때만 받는다(claude 인자에 든 --action 등을
 // 보드 옵션으로 읽지 않게). 떠 있는 보드에 요청을 넘기고 답을 찍은 뒤 끝난다(앱·아래 전역을 띄우지 않는다)
 if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--open-tab" { openTabCommandLine(Array(CommandLine.arguments.dropFirst(2))) }
+// 바깥에서 보드 탭 닫기(OpenTab.swift: --close-tab (--session <세션 id> | --title <탭 이름>) [--stop]) — 같은 꼴(첫 인자일 때만, 답을 찍고 끝남)
+if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--close-tab" { closeTabCommandLine(Array(CommandLine.arguments.dropFirst(2))) }
 
 // 다른 파일의 전역은 처음 쓸 때 초기화된다. 초기화식에 부작용이 있어 시작할 때 바로 초기화해야 하는 전역은 여기서 먼저 읽는다(tools/split-board.py 의 EAGER 표)
 _ = unfocusedSplitOpacity
