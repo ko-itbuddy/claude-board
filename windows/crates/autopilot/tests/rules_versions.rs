@@ -2,11 +2,12 @@
 //! 옮긴 시험(같은 이름): `CatalogTests` 의 `표`·`메모`·`실패`·`앱목록`·`주소` 와 `CatalogLoadTests` 의 `표`·`머리`. 이름이 겹치는 `표` 둘은 모듈(`catalog_tests`·`catalog_load_tests`)로 가른다.
 //! `extra_` 시험은 Swift 시험에 없는 것이다 — 풀기·고르기·범위 읽기·캐시 글 꼴·하루 경계·받지 못한 곳 이름·받기 꺼짐을 Swift 시험이 만든 응답(`springMeta`·`feedsToday`)과 경계값으로 본다.
 //! 원본에서 `private` 인 `majorMinor`·`month`·`num`·`inRange` 는 공개하지 않으므로 목록(`build_catalog`·`eol_list`)을 거쳐 본다.
-//! 표(`TEMURIN`·`SPRING_BOOT`·`NODE`·`PYTHON`·`POSTGRESQL`·`MYSQL`·`KOTLIN`·`SPRING_BOOT_JAVA`·`CATALOG_ROWS`·`LOAD_ROWS`)와 앱에 든 목록 글(`BUILTIN_CATALOG_JSON`, 원본 `BuiltinVersions.swift` 사본)은
-//! Swift 파일에서 변환 스크립트로 기계가 옮긴 것이다(손으로 다시 치지 않았다).
+//! 표(`TEMURIN`·`SPRING_BOOT`·`NODE`·`PYTHON`·`POSTGRESQL`·`MYSQL`·`KOTLIN`·`SPRING_BOOT_JAVA`·`CATALOG_ROWS`·`LOAD_ROWS`)은
+//! Swift 파일에서 변환 스크립트로 기계가 옮긴 것이다(손으로 다시 치지 않았다). 앱에 든 목록 글은 `rules::builtin_versions::BUILTIN_CATALOG_JSON` 을 쓴다.
 //! `extra_eol_list_표` 의 기대 글은 Swift `catalogRows` 의 `want` 에서 `eol_list` 가 만드는 항목(node·python·postgresql·mysql·kotlin, java 는 Temurin 줄 가운데 LTS 만 고른 것)을 그대로 옮긴 것이다.
 
 use claude_board_autopilot::ports::Clock;
+use claude_board_autopilot::rules::builtin_versions::BUILTIN_CATALOG_JSON;
 use claude_board_autopilot::rules::versions::{
     build_catalog, catalog, catalog_data, catalog_label, eol_list, load_catalog, parse_eol, parse_npm_tags, parse_pypi, parse_spring, Catalog,
     CatalogLoad, CatalogOrigin, EolRelease, Feed, VersionCache, VersionFeeds, Ver,
@@ -879,6 +880,3 @@ const LOAD_ROWS: [LoadRow; 8] = [
     LoadRow { note: "받기를 끄고 캐시도 없으면 앱에 든 목록", cache_age: None, feeds: false, feeds_ok: true, want: CatalogOrigin::Builtin, asks: false, writes: false },
     LoadRow { note: "캐시 시각이 앞날이면(시계를 되돌림) 믿지 않고 받는다", cache_age: Some(-7200.0), feeds: true, feeds_ok: true, want: CatalogOrigin::Fresh, asks: true, writes: true },
 ];
-
-/// Swift `apBuiltinCatalogJSON`(`BuiltinVersions.swift`) 글자 그대로. 그 파일은 이 청크 밖이라 시험 쪽에 사본을 둔다
-const BUILTIN_CATALOG_JSON: &str = r##"{"at":1793286911,"items":{"fastapi":[{"lts":false,"rec":true,"v":"0.162"}],"java":[{"lts":true,"rec":true,"until":"2031-09","v":"25"},{"lts":true,"rec":false,"until":"2029-12","v":"21"},{"lts":true,"rec":false,"until":"2027-10","v":"17"}],"kotlin":[{"lts":false,"rec":true,"v":"2.4"}],"mysql":[{"lts":true,"rec":true,"until":"2034-04","v":"9.7"},{"lts":true,"rec":false,"until":"2032-04","v":"8.4"}],"nest":[{"lts":false,"rec":true,"v":"12.3"},{"lts":false,"rec":false,"v":"11.2"}],"next":[{"lts":false,"rec":true,"v":"16.4"}],"node":[{"lts":true,"rec":true,"until":"2029-04","v":"26"},{"lts":true,"rec":false,"until":"2028-04","v":"24"},{"lts":true,"rec":false,"until":"2027-04","v":"22"}],"postgresql":[{"lts":false,"rec":true,"until":"2030-11","v":"18"},{"lts":false,"rec":false,"until":"2029-11","v":"17"},{"lts":false,"rec":false,"until":"2028-11","v":"16"}],"python":[{"lts":false,"rec":true,"until":"2031-10","v":"3.15"},{"lts":false,"rec":false,"until":"2030-10","v":"3.14"},{"lts":false,"rec":false,"until":"2029-10","v":"3.13"}],"react":[{"lts":false,"rec":true,"v":"19.3"}],"spring-boot":[{"lts":false,"rec":true,"until":"2027-07","v":"4.1.2"},{"lts":false,"rec":false,"until":"2026-12","v":"4.0.9"}],"vite":[{"lts":false,"rec":true,"v":"8.3"}],"vue":[{"lts":false,"rec":true,"v":"3.5"}]},"notes":{"java":"목록에 없는 판: Java 27(LTS 가 아니거나 Spring Boot 4.1 의 범위 17 - 26 밖)"}}"##;

@@ -1,13 +1,14 @@
-//! (청크 Meta 2/4 — 원본 1~274줄만 이식됨. 이 첫 줄은 `tests/ported.rs` 가 「구현됐는데 PORTED.json 에 없는 규칙」으로 잡지 않게 하는 표시다. R-Meta-c 가 다음 구간(원본 276줄 `// MARK: - 내장 읽기가 만들 때` 부터)을 옮긴다.
+//! (청크 Meta 3/4 — 원본 1~391줄만 이식됨. 이 첫 줄은 `tests/ported.rs` 가 「구현됐는데 PORTED.json 에 없는 규칙」으로 잡지 않게 하는 표시다. R-Meta-d 가 다음 구간(원본 393줄 `private func reAll`, 정규식 도우미 둘과 그 뒤 `apStripMarkup`)부터 옮긴다.
 //! 바깥 읽기의 메타 형식. 원본: `Sources/AutopilotRules/Meta.swift`(526줄).
 //!
 //! 이식 끝(원본 1~274줄): 자료 꼴 `TocItem`(APTocItem)·`MetaField`(APMetaField)·`MetaLink`(APMetaLink)·`Section`(APSection)·`Frame`(APFrame)·`Meta`(APMeta) ·
 //! `META_FORMAT`(apMetaFormat) · 상한 `limit::*`(APMetaLimit) · `meta_json`(apMetaJSON) · `meta_data`(apMetaData) ·
 //! `UNTRUSTED_OPEN`·`UNTRUSTED_CLOSE`·`EVIDENCE_NOTICE`(apUntrustedOpen·apUntrustedClose·apEvidenceNotice) · `defang_markers`(apDefangMarkers) · `meta_wrap_untrusted`(apMetaWrapUntrusted) ·
 //! `meta_link_shape`(apMetaLinkShape) · `has_tag`(apHasTag) · `meta_check`(apMetaCheck, 결과 `MetaCheck`).
-//! 남은 것(원본 276줄 `// MARK: - 내장 읽기가 만들 때` 부터): `apMetaText` · `apMetaBlockText` · `apMetaURL` · `apMetaClamp` ·
-//! `apDecodeEntities` · `APTextChunk` · `apStripMarkup` · `apMarkupChunks` · `APChunked` · `apSectionWanted` · 그 뒤.
-//! 이어 붙이는 쪽: 아래 `// ── 형식 검사 ──` 구간 끝에 새 구간을 덧붙이고 위쪽 `use` 에 필요한 것을 더한다(앞 구간의 선언은 고치지 않는다).
+//! 이식 끝(원본 276~391줄, 파일 끝의 `// ── 내장 읽기가 만들 때 ──`·`// ── 마크업을 뺀 글 ──` 구간): `meta_text`(apMetaText) · `meta_block_text`(apMetaBlockText) · `meta_url`(apMetaURL) · `meta_clamp`(apMetaClamp) ·
+//! `decode_entities`(apDecodeEntities) · `TextChunk`(APTextChunk).
+//! 남은 것(원본 393줄부터): 비공개 정규식 도우미 `reAll`·`reReplace` · `apStripMarkup` · `apMarkupChunks` · `APChunked` · `apSectionWanted` · 그 뒤.
+//! 이어 붙이는 쪽: 파일 끝에 새 구간을 덧붙이고 위쪽 `use` 에 필요한 것을 더한다(앞 구간의 선언은 고치지 않는다).
 //!
 //! Swift ↔ Rust 로 달라진 점:
 //! - Swift `[String: Any]`(JSON 값)는 `serde_json::Value`(`preserve_order`)다. `meta_json` 은 `Value::Object` 를 돌려준다.
@@ -25,11 +26,19 @@
 //! - `meta_link_shape` 의 `URLComponents(string:)` 은 손으로 쓴 최소 파서다(Foundation 파서를 이 머신에서 돌릴 수 없다): 스킴 `http`·`https`(대소문자 무시), `//` 권한부, 비지 않은 호스트, `@` 가 든 권한부(사용자 정보)는 거부, `%` 뒤 16진 두 글자, 포트는 숫자만(범위는 안 봄), 경로·질의·조각은 RFC 3986 글자만(`[`·`]` 는 호스트 밖에서 거부), 대괄호 호스트는 16진·`:`·`.` 만.
 //!   가장자리(빈 사용자 정보 `https://@h`·IPv6 세부·포트 범위)에서 Foundation 과 다를 수 있고, 다르다면 여기가 더 엄격한 쪽이다.
 //! - 표시 괄호를 찾는 `contains` 는 Swift 가 Character 단위, 여기는 글자(char) 단위다. 괄호 바로 뒤에 결합 부호가 오는 글은 Swift 가 못 찾고 여기는 찾아 거른다(더 엄격).
+//! - `meta_text`·`meta_block_text`·`meta_clamp` 의 글자 수와 자르기(`count`·`prefix`)는 `grapheme_len`(Character 수 근사)에 맞춘다: 상한을 넘으면 앞 `max(n-1, 0)` 글자와 `…` 이고, 자르는 자리는 글자 묶음(결합 부호·ZWJ 열) 경계다.
+//!   `<`·`>` 를 `＜`·`＞` 로 바꾸는 `replacingOccurrences` 는 Swift 가 글자 묶음 경계를 따르고 여기는 글자(char) 단위다(바꿀 괄호 바로 뒤에 결합 부호가 오면 Swift 는 안 바꾸고 여기는 바꾼다. 더 많이 바꾸는 쪽).
+//! - `meta_clamp` 의 프레임 크기 `max(0, min(x, 1e6)).rounded()` 는 Swift 표준 라이브러리의 `min`·`max`(`y < x ? y : x`, `y >= x ? y : x`) 그대로다. `f64::min`·`f64::max` 는 NaN 에서 다른 값을 내므로 쓰지 않는다: 여기서 NaN 은 0, 무한대는 1e6 이다. 반올림은 0 에서 먼 쪽(`f64::round`)이다.
+//! - `meta_url` 의 `URLComponents` 호스트 판정은 위 최소 파서(`url_shape_ok`)다: `http://127.0.0.1` 바로 뒤가 끝·`:`·`/`·`?`·`#` 이고 꼴이 맞을 때만 호스트가 `127.0.0.1` 이다. `trimmingCharacters(in: .whitespacesAndNewlines)` 는 `char::is_whitespace` 로 옮겼다.
+//! - `decode_entities` 는 Swift `Character` 가 아니라 글자(char) 단위로 `&` 와 `;` 를 찾는다(`;` 바로 뒤에 결합 부호가 오면 Swift 는 그 `;` 를 못 찾고 여기는 찾아 푼다). 숫자 참조는 Swift `UInt32(_:radix:)` 를 따른다: 앞 `+` 는 받고, `-` 는 값이 0 일 때만 받고, ASCII 밖 숫자·빈 글은 거른다. 풀린 값이 유니코드 스칼라가 아니면(서로게이트·0x10FFFF 초과) 풀지 않는다.
+//! - `meta_block_text` 의 `split('\n')`(원본 `components(separatedBy: "\n")`)은 `\r\n` 도 `\n` 에서 나눈다. 남은 `\r` 은 `meta_text` 가 빈칸으로 바꿔 가장자리에서 지운다.
 //!
 //! Windows 판단: 이 구간은 글자만 다루고 경로·줄 끝을 보지 않는다. 읽은 글의 `\r\n` 은 받은 그대로 남는다(`meta_data` 가 `\r` 을 `\\r` 로 쓴다).
 //! 주소 검사는 ASCII 인쇄 글자만 받는다. `\` 가 든 경로·드라이브 글자(`C:\x`)는 금지 글자나 스킴 검사에서 거른다.
+//! `meta_url` 은 `\` 가 든 경로(`C:\x`·`\\server\x`)·드라이브 글자·`file:` 주소를 개발 모드(`dev`)에서도 받지 않는다. `meta_block_text` 는 `\r\n` 줄 끝을 `\n` 하나로 줄인다(`tests/rules_meta.rs` 의 `*_windows` 시험).
 
-use crate::rules::formats::grapheme_len;
+use crate::rules::formats::{doc_text_n, grapheme_len};
+use crate::rules::prose::safe_link;
 use serde_json::{Map, Number, Value};
 
 /// 원본: `APTocItem`
@@ -772,5 +781,283 @@ pub fn meta_check(v: Option<&Value>, wrapped: bool) -> MetaCheck {
         MetaCheck { meta: Some(m), problems: Vec::new() }
     } else {
         MetaCheck { meta: None, problems: c.problems }
+    }
+}
+
+// ── 내장 읽기가 만들 때(원본 276~391줄) ─────────────────────
+
+/// 글 `t` 가 `n` 글자(Character)를 넘으면 앞 `max(n-1, 0)` 글자와 `…` 로 줄인다. 원본 `t.count > n ? String(t.prefix(max(n - 1, 0))) + "…" : t`
+fn clamp_graphemes(t: &str, n: usize) -> String {
+    if grapheme_len(t) <= n {
+        return t.to_string();
+    }
+    let keep = n.saturating_sub(1);
+    // 글자 경계 가운데 앞부분의 글자 수가 keep 이하인 가장 뒤쪽(글자 수는 경계가 뒤로 갈수록 줄지 않는다)
+    let bounds: Vec<usize> = t.char_indices().map(|(i, _)| i).chain(std::iter::once(t.len())).collect();
+    let (mut lo, mut hi) = (0, bounds.len() - 1);
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if grapheme_len(&t[..bounds[mid]]) <= keep {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    format!("{}…", &t[..bounds[lo]])
+}
+
+/// 글 한 칸 다듬기 — 화면을 속이는 글자를 지우고(`doc_text` 와 같은 꼴, 줄바꿈은 빈칸), 꺾쇠는 전각으로(태그 꼴이 남지 않게), 상한 `n` 글자에서 자른다. 원본: `apMetaText`
+pub fn meta_text(s: &str, n: usize) -> String {
+    let t = doc_text_n(s, usize::MAX, true).replace('<', "＜").replace('>', "＞");
+    clamp_graphemes(&t, n)
+}
+
+/// 여러 줄 글(절 글) — 줄바꿈은 남기고 빈 줄은 하나로. 원본: `apMetaBlockText`
+pub fn meta_block_text(s: &str, n: usize) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for raw in s.split('\n') {
+        let l = meta_text(raw, usize::MAX);
+        if l.is_empty() {
+            if lines.last().is_some_and(|x| !x.is_empty()) {
+                lines.push(String::new());
+            }
+            continue;
+        }
+        lines.push(l);
+    }
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+    clamp_graphemes(&lines.join("\n"), n)
+}
+
+/// 시험 빌드의 가짜 서버 주소(`http://127.0.0.1` 바로 뒤가 끝·`:`·`/`·`?`·`#` 이고 꼴이 맞을 때만 호스트가 `127.0.0.1`)
+fn loopback_host_ok(t: &str) -> bool {
+    let Some(rest) = t.strip_prefix("http://127.0.0.1") else { return false };
+    (rest.is_empty() || rest.starts_with([':', '/', '?', '#'])) && url_shape_ok(t)
+}
+
+/// 주소 칸 — https(시험 빌드의 가짜 서버는 `http://127.0.0.1`) 이고 사용자 정보가 없을 때만, 아니면 빈 글자. 원본: `apMetaURL`
+pub fn meta_url(s: &str, dev: bool) -> String {
+    // ASCII 밖 글자(한글 경로 등)는 UTF-8 바이트로 퍼센트 인코딩해서 본다
+    let mut t = String::new();
+    for u in s.trim_matches(char::is_whitespace).chars() {
+        if (u as u32) < 0x80 {
+            t.push(u);
+        } else {
+            let mut buf = [0u8; 4];
+            for b in u.encode_utf8(&mut buf).bytes() {
+                t.push_str(&format!("%{b:02X}"));
+            }
+        }
+    }
+    if let Some(ok) = safe_link(&t) {
+        return ok;
+    }
+    if dev
+        && t.starts_with("http://127.0.0.1")
+        && loopback_host_ok(&t)
+        && t.len() <= 2000
+        && t.chars().all(|c| (c as u32) > 0x20 && (c as u32) < 0x7F && !LINK_FORBIDDEN.contains(c))
+    {
+        return t;
+    }
+    String::new()
+}
+
+// Swift `min`·`max`(표준 라이브러리)는 NaN 에서 `f64::min`·`f64::max` 와 다르다: `min(x, y)` 는 `y < x ? y : x`, `max(x, y)` 는 `y >= x ? y : x`
+fn swift_min(x: f64, y: f64) -> f64 {
+    if y < x {
+        y
+    } else {
+        x
+    }
+}
+
+fn swift_max(x: f64, y: f64) -> f64 {
+    if y >= x {
+        y
+    } else {
+        x
+    }
+}
+
+/// 프레임 크기를 0~1e6 으로, 정수로(`max(0, min(x, 1e6)).rounded()`). NaN 은 0 이 된다
+fn clamp_dim(x: f64) -> f64 {
+    swift_max(0.0, swift_min(x, 1e6)).round()
+}
+
+/// 글 목록을 다듬어 빈 것을 버리고 앞 `max` 개만. 원본의 `.map { apMetaText($0, n) }.filter { !$0.isEmpty }.prefix(max)`
+fn texts_clamped(v: &[String], n: usize, max: usize) -> Vec<String> {
+    v.iter().map(|x| meta_text(x, n)).filter(|x| !x.is_empty()).take(max).collect()
+}
+
+/// 상한 안으로 자르고 다듬는다(내장 읽기의 마지막 손질). 이것을 지난 값은 `meta_check` 를 늘 지난다. 원본: `apMetaClamp`
+pub fn meta_clamp(m0: &Meta, dev: bool) -> Meta {
+    let mut m = m0.clone();
+    m.source = meta_text(&m.source, limit::SHORT);
+    m.id = meta_text(&m.id, limit::SHORT);
+    m.url = meta_url(&m.url, dev);
+    m.title = meta_text(&m.title, limit::TITLE);
+    if m.title.is_empty() {
+        m.title = "(제목 없음)".to_string();
+    }
+    m.kind = meta_text(&m.kind, limit::SHORT);
+    m.modified = meta_text(&m.modified, limit::SHORT);
+    m.author = meta_text(&m.author, limit::SHORT);
+    m.toc = m
+        .toc
+        .iter()
+        .take(limit::TOC)
+        .filter_map(|t| {
+            let x = meta_text(&t.title, limit::SHORT);
+            (!x.is_empty()).then(|| TocItem { level: t.level.clamp(1, 6), title: x })
+        })
+        .collect();
+    m.fields = m
+        .fields
+        .iter()
+        .take(limit::FIELDS)
+        .filter_map(|f| {
+            let n = meta_text(&f.name, 60);
+            (!n.is_empty()).then(|| MetaField { name: n, value: meta_text(&f.value, limit::FIELD_VALUE) })
+        })
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    m.links = m
+        .links
+        .iter()
+        .filter_map(|l| {
+            let u = meta_url(&l.url, dev);
+            let t = meta_text(&l.title, limit::TITLE);
+            if (u.is_empty() && t.is_empty()) || !seen.insert(format!("{u}\u{1}{t}")) {
+                return None;
+            }
+            Some(MetaLink { title: t, url: u, kind: meta_text(&l.kind, 40) })
+        })
+        .take(limit::LINKS)
+        .collect();
+    m.length = m.length.clamp(0, 1_000_000_000);
+    m.summary = texts_clamped(&m.summary, limit::SUMMARY_LINE, limit::SUMMARY_LINES);
+    let mut total = 0usize;
+    let mut sections = Vec::new();
+    for s in m.sections.iter().take(limit::SECTIONS) {
+        let t = meta_text(&s.title, limit::SHORT);
+        if t.is_empty() || total >= limit::SECTIONS_TOTAL {
+            continue;
+        }
+        let x = meta_block_text(&s.text, limit::SECTION_TEXT.min(limit::SECTIONS_TOTAL - total));
+        total += grapheme_len(&x);
+        sections.push(Section { title: t, text: x });
+    }
+    m.sections = sections;
+    m.frames = m
+        .frames
+        .iter()
+        .take(limit::FRAMES)
+        .map(|f| {
+            let mut g = f.clone();
+            g.id = meta_text(&f.id, limit::SHORT);
+            g.name = meta_text(&f.name, limit::SHORT);
+            if g.name.is_empty() {
+                g.name = "(이름 없음)".to_string();
+            }
+            g.width = clamp_dim(f.width);
+            g.height = clamp_dim(f.height);
+            g.texts = texts_clamped(&f.texts, limit::FRAME_TEXT, limit::FRAME_TEXTS);
+            g.components = texts_clamped(&f.components, limit::SHORT, limit::FRAME_COMPONENTS);
+            g.colors = f.colors.iter().filter(|c| color_ok(c)).take(limit::FRAME_COLORS).cloned().collect();
+            g.fonts = texts_clamped(&f.fonts, 100, limit::FRAME_FONTS);
+            g
+        })
+        .collect();
+    if !image_name_ok(&m.image) {
+        m.image = String::new();
+    }
+    m
+}
+
+// ── 마크업을 뺀 글(원본 363~391줄: 글자 참조 풀기와 글 덩어리) ──
+
+/// 글자 참조 이름표(원본 `apDecodeEntities` 의 `named`). `nbsp` 는 보통 빈칸(U+0020)이다
+const NAMED_ENTITIES: [(&str, &str); 17] = [
+    ("amp", "&"),
+    ("lt", "<"),
+    ("gt", ">"),
+    ("quot", "\""),
+    ("apos", "'"),
+    ("nbsp", " "),
+    ("ndash", "–"),
+    ("mdash", "—"),
+    ("hellip", "…"),
+    ("middot", "·"),
+    ("lsquo", "‘"),
+    ("rsquo", "’"),
+    ("ldquo", "“"),
+    ("rdquo", "”"),
+    ("copy", "©"),
+    ("rarr", "→"),
+    ("larr", "←"),
+];
+
+/// Swift `UInt32(text, radix:)` — 앞 `+` 는 받고, `-` 는 값이 0 일 때만 받고, 빈 글·ASCII 밖 숫자·넘침은 `None`
+fn parse_u32(text: &str, radix: u32) -> Option<u32> {
+    let (neg, digits) = match text.as_bytes().first() {
+        Some(b'+') => (false, &text[1..]),
+        Some(b'-') => (true, &text[1..]),
+        _ => (false, text),
+    };
+    if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+        return None;
+    }
+    let v = u32::from_str_radix(digits, radix).ok()?;
+    (!neg || v == 0).then_some(v)
+}
+
+/// 글자 참조 풀기(`&amp; &lt; &#39; &#x27; &nbsp; …`). 모르는 이름은 그대로. 원본: `apDecodeEntities`
+pub fn decode_entities(s: &str) -> String {
+    if !s.contains('&') {
+        return s.to_string();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        // `&` 자신 뒤 11 글자 안(원본 `prefix(12)`)에서 첫 `;`
+        if chars[i] == '&' {
+            if let Some(p) = chars[i + 1..].iter().take(11).position(|&c| c == ';') {
+                let semi = i + 1 + p;
+                let name: String = chars[i + 1..semi].iter().collect();
+                let rep: Option<String> = if let Some(h) = name.strip_prefix("#x").or_else(|| name.strip_prefix("#X")) {
+                    parse_u32(h, 16).and_then(char::from_u32).map(String::from)
+                } else if let Some(d) = name.strip_prefix('#') {
+                    parse_u32(d, 10).and_then(char::from_u32).map(String::from)
+                } else {
+                    NAMED_ENTITIES.iter().find(|(k, _)| *k == name).map(|(_, v)| v.to_string())
+                };
+                if let Some(r) = rep {
+                    out.push_str(&r);
+                    i = semi + 1;
+                    continue;
+                }
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// 글 덩어리 — 머리(수준·제목)와 그 아래 글(마크업을 뺀 줄들). 머리가 없는 맨 앞 덩어리는 수준 0. 원본: `APTextChunk`
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TextChunk {
+    pub level: i64,
+    pub title: String,
+    pub text: String,
+}
+
+impl TextChunk {
+    pub fn new(level: i64, title: &str, text: &str) -> Self {
+        Self { level, title: title.to_string(), text: text.to_string() }
     }
 }

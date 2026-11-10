@@ -31,7 +31,8 @@
     {"swift": "Sources/AutopilotRules/SlotTable.swift", "sha256": "e8d329eedb31d427e78552c386581c6586c8c03be5e52b947c5fe1002d977627", "rust": "src/rules/slot_table.rs", "chunk": "W07", "tests": [{"swift": "Tests/AutopilotRulesTests/SlotTableTests.swift", "sha256": "5a1f33c9ca97e38c52dc0722f1be06a38c69fc66ec947ed499e2a51fed25a7ab"}]},
     {"swift": "Sources/AutopilotRules/NewRepo.swift", "sha256": "a3c4dac313b15352bd63f7c1c561bdf08be1c546d31a712d50846ee153f32822", "rust": "src/rules/new_repo.rs", "chunk": "W07", "tests": [{"swift": "Tests/AutopilotRulesTests/TopicTests.swift", "sha256": "fe82b2a433e5e7a0c91c58e9b051096bf9d1b0d6c29c15d3b8fc16bbb8296325"}]},
     {"swift": "Sources/AutopilotRules/Versions.swift", "sha256": "dc533624bb852e993dfbf1f6799dc37ed1f87702e1a5237c6584c788d89cf101", "rust": "src/rules/versions.rs", "chunk": "W08", "tests": [{"swift": "Tests/AutopilotRulesTests/VersionsTests.swift", "sha256": "10a611075282b04ae0c2f8e1d05fc8c5dfed74cec8c2301f0b946d36aaa23e04"}]},
-    {"swift": "Sources/AutopilotRules/Connections.swift", "sha256": "1811678a4cb3ba88b6465fc9a4454434f7b2d1a0d8d4166395e17d3b251f78d8", "rust": "src/rules/connections.rs", "chunk": "W08", "tests": [{"swift": "Tests/AutopilotRulesTests/PublishTests.swift", "sha256": "f69d387740c1c8cb3c851f21883bbed7cf5db1fbabae4699b29b25a41a96c88c"}]}
+    {"swift": "Sources/AutopilotRules/Connections.swift", "sha256": "1811678a4cb3ba88b6465fc9a4454434f7b2d1a0d8d4166395e17d3b251f78d8", "rust": "src/rules/connections.rs", "chunk": "W08", "tests": [{"swift": "Tests/AutopilotRulesTests/PublishTests.swift", "sha256": "f69d387740c1c8cb3c851f21883bbed7cf5db1fbabae4699b29b25a41a96c88c"}]},
+    {"swift": "Sources/AutopilotRules/BuiltinVersions.swift", "sha256": "0ff763d2dff9003eb963d8708997d89b86eb619815a5d28932953a3430f09471", "rust": "src/rules/builtin_versions.rs", "chunk": "W09", "tests": []}
   ],
   "windows_only": ["src/rules/env_policy.rs"]
 }

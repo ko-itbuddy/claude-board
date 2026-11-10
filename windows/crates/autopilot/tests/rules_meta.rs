@@ -17,13 +17,16 @@
 //! - `EvidenceTests.표시` — `apAddEvidence`(`rules::evidence`)와 `apMetaRedact`(뒤 구간)를 거치는 앞부분을 빼고, `meta_wrap_untrusted` → `meta_json` → `meta_check(wrapped)` 로 되읽은 값의 단언만 → `표시_part2`
 //! - `EvidenceTests.거부` — `apAddEvidence` 를 거치는 단언을 빼고 `<b>x</b>` 제목이 `HTML 태그` 까닭으로 걸리는 것만 → `거부_part2`
 //!
-//!   남은 것: `MetaCheckTests.자르기`(`apMetaClamp`)·`ReadingTests` 383·402줄의 `apHasTag(...)` 단언(읽기 파이프라인 전체)·`EvidenceTests.묶음` 의 `apMetaCheck` 줄(근거 묶음 쓰기).
+//!   셋째 구간(원본 276~391줄)에서 옮긴 것: `MetaCheckTests.자르기` 통째로 → `자르기`. `ReadingTests` 383·402줄의 `apHasTag(...apMetaData(r.meta!))` 단언은 읽기 파이프라인(`read`)이 만든 메타 대신 같은 메타인 골든 파일로 → `읽기_메타에_태그_없음_part2`.
+//!   `EvidenceTests.묶음` 의 `apMetaCheck(…, wrapped: true).meta?.image` 단언은 `apAddEvidence` 를 뺀 쓰기→되읽기 → `묶음_part2`.
+//!   남은 것: 읽기 파이프라인·`apAddEvidence`·`apStripMarkup`(`마크업` 시험, 뒤 구간)을 거치는 나머지 단언.
+//!   `decode_entities`·`TextChunk`·`meta_text`·`meta_block_text`·`meta_url` 을 겨냥한 Swift 시험은 없다(`마크업` 시험은 `apStripMarkup`) → `extra_` 시험이 맡는다.
 //!
-//! 끝의 `extra_` 시험은 Swift 시험에 없는 것(상한 값·칸 빠짐·이스케이프·비유한 크기·주소 꼴 표·`NSNumber` 흉내·줄 끝·상한 바이트)이다.
+//! 끝의 `extra_` 시험은 Swift 시험에 없는 것(상한 값·칸 빠짐·이스케이프·비유한 크기·주소 꼴 표·`NSNumber` 흉내·줄 끝·상한 바이트·글 다듬기 표·`meta_url` 표·`meta_clamp` 칸별·글자 참조 표·`*_windows`)이다.
 
 use claude_board_autopilot::rules::meta::{
-    defang_markers, has_tag, limit, meta_check, meta_data, meta_json, meta_link_shape, meta_wrap_untrusted, Frame, Meta, MetaField, MetaLink, Section,
-    TocItem, EVIDENCE_NOTICE, META_FORMAT, UNTRUSTED_CLOSE, UNTRUSTED_OPEN,
+    decode_entities, defang_markers, has_tag, limit, meta_block_text, meta_check, meta_clamp, meta_data, meta_json, meta_link_shape, meta_text, meta_url,
+    meta_wrap_untrusted, Frame, Meta, MetaField, MetaLink, Section, TextChunk, TocItem, EVIDENCE_NOTICE, META_FORMAT, UNTRUSTED_CLOSE, UNTRUSTED_OPEN,
 };
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -640,4 +643,368 @@ fn extra_표시_괄호는_한쪽만_있어도_거른다() {
     assert_eq!(wrapped(json!({"sections": [{"title": "가", "text": text}]})), vec!["표시 괄호가 절 글 안에 있습니다(sections[0].text)".to_string()]);
     assert_eq!(wrapped(json!({"title": "제목 ⟧"})), vec!["표시 괄호가 절 글 밖 칸에 있습니다".to_string()]);
     assert_eq!(wrapped(json!({"title": "제목 ⟦"})), vec!["표시 괄호가 절 글 밖 칸에 있습니다".to_string()]);
+}
+
+// ── 셋째 구간(원본 276~391줄: `apMetaText`·`apMetaBlockText`·`apMetaURL`·`apMetaClamp`·`apDecodeEntities`·`APTextChunk`)의 시험 ──
+
+/// 원본 `MetaCheckTests.자르기` — 통째로
+#[test]
+fn 자르기() {
+    let mut m = Meta { source: "confluence".to_string(), title: format!("{}<b>", "가".repeat(500)), ..Meta::default() };
+    m.summary = vec!["줄".repeat(400); 9];
+    m.sections = (0..12).map(|i| Section::new(&format!("절 {i}"), &"나".repeat(5000))).collect();
+    m.links = (0..150).map(|i| MetaLink::new(&format!("링크 {i}"), &format!("https://example.com/{i}"), "link")).collect();
+    m.links.push(MetaLink::new("나쁨", "javascript:x", "link"));
+    m.frames = vec![Frame {
+        name: "<i>프레임</i>".to_string(),
+        width: -3.0,
+        height: 2e7,
+        texts: vec!["<script>".to_string()],
+        colors: vec!["#12345".to_string(), "#ABCDEF".to_string()],
+        ..Frame::default()
+    }];
+    m.image = "../x.png".to_string();
+    let c = meta_clamp(&m, false);
+    let chk = meta_check(Some(&meta_json(&c)), false);
+    assert!(chk.meta.is_some(), "{:?}", chk.problems);
+    assert!(c.title.chars().count() == limit::TITLE && c.summary.len() == 5 && c.links.len() == 100 && c.image.is_empty());
+    assert!(c.sections.iter().map(|s| s.text.chars().count()).sum::<usize>() <= limit::SECTIONS_TOTAL);
+    assert!(c.frames[0].name == "＜i＞프레임＜/i＞" && c.frames[0].width == 0.0 && c.frames[0].height == 1e6 && c.frames[0].colors == ["#ABCDEF"]);
+    assert_eq!(meta_clamp(&c, false), c, "한 번 다듬은 값은 다시 다듬어도 그대로");
+}
+
+/// 원본 `ReadingTests` 383·402줄의 `#expect(!apHasTag(...apMetaData(...)))` — 읽기 파이프라인(`read`)이 만든 메타는 골든 파일이므로
+/// 골든 메타(바이트가 `골든_바이트` 로 고정된)로 같은 단언을 한다
+#[test]
+fn 읽기_메타에_태그_없음_part2() {
+    for name in ["confluence-evil-meta.json", "notion-meta.json"] {
+        let path = golden_dir().join(name);
+        let text = std::fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+        let m = meta_from(&serde_json::from_str::<Value>(&text).unwrap());
+        assert!(!has_tag(&String::from_utf8(meta_data(&m)).unwrap()), "{name}");
+    }
+}
+
+/// 원본 `EvidenceTests.묶음` 의 `apMetaCheck(…, wrapped: true).meta.image` 단언 중 `apAddEvidence`(뒤 구간)를 뺀 부분:
+/// 그림 이름이 묶음 파일 쓰기→되읽기를 지나도 그대로
+#[test]
+fn 묶음_part2() {
+    let path = golden_dir().join("figma-meta.json");
+    let text = std::fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+    let mut m = meta_from(&serde_json::from_str::<Value>(&text).unwrap());
+    m.image = "2-figma-AbCdEfGhIjKlMn-12-4.png".to_string();
+    let m2 = meta_check(Some(&meta_json(&meta_wrap_untrusted(&m))), true).meta;
+    assert_eq!(m2.map(|x| x.image), Some("2-figma-AbCdEfGhIjKlMn-12-4.png".to_string()));
+}
+
+/// 골든 메타는 읽기 파이프라인이 `apMetaClamp` 를 지난 값이라 다시 다듬어도 바이트가 같다
+#[test]
+fn extra_골든_다듬어도_그대로() {
+    for name in ["jira-meta.json", "confluence-evil-meta.json", "notion-meta.json", "figma-meta.json"] {
+        let path = golden_dir().join(name);
+        let text = std::fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+        let m = meta_from(&serde_json::from_str::<Value>(&text).unwrap());
+        assert_eq!(meta_clamp(&m, false), m, "{name}");
+    }
+}
+
+#[test]
+fn extra_meta_text() {
+    let rows = [
+        ("<b>x</b>", 100, "＜b＞x＜/b＞"),
+        ("가나다라마", 5, "가나다라마"),
+        ("가나다라마", 4, "가나다…"),
+        ("가나다라마", 1, "…"),
+        ("가나다라마", 0, "…"),
+        ("a\nb\tc", 100, "a b c"),
+        ("a\u{202E}b\u{200B}c\u{0}d", 100, "ab\u{200B}cd"),
+        ("  가  나  ", 100, "가 나"),
+        ("e\u{301}e\u{301}e\u{301}", 3, "e\u{301}e\u{301}e\u{301}"),
+        ("e\u{301}e\u{301}e\u{301}", 2, "e\u{301}…"),
+        ("👨\u{200D}👩\u{200D}👧x", 2, "👨\u{200D}👩\u{200D}👧x"),
+        ("👨\u{200D}👩\u{200D}👧x", 1, "…"),
+    ];
+    for (input, n, want) in rows {
+        assert_eq!(meta_text(input, n), want, "{input:?} {n}");
+    }
+    assert_eq!(meta_text(&"가".repeat(10), usize::MAX), "가".repeat(10));
+}
+
+#[test]
+fn extra_meta_block_text() {
+    let rows = [
+        ("a\n\n\nb\n\n", 100, "a\n\nb"),
+        ("\n\na", 100, "a"),
+        ("a\n   \nb", 100, "a\n\nb"),
+        ("a\n<b>", 100, "a\n＜b＞"),
+        ("abcdef", 4, "abc…"),
+        ("abcdef", 6, "abcdef"),
+        ("a\nb\nc", 4, "a\nb…"),
+        ("\n \n", 100, ""),
+    ];
+    for (input, n, want) in rows {
+        assert_eq!(meta_block_text(input, n), want, "{input:?} {n}");
+    }
+}
+
+#[test]
+fn extra_meta_block_text_windows() {
+    // 줄 끝 `\r\n`: `\n` 에서 나눈 뒤 남은 `\r` 은 `meta_text` 가 빈칸으로 바꿔 가장자리에서 지운다
+    assert_eq!(meta_block_text("a\r\n\r\nb\r\n", 100), "a\n\nb");
+    assert_eq!(meta_block_text("a\r\nb", 100), "a\nb");
+    assert_eq!(meta_text("a\r\nb", 100), "a b");
+}
+
+#[test]
+fn extra_meta_url() {
+    let rows = [
+        ("https://example.com/a", false, "https://example.com/a"),
+        ("  https://example.com/a \n", false, "https://example.com/a"),
+        ("https://example.com/가", false, "https://example.com/%EA%B0%80"),
+        ("https://예시.com/", false, "https://%EC%98%88%EC%8B%9C.com/"),
+        ("http://example.com/a", false, ""),
+        ("javascript:alert(1)", false, ""),
+        ("https://u:p@example.com/a", false, ""),
+        ("", false, ""),
+        ("https://example.com/a b", false, ""),
+        ("http://127.0.0.1:8080/x", false, ""),
+        ("http://127.0.0.1:8080/x?y=1#z", true, "http://127.0.0.1:8080/x?y=1#z"),
+        ("http://127.0.0.1", true, "http://127.0.0.1"),
+        ("http://127.0.0.1/가", true, "http://127.0.0.1/%EA%B0%80"),
+        ("http://127.0.0.1.evil.com/x", true, ""),
+        ("http://127.0.0.1x/", true, ""),
+        ("http://127.0.0.1@evil.com/", true, ""),
+        ("http://127.0.0.1:x/", true, ""),
+        ("http://localhost/x", true, ""),
+        ("http://127.0.0.1/a b", true, ""),
+        ("https://example.com/a", true, "https://example.com/a"),
+        ("\u{3000}https://example.com/a\u{3000}", false, "https://example.com/a"),
+        ("\u{3000}http://127.0.0.1/a", true, "http://127.0.0.1/a"),
+        ("http://127.0.0.1/a|b", true, ""),
+    ];
+    for (input, dev, want) in rows {
+        assert_eq!(meta_url(input, dev), want, "{input:?} dev={dev}");
+    }
+    // 길이: 퍼센트 인코딩 뒤 2000 글자까지
+    let https = |n: usize| format!("https://example.com/{}", "a".repeat(n));
+    assert_eq!(meta_url(&https(1980), false), https(1980));
+    assert_eq!(meta_url(&https(1981), false), "");
+    let dev = |n: usize| format!("http://127.0.0.1/{}", "a".repeat(n));
+    assert_eq!(meta_url(&dev(1983), true), dev(1983));
+    assert_eq!(meta_url(&dev(1984), true), "");
+    assert_eq!(meta_url(&format!("https://example.com/{}", "가".repeat(700)), false), "");
+}
+
+#[test]
+fn extra_meta_url_windows() {
+    // 경로·드라이브 글자·역슬래시는 주소로 받지 않는다(금지 글자나 스킴 검사)
+    for input in ["C:\\Users\\x", "C:/Users/x", "\\\\server\\share\\x", "file:///C:/x", "https://example.com\\a", "https://example.com/a\\b"] {
+        assert_eq!(meta_url(input, false), "", "{input:?}");
+        assert_eq!(meta_url(input, true), "", "{input:?} dev");
+    }
+}
+
+#[test]
+fn extra_clamp_칸() {
+    // 제목·이름이 비면 자리 글, 출처·종류 따위는 상한과 꺾쇠 처리
+    let m = Meta {
+        source: "<s>".to_string(),
+        id: "i".repeat(250),
+        url: "javascript:x".to_string(),
+        kind: "k\nk".to_string(),
+        modified: "m".repeat(201),
+        author: " a ".to_string(),
+        length: -5,
+        frames: vec![Frame { name: " ".to_string(), ..Frame::default() }],
+        ..Meta::default()
+    };
+    let c = meta_clamp(&m, false);
+    assert_eq!(c.source, "＜s＞");
+    assert_eq!(c.id, format!("{}…", "i".repeat(199)));
+    assert_eq!(c.url, "");
+    assert_eq!(c.title, "(제목 없음)");
+    assert_eq!(c.kind, "k k");
+    assert_eq!(c.modified, format!("{}…", "m".repeat(199)));
+    assert_eq!(c.author, "a");
+    assert_eq!(c.length, 0);
+    assert_eq!(c.frames[0].name, "(이름 없음)");
+    assert_eq!(meta_clamp(&Meta { length: 2_000_000_000, ..Meta::default() }, false).length, 1_000_000_000);
+    assert_eq!(meta_clamp(&Meta { length: 7, ..Meta::default() }, false).length, 7);
+    let d = Meta { url: "http://127.0.0.1:8080/x".to_string(), ..Meta::default() };
+    assert_eq!(meta_clamp(&d, true).url, "http://127.0.0.1:8080/x");
+    assert_eq!(meta_clamp(&d, false).url, "");
+}
+
+#[test]
+fn extra_clamp_목록() {
+    // 목차: 앞 200 개만 보고, 빈 제목은 버리고, 수준은 1~6
+    let mut m = Meta { toc: vec![TocItem::new(0, "가"), TocItem::new(9, "나"), TocItem::new(3, " "), TocItem::new(-4, &"다".repeat(250))], ..Meta::default() };
+    let c = meta_clamp(&m, false);
+    assert_eq!(c.toc, vec![TocItem::new(1, "가"), TocItem::new(6, "나"), TocItem::new(1, &format!("{}…", "다".repeat(199)))]);
+    m.toc = (0..250).map(|i| TocItem::new(1, &format!("t{i}"))).collect();
+    assert_eq!(meta_clamp(&m, false).toc.len(), limit::TOC);
+    // 앞에서 자른 뒤에 빈 것을 버린다(원본 `prefix` 다음 `compactMap`)
+    m.toc = (0..250).map(|i| TocItem::new(1, if i < 150 { " " } else { "x" })).collect();
+    assert_eq!(meta_clamp(&m, false).toc.len(), 50);
+    // 칸: 앞 40 개, 이름이 비면 버림, 이름 60·값 500
+    let mut m = Meta { fields: vec![MetaField::new(" ", "v"), MetaField::new(&"n".repeat(70), &"v".repeat(600))], ..Meta::default() };
+    let c = meta_clamp(&m, false);
+    assert_eq!(c.fields, vec![MetaField::new(&format!("{}…", "n".repeat(59)), &format!("{}…", "v".repeat(499)))]);
+    m.fields = (0..60).map(|i| MetaField::new(&format!("f{i}"), "v")).collect();
+    assert_eq!(meta_clamp(&m, false).fields.len(), limit::FIELDS);
+    // 링크: 같은 (주소, 제목) 은 하나, 둘 다 비면 버림, 종류 40
+    let m = Meta { links: vec![
+        MetaLink::new("가", "https://example.com/a", "link"),
+        MetaLink::new("가", "https://example.com/a", "page"),
+        MetaLink::new("나", "https://example.com/a", &"k".repeat(50)),
+        MetaLink::new(" ", "javascript:x", "link"),
+        MetaLink::new("", "https://example.com/b", "link"),
+    ], ..Meta::default() };
+    let c = meta_clamp(&m, false);
+    assert_eq!(
+        c.links,
+        vec![
+            MetaLink::new("가", "https://example.com/a", "link"),
+            MetaLink::new("나", "https://example.com/a", &format!("{}…", "k".repeat(39))),
+            MetaLink::new("", "https://example.com/b", "link"),
+        ]
+    );
+    // 요약: 빈 줄은 버리고 앞 5 줄, 한 줄 300
+    let m = Meta { summary: vec![" ".to_string(), "a".repeat(310), "b".to_string(), "c".to_string(), "d".to_string(), "e".to_string(), "f".to_string()], ..Meta::default() };
+    let c = meta_clamp(&m, false);
+    assert_eq!(c.summary, vec![format!("{}…", "a".repeat(299)), "b".to_string(), "c".to_string(), "d".to_string(), "e".to_string()]);
+}
+
+#[test]
+fn extra_clamp_절_합계() {
+    let sec = |t: &str, n: usize| Section::new(t, &"나".repeat(n));
+    let lens = |m: &Meta| m.sections.iter().map(|s| s.text.chars().count()).collect::<Vec<_>>();
+    // 합계 12000 에 닿으면 뒤 절은 버린다
+    let m = Meta { sections: (0..5).map(|i| sec(&format!("절{i}"), 5000)).collect(), ..Meta::default() };
+    assert_eq!(lens(&meta_clamp(&m, false)), vec![4000, 4000, 4000]);
+    // 남은 몫만큼만 받는다
+    let m = Meta { sections: vec![sec("가", 3000), sec("나", 3000), sec("다", 3000), sec("라", 5000), sec("마", 10)], ..Meta::default() };
+    assert_eq!(lens(&meta_clamp(&m, false)), vec![3000, 3000, 3000, 3000]);
+    // 제목이 빈 절은 몫을 쓰지 않고 버린다. 절은 앞 10 개만 본다
+    let m = Meta { sections: vec![sec(" ", 100), sec("가", 5)], ..Meta::default() };
+    assert_eq!(meta_clamp(&m, false).sections, vec![Section::new("가", "나나나나나")]);
+    let m = Meta { sections: (0..12).map(|i| sec(&format!("절{i}"), 1)).collect(), ..Meta::default() };
+    assert_eq!(meta_clamp(&m, false).sections.len(), limit::SECTIONS);
+    // 절 글은 줄바꿈을 남기고 빈 줄은 하나로
+    let m = Meta { sections: vec![Section::new("가", "a\n\n\n<b>")], ..Meta::default() };
+    assert_eq!(meta_clamp(&m, false).sections[0].text, "a\n\n＜b＞");
+}
+
+#[test]
+fn extra_clamp_프레임() {
+    let f = |w: f64, h: f64| Frame { name: "f".to_string(), width: w, height: h, ..Frame::default() };
+    let m = Meta { frames: vec![f(f64::NAN, f64::INFINITY), f(12.5, 0.5), f(-0.4, f64::NEG_INFINITY), f(2.5, 999_999.6)], ..Meta::default() };
+    let c = meta_clamp(&m, false);
+    let sizes: Vec<(f64, f64)> = c.frames.iter().map(|x| (x.width, x.height)).collect();
+    // Swift 의 `max(0, min(x, 1e6))`: NaN 은 0, 무한대는 1e6, 음수는 0, 반올림은 0 에서 먼 쪽
+    assert_eq!(sizes, vec![(0.0, 1e6), (13.0, 1.0), (0.0, 0.0), (3.0, 1e6)]);
+    let g = Frame {
+        id: "i".repeat(250),
+        name: "n".to_string(),
+        texts: (0..250).map(|i| format!("t{i}")).chain([" ".to_string()]).collect(),
+        components: (0..150).map(|i| format!("c{i}")).collect(),
+        colors: ["#12345678", "#abcdef", "#ABCDEG", "red", "#12345"].iter().map(|s| s.to_string()).chain((0..60).map(|_| "#000000".to_string())).collect(),
+        fonts: (0..40).map(|i| format!("f{i}")).chain(["x".repeat(150)]).collect(),
+        ..Frame::default()
+    };
+    let c = meta_clamp(&Meta { frames: vec![g], ..Meta::default() }, false);
+    let g = &c.frames[0];
+    assert_eq!(g.id, format!("{}…", "i".repeat(199)));
+    assert_eq!(g.texts.len(), limit::FRAME_TEXTS);
+    assert_eq!(g.components.len(), limit::FRAME_COMPONENTS);
+    assert_eq!(g.colors.len(), limit::FRAME_COLORS);
+    assert_eq!(&g.colors[..2], ["#12345678", "#abcdef"]);
+    assert_eq!(g.fonts.len(), limit::FRAME_FONTS);
+    let long = Frame { fonts: vec!["x".repeat(150)], texts: vec!["t".repeat(350)], components: vec!["c".repeat(250)], ..Frame::default() };
+    let g = &meta_clamp(&Meta { frames: vec![long], ..Meta::default() }, false).frames[0].clone();
+    assert_eq!(g.fonts[0], format!("{}…", "x".repeat(99)));
+    assert_eq!(g.texts[0], format!("{}…", "t".repeat(299)));
+    assert_eq!(g.components[0], format!("{}…", "c".repeat(199)));
+    let many = Meta { frames: (0..60).map(|i| Frame { name: format!("f{i}"), ..Frame::default() }).collect(), ..Meta::default() };
+    assert_eq!(meta_clamp(&many, false).frames.len(), limit::FRAMES);
+    // 그림 이름
+    for (img, want) in [("a.png", "a.png"), ("../x.png", ""), ("a.jpg", ""), ("", "")] {
+        assert_eq!(meta_clamp(&Meta { image: img.to_string(), ..Meta::default() }, false).image, want, "{img}");
+    }
+}
+
+#[test]
+fn extra_decode_entities() {
+    let rows = [
+        ("가 &amp; 나 &lt;b&gt; &#44397;&#x2F;", "가 & 나 <b> 국/"), // 원본 `마크업` 시험의 입력 일부
+        ("a &amp; b", "a & b"),
+        ("&quot;&apos;", "\"'"),
+        ("&#39;&#x27;&#X27;", "'''"),
+        ("&nbsp;", " "),
+        ("&AMP;", "&AMP;"),
+        ("&unknown;", "&unknown;"),
+        ("&amp", "&amp"),
+        ("&;", "&;"),
+        ("&#;", "&#;"),
+        ("&#x;", "&#x;"),
+        ("&#xZZ;", "&#xZZ;"),
+        ("&#1114112;", "&#1114112;"),
+        ("&#x110000;", "&#x110000;"),
+        ("&#55296;", "&#55296;"),
+        ("&#xD800;", "&#xD800;"),
+        ("&#999999999;", "&#999999999;"),
+        ("&#0;", "\u{0}"),
+        ("&#+65;", "A"),
+        ("&#x+41;", "A"),
+        ("&#-1;", "&#-1;"),
+        ("&#-0;", "\u{0}"),
+        ("&#\u{663};", "&#\u{663};"),
+        ("&#x1F600;", "\u{1F600}"),
+        ("&#000000065;", "A"),
+        ("&#0000000065;", "&#0000000065;"),
+        ("&amp;amp;", "&amp;"),
+        ("&a&amp;", "&a&"),
+        ("&&amp;", "&&"),
+        ("&lt", "&lt"),
+        ("a;b&c", "a;b&c"),
+        ("&#12345678901;", "&#12345678901;"),
+        ("&#65 ;", "&#65 ;"),
+        ("&amp;&", "&&"),
+        ("&hellip;&mdash;&ndash;", "\u{2026}\u{2014}\u{2013}"),
+        ("", ""),
+    ];
+    for (input, want) in rows {
+        assert_eq!(decode_entities(input), want, "{input:?}");
+    }
+    let named = [
+        ("amp", "&"),
+        ("lt", "<"),
+        ("gt", ">"),
+        ("quot", "\""),
+        ("apos", "'"),
+        ("nbsp", " "),
+        ("ndash", "\u{2013}"),
+        ("mdash", "\u{2014}"),
+        ("hellip", "\u{2026}"),
+        ("middot", "\u{b7}"),
+        ("lsquo", "\u{2018}"),
+        ("rsquo", "\u{2019}"),
+        ("ldquo", "\u{201c}"),
+        ("rdquo", "\u{201d}"),
+        ("copy", "\u{a9}"),
+        ("rarr", "\u{2192}"),
+        ("larr", "\u{2190}"),
+    ];
+    for (name, want) in named {
+        assert_eq!(decode_entities(&format!("&{name};")), want, "{name}");
+    }
+}
+
+#[test]
+fn extra_text_chunk() {
+    let c = TextChunk::new(1, "하나", "가");
+    assert_eq!((c.level, c.title.as_str(), c.text.as_str()), (1, "하나", "가"));
+    assert_eq!(c, TextChunk { level: 1, title: "하나".to_string(), text: "가".to_string() });
+    assert_ne!(c, TextChunk::new(2, "하나", "가"));
+    assert_eq!(TextChunk::default(), TextChunk::new(0, "", ""));
 }

@@ -1,4 +1,4 @@
-//! (청크 Report 2/4 — 원본 1~251줄만 이식됨. 이 첫 줄은 `tests/ported.rs` 가 「구현됐는데 PORTED.json 에 없는 규칙」으로 잡지 않게 하는 표시다. R-Report-c·d 가 나머지(Writer 부터)를 옮긴다.
+//! (청크 Report 3/4 — 원본 1~334줄만 이식됨. 이 첫 줄은 `tests/ported.rs` 가 「구현됐는데 PORTED.json 에 없는 규칙」으로 잡지 않게 하는 표시다. R-Report-d 가 나머지(`apReportHTML` 부터)를 옮긴다.
 //! 실행 보고서 틀 앞부분. 원본: `Sources/AutopilotRules/Report.swift`(568줄). 이 구간은 결과 기록(`result.json`, 모델이 쓴 글)을 값으로 읽는 일과
 //! 보고서가 쓰는 값 꼴이다. 모델이 쓴 글은 믿지 않는다: 칸의 꼴이 틀리면 그 칸만 비우고, 글·목록 길이는 상한에서 자른다(`rules::formats`·`rules::prose` 와 같은 태도).
 //! 긴 줄표 바꾸기(`rules::prose::plain`)와 HTML 이스케이프(`rules::prose::escape_html`)는 그릴 때(뒤 구간) 한다. 여기서는 글자를 그대로 둔다.
@@ -9,8 +9,11 @@
 //! `report_text_n`·`report_text`(apReportText) · `parse_result`(apParseResult) · `ResultState`(APResultState) · `ReportCheck`(APReportCheck) ·
 //! `ReportUnit`(APReportUnit) · `ReportRun`(APReportRun) · `ReportOrigin`(APReportOrigin, 원본은 `Ports.swift` 에 있다).
 //! 이식됨(2/4, 원본 143~251줄): `ReportSource`(APReportSource, 원본은 `Ports.swift`) · `num`·`int`·`str`(`str_of`)·`lastPart`(`last_part`) · `report_run`(apReportRun, 기록 → 보고서 값) · 이름표 사전 일곱(`unit_label`·`unit_class`·`run_label`·`kind_label`·`outcome_label`·`test_label`·`merge_label`) · `report_dur`(apReportDur) · `kind_text`(비공개 `kind`).
-//! 남음(원본 253~568줄, 뒤 구간이 이 파일 끝에 이어 붙인다): `Writer`(시간대 글 만들기 포함) · `chip` · 그리는 쪽 전부(`apReportHTML`·`apDrawReports` 등). 쓸 곳 포트(`APReportSink`·`APReportFile`)는 그릴 때 정한다.
-//! 원본 시험 중 이 구간의 것: `ReportTests.swift` 의 `ResultParseTests` 셋(`아님`·`꼴`·`상한`)과 `ReportRunTests` 셋(`견본`·`칸`·`없음`) → `tests/rules_report.rs`.
+//! 이식됨(3/4, 원본 253~334줄): `Writer`(`Writer`·`t`·`c`·`short`·`date`·`add`, 시간대는 `FixedZone`·`CivilTime`) · `chip`(`chip`·`chip_plain`) · `css`(`CSS`).
+//! 남음(원본 337~568줄, 뒤 구간이 이 파일 끝에 이어 붙인다): `apReportHTML`(337) · `unitSection`(414) · `list`(497) · `flow`(503) · `timeline`(517) · `APReportDraw`·`apDrawReports`(542~) · `apReportEndedStatuses`·`apMissingUnitReports`. 쓸 곳 포트(`APReportSink`·`APReportFile`)는 그릴 때 정한다.
+//! 원본 시험 중 앞 구간의 것: `ReportTests.swift` 의 `ResultParseTests` 셋(`아님`·`꼴`·`상한`)과 `ReportRunTests` 셋(`견본`·`칸`·`없음`) → `tests/rules_report.rs`.
+//! 3/4 구간(`Writer`·`chip`·`css` 는 Swift 에서 비공개)을 겨냥한 Swift 시험은 없고 골든 HTML(`Report/*.html`)과 `ReportTests.swift` 의 `결정적`(시간대만 바꾸면 시각만 다름)이 덮는다.
+//! 이 구간은 골든의 `<style>` 안(`CSS`)·때 글자(`Writer::date`)를 직접 맞춰 보고, `결정적` 의 시각 부분을 옮겼다. HTML 전체 골든은 `apReportHTML` 이 옮겨질 때 따라간다.
 //!
 //! Swift ↔ Rust 로 달라진 점:
 //! - 기본 인자(`apReportText(v, n = 4000)`)가 없다: `report_text`(상한 4000)와 `report_text_n`(상한을 준다)으로 나눈다.
@@ -25,12 +28,17 @@
 //! - `as? [[String: Any]]` 는 원소 하나라도 객체가 아니면 통째로 빈 배열이 된다(`moved`·`changed`·`checks`·`denials`). 같게 옮겼다.
 //! - `apReportDur` 의 `Int(sec)` 는 범위 밖에서 멈추고 Rust `as i64` 는 끝값에 붙는다.
 //! - 사전 일곱은 Swift 에서 파일 안 비공개 상수이고 Rust 에서는 `Option` 을 돌려주는 함수다(뒤 구간이 쓰므로 공개).
+//! - 시간대: Foundation `TimeZone` 대신 `FixedZone`(UTC 에서 앞선 초). `Asia/Seoul`(`FixedZone::SEOUL`)·UTC 뿐이고 서머타임 시간대는 못 쓴다. 날짜 계산은 `rules::stopline::utc_time` 과 같은 civil_from_days 이고 stopline.rs 는 건드리지 않았다.
+//! - `Writer`·`chip`·`css` 는 Swift 에서 비공개이고 Rust 에서는 뒤 구간(같은 파일)이 쓰므로 공개다. `chip` 의 기본 인자는 `chip_plain` 으로 나눴다. `Writer` 는 값 복사 대신 `&Writer`(`timeline` 은 읽기만 한다)로 건넨다.
+//! - `Writer::date` 의 무늬는 보고서가 쓰는 글자(`y M d H m s` 와 따옴표 글)만 푼다. Foundation 의 나머지 무늬 글자는 지원하지 않는다.
 //!
 //! Windows 판단: 글 칸에 CRLF 가 들어와도(`\r\n` 은 한 글자) 자르는 자리·글자 수는 Swift 와 같다. 경로 가운데 `ResultChange::place` 는 받은 글자 그대로 두고,
 //! 저장소 이름만 `last_part` 가 `/` 와 `\` 로 끊는다(`C:\work\todo-api` → `todo-api`). 이 변환은 홈 폴더 줄이기(`~/`)와 달리 그리는 쪽이 아니라 값을 만들 때 한다.
+//! 홈 폴더 줄이기(`Writer::short`)는 홈 뒤에 `/` 하나를 붙여 찾는다(Swift 와 같다). 홈이 `C:\Users\x` 이고 경로가 `C:\Users\x\proj` 처럼 `\` 로 이어지면 줄이지 않는다(1:1 로 두었다).
 
 use crate::ports::Row;
 use crate::rules::formats::grapheme_len;
+use crate::rules::prose::{escape_html, plain};
 use serde_json::{Map, Number, Value};
 
 // ── 결과 기록 (result.json, 설계 5장 3절) ─────────────
@@ -681,3 +689,220 @@ pub fn report_dur(sec: f64) -> String {
 pub fn kind_text(k: &str) -> String {
     kind_label(&k.to_lowercase()).map_or_else(|| k.to_string(), str::to_string)
 }
+
+// ── 보고서 HTML: 글 만들기 (원본 253~334줄) ─────────────
+
+/// 고정 시간대(UTC 에서 몇 초 앞서나). 원본은 Foundation `TimeZone` 이고 보고서는 한국(`Asia/Seoul`, UTC+9, 서머타임 없음)이나 UTC 로만 그린다.
+/// 서머타임이 있는 시간대는 표현하지 못한다(`rules::stopline::Tz` 는 UTC 와 이 머신 시간대 둘뿐이라 이 파일 안에서 따로 둔다).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FixedZone {
+    pub offset_secs: i32,
+}
+
+impl FixedZone {
+    /// `Asia/Seoul` — UTC+9, 서머타임 없음.
+    pub const SEOUL: FixedZone = FixedZone { offset_secs: 9 * 3600 };
+    /// `UTC`
+    pub const UTC: FixedZone = FixedZone { offset_secs: 0 };
+
+    /// 유닉스 초 → 이 시간대의 달력 날짜·시각. 초의 소수는 버린다(음수는 내림, Foundation 이 초 단위로 끊는 것과 같다).
+    /// 아주 큰 수는 `i64` 끝값에 붙는다(원본은 범위 밖 `Date` 를 그대로 둔다, 결과 기록 칸에 그런 때가 오는 것은 모델이 틀리게 쓴 때뿐이다).
+    pub fn civil(&self, ts: f64) -> CivilTime {
+        let secs = (ts.floor() as i64).saturating_add(i64::from(self.offset_secs));
+        let days = secs.div_euclid(86_400);
+        let rem = secs.rem_euclid(86_400);
+        // 그레고리력 날짜 계산(Howard Hinnant 의 civil_from_days, `rules::stopline::utc_time` 과 같다)
+        let z = days + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z.rem_euclid(146_097);
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+        CivilTime {
+            year: yoe + era * 400 + i64::from(month <= 2),
+            month,
+            day: (doy - (153 * mp + 2) / 5 + 1) as u32,
+            hour: (rem / 3600) as u32,
+            minute: (rem % 3600 / 60) as u32,
+            second: (rem % 60) as u32,
+        }
+    }
+}
+
+/// 달력 날짜·시각(그레고리력). `FixedZone::civil` 이 만든다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CivilTime {
+    pub year: i64,
+    pub month: u32,
+    pub day: u32,
+    pub hour: u32,
+    pub minute: u32,
+    pub second: u32,
+}
+
+/// 글 만들기. 원본: `Writer`(비공개 구조체). `tz` 는 보일 시간대, `home` 은 `~` 로 줄일 홈 폴더, 만든 글은 `output` 으로 읽는다.
+#[derive(Debug, Clone)]
+pub struct Writer {
+    pub tz: FixedZone,
+    pub home: Option<String>,
+    o: String,
+}
+
+impl Writer {
+    pub fn new(tz: FixedZone, home: Option<&str>) -> Self {
+        Writer { tz, home: home.map(str::to_string), o: String::new() }
+    }
+
+    /// 모델·사람이 쓴 글(긴 줄표 바꿈 + 이스케이프). 원본: `t`
+    pub fn t(&self, s: &str) -> String {
+        escape_html(&plain(s))
+    }
+
+    /// 경로·가지 같은 이름(그대로, 홈 줄이기 + 이스케이프). 원본: `c`
+    pub fn c(&self, s: &str) -> String {
+        escape_html(&self.short(s))
+    }
+
+    /// 홈 폴더를 `~` 로(보고서가 바깥에 첨부될 수 있어 사용자 이름이 든 경로를 줄인다). 홈이 한 글자 이하(`/` 만)면 그대로. 원본: `short`
+    /// 홈 뒤에 붙이는 것은 `/` 하나다(Swift 와 같다): 엔진이 Windows 경로(`C:\Users\x\proj`)를 기록하면 줄이지 못한다.
+    pub fn short(&self, s: &str) -> String {
+        match &self.home {
+            Some(h) if grapheme_len(h) > 1 => s.replace(&format!("{h}/"), "~/"),
+            _ => s.to_string(),
+        }
+    }
+
+    /// 때 글자. 원본: `date`. 시각이 없거나 유한하지 않으면 `때 모름`.
+    /// 무늬는 Foundation `DateFormatter`(`ko_KR`·그레고리력) 글자 중 보고서가 쓰는 것만 푼다: `y`(한 글자는 그대로, 둘은 끝 두 자리, 셋 이상은 그 자리 수까지 0 채움) ·
+    /// `M`·`d`·`H`·`m`·`s`(한 글자는 그대로, 둘 이상은 두 자리 0 채움) · `'…'` 따옴표 글(`''` 은 따옴표 하나). 다른 글자는 그대로 쓴다(영문자 가운데 쓰이지 않는 것을
+    /// Foundation 은 다르게 풀 수 있다). 서기 1년 아래는 Foundation 이 시대를 따로 쓰는데 여기는 부호 있는 연도를 그대로 쓴다.
+    pub fn date(&self, ts: Option<f64>, f: &str) -> String {
+        let Some(ts) = ts.filter(|t| t.is_finite()) else {
+            return "때 모름".to_string();
+        };
+        let t = self.tz.civil(ts);
+        let chars: Vec<char> = f.chars().collect();
+        let mut o = String::new();
+        let mut i = 0;
+        while i < chars.len() {
+            let ch = chars[i];
+            if ch == '\'' {
+                // 따옴표 글: `''` 은 따옴표 하나, 그 밖은 닫는 따옴표까지 그대로(`''` 은 안에서도 따옴표 하나)
+                if chars.get(i + 1) == Some(&'\'') {
+                    o.push('\'');
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                while i < chars.len() {
+                    if chars[i] == '\'' {
+                        if chars.get(i + 1) == Some(&'\'') {
+                            o.push('\'');
+                            i += 2;
+                            continue;
+                        }
+                        i += 1;
+                        break;
+                    }
+                    o.push(chars[i]);
+                    i += 1;
+                }
+                continue;
+            }
+            let run = chars[i..].iter().take_while(|c| **c == ch).count();
+            let v = match ch {
+                'y' => Some(t.year),
+                'M' => Some(i64::from(t.month)),
+                'd' => Some(i64::from(t.day)),
+                'H' => Some(i64::from(t.hour)),
+                'm' => Some(i64::from(t.minute)),
+                's' => Some(i64::from(t.second)),
+                _ => None,
+            };
+            match v {
+                Some(v) if ch == 'y' && run == 2 => o.push_str(&format!("{:02}", v.rem_euclid(100))),
+                Some(v) if ch == 'y' => o.push_str(&format!("{:0w$}", v, w = if run >= 3 { run } else { 1 })),
+                Some(v) => o.push_str(&format!("{:0w$}", v, w = if run >= 2 { 2 } else { 1 })),
+                None => o.push_str(&ch.to_string().repeat(run)),
+            }
+            i += run;
+        }
+        o
+    }
+
+    /// 만든 글 뒤에 이어 붙인다. 원본: `add`
+    pub fn add(&mut self, s: &str) {
+        self.o.push_str(s);
+    }
+
+    /// 지금까지 만든 글. 원본: `w.o`
+    pub fn output(&self) -> &str {
+        &self.o
+    }
+
+    /// 만든 글을 넘겨 준다.
+    pub fn into_output(self) -> String {
+        self.o
+    }
+}
+
+/// 칩(알약 모양 이름표). 글은 이미 이스케이프된 것을 받는다. 원본: `chip`(비공개 함수, 둘째 인자 기본값 `""` 은 `chip_plain`)
+pub fn chip(text: &str, cls: &str) -> String {
+    format!("<span class=\"chip{}\">{}</span>", if cls.is_empty() { String::new() } else { format!(" {cls}") }, text)
+}
+
+/// 칩, 클래스 없음. 원본: `chip(text)`
+pub fn chip_plain(text: &str) -> String {
+    chip(text, "")
+}
+
+/// 보고서에 그대로 넣는 스타일(바깥 요청 없음). 원본: `css`(Swift 여러 줄 글자의 줄 끝 `\` 는 줄 이음이라 지금은 한 줄로 이어 붙인 값이다).
+/// 시험이 골든 HTML 의 `<style>` 안과 바이트로 맞춰 본다.
+pub const CSS: &str = r##":root{color-scheme:light dark;--bg:#f6f7f8;--card:#ffffff;--fg:#1f2328;--muted:#57606a;--line:#d8dee4;--soft:#eef1f4;--code:#f1f3f5;--accent:#0b62d6;--ok:#1a7f37;--ok-bg:#dcf5e3;--fail:#c4252f;--fail-bg:#ffe9e8;--cap:#8a5a00;--cap-bg:#fff3c4;--run:#0b62d6;--run-bg:#e2edff;--chip:#e9edf1;--note:#fff6cc;--note-line:#c9a227;--frame:#8c959f;--tag:#e9edf1}
+@media (prefers-color-scheme:dark){:root{--bg:#101215;--card:#181b20;--fg:#e6edf3;--muted:#9aa4af;--line:#30363d;--soft:#20252c;--code:#1c2027;--accent:#6aa8ff;--ok:#56d37f;--ok-bg:#132a1b;--fail:#ff8078;--fail-bg:#311719;--cap:#e3a93a;--cap-bg:#2e2410;--run:#6aa8ff;--run-bg:#14243d;--chip:#232830;--note:#2d2712;--note-line:#8f7425;--frame:#76808b;--tag:#232830}}
+*{box-sizing:border-box}
+html{background:var(--bg)}
+body{margin:0 auto;max-width:960px;padding:24px 16px 40px;background:var(--bg);color:var(--fg);font:14px/1.6 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic","Segoe UI",sans-serif;word-break:keep-all;overflow-wrap:anywhere}
+header,nav,section{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:0 0 14px}
+h1{font-size:21px;line-height:1.35;margin:2px 0 4px}
+h2{font-size:16.5px;line-height:1.4;margin:0 0 4px}
+h3{font-size:12.5px;color:var(--muted);font-weight:600;margin:16px 0 4px}h3.top{margin-top:0}
+p{margin:4px 0}
+.mark{color:var(--muted);font-size:12px;margin:0}
+.meta{color:var(--muted);font-size:12.5px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px}
+.chip{display:inline-block;padding:1px 9px;border-radius:999px;font-size:12px;line-height:1.7;background:var(--chip);white-space:nowrap}
+.chip.ok{background:var(--ok-bg);color:var(--ok)}.chip.fail{background:var(--fail-bg);color:var(--fail)}
+.chip.cap{background:var(--cap-bg);color:var(--cap)}.chip.run{background:var(--run-bg);color:var(--run)}
+dl{display:grid;grid-template-columns:max-content 1fr;gap:3px 14px;margin:10px 0 0;font-size:13px}
+dt{color:var(--muted)}dd{margin:0}
+nav ol{margin:4px 0 0;padding-left:24px}nav li{margin:2px 0}
+a{color:var(--accent)}nav a{text-decoration:none}
+.headline{font-size:15px;font-weight:600;margin:10px 0 2px}
+ul{margin:4px 0;padding-left:20px}li{margin:2px 0}
+ul.risk li::marker{color:var(--cap)}
+table{border-collapse:collapse;width:100%;font-size:13px;margin:2px 0}
+th,td{border-bottom:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:600}
+code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+code{background:var(--code);border-radius:5px;padding:1px 5px}
+pre{background:var(--code);border-radius:8px;padding:10px 12px;margin:6px 0;overflow:auto;white-space:pre-wrap}
+details{margin:6px 0}summary{color:var(--muted);font-size:12.5px;cursor:pointer}
+figure{margin:8px 0 12px}figcaption{color:var(--muted);font-size:12.5px;margin:0 0 4px}
+.pic{overflow-x:auto;border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--bg)}
+.pic svg{display:block;max-width:none}.pic svg.tl{width:100%;height:auto}
+svg text{font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic","Segoe UI",sans-serif}
+.sq .pb{fill:var(--soft);stroke:var(--frame)}.sq .pt{fill:var(--fg);font-size:13px}
+.sq .ll{stroke:var(--frame);stroke-dasharray:3 4}
+.sq .ml{stroke:var(--fg);stroke-width:1.3;fill:none}.sq .ml.d{stroke-dasharray:5 4}
+.sq .ah{fill:var(--fg)}.sq .mt{fill:var(--fg);font-size:12.5px}
+.sq .nb{fill:var(--note);stroke:var(--note-line)}.sq .nt{fill:var(--fg);font-size:12.5px}
+.sq .fr{fill:none;stroke:var(--frame)}.sq .fr.rc{fill:var(--soft);fill-opacity:.5;stroke-dasharray:2 3}
+.sq .ft{fill:var(--tag);stroke:var(--frame)}.sq .fl{fill:var(--fg);font-size:11.5px;font-weight:600}
+.sq .fc{fill:var(--muted);font-size:11.5px}.sq .fs{stroke:var(--frame);stroke-dasharray:4 3}
+.tl .ax{stroke:var(--line)}.tl .lb{fill:var(--muted);font-size:11px}.tl .bar{fill:var(--frame)}
+.tl .ok{fill:var(--ok)}.tl .fail{fill:var(--fail)}.tl .cap{fill:var(--cap)}.tl .run{fill:var(--run)}
+.empty{color:var(--muted)}
+footer{color:var(--muted);font-size:12px;margin:16px 4px 0}
+@media (max-width:560px){header,nav,section{padding:14px}dl{grid-template-columns:1fr}dt{margin-top:6px}}"##;

@@ -10,6 +10,7 @@ pub mod stream;
 pub mod rules {
     pub mod branches;
     pub mod board_git;
+    pub mod builtin_versions;
     pub mod carry;
     pub mod checks;
     pub mod connections;
@@ -48,6 +49,7 @@ pub mod engine {
     pub mod branches;
     pub mod decide;
     pub mod gitlinks_guard;
+    pub mod leftovers;
     pub mod prep_git;
     pub mod run;
 }

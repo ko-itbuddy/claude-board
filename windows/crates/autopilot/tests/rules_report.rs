@@ -1,4 +1,4 @@
-//! 실행 보고서 틀(`rules::report`, 원본 `Report.swift`) 앞쪽 2/4(원본 1~251줄) 시험.
+//! 실행 보고서 틀(`rules::report`, 원본 `Report.swift`) 앞쪽 3/4(원본 1~334줄) 시험. 3/4 구간의 시험은 끝의 `date_`·`writer_`·`chip_`·`css_` 시험이다.
 //! 원본 시험: `ReportTests.swift` 의 `ResultParseTests` 셋을 같은 이름으로 옮겼다 — `아님`(인자 다섯, nil 포함) · `꼴` · `상한`.
 //! 이어서 `ReportRunTests` 셋 — `견본`(견본 기록 `Tests/AutopilotRulesTests/Report/sample-run.json` 을 그 자리에서 읽는다) · `칸` · `없음`.
 //! 이 구간의 선언(`APResultRecord` 계열·`apCut`·`apReportText`·`apParseResult`·`APReport*` 값 꼴·`apReportRun`)을 겨냥한 Swift 시험은 이 여섯뿐이다.
@@ -12,9 +12,9 @@ use std::path::Path;
 use claude_board_autopilot::ports::Row;
 use claude_board_autopilot::rules::formats::grapheme_len;
 use claude_board_autopilot::rules::report::{
-    cut, kind_label, kind_text, last_part, merge_label, outcome_label, parse_result, report_dur, report_run, report_text, report_text_n, run_label, test_label,
+    chip, chip_plain, cut, kind_label, kind_text, last_part, merge_label, outcome_label, parse_result, report_dur, report_run, report_text, report_text_n, run_label, test_label,
     unit_class, unit_label, ReportCheck, ReportOrigin, ReportRun, ReportSource, ReportUnit, ResultCarry, ResultChange, ResultFlow, ResultRecord, ResultState,
-    ResultTest, REPORT_FLOW_MAX, REPORT_LIST_MAX, REPORT_TAIL_MAX, REPORT_TEXT_MAX,
+    ResultTest, Writer, FixedZone, CSS, REPORT_FLOW_MAX, REPORT_LIST_MAX, REPORT_TAIL_MAX, REPORT_TEXT_MAX,
 };
 use serde_json::{json, Value};
 
@@ -683,4 +683,383 @@ fn extra_걸린_시간() {
     ] {
         assert_eq!(report_dur(sec), want, "{sec}");
     }
+}
+
+// ── 3/4 구간: Writer · chip · css (원본 253~334줄, Swift 에서 비공개 → 시험은 골든과 `결정적` 의 시각 부분) ──────────────
+
+fn golden(name: &str) -> String {
+    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../Tests/AutopilotRulesTests/Report").join(name);
+    // 윈도우 체크아웃은 줄 끝이 CRLF 일 수 있다. Swift 가 쓴 글은 LF 뿐이다.
+    std::fs::read_to_string(p).unwrap().replace("\r\n", "\n")
+}
+
+fn seoul() -> Writer {
+    Writer::new(FixedZone::SEOUL, None)
+}
+
+fn num_at(v: &Value, path: &[&str]) -> Option<f64> {
+    let mut cur = v;
+    for k in path {
+        cur = cur.get(*k)?;
+    }
+    cur.as_f64()
+}
+
+/// 파이썬 datetime(독립 구현)이 만든 경계 표: 서울 자정 앞뒤 1초(월말·연말·윤일·평년 2월·100년 평년·400년 윤년), 소수 초, 골든 시각, 시대 가장자리, UTC·서울·UTC-5.
+const DATE_ROWS: [(f64, i32, &str, &str); 183] = [
+    (1793458799.0, 32400, "yyyy년 M월 d일 HH:mm", "2026년 10월 31일 23:59"),
+    (1793458799.0, 0, "yyyy년 M월 d일 HH:mm", "2026년 10월 31일 14:59"),
+    (1793458799.0, 32400, "yyyy-MM-dd HH:mm:ss", "2026-10-31 23:59:59"),
+    (1793458799.0, 0, "yyyy-MM-dd HH:mm:ss", "2026-10-31 14:59:59"),
+    (1793458800.0, 32400, "yyyy년 M월 d일 HH:mm", "2026년 11월 1일 00:00"),
+    (1793458800.0, 0, "yyyy년 M월 d일 HH:mm", "2026년 10월 31일 15:00"),
+    (1793458800.0, 32400, "yyyy-MM-dd HH:mm:ss", "2026-11-01 00:00:00"),
+    (1793458800.0, 0, "yyyy-MM-dd HH:mm:ss", "2026-10-31 15:00:00"),
+    (1793458801.0, 32400, "yyyy년 M월 d일 HH:mm", "2026년 11월 1일 00:00"),
+    (1793458801.0, 0, "yyyy년 M월 d일 HH:mm", "2026년 10월 31일 15:00"),
+    (1793458801.0, 32400, "yyyy-MM-dd HH:mm:ss", "2026-11-01 00:00:01"),
+    (1793458801.0, 0, "yyyy-MM-dd HH:mm:ss", "2026-10-31 15:00:01"),
+    (1793458799.5, 32400, "yyyy-MM-dd HH:mm:ss", "2026-10-31 23:59:59"),
+    (1793458800.999, 32400, "yyyy-MM-dd HH:mm:ss", "2026-11-01 00:00:00"),
+    (1798729199.0, 32400, "yyyy년 M월 d일 HH:mm", "2026년 12월 31일 23:59"),
+    (1798729199.0, 0, "yyyy년 M월 d일 HH:mm", "2026년 12월 31일 14:59"),
+    (1798729199.0, 32400, "yyyy-MM-dd HH:mm:ss", "2026-12-31 23:59:59"),
+    (1798729199.0, 0, "yyyy-MM-dd HH:mm:ss", "2026-12-31 14:59:59"),
+    (1798729200.0, 32400, "yyyy년 M월 d일 HH:mm", "2027년 1월 1일 00:00"),
+    (1798729200.0, 0, "yyyy년 M월 d일 HH:mm", "2026년 12월 31일 15:00"),
+    (1798729200.0, 32400, "yyyy-MM-dd HH:mm:ss", "2027-01-01 00:00:00"),
+    (1798729200.0, 0, "yyyy-MM-dd HH:mm:ss", "2026-12-31 15:00:00"),
+    (1798729201.0, 32400, "yyyy년 M월 d일 HH:mm", "2027년 1월 1일 00:00"),
+    (1798729201.0, 0, "yyyy년 M월 d일 HH:mm", "2026년 12월 31일 15:00"),
+    (1798729201.0, 32400, "yyyy-MM-dd HH:mm:ss", "2027-01-01 00:00:01"),
+    (1798729201.0, 0, "yyyy-MM-dd HH:mm:ss", "2026-12-31 15:00:01"),
+    (1798729199.5, 32400, "yyyy-MM-dd HH:mm:ss", "2026-12-31 23:59:59"),
+    (1798729200.999, 32400, "yyyy-MM-dd HH:mm:ss", "2027-01-01 00:00:00"),
+    (1709132399.0, 32400, "yyyy년 M월 d일 HH:mm", "2024년 2월 28일 23:59"),
+    (1709132399.0, 0, "yyyy년 M월 d일 HH:mm", "2024년 2월 28일 14:59"),
+    (1709132399.0, 32400, "yyyy-MM-dd HH:mm:ss", "2024-02-28 23:59:59"),
+    (1709132399.0, 0, "yyyy-MM-dd HH:mm:ss", "2024-02-28 14:59:59"),
+    (1709132400.0, 32400, "yyyy년 M월 d일 HH:mm", "2024년 2월 29일 00:00"),
+    (1709132400.0, 0, "yyyy년 M월 d일 HH:mm", "2024년 2월 28일 15:00"),
+    (1709132400.0, 32400, "yyyy-MM-dd HH:mm:ss", "2024-02-29 00:00:00"),
+    (1709132400.0, 0, "yyyy-MM-dd HH:mm:ss", "2024-02-28 15:00:00"),
+    (1709132401.0, 32400, "yyyy년 M월 d일 HH:mm", "2024년 2월 29일 00:00"),
+    (1709132401.0, 0, "yyyy년 M월 d일 HH:mm", "2024년 2월 28일 15:00"),
+    (1709132401.0, 32400, "yyyy-MM-dd HH:mm:ss", "2024-02-29 00:00:01"),
+    (1709132401.0, 0, "yyyy-MM-dd HH:mm:ss", "2024-02-28 15:00:01"),
+    (1709132399.5, 32400, "yyyy-MM-dd HH:mm:ss", "2024-02-28 23:59:59"),
+    (1709132400.999, 32400, "yyyy-MM-dd HH:mm:ss", "2024-02-29 00:00:00"),
+    (1709218799.0, 32400, "yyyy년 M월 d일 HH:mm", "2024년 2월 29일 23:59"),
+    (1709218799.0, 0, "yyyy년 M월 d일 HH:mm", "2024년 2월 29일 14:59"),
+    (1709218799.0, 32400, "yyyy-MM-dd HH:mm:ss", "2024-02-29 23:59:59"),
+    (1709218799.0, 0, "yyyy-MM-dd HH:mm:ss", "2024-02-29 14:59:59"),
+    (1709218800.0, 32400, "yyyy년 M월 d일 HH:mm", "2024년 3월 1일 00:00"),
+    (1709218800.0, 0, "yyyy년 M월 d일 HH:mm", "2024년 2월 29일 15:00"),
+    (1709218800.0, 32400, "yyyy-MM-dd HH:mm:ss", "2024-03-01 00:00:00"),
+    (1709218800.0, 0, "yyyy-MM-dd HH:mm:ss", "2024-02-29 15:00:00"),
+    (1709218801.0, 32400, "yyyy년 M월 d일 HH:mm", "2024년 3월 1일 00:00"),
+    (1709218801.0, 0, "yyyy년 M월 d일 HH:mm", "2024년 2월 29일 15:00"),
+    (1709218801.0, 32400, "yyyy-MM-dd HH:mm:ss", "2024-03-01 00:00:01"),
+    (1709218801.0, 0, "yyyy-MM-dd HH:mm:ss", "2024-02-29 15:00:01"),
+    (1709218799.5, 32400, "yyyy-MM-dd HH:mm:ss", "2024-02-29 23:59:59"),
+    (1709218800.999, 32400, "yyyy-MM-dd HH:mm:ss", "2024-03-01 00:00:00"),
+    (1677596399.0, 32400, "yyyy년 M월 d일 HH:mm", "2023년 2월 28일 23:59"),
+    (1677596399.0, 0, "yyyy년 M월 d일 HH:mm", "2023년 2월 28일 14:59"),
+    (1677596399.0, 32400, "yyyy-MM-dd HH:mm:ss", "2023-02-28 23:59:59"),
+    (1677596399.0, 0, "yyyy-MM-dd HH:mm:ss", "2023-02-28 14:59:59"),
+    (1677596400.0, 32400, "yyyy년 M월 d일 HH:mm", "2023년 3월 1일 00:00"),
+    (1677596400.0, 0, "yyyy년 M월 d일 HH:mm", "2023년 2월 28일 15:00"),
+    (1677596400.0, 32400, "yyyy-MM-dd HH:mm:ss", "2023-03-01 00:00:00"),
+    (1677596400.0, 0, "yyyy-MM-dd HH:mm:ss", "2023-02-28 15:00:00"),
+    (1677596401.0, 32400, "yyyy년 M월 d일 HH:mm", "2023년 3월 1일 00:00"),
+    (1677596401.0, 0, "yyyy년 M월 d일 HH:mm", "2023년 2월 28일 15:00"),
+    (1677596401.0, 32400, "yyyy-MM-dd HH:mm:ss", "2023-03-01 00:00:01"),
+    (1677596401.0, 0, "yyyy-MM-dd HH:mm:ss", "2023-02-28 15:00:01"),
+    (1677596399.5, 32400, "yyyy-MM-dd HH:mm:ss", "2023-02-28 23:59:59"),
+    (1677596400.999, 32400, "yyyy-MM-dd HH:mm:ss", "2023-03-01 00:00:00"),
+    (4107509999.0, 32400, "yyyy년 M월 d일 HH:mm", "2100년 2월 28일 23:59"),
+    (4107509999.0, 0, "yyyy년 M월 d일 HH:mm", "2100년 2월 28일 14:59"),
+    (4107509999.0, 32400, "yyyy-MM-dd HH:mm:ss", "2100-02-28 23:59:59"),
+    (4107509999.0, 0, "yyyy-MM-dd HH:mm:ss", "2100-02-28 14:59:59"),
+    (4107510000.0, 32400, "yyyy년 M월 d일 HH:mm", "2100년 3월 1일 00:00"),
+    (4107510000.0, 0, "yyyy년 M월 d일 HH:mm", "2100년 2월 28일 15:00"),
+    (4107510000.0, 32400, "yyyy-MM-dd HH:mm:ss", "2100-03-01 00:00:00"),
+    (4107510000.0, 0, "yyyy-MM-dd HH:mm:ss", "2100-02-28 15:00:00"),
+    (4107510001.0, 32400, "yyyy년 M월 d일 HH:mm", "2100년 3월 1일 00:00"),
+    (4107510001.0, 0, "yyyy년 M월 d일 HH:mm", "2100년 2월 28일 15:00"),
+    (4107510001.0, 32400, "yyyy-MM-dd HH:mm:ss", "2100-03-01 00:00:01"),
+    (4107510001.0, 0, "yyyy-MM-dd HH:mm:ss", "2100-02-28 15:00:01"),
+    (4107509999.5, 32400, "yyyy-MM-dd HH:mm:ss", "2100-02-28 23:59:59"),
+    (4107510000.999, 32400, "yyyy-MM-dd HH:mm:ss", "2100-03-01 00:00:00"),
+    (951749999.0, 32400, "yyyy년 M월 d일 HH:mm", "2000년 2월 28일 23:59"),
+    (951749999.0, 0, "yyyy년 M월 d일 HH:mm", "2000년 2월 28일 14:59"),
+    (951749999.0, 32400, "yyyy-MM-dd HH:mm:ss", "2000-02-28 23:59:59"),
+    (951749999.0, 0, "yyyy-MM-dd HH:mm:ss", "2000-02-28 14:59:59"),
+    (951750000.0, 32400, "yyyy년 M월 d일 HH:mm", "2000년 2월 29일 00:00"),
+    (951750000.0, 0, "yyyy년 M월 d일 HH:mm", "2000년 2월 28일 15:00"),
+    (951750000.0, 32400, "yyyy-MM-dd HH:mm:ss", "2000-02-29 00:00:00"),
+    (951750000.0, 0, "yyyy-MM-dd HH:mm:ss", "2000-02-28 15:00:00"),
+    (951750001.0, 32400, "yyyy년 M월 d일 HH:mm", "2000년 2월 29일 00:00"),
+    (951750001.0, 0, "yyyy년 M월 d일 HH:mm", "2000년 2월 28일 15:00"),
+    (951750001.0, 32400, "yyyy-MM-dd HH:mm:ss", "2000-02-29 00:00:01"),
+    (951750001.0, 0, "yyyy-MM-dd HH:mm:ss", "2000-02-28 15:00:01"),
+    (951749999.5, 32400, "yyyy-MM-dd HH:mm:ss", "2000-02-28 23:59:59"),
+    (951750000.999, 32400, "yyyy-MM-dd HH:mm:ss", "2000-02-29 00:00:00"),
+    (951836399.0, 32400, "yyyy년 M월 d일 HH:mm", "2000년 2월 29일 23:59"),
+    (951836399.0, 0, "yyyy년 M월 d일 HH:mm", "2000년 2월 29일 14:59"),
+    (951836399.0, 32400, "yyyy-MM-dd HH:mm:ss", "2000-02-29 23:59:59"),
+    (951836399.0, 0, "yyyy-MM-dd HH:mm:ss", "2000-02-29 14:59:59"),
+    (951836400.0, 32400, "yyyy년 M월 d일 HH:mm", "2000년 3월 1일 00:00"),
+    (951836400.0, 0, "yyyy년 M월 d일 HH:mm", "2000년 2월 29일 15:00"),
+    (951836400.0, 32400, "yyyy-MM-dd HH:mm:ss", "2000-03-01 00:00:00"),
+    (951836400.0, 0, "yyyy-MM-dd HH:mm:ss", "2000-02-29 15:00:00"),
+    (951836401.0, 32400, "yyyy년 M월 d일 HH:mm", "2000년 3월 1일 00:00"),
+    (951836401.0, 0, "yyyy년 M월 d일 HH:mm", "2000년 2월 29일 15:00"),
+    (951836401.0, 32400, "yyyy-MM-dd HH:mm:ss", "2000-03-01 00:00:01"),
+    (951836401.0, 0, "yyyy-MM-dd HH:mm:ss", "2000-02-29 15:00:01"),
+    (951836399.5, 32400, "yyyy-MM-dd HH:mm:ss", "2000-02-29 23:59:59"),
+    (951836400.999, 32400, "yyyy-MM-dd HH:mm:ss", "2000-03-01 00:00:00"),
+    (1793285999.0, 32400, "yyyy년 M월 d일 HH:mm", "2026년 10월 29일 23:59"),
+    (1793285999.0, 0, "yyyy년 M월 d일 HH:mm", "2026년 10월 29일 14:59"),
+    (1793285999.0, 32400, "yyyy-MM-dd HH:mm:ss", "2026-10-29 23:59:59"),
+    (1793285999.0, 0, "yyyy-MM-dd HH:mm:ss", "2026-10-29 14:59:59"),
+    (1793286000.0, 32400, "yyyy년 M월 d일 HH:mm", "2026년 10월 30일 00:00"),
+    (1793286000.0, 0, "yyyy년 M월 d일 HH:mm", "2026년 10월 29일 15:00"),
+    (1793286000.0, 32400, "yyyy-MM-dd HH:mm:ss", "2026-10-30 00:00:00"),
+    (1793286000.0, 0, "yyyy-MM-dd HH:mm:ss", "2026-10-29 15:00:00"),
+    (1793286001.0, 32400, "yyyy년 M월 d일 HH:mm", "2026년 10월 30일 00:00"),
+    (1793286001.0, 0, "yyyy년 M월 d일 HH:mm", "2026년 10월 29일 15:00"),
+    (1793286001.0, 32400, "yyyy-MM-dd HH:mm:ss", "2026-10-30 00:00:01"),
+    (1793286001.0, 0, "yyyy-MM-dd HH:mm:ss", "2026-10-29 15:00:01"),
+    (1793285999.5, 32400, "yyyy-MM-dd HH:mm:ss", "2026-10-29 23:59:59"),
+    (1793286000.999, 32400, "yyyy-MM-dd HH:mm:ss", "2026-10-30 00:00:00"),
+    (1793318400.0, 32400, "yyyy년 M월 d일 HH:mm", "2026년 10월 30일 09:00"),
+    (1793318400.0, 32400, "M월 d일 HH:mm", "10월 30일 09:00"),
+    (1793318400.0, 32400, "HH:mm", "09:00"),
+    (1793318400.0, 0, "HH:mm", "00:00"),
+    (1793329500.0, 32400, "yyyy년 M월 d일 HH:mm", "2026년 10월 30일 12:05"),
+    (1793329500.0, 32400, "M월 d일 HH:mm", "10월 30일 12:05"),
+    (1793329500.0, 32400, "HH:mm", "12:05"),
+    (1793329500.0, 0, "HH:mm", "03:05"),
+    (1793329800.0, 32400, "yyyy년 M월 d일 HH:mm", "2026년 10월 30일 12:10"),
+    (1793329800.0, 32400, "M월 d일 HH:mm", "10월 30일 12:10"),
+    (1793329800.0, 32400, "HH:mm", "12:10"),
+    (1793329800.0, 0, "HH:mm", "03:10"),
+    (1793318460.0, 32400, "yyyy년 M월 d일 HH:mm", "2026년 10월 30일 09:01"),
+    (1793318460.0, 32400, "M월 d일 HH:mm", "10월 30일 09:01"),
+    (1793318460.0, 32400, "HH:mm", "09:01"),
+    (1793318460.0, 0, "HH:mm", "00:01"),
+    (1793320100.0, 32400, "yyyy년 M월 d일 HH:mm", "2026년 10월 30일 09:28"),
+    (1793320100.0, 32400, "M월 d일 HH:mm", "10월 30일 09:28"),
+    (1793320100.0, 32400, "HH:mm", "09:28"),
+    (1793320100.0, 0, "HH:mm", "00:28"),
+    (1793323500.0, 32400, "yyyy년 M월 d일 HH:mm", "2026년 10월 30일 10:25"),
+    (1793323500.0, 32400, "M월 d일 HH:mm", "10월 30일 10:25"),
+    (1793323500.0, 32400, "HH:mm", "10:25"),
+    (1793323500.0, 0, "HH:mm", "01:25"),
+    (1793325510.0, 32400, "yyyy년 M월 d일 HH:mm", "2026년 10월 30일 10:58"),
+    (1793325510.0, 32400, "M월 d일 HH:mm", "10월 30일 10:58"),
+    (1793325510.0, 32400, "HH:mm", "10:58"),
+    (1793325510.0, 0, "HH:mm", "01:58"),
+    (1793322000.0, 32400, "yyyy년 M월 d일 HH:mm", "2026년 10월 30일 10:00"),
+    (1793322000.0, 32400, "M월 d일 HH:mm", "10월 30일 10:00"),
+    (1793322000.0, 32400, "HH:mm", "10:00"),
+    (1793322000.0, 0, "HH:mm", "01:00"),
+    (1793320200.0, 32400, "yyyy년 M월 d일 HH:mm", "2026년 10월 30일 09:30"),
+    (1793320200.0, 32400, "M월 d일 HH:mm", "10월 30일 09:30"),
+    (1793320200.0, 32400, "HH:mm", "09:30"),
+    (1793320200.0, 0, "HH:mm", "00:30"),
+    (0.0, 32400, "yyyy-MM-dd HH:mm:ss", "1970-01-01 09:00:00"),
+    (0.0, 0, "yyyy-MM-dd HH:mm:ss", "1970-01-01 00:00:00"),
+    (0.0, -18000, "yyyy-MM-dd HH:mm:ss", "1969-12-31 19:00:00"),
+    (-1.0, 32400, "yyyy-MM-dd HH:mm:ss", "1970-01-01 08:59:59"),
+    (-1.0, 0, "yyyy-MM-dd HH:mm:ss", "1969-12-31 23:59:59"),
+    (-1.0, -18000, "yyyy-MM-dd HH:mm:ss", "1969-12-31 18:59:59"),
+    (-0.5, 32400, "yyyy-MM-dd HH:mm:ss", "1970-01-01 08:59:59"),
+    (-0.5, 0, "yyyy-MM-dd HH:mm:ss", "1969-12-31 23:59:59"),
+    (-0.5, -18000, "yyyy-MM-dd HH:mm:ss", "1969-12-31 18:59:59"),
+    (86399.0, 32400, "yyyy-MM-dd HH:mm:ss", "1970-01-02 08:59:59"),
+    (86399.0, 0, "yyyy-MM-dd HH:mm:ss", "1970-01-01 23:59:59"),
+    (86399.0, -18000, "yyyy-MM-dd HH:mm:ss", "1970-01-01 18:59:59"),
+    (86400.0, 32400, "yyyy-MM-dd HH:mm:ss", "1970-01-02 09:00:00"),
+    (86400.0, 0, "yyyy-MM-dd HH:mm:ss", "1970-01-02 00:00:00"),
+    (86400.0, -18000, "yyyy-MM-dd HH:mm:ss", "1970-01-01 19:00:00"),
+    (951782399.0, 32400, "yyyy-MM-dd HH:mm:ss", "2000-02-29 08:59:59"),
+    (951782399.0, 0, "yyyy-MM-dd HH:mm:ss", "2000-02-28 23:59:59"),
+    (951782399.0, -18000, "yyyy-MM-dd HH:mm:ss", "2000-02-28 18:59:59"),
+    (4102444799.0, 32400, "yyyy-MM-dd HH:mm:ss", "2100-01-01 08:59:59"),
+    (4102444799.0, 0, "yyyy-MM-dd HH:mm:ss", "2099-12-31 23:59:59"),
+    (4102444799.0, -18000, "yyyy-MM-dd HH:mm:ss", "2099-12-31 18:59:59"),
+];
+
+#[test]
+fn date_경계표() {
+    let mut bad = Vec::new();
+    for (ts, off, f, want) in DATE_ROWS {
+        let got = Writer::new(FixedZone { offset_secs: off }, None).date(Some(ts), f);
+        if got != want {
+            bad.push(format!("{ts} off={off} {f}: got {got:?} want {want:?}"));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+#[test]
+fn date_모름() {
+    // `guard let ts, ts.isFinite else { return "때 모름" }`
+    for ts in [None, Some(f64::NAN), Some(f64::INFINITY), Some(f64::NEG_INFINITY)] {
+        for f in ["yyyy년 M월 d일 HH:mm", "M월 d일 HH:mm", "HH:mm"] {
+            assert_eq!(seoul().date(ts, f), "때 모름", "{ts:?} {f}");
+        }
+    }
+    // 0 은 모름이 아니다
+    assert_eq!(seoul().date(Some(0.0), "HH:mm"), "09:00");
+}
+
+#[test]
+fn date_결정적() {
+    // Swift `ReportTests.결정적` 의 시각 부분: 같은 기록을 UTC 로 그리면 견본의 시작이 00:00, 서울이면 09:00 이다
+    let j = fixture("sample-run.json");
+    let started = num_at(&j, &["run", "started"]);
+    assert_eq!(started, Some(1_793_318_400.0));
+    let utc = Writer::new(FixedZone::UTC, None).date(started, "yyyy년 M월 d일 HH:mm");
+    let kst = Writer::new(FixedZone::SEOUL, None).date(started, "yyyy년 M월 d일 HH:mm");
+    assert_eq!(utc, "2026년 10월 30일 00:00");
+    assert_eq!(kst, "2026년 10월 30일 09:00");
+    assert_eq!(FixedZone::SEOUL.offset_secs, 32_400);
+    assert_eq!(FixedZone::UTC.offset_secs, 0);
+}
+
+#[test]
+fn date_골든() {
+    // 골든 HTML 의 때 글자와 바이트로 같은가: 머리 meta 줄(시작 ~ 끝)과 바닥 글(그린 때)
+    for (run, html) in [("sample-run.json", "sample-report.html"), ("evil-run.json", "evil-report.html"), ("sample-run.json", "sample-unit-2.html")] {
+        let j = fixture(run);
+        let g = golden(html);
+        let w = seoul();
+        let s = w.date(num_at(&j, &["run", "started"]), "yyyy년 M월 d일 HH:mm");
+        let e = w.date(num_at(&j, &["run", "ended"]), "M월 d일 HH:mm");
+        let at = w.date(num_at(&j, &["at"]), "yyyy년 M월 d일 HH:mm");
+        assert!(g.contains(&format!("{s} ~ {e} · ")), "{run}: {s} ~ {e}");
+        assert!(g.contains(&format!("그린 때 {at} · 바탕 ")), "{run}: {at}");
+    }
+    // 단위 시각(`HH:mm ~ HH:mm`) — 견본 골든의 단위 머리 줄
+    let g = golden("sample-report.html");
+    let w = seoul();
+    for (a, b) in [(1_793_318_460.0, 1_793_320_100.0), (1_793_320_160.0, 1_793_323_500.0), (1_793_325_510.0, 1_793_325_510.0)] {
+        let line = format!("{} ~ {}</p>", w.date(Some(a), "HH:mm"), w.date(Some(b), "HH:mm"));
+        assert!(g.contains(&line), "{line}");
+    }
+    // 때가 없으면 `때 모름`(골든에는 없는 칸)
+    assert!(!g.contains("때 모름"));
+}
+
+#[test]
+fn date_무늬() {
+    let w = Writer::new(FixedZone::UTC, None);
+    let t = Some(1_793_318_400.0 + 18_429.0); // 2026-10-30 05:07:09 UTC
+    assert_eq!(w.date(t, "yyyy년 M월 d일 HH:mm"), "2026년 10월 30일 05:07");
+    assert_eq!(w.date(t, "yy"), "26");
+    assert_eq!(w.date(t, "y"), "2026");
+    assert_eq!(w.date(t, "yyyyy"), "02026");
+    assert_eq!(w.date(t, "H:m:s"), "5:7:9");
+    assert_eq!(w.date(t, "HH:mm:ss"), "05:07:09");
+    assert_eq!(w.date(t, "MM-dd"), "10-30");
+    // 따옴표 글과 `''`
+    assert_eq!(w.date(t, "HH'시' mm'분'"), "05시 07분");
+    assert_eq!(w.date(t, "HH 'mm' ''"), "05 mm '");
+    assert_eq!(w.date(t, "'it''s' HH"), "it's 05");
+    // 풀지 않는 글자는 그대로(이어 쓴 것도 그 길이만큼)
+    assert_eq!(w.date(t, "hh:QQQ"), "hh:QQQ");
+    // 서기 1년 1월 1일 0시(UTC)
+    assert_eq!(w.date(Some(-62_135_596_800.0), "yyyy-MM-dd HH:mm:ss"), "0001-01-01 00:00:00");
+    // `y` 한 글자는 0 을 채우지 않는다
+    assert_eq!(w.date(Some(-62_135_596_800.0), "y"), "1");
+    assert_eq!(w.date(Some(-62_135_596_800.0), "yy"), "01");
+    assert_eq!(w.date(Some(-62_135_596_800.0), "yyyy"), "0001");
+    // 작은 해: 2005 → yy 05
+    assert_eq!(w.date(Some(1_105_000_000.0), "yy"), "05");
+    // 아주 큰 수도 멈추지 않는다(끝값에 붙는다)
+    assert!(!w.date(Some(1e300), "yyyy").is_empty());
+    assert!(!w.date(Some(-1e300), "yyyy").is_empty());
+    // 달력 값
+    let c = FixedZone::SEOUL.civil(1_793_458_800.0);
+    assert_eq!((c.year, c.month, c.day, c.hour, c.minute, c.second), (2026, 11, 1, 0, 0, 0));
+}
+
+#[test]
+fn writer_글자() {
+    // `t` 는 긴 줄표를 쉼표로 바꾸고 이스케이프한다, `c` 는 홈을 줄이고 이스케이프한다(줄표는 그대로)
+    let w = Writer::new(FixedZone::SEOUL, Some("/Users/toy"));
+    assert_eq!(w.t("가 — 나 <b>&\"'"), "가, 나 &lt;b&gt;&amp;&quot;&#39;");
+    assert_eq!(w.c("/Users/toy/work/a — b & <c>"), "~/work/a — b &amp; &lt;c&gt;");
+    // 홈 뒤에 `/` 가 와야 줄인다
+    assert_eq!(w.short("/Users/toyota/x"), "/Users/toyota/x");
+    assert_eq!(w.short("/Users/toy"), "/Users/toy");
+    assert_eq!(w.short("/Users/toy/a /Users/toy/b"), "~/a ~/b");
+    assert_eq!(w.short("x/Users/toy/y"), "x~/y");
+    // 홈이 없거나 한 글자 이하면 줄이지 않는다
+    assert_eq!(Writer::new(FixedZone::UTC, None).short("/Users/toy/x"), "/Users/toy/x");
+    assert_eq!(Writer::new(FixedZone::UTC, Some("/")).short("//x"), "//x");
+    assert_eq!(Writer::new(FixedZone::UTC, Some("")).short("/x"), "/x");
+    assert_eq!(Writer::new(FixedZone::UTC, Some("a")).short("a/x"), "a/x");
+    assert_eq!(Writer::new(FixedZone::UTC, Some("ab")).short("ab/x"), "~/x");
+    // 글자 수는 Character 수: 한 글자 홈(CR LF 한 글자)도 줄이지 않는다
+    assert_eq!(Writer::new(FixedZone::UTC, Some("\r\n")).short("\r\n/x"), "\r\n/x");
+    // Windows 경로는 `/` 로 이어지지 않으면 줄이지 않는다(Swift 와 같다)
+    assert_eq!(Writer::new(FixedZone::UTC, Some("C:\\Users\\x")).short("C:\\Users\\x\\proj"), "C:\\Users\\x\\proj");
+    assert_eq!(Writer::new(FixedZone::UTC, Some("C:\\Users\\x")).short("C:\\Users\\x/proj"), "~/proj");
+}
+
+#[test]
+fn writer_이어붙임() {
+    let mut w = seoul();
+    assert_eq!(w.output(), "");
+    w.add("<p>");
+    w.add("가");
+    assert_eq!(w.output(), "<p>가");
+    assert_eq!(w.clone().into_output(), "<p>가");
+    assert_eq!(w.tz, FixedZone::SEOUL);
+}
+
+#[test]
+fn chip_글() {
+    assert_eq!(chip("통과", "ok"), "<span class=\"chip ok\">통과</span>");
+    assert_eq!(chip("건너뜀", ""), "<span class=\"chip\">건너뜀</span>");
+    assert_eq!(chip_plain("3개 중 1개 통과"), "<span class=\"chip\">3개 중 1개 통과</span>");
+    // 글은 이스케이프하지 않는다(받은 대로)
+    assert_eq!(chip("<b>", "fail"), "<span class=\"chip fail\"><b></span>");
+    // 골든의 칩 글자와 같다
+    let g = golden("sample-report.html");
+    assert!(g.contains(&chip("통과", "ok")));
+    assert!(g.contains(&chip("미통과", "fail")));
+}
+
+#[test]
+fn css_골든() {
+    // 골든 HTML 의 <style> 안과 바이트로 같다
+    for name in ["sample-report.html", "evil-report.html", "sample-unit-2.html"] {
+        let g = golden(name);
+        let a = g.find("<style>\n").unwrap() + "<style>\n".len();
+        let b = g.find("\n</style>").unwrap();
+        let (got, want) = (CSS, &g[a..b]);
+        if got != want {
+            let at = got.bytes().zip(want.bytes()).position(|(x, y)| x != y).unwrap_or(got.len().min(want.len()));
+            panic!("{name}: 달라지는 자리 {at}\n got: {:?}\nwant: {:?}", &got[at.saturating_sub(40)..(at + 40).min(got.len())], &want[at.saturating_sub(40)..(at + 40).min(want.len())]);
+        }
+    }
+    // 앞뒤에 줄바꿈이 없다
+    assert!(!CSS.starts_with('\n') && !CSS.ends_with('\n') && !CSS.contains('\r'));
+}
+
+#[test]
+fn css_원본() {
+    // Swift 소스의 여러 줄 글자(줄 끝 `\` 는 줄 이음)를 그 자리에서 풀어 같은지 본다
+    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../Sources/AutopilotRules/Report.swift");
+    let src = std::fs::read_to_string(p).unwrap().replace("\r\n", "\n");
+    let open = "private let css = \"\"\"\n";
+    let a = src.find(open).unwrap() + open.len();
+    let b = a + src[a..].find("\n\"\"\"\n").unwrap();
+    let want = src[a..b].replace("\\\n", "");
+    assert_eq!(CSS, want);
 }
