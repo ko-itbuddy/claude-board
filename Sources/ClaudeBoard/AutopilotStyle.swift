@@ -354,3 +354,90 @@ struct APFold<Content: View>: View {
         .overlay(RoundedRectangle(cornerRadius: 11).stroke((tint ?? Color.white).opacity(tint == nil ? 0.07 : 0.28), lineWidth: 0.5))
     }
 }
+
+// MARK: 2단계에서 더한 부품(보드 칸 화면) — 아래 부품은 출발 준비·합치기 시트에서도 쓴다
+
+// ⓘ 도움말 — 늘 붙어 있던 화면 사용법 글을 제목 옆 아이콘으로 옮긴다(마우스를 올리면 .hint). 정보(값·까닭·경고)는 글로 남기고 이것에 넣지 않는다
+struct APInfo: View {
+    let text: String
+    var axid = ""
+    @Environment(\.apMini) private var mini
+    @State private var hover = false
+    var body: some View {
+        Image(systemName: "info.circle")
+            .font(.system(size: mini ? 11 : 12.5, weight: .medium))
+            .foregroundStyle(Color.secondary.opacity(hover ? 1 : 0.7))
+            .padding(2)
+            .contentShape(Rectangle())
+            .onHover { hover = $0 }
+            .hint(text)
+            .accessibilityLabel("도움말")
+            .accessibilityIdentifier(axid)
+    }
+}
+
+// 덜 눈에 띄는 글자 단추 — 자주 쓰지 않는 행동(멈추고 다시 출발·터미널로 이어받기·원문 지우기)을 주 단추 줄 아래 작은 줄에.
+// 바탕 없이 아이콘 + 12pt 글, 올리면 밝아진다. tint 를 주면 그 색(위험은 APColor.fail). 잠기면 흐리게, 도움말에 까닭
+struct APMinorButton: View {
+    let title: String
+    var icon: String? = nil
+    var tint: Color? = nil
+    var enabled = true
+    var help = ""
+    var axid = ""
+    let action: @MainActor () -> Void
+    @Environment(\.apMini) private var mini
+    @State private var hover = false
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                if let icon { Image(systemName: icon).font(.system(size: mini ? 10 : 11.5, weight: .semibold)) }
+                Text(title).boardFont(APType.note, weight: .semibold).lineLimit(1)
+            }
+            .fixedSize()
+            .foregroundStyle(enabled ? (tint ?? Color.white).opacity(hover ? 1 : (tint == nil ? 0.72 : 0.85)) : Color.secondary.opacity(0.6))
+            .padding(.vertical, 4).padding(.horizontal, 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .modifier(ClickableIf(active: enabled, hover: $hover))
+        .hint(help.isEmpty ? title : help)
+        .accessibilityIdentifier(axid)
+    }
+}
+
+// 얇은 막대(높이 4) — 상한까지 얼마나 썼는지. 값 글자는 옆이나 위에 따로 쓴다
+struct APThinBar: View {
+    let fraction: Double
+    var color: Color = APColor.work
+    var body: some View {
+        Canvas { ctx, size in
+            let h = size.height, w = size.width
+            ctx.fill(Path(roundedRect: CGRect(x: 0, y: 0, width: w, height: h), cornerRadius: h / 2), with: .color(.white.opacity(0.08)))
+            let fw = max(h, w * CGFloat(min(max(fraction, 0), 1)))
+            ctx.fill(Path(roundedRect: CGRect(x: 0, y: 0, width: fw, height: h), cornerRadius: h / 2), with: .color(color))
+        }
+        .frame(height: 4)
+        .accessibilityHidden(true)
+    }
+}
+
+// 누르는 줄 끝의 "건너가기" 알약 — 줄 전체가 단추일 때 무엇을 하는 줄인지 보인다(예: 끝난 실행 줄의 "합치기·승격 ›"). 단추가 아니라 꼴만
+struct APGoPill: View {
+    let title: String
+    var color: Color = Palette.accent
+    var hover = false
+    @Environment(\.apMini) private var mini
+    var body: some View {
+        HStack(spacing: 3) {
+            Text(title).boardFont(APType.note, weight: .bold)
+            Image(systemName: "chevron.right").font(.system(size: mini ? 9 : 10, weight: .heavy))
+        }
+        .fixedSize()
+        .foregroundStyle(color)
+        .padding(.horizontal, mini ? 7 : 9).frame(height: mini ? 22 : 25)
+        .background(Capsule().fill(color.opacity(hover ? 0.26 : 0.16)))
+        .overlay(Capsule().stroke(color.opacity(0.45), lineWidth: 0.5))
+    }
+}
