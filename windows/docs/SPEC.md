@@ -425,6 +425,9 @@ macOS 키체인 대신:
 설정 화면 키(§5.14): `shortcuts`(`{동작 id: [키 코드, 수정키 비트]}`, 비운 동작은 `[]`, 기본 키면 항목 없음, 기본 `{}`, §5.14.3), `settingsTransition`(`"slide"`\|`"fade"`\|`"none"`, 기본 `"slide"`, 모르는 값은 `"slide"` 로 읽는다), `newSessionCommand`(문자열, 기본 빈 값, §5.14.4), `newSessionMdRender`(bool, 기본 true), `autoUpdateCheck`(bool, 기본 true, §5.14.5).
 `shortcuts` 는 읽을 때 항목마다 모양을 거른다(객체가 아니면 그 키만 버리고, 배열이 아니거나 모양이 틀린 항목은 그 항목만 버린다. 항목 하나 때문에 파일 전체를 기본값으로 읽지 않는다).
 로그인할 때 열기는 이 파일이 아니라 Run 값 `ClaudeBoard` 와 표지 파일 `login-launch-off`(§2.2)가 소유한다.
+보드 글자 크기 배율 키: `boardFontScale`(f64, 기본 1.0, `SettingsView` 에도 같은 이름으로 실린다, mac `boardFontScale`). 범위 0.8~1.5, 단계 0.1(규칙은 `board/fontScale.ts` 와 `settings.rs clamp_board_font_scale` 가 같다: 숫자가 아니면 1.0, 범위 밖은 끝값, 0.1 단위로 반올림). 명령 `set_board_font_scale(v)` 가 자르고 저장한다.
+프론트는 보드 안쪽(미니·본문, 제목 막대와 터미널 독은 밖)을 `BoardScale.svelte` 로 감싸 CSS `zoom` 을 건다(1 이면 걸지 않는다). 단계 문턱은 화면 높이로 비교하므로 `measure()` 가 안쪽 높이에 `screenHeight` 로 배율을 곱한다.
+`zoom` 은 글자뿐 아니라 아이콘·여백도 키운다(mac 은 글자만 키운다). 150% 에서는 보드 칸 폭 360px 이 안쪽 240px 이 되어 잘릴 수 있다. 화면에서 배율을 바꾸는 조작(설정 항목·단축키·메뉴)은 아직 없고 설정 파일 값만 따른다. 확인하지 못한 것: 실제 WebView2 에서 `zoom` 이 레이아웃·`ResizeObserver` 값에 어떻게 닿는지, 실제 Tauri 창(단위 시험과 타입 검사만 했다).
 `terminalTabs` 는 `save_tabs` 가 통째로 바꿔 넣고 `load_tabs` 가 읽는다. 값은 프론트가 쥔 모양이며 백엔드는 항목을 풀지 않는다.
 `SettingsView` 에는 `terminalExpanded`·`boardSide`·`boardPaneWidth`·`mdRenderOff` 와 설정 화면 키 다섯이 있다(`terminalTabs` 는 스냅샷에 싣지 않고 `load_tabs` 로만 읽는다). 1초 스냅샷(§6.1)에는 터미널 목록을 넣지 않는다 — 터미널 상태는 이벤트 기반이고 프론트 `TerminalHub` 가 `term_list` 와 채널로 채운다(§5.12).
 
@@ -447,6 +450,7 @@ macOS 키체인 대신:
   - 경계를 끌다 놓으면 `set_board_width(width)` 가 `boardPaneWidth`(논리 px)를 저장한다.
   - 접을 때 터미널은 언마운트하지 않고 숨긴다. 출력은 숨겨진 동안에도 백엔드 링 버퍼에 쌓이고 다시 펼치면 이어서 받는다(§5.12).
   - 미니: `enter_mini` 는 먼저 접고 `miniFromExpanded` 를 기록한다. 미니 프레임은 보드 쪽 모서리 기준이다. `leave_mini` 는 그 표지가 있으면 다시 펼친다.
+- 붙이기 단추의 힌트와 그림은 보드 위치(`boardSide`)만 따른다(`board/windowMenu.ts`의 `snapMenuLabel`·`snapHint`·`snapIconName`, mac 제목 막대 `SnapButton` 대응): `"left"` 면 「처음 크기로 되돌려 화면 왼쪽에 붙이기 (키)」와 `panel-left` 그림, 그 밖의 모든 값은 오른쪽(`snap-right`). 접힘·펼침·미니·항상 위는 글자를 바꾸지 않는다. 확인하지 못한 것: 실제 창에서 보드를 왼쪽으로 옮겼을 때의 모양(단위 시험만).
 - 트레이: 앱 아이콘. 왼쪽 클릭 = 보드 열고 닫기. 툴팁 "Claude Board — 승인 대기 n · 작업 중 n". 승인 대기가 있으면 주황 점, 작업 중만 있으면 파란 점이 붙은 아이콘으로 바꾼다(미리 만든 그림). 오른쪽 클릭 메뉴: 세션 보드 보기 · 터미널 펼치기 (<지금 키>)(체크) · 항상 위에 고정(체크) · 설정… · 업데이트 확인… · 종료. 캐릭터·알림 위치·보드 위치 항목은 없고 설정 화면에서 고른다(§5.14.5).
 - 단일 실행: 두 번째 실행은 첫 보드를 앞으로(`--show` 와 같음), `--action` 이면 동작을 넘기고 끝. `--background` 면 창을 보이되 포커스를 가져가지 않는다.
 - Windows Terminal(`WindowsTerminal.exe`)이 새로 실행되면 보드를 보이게(포커스는 그대로) — 3초 주기 프로세스 확인. (macOS 의 Ghostty 연동 대응)
@@ -696,6 +700,15 @@ mac 3.1.7(탭 줄)·3.1.8(경로 줄)의 가로 밀기다. 두 줄이 같은 규
 - 독(§5.11): WSL 배포판마다 `WSL · <이름>` 단추. 눌러서 `wsl.exe -d <배포판> --cd ~` 를 새 콘솔로 연다. 있는 것만 보이므로 늘 설치됨이고 실행 중 점은 없다.
 - 시험: `terminal.rs`(UNC 변환 · `wsl_launch` 인자 · 환경 목록에서 셸 만들기 · 틀린 키), `settings.rs`(`terminalShell` 규칙), `terms/real.rs`(claude 칠 탭이 WSL 을 받으면 기본 셸로 뜸), 프론트 `shellRules.test.ts` · `restore.test.ts`. 실제 배포판 시험 `wsl_tab_starts_in_the_given_folder_and_exits` 는 VM 을 띄우므로 `#[ignore]` 이고(`cargo test wsl_tab -- --ignored`) 이 문서는 돌렸다고 적지 않는다(§11.7).
 
+#### 5.12.15 카드 머리 클릭 · 세션 메뉴 · 넘긴 세션 규칙 · PowerShell 프로필 블록
+
+- **카드 머리 클릭이 터미널 경로를 바꾼다**(`terminal/workspaceSwitch.ts`의 `switchForHeaderClick`·`headerMarker`, 허브 `showWorkspace`, mac `TerminalHub.showWorkspace`·`GroupCard` 머리 탭 대응): 그 경로에 보드 탭이 있으면 마지막에 고른 탭으로 바꾼다(경로 비교는 대소문자·슬래시 차이를 같은 경로로 본다, `workspaceKeyOf`). 포커스는 터미널이 펼쳐 있을 때만 준다. 접혀 있으면 펼치지 않고 바꿔만 둔다. 그 경로에 탭이 없으면 아무것도 하지 않는다(새 경로를 열지 않는다). 머리에는 지금 펼친 터미널이 그 경로를 보이는 동안만 폴더 그림 표지가 붙는다(홈 경로는 `~` 와 같은 키로 맞춘다).
+  확인하지 못한 것: 실제 Tauri 창에서 머리를 눌러 본 것(단위 시험만).
+- **세션 메뉴는 mac 과 같다**(`board/sessionActions.ts`, 확인했다): 상태·보드 탭 여부별 항목 40행 표가 글자·설명(`detail`)·켜짐 여부·동작 이름을 고정한다. 메뉴 항목의 마우스 설명은 `detail`, 「세션 중단」은 빨간 글자(`destructive`)다(`SessionRow.svelte showMenu`). 코드 변경 없이 표 시험만 더했다.
+- **넘긴 세션 알아보기**(`core::handoff`, 순수 함수와 파일 읽기. **보드 스냅샷에는 아직 잇지 않았다**, 즉 카드는 이 규칙으로 숨겨지지 않는다): Claude Code 가 대화를 새 세션 id 로 넘기면(`/bg`) 원래 대화 기록 끝에 `{"type":"continued-in","continuedInSessionId":…}` 줄이 남는다. `handed_off_to_in(tail, mtime)` 은 기록 꼬리(마지막 256000바이트)에서 마지막 표지를 따르고, 그 뒤에 사이드체인이 아닌 user·assistant 줄이 오면 다시 이어 받은 것으로 보아 없음을 돌려준다. `handed_off_to(path)` 는 파일을 읽는 겉껍질이고 `visible_sessions`·`session_id` 는 카드에 보일 세션 거르기(mac `HandoffReader`·`visibleSessions`·`sessionID` 대응)다. 보드에 잇는 일(mtime 캐시·목록·개수에서 빼기)이 남았다.
+- **PowerShell 프로필 블록**(`core::profile_block`, 순수 함수 `insert_block`·`remove_block`. **설치·제거 흐름에 아직 잇지 않았다. 프로필에 무엇을 넣을지는 제품 질문으로 열려 있다**): 표지 줄은 `# >>> claude-board >>>` 와 `# <<< claude-board <<<` 이다. 줄 전체가 표지와 같은 줄만 표지로 보고, 짝 없는 표지는 사용자 글로 둔다. 멱등이며 줄바꿈(LF·CRLF)·BOM 을 보존한다(mac `user-setup.sh` 의 zshrc 블록 대응). 파일을 읽고 쓰지 않는다.
+- 확인한 것: 이 순수 함수와 규칙은 단위 시험(`crates/core/tests/handoff.rs`·`profile_block.rs`)으로 봤다. 확인하지 못한 것: 실제 `/bg` 로 넘긴 대화 기록, 실제 PowerShell 프로필 파일.
+
 ### 5.13 GUI 시험 장치 (`windows/ci/gui`·`windows/ci/jev`·가짜 claude)
 
 보드를 GUI 로 시험할 때 지키는 두 규칙: 진짜 claude 를 띄우지 않고, 사용자 환경(홈·`settings.json`·PowerShell 프로필·설치한 보드)을 바꾸지 않는다. 아래 장치가 그 규칙을 코드로 막는다.
@@ -765,6 +778,7 @@ mac 3.2.0 의 설정 화면(`SettingsScreen`)을 옮긴 것이다. 이 절이 �
 
 | id | 묶음 | 이름 | 기본 키 |
 |---|---|---|---|
+| `showBoard` | 보드 | 세션 보드 보기 | Ctrl+Alt+0 |
 | `snap` | 보드 | 처음 크기로 붙이기 (어느 앱에서든) | Ctrl+Alt+B |
 | `terminal` | 보드 | 터미널 펼치기·접기 (어느 앱에서든) | Ctrl+Alt+T |
 | `pin` | 보드 | 항상 위에 고정 | 없음 |
@@ -773,7 +787,13 @@ mac 3.2.0 의 설정 화면(`SettingsScreen`)을 옮긴 것이다. 이 절이 �
 | `tab1`~`tab9` | 탭으로 가기 | 탭 1~9 | Ctrl+Alt+1~9 |
 | `prevTab` · `nextTab` | 탭으로 가기 | 이전 탭 · 다음 탭 | Ctrl+Alt+← · Ctrl+Alt+→ |
 | `prevTab2` · `nextTab2` | 탭으로 가기 | 이전 탭 (보조) · 다음 탭 (보조) | Ctrl+Shift+Tab · Ctrl+Tab |
+| `prevTab3` · `nextTab3` | 탭으로 가기 | 이전 탭 (보조 2) · 다음 탭 (보조 2) | 없음 |
 | `prevWorkspace` · `nextWorkspace` | 탭으로 가기 | 이전 경로 · 다음 경로 | Ctrl+Alt+↑ · Ctrl+Alt+↓ |
+
+보드 보기와 보조 탭 키(`shortcuts/showBoard.ts`가 행과 판단을 갖고 `actions.ts` 표 맨 앞에 펼쳐 넣는다, mac `showBoard`·`prevTab3`·`nextTab3` 대응):
+- `showBoard`(mac ⌘0): 보드 창을 펼쳐 앞으로 가져오고(`show_board`) 키 입력이 터미널(`.xterm` 안 요소)에 있으면 그 포커스를 뺀다(`showBoardPlan`, `isTerminalElement`). 기본 키는 Ctrl+Alt+0 이다. Ctrl+0 은 터미널 글자 원래 크기 키와 겹칠 수 있어 피했고, `tab1`~`tab9` 가 Ctrl+Alt+1~9 라 0 이 비어 있다. 앱 안 키이고 어느 앱에서든 듣는 전역 키는 아니다.
+- `prevTab3`·`nextTab3`: mac 의 ⌃⇧⇥·⌃⇥ 는 Windows 에서 `prevTab2`·`nextTab2` 의 기본 키와 같으므로 기본 키가 없다(같은 키 두 동작은 충돌 표시만 만든다). 동작은 둘째 키와 같고(`TAB_STEP`: 이전 -1, 다음 +1) 사용자가 다른 키를 묶을 수 있게 id 만 둔다.
+- 확인하지 못한 것: 실제 Tauri 창에서 터미널에 포커스를 둔 채 Ctrl+Alt+0 을 눌러 포커스가 빠지는 것(순수 판단과 표 행만 단위 시험으로 봤다).
 
 표 밖의 고정 키는 둘이다: 설정 열고 닫기 Ctrl+,(`SETTINGS_KEY`)와 설정 화면이 떠 있을 때의 Esc. 화면 나누기·글꼴 크기 동작은 3단계에서 표에 더한다.
 
@@ -1360,7 +1380,8 @@ G7 결과(Windows 11 빌드 26300, 격리한 보드와 키를 받아 적는 가�
 |---|---|
 | 화면 나누기 | `SplitNode` 와 `split.ts` 순수 함수만 있고 탭마다 잎 하나만 그린다 |
 | 터미널 글꼴 크기·테마·애니메이션 설정 | 고정(글꼴 `Cascadia Mono, Consolas, D2Coding, monospace`) |
-| 보드 글자 크기 배율 | 없음 |
+| 보드 글자 크기 배율의 화면 조작 | 설정 키와 적용(§5.9)만 있고 설정 항목·단축키·메뉴는 없다. 실제 창의 `zoom` 확인도 없다 |
+| 넘긴 세션 숨기기 · PowerShell 프로필 블록 | 순수 함수만 있고 보드 스냅샷·설치 흐름에 잇지 않았다(§5.12.15) |
 | 실제 Windows 10 확인 | §11.3 의 순서가 남아 있다 |
 | 모니터가 여럿일 때의 확인 | 프레임 시험은 모니터 둘을 가정한 단위 시험뿐이고 실기 확인이 없다 |
 | AltGr 배열 확인 | AltGr 입력은 Ctrl+Alt 키를 가로채지 않게 코드로 막았으나 실제 배열에서 확인하지 않았다 |
