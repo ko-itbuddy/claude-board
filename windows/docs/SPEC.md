@@ -427,7 +427,7 @@ macOS 키체인 대신:
 로그인할 때 열기는 이 파일이 아니라 Run 값 `ClaudeBoard` 와 표지 파일 `login-launch-off`(§2.2)가 소유한다.
 보드 글자 크기 배율 키: `boardFontScale`(f64, 기본 1.0, `SettingsView` 에도 같은 이름으로 실린다, mac `boardFontScale`). 범위 0.8~1.5, 단계 0.1(규칙은 `board/fontScale.ts` 와 `settings.rs clamp_board_font_scale` 가 같다: 숫자가 아니면 1.0, 범위 밖은 끝값, 0.1 단위로 반올림). 명령 `set_board_font_scale(v)` 가 자르고 저장한다.
 프론트는 보드 안쪽(미니·본문, 제목 막대와 터미널 독은 밖)을 `BoardScale.svelte` 로 감싸 CSS `zoom` 을 건다(1 이면 걸지 않는다). 단계 문턱은 화면 높이로 비교하므로 `measure()` 가 안쪽 높이에 `screenHeight` 로 배율을 곱한다.
-`zoom` 은 글자뿐 아니라 아이콘·여백도 키운다(mac 은 글자만 키운다). 150% 에서는 보드 칸 폭 360px 이 안쪽 240px 이 되어 잘릴 수 있다. 화면에서 배율을 바꾸는 조작(설정 항목·단축키·메뉴)은 아직 없고 설정 파일 값만 따른다. 확인하지 못한 것: 실제 WebView2 에서 `zoom` 이 레이아웃·`ResizeObserver` 값에 어떻게 닿는지, 실제 Tauri 창(단위 시험과 타입 검사만 했다).
+`zoom` 은 글자뿐 아니라 아이콘·여백도 키운다(mac 은 글자만 키운다). 150% 에서는 보드 칸 폭 360px 이 안쪽 240px 이 되어 잘릴 수 있다. 배율을 바꾸는 조작은 단축키 넷이다(§5.14.3). 설정 화면의 단계 조절 항목과 메뉴 항목은 아직 없다. 확인하지 못한 것: 실제 WebView2 에서 `zoom` 이 레이아웃·`ResizeObserver` 값에 어떻게 닿는지, 실제 Tauri 창(단위 시험과 타입 검사만 했다).
 `terminalTabs` 는 `save_tabs` 가 통째로 바꿔 넣고 `load_tabs` 가 읽는다. 값은 프론트가 쥔 모양이며 백엔드는 항목을 풀지 않는다.
 `SettingsView` 에는 `terminalExpanded`·`boardSide`·`boardPaneWidth`·`mdRenderOff` 와 설정 화면 키 다섯이 있다(`terminalTabs` 는 스냅샷에 싣지 않고 `load_tabs` 로만 읽는다). 1초 스냅샷(§6.1)에는 터미널 목록을 넣지 않는다 — 터미널 상태는 이벤트 기반이고 프론트 `TerminalHub` 가 `term_list` 와 채널로 채운다(§5.12).
 
@@ -468,7 +468,7 @@ macOS 키체인 대신:
 경로 줄·탭 줄·빈 상태(둘 다 넘치면 가로로 밀기, §5.12.13), 새 세션 창(Ctrl+T·카드의 +, 키는 §5.14.3 에서 바꾼다), 탭마다 셸 하나(고르는 법은 새 탭 셸·WSL·Git Bash, §5.12.14)와 그 셸에 쳐 넣는 claude(`--session-id`·`--name`), 탭 이름 바꾸기와 `/rename`, 닫기 확인, Ctrl+Alt+1~9 번호 배지,
 세션과 탭의 짝짓기와 위치 칩(§5.12.7), 세션 줄 클릭 흐름과 일시중지·재개·중단·이어 열기(§5.7), 크기 바꾸기 장벽(§5.12.8),
 탭 목록 저장과 복원(§5.12.9), 보드를 끌 때 확인 창(§5.12.10), 앱 쪽 답변 꾸미기(md-render, §5.12.11), 다른 터미널 세션을 보드 탭으로 옮기기와 알림 패널에서 세션으로 이동(§5.12.12).
-미구현(각각 한 줄): 화면 나누기(자료구조 `SplitNode` 만 있고 탭마다 잎 하나만 그린다) · 터미널 글꼴 크기·테마·애니메이션 설정 · 보드 글자 크기 배율 ·
+미구현(각각 한 줄): 화면 나누기(자료구조 `SplitNode` 만 있고 탭마다 잎 하나만 그린다) · 터미널 글꼴 크기·테마·애니메이션 설정 · 보드 글자 크기 배율의 설정 화면 항목(단축키는 있다, §5.14.3) ·
 실제 Windows 10 확인 · 모니터가 여럿일 때의 배치 확인 · AltGr 배열 확인. 목록은 §11.7 이 소유한다.
 이름은 macOS `ClaudeBoard.swift` 와 맞춘다: 탭 `BoardTab`, 화면 `BoardSurface`, 칸 배치 `SplitNode`, 저장소 `TerminalHub`(프론트 `hub.svelte.ts`), 탭 줄 `TerminalTabBar`, 경로 줄 `TerminalWorkspaceBar`, 영역 `TerminalAreaView`, 세션 동작 `performAction` 어휘.
 탭·분할로 늘릴 수 있는 구조다. 모든 명령이 `TermId` 를 받고, 칸 배치는 분할 트리형이다. 지금은 탭마다 잎 하나다.
@@ -733,7 +733,7 @@ mac 3.1.7(탭 줄)·3.1.8(경로 줄)의 가로 밀기다. 두 줄이 같은 규
 
 ### 5.14 설정 화면·단축키 바꾸기·설정 안 계정 추가
 
-mac 3.2.0 의 설정 화면(`SettingsScreen`)을 옮긴 것이다. 이 절이 설정 화면의 열기·닫기·검색·전환, 단축키 모델, 새 세션 기본값, 로그인할 때 열기, 트레이 메뉴, 설정 안 계정 추가를 소유한다. 확인한 것은 §11.2.2 의 표만 확인으로 읽는다. 아직 없는 것(화면 나누기·글꼴 크기·테마·애니메이션·보드 글자 크기)은 §11.7 이 소유한다.
+mac 3.2.0 의 설정 화면(`SettingsScreen`)을 옮긴 것이다. 이 절이 설정 화면의 열기·닫기·검색·전환, 단축키 모델, 새 세션 기본값, 로그인할 때 열기, 트레이 메뉴, 설정 안 계정 추가를 소유한다. 확인한 것은 §11.2.2 의 표만 확인으로 읽는다. 아직 없는 것(화면 나누기·글꼴 크기·테마·애니메이션·보드 글자 크기의 설정 화면 항목)은 §11.7 이 소유한다.
 이름은 mac 과 맞춘다: `SettingsScreen`·`SettingsItem`·`SettingsSection`·`Shortcuts`·`KeyCombo`·`ShortcutSettings`·`LoginItem`·`NotifyPositionPicker`.
 
 #### 5.14.1 열기·닫기·Esc·접힌 칸·전환 (`settings/screen.svelte.ts`·`screenRules.ts`·`motion.ts`·`SettingsView.svelte`)
@@ -795,7 +795,21 @@ mac 3.2.0 의 설정 화면(`SettingsScreen`)을 옮긴 것이다. 이 절이 �
 - `prevTab3`·`nextTab3`: mac 의 ⌃⇧⇥·⌃⇥ 는 Windows 에서 `prevTab2`·`nextTab2` 의 기본 키와 같으므로 기본 키가 없다(같은 키 두 동작은 충돌 표시만 만든다). 동작은 둘째 키와 같고(`TAB_STEP`: 이전 -1, 다음 +1) 사용자가 다른 키를 묶을 수 있게 id 만 둔다.
 - 확인하지 못한 것: 실제 Tauri 창에서 터미널에 포커스를 둔 채 Ctrl+Alt+0 을 눌러 포커스가 빠지는 것(순수 판단과 표 행만 단위 시험으로 봤다).
 
-표 밖의 고정 키는 둘이다: 설정 열고 닫기 Ctrl+,(`SETTINGS_KEY`)와 설정 화면이 떠 있을 때의 Esc. 화면 나누기·글꼴 크기 동작은 3단계에서 표에 더한다.
+보드 글자 크기 키 넷(`board/fontScaleKeys.ts`가 행을 갖고 `actions.ts` 표에 펼쳐 넣는다, 묶음 「글자 크기」, mac `boardBigger`·`boardBigger2`·`boardSmaller`·`boardReset` 대응):
+
+| id | 이름 | 기본 키 |
+|---|---|---|
+| `boardBigger` | 보드 글자 크게 | Ctrl+Alt+Shift+= |
+| `boardBigger2` | 보드 글자 크게 (보조) | Ctrl+Alt+Num + (숫자패드 더하기) |
+| `boardSmaller` | 보드 글자 작게 | Ctrl+Alt+Shift+- |
+| `boardReset` | 보드 글자 원래 크기 | Ctrl+Alt+Shift+0 |
+
+- 한 번에 10%(80%~150%), 원래 크기는 100%. mac 은 ⌘ 조합(⌘⌥ 로 작게·원래 크기, ⌘⌥⇧ 로 크게)을 쓴다. Windows 에서 Ctrl+Alt+0 은 `showBoard` 가, Ctrl+Alt+= 은 화면 고르게 동작을 둘 자리라 셋 모두 Shift 를 더했고 보조는 숫자패드 +다.
+- 터미널 칸이 접혀 있어도 받는다(`gate.ts` 의 `actionAllowed`, 터미널과 무관한 동작이라 `isBoardFontAction` 이면 통과).
+- 눌렀을 때(`run.ts` 의 `runBoardFont`, 판단은 `boardFontScaleChange`): 바뀐 값을 `set_board_font_scale` 로 저장하고 알림 `보드 글자 N%` 를 6초 보인다. 80%·150% 끝이나 이미 100% 라 값이 안 바뀌면 저장은 건너뛰되 같은 알림은 그대로 보인다(mac `BoardFontScale.change` 도 끝에서 알린다).
+- 확인한 것은 단위 시험(`fontScaleKeys.test.ts`)뿐이고 실제 Tauri 창에서 키를 눌러 보지 않았다.
+
+표 밖의 고정 키는 둘이다: 설정 열고 닫기 Ctrl+,(`SETTINGS_KEY`)와 설정 화면이 떠 있을 때의 Esc. 화면 나누기 동작은 3단계에서 표에 더한다.
 
 받을 수 있는 키(`acceptable`):
 - Win 이 든 키는 모두 거절(`reserved`). Ctrl 과 Alt 가 모두 없는 키는 거절(`needsModifier`, "Ctrl·Alt 가운데 하나를 함께 눌러 주세요", Shift 만 든 키도 같다). 예외로 F1~F12 는 수정키 없이도 받는다(mac 규칙).
@@ -1380,7 +1394,7 @@ G7 결과(Windows 11 빌드 26300, 격리한 보드와 키를 받아 적는 가�
 |---|---|
 | 화면 나누기 | `SplitNode` 와 `split.ts` 순수 함수만 있고 탭마다 잎 하나만 그린다 |
 | 터미널 글꼴 크기·테마·애니메이션 설정 | 고정(글꼴 `Cascadia Mono, Consolas, D2Coding, monospace`) |
-| 보드 글자 크기 배율의 화면 조작 | 설정 키와 적용(§5.9)만 있고 설정 항목·단축키·메뉴는 없다. 실제 창의 `zoom` 확인도 없다 |
+| 보드 글자 크기 배율의 설정 화면 항목·메뉴 | 설정 키와 적용(§5.9)과 단축키 넷(§5.14.3)만 있고 설정 항목·메뉴는 없다. 실제 창의 `zoom` 확인과 키를 눌러 본 확인도 없다 |
 | 넘긴 세션 숨기기 · PowerShell 프로필 블록 | 순수 함수만 있고 보드 스냅샷·설치 흐름에 잇지 않았다(§5.12.15) |
 | 실제 Windows 10 확인 | §11.3 의 순서가 남아 있다 |
 | 모니터가 여럿일 때의 확인 | 프레임 시험은 모니터 둘을 가정한 단위 시험뿐이고 실기 확인이 없다 |
@@ -1421,7 +1435,7 @@ macOS 판 자율주행(`Sources/ClaudeAutopilot`, 설계 `docs/자율주행/설�
 
 | 층 | 파일 | 내용 |
 |---|---|---|
-| 규칙(순수) | `rules/control` · `stopline` · `records` · `checks` · `evidence` | macOS `AutopilotRules` 를 손으로 옮긴 것. 옮긴 원본마다 지문이 `PORTED.json` 에 있다(§12.8) |
+| 규칙(순수) | `rules/control` · `stopline` · `records` · `checks` · `evidence` · `prose` · `board_git` · `gitlinks` · `leftovers` · `history` | macOS `AutopilotRules` 를 손으로 옮긴 것. 옮긴 원본마다 지문이 `PORTED.json` 에 있다(§12.8). 뒤의 다섯은 §12.1.1 |
 | 규칙(Windows 전용) | `rules/env_policy` | 실행 환경에서 파생되는 동의 · 출발 문턱 · 판정 명령 호출 꼴 · 세션 설정의 `sandbox` 덩어리. `PORTED.json` 의 `windows_only` 에 둔다 |
 | 상태 기계(순수) | `engine/decide` | `decide(state, event) → actions`. 실행 · 단위 상태, 멈출 선, 시간 · 비용 상한, 판정 재시도 |
 | 해석(순수) | `stream`(claude stream-json 한 줄 파서) · `model`(실행 폴더 파일 모델, 키 순서를 지키는 `Ordered`/`Slot` 로 macOS 가 쓴 파일을 그대로 읽고 쓴다) | |
@@ -1431,7 +1445,27 @@ macOS 판 자율주행(`Sources/ClaudeAutopilot`, 설계 `docs/자율주행/설�
 | 실행 파일 | `claude-autopilot.exe`(콘솔, `cli::main`) · `claude-autopilot-engine.exe`(콘솔 창 없는 하위 시스템, `run` 만) | |
 | core | `core::envs`(실행 환경 목록, §5.12.14 와 공유) · `core::test_claude`(시험용 claude 판정, 보드와 공유) · `core::paths::autopilot_root(dev)` | |
 
-엔진 git 보호(`adapters/git`, macOS `EngineGit.swift` 를 옮긴 것이고 지문이 `PORTED.json` 에 있다): 엔진은 git 을 이 어댑터로만 부른다(`git -C <저장소>`, 늘 `git.exe`).
+#### 12.1.1 옮겨 놓았으나 아직 잇지 않은 규칙 다섯 (`PORTED.json` 의 `chunk` W03)
+
+`prose` · `board_git` · `gitlinks` · `leftovers` · `history` 는 순수 규칙이고 시험(`tests/rules_*.rs`)과 지문(`PORTED.json`)이 있다. 엔진과 어댑터는 아직 부르지 않는다(시험 파일만 쓴다). 이을 일감:
+
+| 규칙 | 내용 | 이을 곳 |
+|---|---|---|
+| `prose`(`Prose.swift`) | `plain`(모델 글의 긴 줄표를 쉼표로 바꾸고 줄 앞뒤 줄표는 지움) · `escape_html` · `safe_link`(호스트가 있는 https 주소만 통과, 아니면 `None`). 시험은 `ReportTests.swift` 의 `PlainTests` · `EscapeTests` · 링크 표에서 옮겼다 | `Report`·`Formats` 를 옮길 때 |
+| `board_git`(`BoardGit.swift`) | `GitRecord` · `board_git_changed`(git 폴더가 출발 때와 달라졌으면 까닭, 같거나 기록이 없으면 `None`) · `board_refs_pin`(보드가 ref 를 읽을 때 박는 `GIT_DIR`·`GIT_CEILING_DIRECTORIES`). inode 문자열은 Windows 에서 `볼륨 일련번호:파일 인덱스` 꼴이다. Windows 경로 사례는 Swift 시험에 없는 추가 시험이다. 호출하는 쪽은 기록한 값과 지금 읽은 값에 같은 정규 경로 꼴을 넘겨야 한다(규칙은 글자 비교만 한다) | `PrepGit`과 보드 쪽 git 어댑터 |
+| `gitlinks`(`Gitlinks.swift`) | `gitlink_paths` · `gitlink_excludes`(`git ls-files -s -z` 출력에서 mode 160000 경로를) · `has_submodule` · `submodule_reason` | git 보호 어댑터 |
+| `leftovers`(`Leftovers.swift`) | `leftover` → `Clean` · `Commit` · `Stash` · `Refuse` · `stash_paths` · `stash_message` · `stash_unit`. git 이 특수 글자·한글 경로를 따옴표와 8진 이스케이프로 싸서 낸 줄은 `stash_paths` 가 갈라 내지 않으므로, 읽기 전용 자리에서는 `Refuse` 가 된다 | 엔진 G4 의 보관(stash) 걸음 |
+| `history`(`History.swift`) | `history_pick`(거른 프로젝트 목록 안에서 고른 실행, 없으면 첫 실행) · `RunTag` | 실행 기록 화면 |
+
+Swift 와 다른 점(알려진 차이):
+- Swift 문자열의 `==`·`contains` 는 유니코드 정규 동등(조합형과 완성형을 같게 봄)으로 비교하고, Rust 는 바이트로 비교한다(`gitlinks` · `history` · `prose` 의 긴 줄표 검사).
+- `prose::safe_link` 는 RFC 3986 을 손으로 쪼갠 것이라 Foundation `URLComponents` 보다 엄격하다. 실제 Foundation 과는 맞춰 보지 않았다.
+- `prose::plain` 은 ICU 의 `$`(줄 끝) 의미를 문서만 보고 따라 했다.
+- `ReportTests.swift` 는 지금 `Prose` 항목의 지문 시험 파일이다. 나중에 `Report` 를 옮기면 이 파일이 두 규칙 항목에 속하므로, 지문 시험(`tests/ported.rs`)이 한 시험 파일을 두 항목이 함께 가리키는 경우를 다뤄야 한다.
+
+#### 12.1.2 엔진 git 보호
+
+`adapters/git`(macOS `EngineGit.swift` 를 옮긴 것이고 지문이 `PORTED.json` 에 있다): 엔진은 git 을 이 어댑터로만 부른다(`git -C <저장소>`, 늘 `git.exe`).
 - 환경: 물려받은 `GIT_*` 는 `GIT_CONFIG_*` · `GIT_SSH*` · `GIT_ALLOW_PROTOCOL` · `GIT_EXEC_PATH` 까지 모두 빼고(대소문자 가리지 않음) `GIT_CONFIG_NOSYSTEM=1` · `GIT_CONFIG_GLOBAL=NUL` · `GIT_ATTR_NOSYSTEM=1` · `GIT_NO_REPLACE_OBJECTS=1` · `GIT_NO_LAZY_FETCH=1` 만 건다(`ENGINE_GIT_HARDEN_ENV`, 순수 함수 `engine_git_env`). Windows 어댑터는 여기에 `GIT_PAGER=cat` · `GIT_TERMINAL_PROMPT=0` · `GIT_OPTIONAL_LOCKS=0` 을 더 건다.
 - 명령줄 `-c`(저장소 설정보다 센 자리): `core.fsmonitor=false` · `core.hooksPath` · `core.attributesFile` · `core.excludesFile` · `diff.external` · `core.pager=cat` · `protocol.ext.allow=never` · `commit.gpgsign=false`. 여기에 macOS 와 같은 값 네 개 `safe.bareRepository=explicit` · `diff.ignoreSubmodules=all` · `protocol.allow=never` · `log.showSignature=false` 가 이 차례로 더해진다. 저장소가 이름을 붙인 `filter.<이름>.*` · `diff.<이름>.textconv` · `merge.<이름>.driver` 는 `git config --list` 로 찾아 비운다(Windows 어댑터에만 있다).
 - 늦은 받기 끄기: 부분 복제 저장소에서 빠진 객체를 읽으면 git 이 `core.sshCommand` · `remote.*.uploadpack` 을 부른다. `GIT_NO_LAZY_FETCH=1` 과 `protocol.allow=never` 둘 다 이것을 막고(하나만 있어도 막힌다), 빠진 객체가 필요한 걸음은 실패한다(닫힌 쪽). 엔진은 `fetch` · `push` · `clone` · `ls-remote` 를 부르지 않는다.
@@ -1518,7 +1552,7 @@ macOS LaunchAgent(`KeepAlive` · `RunAtLoad`)의 대응이다. COM 이 아니라
 | 도구 | 하는 일 |
 |---|---|
 | `crates/autopilot/tests/*.rs` | 규칙 · 상태 기계 · 어댑터 · 엔진 루프(가짜 포트 `tests/fakes`) · 명령줄(`cli.rs`, 실제 `claude-autopilot.exe` 를 `CLAUDE_BOARD_HOME`=임시 폴더로) · 종단(`e2e_fake.rs`) |
-| `tests/ported.rs` + `PORTED.json` | 옮긴 macOS 원본 파일(`rules/*` 다섯과 엔진 git 보호 `EngineGit`, 옮긴 곳 `adapters/git`)과 그 시험 파일의 sha256 을 비교한다. macOS 규칙이 바뀌면 이 시험이 실패해 옮길 일을 알려 준다. 원본은 `Sources/AutopilotRules` |
+| `tests/ported.rs` + `PORTED.json` | 옮긴 macOS 원본 파일(`rules/*` 열과 엔진 git 보호 `EngineGit`, 옮긴 곳 `adapters/git`. 열 가운데 다섯은 §12.1.1)과 그 시험 파일의 sha256 을 비교한다. macOS 규칙이 바뀌면 이 시험이 실패해 옮길 일을 알려 준다. 원본은 `Sources/AutopilotRules` |
 | `ci/fake-claude-stream.cjs` (+ `.test.cjs`) | `claude -p --input-format stream-json --output-format stream-json` 를 흉내 내는 가짜(모델 비용 0, 네트워크 없음). `FAKE_CLAUDE_*` 환경변수로 턴별 동작을 준다. `start` 가 `FAKE_CLAUDE_` 변수를 고정 설정 `claude_env` 에 얼린다 |
 | `tests/fixtures/mac-run/` | macOS 가 쓴 실행 폴더 사본. 파일 호환 시험(`tests/model.rs`)이 읽고 다시 써 본다 |
 | `#[ignore] measured_start_registers_and_unregister_all` | 실제 작업 스케줄러에 등록 · 지우기. `cargo test -p claude-board-autopilot --test cli -- --ignored` |
@@ -1550,6 +1584,7 @@ macOS LaunchAgent(`KeepAlive` · `RunAtLoad`)의 대응이다. COM 이 아니라
 - 규칙은 손으로 옮긴 것이라 macOS 쪽 변경은 `ported.rs` 가 실패해야 알 수 있다. `apAddEvidence`(밖에서 읽은 근거를 비밀값을 가려 기록)는 옮기지 않았다.
 - 옮긴 지점: `Stopline.swift`(5시간 한도가 없는 요금제에서 `apUsageFromPercent` 가 주간만 풀고, 두 창 모두 사용률을 읽지 못하면 모름으로 답하며, `apShowFiveHour` 를 더한 것)와 `Records.swift`(판 5, `unit_commits` 표). Windows 사용률 어댑터(`adapters/usage`)는 원래부터 `five_hour` null 을 한도 없음(0.0)으로 읽어 같은 판정이 되고, `tests/usage.rs` 가 그 판정을 지킨다.
 - macOS 에서 옮기기 뒤에 늘어난 자율주행 규칙 가운데 아직 옮기지 않은 것(기능 이름): 출발 준비 git 자리 확인(`PrepGit`) · 단위 커밋 기록과 승격 뒤 되돌림 신호(`UnitCommits`) · 보고서 창 콘텐츠 규칙 차례(`ReportGate`) · 멈출 선 자리 표(`SlotTable`) · 출발 때 Jira 티켓 나무(`Tickets`) · 빠진 단위 보고서 찾기(`Report`) · 초안 세션의 경로 권한 규칙 절대 경로 꼴(`Draft`) · 출발 확인 설정 줄 안내 글(`StartSettings`).
+- 옮겼으나 엔진·어댑터가 아직 부르지 않는 규칙: `Prose` · `BoardGit` · `Gitlinks` · `Leftovers` · `History`(§12.1.1). 문자열 비교가 Swift(유니코드 정규 동등)와 Rust(바이트)로 갈리고, `safe_link` 는 실제 Foundation 과 맞춰 보지 않았다.
 - 네이티브 거부 규칙은 도구 권한만 막는다. Bash 를 허용한 실행에서 Bash 가 하는 일은 막지 못한다. 네이티브 환경은 샌드박스 없음에 동의한 실행에만 쓴다.
 - 확인하지 못한 것(`untested:`): ① 실제 WSL 에서 판정 재시도 · 단위 30개 · 몇 시간 도는 실행(41분은 §12.8 에서 확인했다) · 엔진을 끊은 지 3초 안에 엔진이 다시 뜨는 경우(남은 claude 가 2~3초 동안 살아 있어 같은 세션에 둘이 쓸 수 있다. 작업 스케줄러 재시작은 최대 약 60초 뒤라 겹치지 않는다) · 다시 띄운 엔진이 이전 꼬리표를 쓸어내는 `LAUNCH`·`SWEEP` 동작(엔진 강제 종료 확인에서는 띄울 때마다 새 꼬리표라 돌지 않았다) · 모델이 도구가 아니라 답을 쓰는 중에 엔진을 끊는 경우 ② WSL 샌드박스 확인은 haiku 한 모델과 위 두 가지 행동(쓰기 · 네트워크)뿐이고, `.claude/.cc-writes` 가 작업 폴더에 남는 것을 보았다 ③ Git Bash · PowerShell 7 · Windows PowerShell 환경에서 진짜 claude 로 도는 것(진짜 claude 단위 통과는 명령 프롬프트와 WSL 뿐) ④ 판정 재시도 ⑤ wsl.exe 자신의 시작 메시지가 판정 출력 앞에 섞이는지 ⑥ 실제 Windows 10 ⑦ 로그오프 · 재부팅 뒤 작업 스케줄러가 엔진을 다시 띄우는 것 ⑧ 몇 시간 사람 없이 도는 실행 ⑨ 시작 준비 화면: 좁은 머리 배치, 트레이 항목, 폴더 고르기 창에서 사람이 마우스로 폴더를 고르는 조작(창을 Win32 메시지로 눌렀다), 다른 WSL 배포판 폴더를 시트에서 거절하는 글(`wsl_cd_arg` 시험으로만 확인), 네이티브 환경에서 시트로 출발한 진짜 claude 단위 ⑩ 두 exe 가 든 실제 CI 빌드 · 실제 setup.exe 설치(§8.1) ⑪ 실제 살아 있는 보드에 `--action quit` 을 청하는 GUI 흐름과 강제 종료 물음 입력창(단위 시험과 가짜 보드(stub)로만 확인했다) ⑫ 8.3 짧은 이름 · 접합(junction) · 심볼릭 링크로 같은 폴더를 가리키는 프로젝트 폴더(§12.3 의 견줌은 글자 규칙이라 풀지 못한다).
 - 엔진이 죽은 뒤 다시 뜨기까지는 최대 약 60초다(작업 스케줄러 반복 간격의 한계, macOS 10초).
