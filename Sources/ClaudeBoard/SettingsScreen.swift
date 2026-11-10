@@ -1745,6 +1745,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                                                             queue: .main) { n in
             if let a = n.userInfo?["action"] as? String, let id = n.userInfo?["id"] as? String { MainActor.assumeIsolated { performAction(a, id) } }
         }
+        // 바깥에서 탭 열기(ClaudeBoard --open-tab) — 알림에는 내용이 없고 요청은 사용자만 쓰는 폴더에서 읽는다(OpenTabInbox)
+        DistributedNotificationCenter.default().addObserver(forName: .init("\(instanceName).open-tab"), object: nil,
+                                                            queue: .main) { _ in MainActor.assumeIsolated { OpenTabInbox.shared.drain() } }
         // Ghostty 가 실행되면 보드 창도 함께 띄운다 — 포커스는 Ghostty 에 그대로 둔다
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didLaunchApplicationNotification,
                                                           object: nil, queue: .main) { note in
