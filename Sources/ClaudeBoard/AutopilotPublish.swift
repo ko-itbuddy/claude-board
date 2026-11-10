@@ -201,7 +201,7 @@ struct APConnectionCard: View {
                 status
                 Spacer(minLength: 4)
                 if let c = saved, let k = c.checked, k.at > 0 {
-                    Text("마지막 확인 " + apConnDay(k.at)).boardFont(10.5).foregroundStyle(.secondary)
+                    Text("마지막 확인 " + apConnDay(k.at)).boardFont(APType.note).foregroundStyle(.secondary)
                 }
             }
             if service == .atlassian {
@@ -211,16 +211,16 @@ struct APConnectionCard: View {
             }
             field(service == .notion ? "요청자 이름" : "계정 메일", service == .notion ? "본문 둘째 줄에 씀(작성자 칸 보완)" : "kim@example.com", $account, axid: "conn-\(id)-account")
             HStack(spacing: 8) {
-                Text("토큰").boardFont(11, weight: .semibold).foregroundStyle(.secondary).frame(width: 74, alignment: .leading)
+                Text("토큰").boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: 88, alignment: .leading)
                 SecureField(m.secrets.contains(id) ? "키체인에 있음 · 바꾸려면 새로 넣기" : "API 토큰", text: $token)
-                    .textFieldStyle(.roundedBorder).font(.system(size: 11.5)).accessibilityIdentifier("conn-\(id)-token")
+                    .textFieldStyle(.roundedBorder).boardFont(APType.body).accessibilityIdentifier("conn-\(id)-token")
             }
             field("만료일", "yyyy-MM-dd · 토큰을 만들 때 고른 날(없으면 비움)", $expires, axid: "conn-\(id)-expires")
             HStack(spacing: 8) {
-                Text("범위").boardFont(11, weight: .semibold).foregroundStyle(.secondary).frame(width: 74, alignment: .leading)
+                Text("범위").boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: 88, alignment: .leading)
                 WrapRow(spacing: 4) {
                     ForEach(service.scopeChoices, id: \.key) { s in
-                        APButton(title: (scopes.contains(s.key) ? "✓ " : "") + s.label, tint: scopes.contains(s.key) ? Palette.accent : nil, axid: "conn-\(id)-scope-\(s.key)") {
+                        APChoice(title: s.label, on: scopes.contains(s.key), axid: "conn-\(id)-scope-\(s.key)") {
                             if scopes.contains(s.key) { scopes.remove(s.key) } else { scopes.insert(s.key) }
                         }
                     }
@@ -230,7 +230,7 @@ struct APConnectionCard: View {
                 APButton(title: "저장", primary: true, axid: "conn-\(id)-save") { save() }
                 APButton(title: m.checking.contains(id) ? "확인하는 중" : "연결 확인", enabled: saved != nil && !m.checking.contains(id),
                          help: "읽기 요청 하나로 토큰과 사이트를 확인합니다(토큰이 없거나 주소가 규칙 밖이면 요청하지 않음)", axid: "conn-\(id)-check") { m.check(id) }
-                APButton(title: "지우기", tint: APColor.fail, enabled: saved != nil || m.secrets.contains(id), help: "키체인 항목과 연결 목록 줄을 지웁니다", axid: "conn-\(id)-remove") {
+                APButton(title: "지우기", role: .destructive, enabled: saved != nil || m.secrets.contains(id), help: "키체인 항목과 연결 목록 줄을 지웁니다", axid: "conn-\(id)-remove") {
                     m.remove(id); token = ""; filled = false; fill()
                 }
                 Spacer(minLength: 0)
@@ -270,14 +270,14 @@ struct APConnectionCard: View {
         return HStack(spacing: 6) {
             APChip(text: t, color: col, strong: true).accessibilityIdentifier("conn-\(id)-status")
             if let c = saved, !c.expires.isEmpty, case .ok = apExpiry(c.expires, now: Date(), tz: .current) {
-                Text(apExpiryLabel(apExpiry(c.expires, now: Date(), tz: .current), c.expires)).boardFont(10.5).foregroundStyle(.secondary)
+                Text(apExpiryLabel(apExpiry(c.expires, now: Date(), tz: .current), c.expires)).boardFont(APType.note).foregroundStyle(.secondary)
             }
         }
     }
     private func field(_ k: String, _ ph: String, _ b: Binding<String>, axid: String) -> some View {
         HStack(spacing: 8) {
-            Text(k).boardFont(11, weight: .semibold).foregroundStyle(.secondary).frame(width: 74, alignment: .leading)
-            TextField(ph, text: b).textFieldStyle(.roundedBorder).font(.system(size: 11.5)).accessibilityIdentifier(axid)
+            Text(k).boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: 88, alignment: .leading)
+            TextField(ph, text: b).textFieldStyle(.roundedBorder).boardFont(APType.body).accessibilityIdentifier(axid)
         }
     }
 }
@@ -302,17 +302,17 @@ struct APWebhookCard: View {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 6) {
                         APChip(text: m.secrets.contains(h.id) ? "주소 있음" : "주소 없음", color: m.secrets.contains(h.id) ? APColor.ok : APColor.fail)
-                        Text(h.name.isEmpty ? h.id : h.name).boardFont(11.5, weight: .semibold)
-                        Text(h.host).boardFont(10.5, design: .monospaced).foregroundStyle(.secondary)
+                        Text(h.name.isEmpty ? h.id : h.name).boardFont(APType.body, weight: .semibold)
+                        Text(h.host).boardFont(APType.monoSmall).foregroundStyle(.secondary)
                         Spacer(minLength: 4)
                         APButton(title: m.checking.contains(h.id) ? "보내는 중" : "시험 글 보내기", enabled: !m.checking.contains(h.id) && m.secrets.contains(h.id),
                                  help: "첫 줄 '오토파일럿 작성'인 시험 글 하나를 이 대화방에 보냅니다", axid: "conn-\(h.id)-test") { m.testWebhook(h.id) }
-                        APButton(title: "지우기", tint: APColor.fail, axid: "conn-\(h.id)-remove") { m.remove(h.id) }
+                        APButton(title: "지우기", role: .destructive, axid: "conn-\(h.id)-remove") { m.remove(h.id) }
                     }
                     HStack(spacing: 4) {
-                        Text("글 꼴").boardFont(10.5).foregroundStyle(.secondary)
+                        Text("글 꼴").boardFont(APType.note).foregroundStyle(.secondary)
                         ForEach(APNotifyFormat.allCases, id: \.self) { f in
-                            APButton(title: f.label, tint: h.format == f ? Palette.accent : nil, axid: "conn-\(h.id)-format-\(f.rawValue)") {
+                            APChoice(title: f.label, on: h.format == f, axid: "conn-\(h.id)-format-\(f.rawValue)") {
                                 var c = h; c.format = f
                                 problem = m.save(c, secret: "")
                             }
@@ -322,9 +322,9 @@ struct APWebhookCard: View {
                 }
             }
             HStack(spacing: 8) {
-                TextField("이름(예: 팀 대화방)", text: $name).textFieldStyle(.roundedBorder).font(.system(size: 11.5)).frame(maxWidth: 180)
+                TextField("이름(예: 팀 대화방)", text: $name).textFieldStyle(.roundedBorder).boardFont(APType.body).frame(maxWidth: 180)
                     .accessibilityIdentifier("conn-webhook-name")
-                SecureField(apDevBuild ? "https://… (시험 빌드는 http://127.0.0.1 도)" : "https://…", text: $url).textFieldStyle(.roundedBorder).font(.system(size: 11.5))
+                SecureField(apDevBuild ? "https://… (시험 빌드는 http://127.0.0.1 도)" : "https://…", text: $url).textFieldStyle(.roundedBorder).boardFont(APType.body)
                     .accessibilityIdentifier("conn-webhook-url")
                 APButton(title: "더하기", primary: true, axid: "conn-webhook-add") {
                     let c = APConnection(id: m.nextWebhookID(), service: .webhook, name: apDocText(name, 80), scopes: ["notify"], format: format)
@@ -333,9 +333,9 @@ struct APWebhookCard: View {
                 }
             }
             HStack(spacing: 4) {
-                Text("더할 글 꼴").boardFont(10.5).foregroundStyle(.secondary)
+                Text("더할 글 꼴").boardFont(APType.note).foregroundStyle(.secondary)
                 ForEach(APNotifyFormat.allCases, id: \.self) { f in
-                    APButton(title: f.label, tint: format == f ? Palette.accent : nil, axid: "conn-webhook-format-\(f.rawValue)") { format = f }
+                    APChoice(title: f.label, on: format == f, axid: "conn-webhook-format-\(f.rawValue)") { format = f }
                 }
             }
             if let p = problem { apNote(p, APColor.fail) }
@@ -555,8 +555,8 @@ struct APOutboxSheet: View {
         let wait = m.visible.filter { APOutboxReview.isWaiting($0.item) }.count
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                Image(systemName: "paperplane").font(.system(size: 12, weight: .bold)).foregroundStyle(Palette.accent)
-                Text("올릴 글 \(m.visible.count)개").boardFont(13, weight: .bold).accessibilityIdentifier("ap-outbox-count")
+                Image(systemName: "paperplane").font(.system(size: 14, weight: .bold)).foregroundStyle(Palette.accent)
+                Text("올릴 글 \(m.visible.count)개").boardFont(APType.heading, weight: .bold).accessibilityIdentifier("ap-outbox-count")
                 if wait > 0 { APChip(text: "기다림 \(wait)", color: APColor.wait) }
                 Spacer(minLength: 4)
                 APButton(title: "모두 올리기", primary: true, enabled: !m.postable.isEmpty,
@@ -567,7 +567,7 @@ struct APOutboxSheet: View {
             if m.confirmAll {
                 let p = m.postable
                 HStack(spacing: 6) {
-                    Text("글 \(p.count)개를 올립니다: \(apOutboxCounts(p.map(\.item))). 올린 뒤에는 보드에서 되돌릴 수 없습니다.").boardFont(11.5)
+                    Text("글 \(p.count)개를 올립니다: \(apOutboxCounts(p.map(\.item))). 올린 뒤에는 보드에서 되돌릴 수 없습니다.").boardFont(APType.body)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 4)
                     APButton(title: "올리기", primary: true, axid: "ap-outbox-all-yes") { m.postAll() }
@@ -586,10 +586,10 @@ struct APOutboxSheet: View {
         if let rid = m.filterRun ?? (m.selected != nil ? m.current?.runID : nil) {
             let live = ap.runs.first { $0.id == rid }
             HStack(spacing: 6) {
-                Text(m.entries.first { $0.runID == rid }?.runTitle ?? rid).boardFont(11, weight: .semibold).lineLimit(1)
+                Text(m.entries.first { $0.runID == rid }?.runTitle ?? rid).boardFont(APType.body, weight: .semibold).lineLimit(1)
                 if let r = live {
                     APChip(text: apStateChip(r).0, color: apStateChip(r).1)
-                    if r.active { Text("검수를 기다리는 동안에도 계속합니다").boardFont(10.5).foregroundStyle(.secondary).lineLimit(1) }
+                    if r.active { Text("검수를 기다리는 동안에도 계속합니다").boardFont(APType.note).foregroundStyle(.secondary).lineLimit(1) }
                 }
                 Spacer(minLength: 4)
                 APButton(title: "합치기·승격 →", help: "끝난 실행의 바뀐 줄을 보고 승격 차례대로 합칩니다", axid: "ap-outbox-merge") {
@@ -611,13 +611,13 @@ struct APOutboxSheet: View {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 5) {
                             APChip(text: e.item.kind == "ticket" ? "Jira 티켓" : apServiceName(e.item.target.service), color: APColor.jira)
-                            Text(e.item.title).boardFont(11.5, weight: .semibold).lineLimit(2).multilineTextAlignment(.leading)
+                            Text(e.item.title).boardFont(APType.body, weight: .semibold).lineLimit(2).multilineTextAlignment(.leading)
                             Spacer(minLength: 0)
                         }
                         HStack(spacing: 5) {
                             APChip(text: apOutboxStateLabel(e.item), color: apOutboxColor(e.item))
-                            Text(apOutboxAge(e.item)).boardFont(10.5).foregroundStyle(.secondary)
-                            if m.filterRun == nil { Text(e.runTitle).boardFont(10.5).foregroundStyle(.tertiary).lineLimit(1) }
+                            Text(apOutboxAge(e.item)).boardFont(APType.note).foregroundStyle(.secondary)
+                            if m.filterRun == nil { Text(e.runTitle).boardFont(APType.note).foregroundStyle(.tertiary).lineLimit(1) }
                         }
                     }
                     .padding(7)
@@ -638,20 +638,20 @@ struct APOutboxSheet: View {
         return VStack(alignment: .leading, spacing: 10) {
             kv("받을 곳", apItemLabel(it), axid: "ap-outbox-target")
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("올릴 계정").boardFont(11, weight: .semibold).foregroundStyle(.secondary).frame(width: 70, alignment: .leading)
+                Text("올릴 계정").boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: 84, alignment: .leading)
                 if let c, conns.secrets.contains(c.id) {
                     Text("\(c.account.isEmpty ? "(계정 칸 없음)" : c.account) · \(c.service.label) 연결" + (c.site.isEmpty ? "" : " · " + c.site.replacingOccurrences(of: "https://", with: "")))
-                        .boardFont(11.5).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("ap-outbox-account")
+                        .boardFont(APType.body).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("ap-outbox-account")
                 } else {
                     APChip(text: "연결 없음", color: APColor.fail, strong: true)
-                    Text("올릴 수 없습니다. 이 글은 보고서와 함께 로컬에만 남습니다.").boardFont(11).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text("올릴 수 없습니다. 이 글은 보고서와 함께 로컬에만 남습니다.").boardFont(APType.body).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     APButton(title: "연결 설정", axid: "ap-outbox-settings") { m.close(); SettingsScreen.shared.open(.connections) }
                 }
                 Spacer(minLength: 0)
             }
             VStack(alignment: .leading, spacing: 6) {
-                Text("미리보기 · 올라갈 모습 그대로입니다(여기서 글을 고치지 않습니다)").boardFont(10.5).foregroundStyle(.secondary)
-                if it.target.service != .jira || it.kind == "ticket" { Text(it.title).boardFont(13, weight: .bold).fixedSize(horizontal: false, vertical: true) }
+                Text("미리보기 · 올라갈 모습 그대로입니다(여기서 글을 고치지 않습니다)").boardFont(APType.note).foregroundStyle(.secondary)
+                if it.target.service != .jira || it.kind == "ticket" { Text(it.title).boardFont(APType.heading, weight: .bold).fixedSize(horizontal: false, vertical: true) }
                 APDocView(doc: it.doc)
             }
             .padding(10)
@@ -660,8 +660,8 @@ struct APOutboxSheet: View {
             .accessibilityIdentifier("ap-outbox-preview")
             if let a = it.attachment {
                 HStack(spacing: 6) {
-                    Text("첨부").boardFont(11, weight: .semibold).foregroundStyle(.secondary).frame(width: 70, alignment: .leading)
-                    Text("\(a) · " + (e.attachBytes.map { apBytes($0) } ?? "파일 없음")).boardFont(11.5, design: .monospaced).accessibilityIdentifier("ap-outbox-attach")
+                    Text("첨부").boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: 84, alignment: .leading)
+                    Text("\(a) · " + (e.attachBytes.map { apBytes($0) } ?? "파일 없음")).boardFont(APType.mono).accessibilityIdentifier("ap-outbox-attach")
                     APButton(title: "열어 보기", enabled: e.attachBytes != nil, help: "같은 실행의 보고서를 엽니다. 흐름 그림은 이 HTML 안에만 있습니다", axid: "ap-outbox-open-report") {
                         APReportViewer.show(run: e.runID, runDir: e.runDir, title: e.runTitle)
                     }
@@ -682,7 +682,7 @@ struct APOutboxSheet: View {
             if case .hold(let why) = d { apNote(why, APColor.fail).accessibilityIdentifier("ap-outbox-why") }
             if m.confirmOne == e.id {
                 HStack(spacing: 6) {
-                    Text("앞 올리기가 끝났는지 모릅니다. 받을 곳에 같은 글이 이미 있는지 먼저 보세요. 그래도 올릴까요?").boardFont(11.5).fixedSize(horizontal: false, vertical: true)
+                    Text("앞 올리기가 끝났는지 모릅니다. 받을 곳에 같은 글이 이미 있는지 먼저 보세요. 그래도 올릴까요?").boardFont(APType.body).fixedSize(horizontal: false, vertical: true)
                     APButton(title: "그래도 올리기", tint: APColor.limit, axid: "ap-outbox-post-anyway") { m.post(e) }
                     APButton(title: "그만두기", axid: "ap-outbox-post-cancel") { m.confirmOne = nil }
                 }
@@ -703,8 +703,8 @@ struct APOutboxSheet: View {
     }
     private func kv(_ k: String, _ v: String, axid: String, mono: Bool = false) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(k).boardFont(11, weight: .semibold).foregroundStyle(.secondary).frame(width: 70, alignment: .leading)
-            Text(v).boardFont(11.5, design: mono ? .monospaced : .default).textSelection(.enabled).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier(axid)
+            Text(k).boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: 84, alignment: .leading)
+            Text(v).boardFont(APType.body, design: mono ? .monospaced : .default).textSelection(.enabled).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier(axid)
             Spacer(minLength: 0)
         }
     }
@@ -741,16 +741,16 @@ struct APDocView: View {
     }
     @ViewBuilder private func block(_ b: APBlock) -> some View {
         switch b {
-        case .heading(let l, let t): Text(verbatim: t).boardFont(l == 1 ? 15 : l == 2 ? 13.5 : 12, weight: .bold).fixedSize(horizontal: false, vertical: true)
+        case .heading(let l, let t): Text(verbatim: t).boardFont(l == 1 ? APType.title : l == 2 ? APType.heading : APType.label, weight: .bold).fixedSize(horizontal: false, vertical: true)
         case .paragraph(let s): spans(s)
         case .bullets(let rows):
             VStack(alignment: .leading, spacing: 3) {
                 ForEach(rows.indices, id: \.self) { i in
-                    HStack(alignment: .firstTextBaseline, spacing: 5) { Text(verbatim: "•").boardFont(11.5); spans(rows[i]) }
+                    HStack(alignment: .firstTextBaseline, spacing: 5) { Text(verbatim: "•").boardFont(APType.body); spans(rows[i]) }
                 }
             }
         case .code(let t):
-            Text(verbatim: t).font(.system(size: 11, design: .monospaced)).fixedSize(horizontal: false, vertical: true)
+            Text(verbatim: t).boardFont(APType.mono).fixedSize(horizontal: false, vertical: true)
                 .padding(6).background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.05)))
         case .rule: Divider().opacity(0.5)
         }
@@ -762,6 +762,6 @@ struct APDocView: View {
             case .link(let t, _): return acc + Text(verbatim: t).underline().foregroundColor(Palette.accent)
             }
         }
-        .boardFont(11.5).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+        .boardFont(APType.body).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
     }
 }

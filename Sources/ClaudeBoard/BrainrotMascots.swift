@@ -1050,6 +1050,9 @@ struct BoardView: View {
         let autoOnly = autopilotView == "auto" && !runs.isEmpty   // 도는 실행이 없으면 모두 보기로 그린다
         // 경로 카드가 없는 실행 — 자율주행 세션은 세션 파일을 남기지 않아 사람 세션이 없던 경로에는 카드가 없다
         let orphans = autopilotView == "basic" || filter != nil ? [] : runs.filter { r in !store.groups.contains { r.covers($0.id) } }
+        // 계정 사용률은 한 번만(자율주행 2단계 ①): 도는 실행이 있고 머리 사용량 줄이 막대를 그리면(자율주행 보기는 늘, 모두 보기는 상세 꼴일 때) 멈출 선 눈금을
+        // 그 줄에 얹고 실행 줄의 사용률 막대를 끈다. 간략 한 줄·중간 크기·사용량을 못 읽음이면 실행 줄에 그대로 남긴다(어디에도 안 보이는 일이 없게)
+        let usageInHead = !runs.isEmpty && autopilotView != "basic" && !usage.limits.isEmpty && (autoOnly || (!usageCompact && !medium))
         return VStack(alignment: .leading, spacing: 14) {
             // 윗줄은 늘 두 줄 — 제목 아래 줄에 상태 칩(왼쪽)과 단추(오른쪽).
             // 한 줄·두 줄을 폭에 따라 바꾸면 "알림 꺼짐" 글자가 생길 때마다 단추 줄이 위아래로 오간다
@@ -1069,7 +1072,7 @@ struct BoardView: View {
             }
 
             UsagePanel(usage: usage, accounts: accounts, forceCompact: medium,
-                       stoplines: autoOnly ? autopilot.stoplines : nil) {
+                       stoplines: usageInHead ? autopilot.stoplines : nil) {
                 store.groups.flatMap(\.sessions).filter { $0.state == "working" || $0.state == "waiting" }
             }
 
@@ -1107,7 +1110,7 @@ struct BoardView: View {
                         }
                         // 자율주행 보기는 실행 카드만, 다른 보기는 카드 없는 실행을 맨 위에. 단위 시계(분)는 1초 시계(EverySecond)로 셈한다
                         ForEach(autoOnly ? runs : orphans) { r in
-                            EverySecond { now in APRunCard(run: r, minutes: r.unitMinutes(now), meters: !autoOnly).equatable() }
+                            EverySecond { now in APRunCard(run: r, minutes: r.unitMinutes(now), meters: !usageInHead).equatable() }
                                 .transition(.opacity)
                         }
                         ForEach(autoOnly ? [] : shownGroups) { g in
@@ -1169,6 +1172,7 @@ struct BoardView: View {
                 }
                 }
                 .environment(\.notifyLocked, store.allMuted)
+                .environment(\.apUsageInHead, usageInHead)   // 경로 카드 안 실행 줄도 사용률 막대를 끈다
             }
 
             // 카카오톡 PC 처럼 창 오른쪽 아래에 투명도 슬라이더

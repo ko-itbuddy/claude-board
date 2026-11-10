@@ -158,27 +158,30 @@ import SwiftUI
 }
 
 // 1단계: 작업 경로 · 원천 칸 · 덧붙일 말
+// 두 칸(2단계 ②): 왼쪽(.main) 원천 칸·덧붙일 말, 오른쪽(.side) 작업 경로·에픽
 struct APImportStep1: View {
     @ObservedObject var s: APStart
     @ObservedObject var m: APImportInput
+    var part: APSheetPart = .main
     @ObservedObject private var cn = APConnections.shared   // 연결 목록·키체인 있음 여부가 늦게 읽혀도 서비스 잠금을 다시 그린다
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            pathBox
+        if part == .main {
             switch s.source {
             case "todo": todoBox
             case "list": listBox
             default: legacyBox
             }
-            if s.jira { APEpicBox(s: s) }
             requestBox
+        } else {
+            pathBox
+            if s.jira { APEpicBox(s: s) }
         }
     }
 
     private var pathBox: some View {
         APBox(title: "작업 경로", note: "기존 저장소 · 단위는 이 저장소 뿌리에서 돕니다", axid: "ap-imp-path-box") {
             TextField("저장소 경로(예: ~/workspace/todo-api)", text: $m.path)
-                .textFieldStyle(.roundedBorder).boardFont(12)
+                .textFieldStyle(.roundedBorder).boardFont(APType.label)
                 .accessibilityIdentifier("ap-imp-path")
             if m.reading { apNote("읽는 중…") }
             else if let r = m.repo {
@@ -192,37 +195,38 @@ struct APImportStep1: View {
     }
 
     private var todoBox: some View {
-        APBox(title: "할 일 문서", note: "파일과 그 안의 절을 고릅니다 · 체크박스·목록 항목이 항목이고 [x] 는 끝난 것", axid: "ap-imp-todo-box") {
+        APBox(title: "할 일 문서", note: "파일과 그 안의 절을 고릅니다", axid: "ap-imp-todo-box",
+              info: "체크박스·목록 항목이 항목이고 [x] 는 끝난 것입니다. 파일은 저장소 안에서만 읽고 바로 가기(링크)는 따라가지 않습니다. 끝난 표시([x]·취소선·(완료))와 진행 중([~])인 항목은 가립니다") {
             TextField("저장소 안 경로(예: docs/TODO.md)", text: $m.file)
-                .textFieldStyle(.roundedBorder).boardFont(12)
+                .textFieldStyle(.roundedBorder).boardFont(APType.label)
                 .accessibilityIdentifier("ap-imp-file-input")
             if !m.files.isEmpty {
                 WrapRow(spacing: 5) {
                     ForEach(Array(m.files.prefix(12).enumerated()), id: \.offset) { i, f in
-                        APButton(title: f, tint: m.file == f ? Palette.accent : nil, help: "이 문서를 고릅니다", axid: "ap-imp-file-\(i)") { m.file = f }
+                        APChoice(title: f, on: m.file == f, help: "이 문서를 고릅니다", axid: "ap-imp-file-\(i)") { m.file = f }
                     }
                 }
             } else if m.repo?.top != nil, !m.reading { apNote("저장소에서 글 문서(md·txt)를 찾지 못했습니다. 경로를 직접 넣습니다") }
             if let n = m.fileNote { apNote(n, APColor.fail) }
             if !m.file.isEmpty, m.fileNote == nil {
                 apNote("절")
-                APPickRow(on: m.section.isEmpty, axid: "ap-imp-section-0", action: { m.section = "" }) { Text("문서 전체").boardFont(11.5) }
+                APPickRow(on: m.section.isEmpty, axid: "ap-imp-section-0", action: { m.section = "" }) { Text("문서 전체").boardFont(APType.body) }
                 ForEach(Array(m.sections.enumerated()), id: \.offset) { i, h in
-                    APPickRow(on: m.section == h, axid: "ap-imp-section-\(i + 1)", action: { m.section = h }) { Text(h).boardFont(11.5) }
+                    APPickRow(on: m.section == h, axid: "ap-imp-section-\(i + 1)", action: { m.section = h }) { Text(h).boardFont(APType.body) }
                 }
             }
-            apNote("파일은 저장소 안에서만 읽고 바로 가기(링크)는 따라가지 않습니다. 끝난 표시([x]·취소선·(완료))와 진행 중([~])인 항목은 가립니다.")
         }
     }
 
     private var listBox: some View {
-        APBox(title: "바깥 목록", note: "연결이 있는 서비스만 · 메타 정보만 읽습니다", axid: "ap-imp-list-box") {
+        APBox(title: "바깥 목록", note: "연결이 있는 서비스만 · 메타 정보만 읽습니다", axid: "ap-imp-list-box",
+              info: "읽기 요청만 보냅니다(Jira 는 검색 GET, Notion 은 데이터베이스 질의). 끝난 상태(Done·Complete)와 진행 중(In Progress)인 항목은 가리고, Jira 번호는 단위의 티켓으로 그대로 넘깁니다") {
             ForEach([APService.atlassian, .notion], id: \.self) { svc in
                 let lock = m.serviceLock(svc)
                 APPickRow(on: m.service == svc.rawValue, enabled: lock == nil, help: lock ?? "", axid: "ap-imp-svc-\(svc.rawValue)", action: { m.service = svc.rawValue }) {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 6) {
-                            Text(svc == .atlassian ? "Jira 필터·에픽" : "Notion 데이터베이스").boardFont(12, weight: .semibold)
+                            Text(svc == .atlassian ? "Jira 필터·에픽" : "Notion 데이터베이스").boardFont(APType.label, weight: .semibold)
                             if lock != nil { APChip(text: "잠금", color: APColor.muted) }
                         }
                         if let lock { apNote(lock, APColor.limit.opacity(0.85)) }
@@ -230,29 +234,28 @@ struct APImportStep1: View {
                 }
             }
             TextField(m.service == "notion" ? "데이터베이스 주소나 32자리 id" : "에픽 키(TOY-10)·필터 번호·필터 주소·JQL", text: $m.query)
-                .textFieldStyle(.roundedBorder).boardFont(12)
+                .textFieldStyle(.roundedBorder).boardFont(APType.label)
                 .accessibilityIdentifier("ap-imp-query")
             if let svc = APService(rawValue: m.service), !m.query.isEmpty {
                 let q = apListQuery(m.query, service: svc)
                 if case .bad(let why) = q { apNote(why, APColor.fail) } else { apNote("읽을 것: " + q.label) }
             }
-            apNote("읽기 요청만 보냅니다(Jira 는 검색 GET, Notion 은 데이터베이스 질의). 끝난 상태(Done·Complete)와 진행 중(In Progress)인 항목은 가리고, Jira 번호는 단위의 티켓으로 그대로 넘깁니다.")
         }
     }
 
     private var legacyBox: some View {
-        APBox(title: "옛 자동화 폴더", note: "멈춘 자리 기록과 원장(글 파일)을 읽습니다", axid: "ap-imp-legacy-box") {
+        APBox(title: "옛 자동화 폴더", note: "멈춘 자리 기록과 원장(글 파일)을 읽습니다", axid: "ap-imp-legacy-box",
+              info: "이 폴더 안 글 파일(md·txt·json·jsonl·yaml·log 등, 깊이 3·40개·파일마다 256 KB 까지)만 읽고 바로 가기는 따라가지 않습니다. 비밀이 흔한 이름(.env·key·secret·token 등)은 읽지 않고, 읽은 글의 비밀 꼴은 가린 뒤 근거 묶음으로만 넘깁니다. 원장의 줄(제목·상태·id)이 항목입니다") {
             TextField("폴더 경로(예: ~/old-automation/state)", text: $m.folder)
-                .textFieldStyle(.roundedBorder).boardFont(12)
+                .textFieldStyle(.roundedBorder).boardFont(APType.label)
                 .accessibilityIdentifier("ap-imp-folder")
-            apNote("이 폴더 안 글 파일(md·txt·json·jsonl·yaml·log 등, 깊이 3·40개·파일마다 256 KB 까지)만 읽고 바로 가기는 따라가지 않습니다. 비밀이 흔한 이름(.env·key·secret·token 등)은 읽지 않고, 읽은 글의 비밀 꼴은 가린 뒤 근거 묶음으로만 넘깁니다. 원장의 줄(제목·상태·id)이 항목입니다.")
         }
     }
 
     private var requestBox: some View {
         APBox(title: "덧붙일 말(선택)", note: "가져오기 세션에 넘깁니다 · 결정이 아니라 요청입니다", axid: "ap-imp-request-box") {
             TextEditor(text: $m.request)
-                .font(.system(size: 12))
+                .boardFont(APType.body)
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 44, maxHeight: 110)
                 .padding(4)
@@ -276,7 +279,7 @@ struct APImportHiddenBox: View {
                     let key = h["key"] as? String ?? ""
                     APPickRow(on: s.importRevive.contains(key), square: true, enabled: !s.preparing && !s.starting, axid: "ap-imp-revive-\(i)", action: { s.toggleRevive(key) }) {
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(h["title"] as? String ?? "").boardFont(11.5, weight: .semibold).fixedSize(horizontal: false, vertical: true)
+                            Text(h["title"] as? String ?? "").boardFont(APType.body, weight: .semibold).fixedSize(horizontal: false, vertical: true)
                             apNote((h["why"] as? String ?? "") + " · " + (h["place"] as? String ?? ""))
                         }
                     }
@@ -301,10 +304,10 @@ struct APImportSourceBox: View {
         func n(_ k: String) -> Int { (c[k] as? NSNumber)?.intValue ?? 0 }
         let parts = [("source_done", "원천에서 끝남"), ("source_progress", "원천에서 진행 중"), ("records_done", "이미 끝남"), ("running", "도는 실행에서 진행 중"),
                      ("queue_state", "대기열에서 뺀·보류한 줄")].compactMap { k, l in (hidden[k] ?? 0) > 0 ? "\(l) \(hidden[k]!)" : nil }
-        return APBox(title: "원천", note: "늘 보입니다", axid: "ap-imp-source") {
+        return APBox(title: "원천", axid: "ap-imp-source") {
             HStack(spacing: 6) {
                 APChip(text: s.importSource?.label ?? s.source, color: Palette.accent, strong: true)
-                Text(g["origin"] as? String ?? "").boardFont(11, design: .monospaced).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                Text(g["origin"] as? String ?? "").boardFont(APType.mono).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
             apNote("항목 \(n("total")) · 뺀 것 \(hidden.values.reduce(0, +))" + (parts.isEmpty ? "" : "(" + parts.joined(separator: " · ") + ")")
                    + " · 대기열 줄을 이음 \(n("continue"))" + (n("changed") > 0 ? "(바뀐 본문 \(n("changed")))" : "") + " · 새 항목 \(n("new"))")
@@ -324,7 +327,7 @@ struct APImportChangedNote: View {
         VStack(alignment: .leading, spacing: 1) {
             apNote("원천 본문이 앞 가져오기 뒤에 바뀌었습니다(대기열 줄의 정의는 그대로 잇습니다. 바뀐 일이면 이 단위를 빼고 다음에 되살려 다시 가져옵니다)", APColor.limit)
             ForEach(Array(lines.prefix(10).enumerated()), id: \.offset) { _, l in
-                Text(l).boardFont(10.5, design: .monospaced).foregroundStyle(l.hasPrefix("+") ? APColor.ok : APColor.limit).fixedSize(horizontal: false, vertical: true)
+                Text(l).boardFont(APType.monoSmall).foregroundStyle(l.hasPrefix("+") ? APColor.ok : APColor.limit).fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(6)
