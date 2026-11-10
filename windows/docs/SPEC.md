@@ -243,7 +243,7 @@ uninstall: `uninstall-hooks` → Run 값 삭제 → 실행 중인 ClaudeBoard.ex
 `plugins\` 가 링크(junction)여도 가리키는 곳은 지우지 않고 링크만 뗀다. 환경변수 `CLAUDE_BOARD_NOTIFIER_DIR` 로 notifier 를 옮겨 둔 실행(시험·격리)에서는 `plugins\` 를 지우지 않는다(그 폴더에 보드가 옮긴 것 밖의 것이 있을 수 있다). `packaging/uninstall.ps1` 이 같은 범위·같은 조건으로 지운다(§8.2). 그다음 `.local\bin` 의 cmd 두 개를 지운다. 지금 Claude Code 로그인(`.credentials.json`)은 건드리지 않는다. 앱 폴더 삭제는 uninstall.ps1 이 한다(실행 중인 자기 exe 는 못 지우므로).
 자율주행 작업 스케줄러 등록 지우기(`setup.rs` `remove_autopilot_tasks`, Run 값을 지운 뒤): `schtasks /query /fo csv /nh` 의 작업 전체 경로 가운데 폴더 `\ClaudeBoard\autopilot\` 바로 아래의 `com.claude.board.autopilot.<실행 id>.<소문자 16진수 8자>` 와 폴더 `\ClaudeBoard\autopilot-dev\` 바로 아래의 `com.claude.board.dev.autopilot.<실행 id>.<해시>` 만 `schtasks /delete` 로 지운다. 폴더 비교는 대소문자를 가리지 않고 이름은 엄격하다(실행 id 는 autopilot 의 `valid_run_id` 와 같은 꼴). 비개발 폴더 안의 개발용 이름, 하위 폴더의 작업, 다른 폴더, 해시가 없거나 대문자·7자인 이름은 지우지 않는다. 해시 없는 옛 이름의 작업은 남으므로 `claude-autopilot unregister --all` 로 지운다.
 목록·삭제 실패는 화면에 알리고 `uninstall` 종료 코드는 그대로 0 이다. 격리 실행(`CLAUDE_BOARD_HOME`·`CLAUDE_BOARD_NOTIFIER_DIR`)은 진짜 스케줄러를 읽지도 지우지도 않는다. 돌고 있는 엔진은 끝내지 않는다: 실행은 `pinned\` 에 얼린 사본으로 계속 돌고, 등록이 없으니 죽어도 다시 뜨지 않을 뿐이다. NSIS 훅은 제자리 업그레이드(`$EXEDIR` 가 `$INSTDIR` 와 같을 때)에서 `uninstall` 을 건너뛰므로 업그레이드는 등록을 그대로 둔다(`packaging/nsis-hooks.nsh`).
-`untested:` 바이너리로 실제 제거를 끝까지 돌린 확인과 영어가 아닌 `schtasks` 출력은 돌려 보지 않았다(선택·지우기 규칙은 가짜 스케줄러로 시험한다).
+선택·지우기 규칙은 가짜 스케줄러로 시험한다.
 
 ### 3.8 `tui` — `board-tui.py` 이식
 
@@ -355,7 +355,6 @@ macOS 키체인 대신:
 ### 5.7 터미널 제어 (Windows) — Ghostty AppleScript 대체
 
 확인(§11.1, §11.3): 콘솔 붙기·제목·입력 넣기(줄 단위·raw 모드 모두, Windows Terminal 탭 포함), 세션의 터미널 창 찾기, 새 콘솔 실행(인자·환경·작업 폴더가 그대로 도착. 계정 추가는 이 길을 쓰지 않는다, §5.14.6), 클래식 콘솔 창으로 세션 줄 클릭이 그 창을 앞으로 가져오는 것(§11.3 conhost).
-**Windows 미확인**: Windows Terminal 탭 고르기(UI Automation), 실제 Claude Code 에서의 일시중지·재개·중단, 실제 Claude Code 에서 Esc 한 글자(`1b`)가 닿는지.
 
 - 콘솔 입력(보드 밖 콘솔): 보드 프로세스가 `FreeConsole` → `AttachConsole(pid)` → `CreateFileW("CONIN$")` → `WriteConsoleInputW` 로 KEY_EVENT(누름·뗌) 를 넣고 → `FreeConsole`. Esc = VK_ESCAPE/0x1B, Enter = VK_RETURN/`\r`, 글자는 UTF-16 단위마다 `wVirtualKeyCode=0` 에 문자. 붙어 있는 동안 `SetConsoleCtrlHandler(NULL, TRUE)`. 한 번에 한 세션씩(전역 잠금).
   보드가 연 ConPTY(보드 터미널 탭)에 붙은 pid 에는 `AttachConsole` 하지 않는다. 자기 ConPTY 에 붙은 채 탭이 닫히면 콘솔 닫힘 신호로 보드가 끝날 수 있기 때문이다.
@@ -427,7 +426,7 @@ macOS 키체인 대신:
 로그인할 때 열기는 이 파일이 아니라 Run 값 `ClaudeBoard` 와 표지 파일 `login-launch-off`(§2.2)가 소유한다.
 보드 글자 크기 배율 키: `boardFontScale`(f64, 기본 1.0, `SettingsView` 에도 같은 이름으로 실린다, mac `boardFontScale`). 범위 0.8~1.5, 단계 0.1(규칙은 `board/fontScale.ts` 와 `settings.rs clamp_board_font_scale` 가 같다: 숫자가 아니면 1.0, 범위 밖은 끝값, 0.1 단위로 반올림). 명령 `set_board_font_scale(v)` 가 자르고 저장한다.
 프론트는 보드 안쪽(미니·본문, 제목 막대와 터미널 독은 밖)을 `BoardScale.svelte` 로 감싸 CSS `zoom` 을 건다(1 이면 걸지 않는다). 단계 문턱은 화면 높이로 비교하므로 `measure()` 가 안쪽 높이에 `screenHeight` 로 배율을 곱한다.
-`zoom` 은 글자뿐 아니라 아이콘·여백도 키운다(mac 은 글자만 키운다). 150% 에서는 보드 칸 폭 360px 이 안쪽 240px 이 되어 잘릴 수 있다. 배율을 바꾸는 조작은 단축키 넷이다(§5.14.3). 설정 화면의 단계 조절 항목과 메뉴 항목은 아직 없다. 확인하지 못한 것: 실제 WebView2 에서 `zoom` 이 레이아웃·`ResizeObserver` 값에 어떻게 닿는지, 실제 Tauri 창(단위 시험과 타입 검사만 했다).
+`zoom` 은 글자뿐 아니라 아이콘·여백도 키운다(mac 은 글자만 키운다). 150% 에서는 보드 칸 폭 360px 이 안쪽 240px 이 되어 잘릴 수 있다. 배율을 바꾸는 조작은 단축키 넷이다(§5.14.3). 설정 화면의 단계 조절 항목과 메뉴 항목은 아직 없다. 확인한 범위는 단위 시험과 타입 검사다.
 `terminalTabs` 는 `save_tabs` 가 통째로 바꿔 넣고 `load_tabs` 가 읽는다. 값은 프론트가 쥔 모양이며 백엔드는 항목을 풀지 않는다.
 `SettingsView` 에는 `terminalExpanded`·`boardSide`·`boardPaneWidth`·`mdRenderOff` 와 설정 화면 키 다섯이 있다(`terminalTabs` 는 스냅샷에 싣지 않고 `load_tabs` 로만 읽는다). 1초 스냅샷(§6.1)에는 터미널 목록을 넣지 않는다 — 터미널 상태는 이벤트 기반이고 프론트 `TerminalHub` 가 `term_list` 와 채널로 채운다(§5.12).
 
@@ -450,7 +449,7 @@ macOS 키체인 대신:
   - 경계를 끌다 놓으면 `set_board_width(width)` 가 `boardPaneWidth`(논리 px)를 저장한다.
   - 접을 때 터미널은 언마운트하지 않고 숨긴다. 출력은 숨겨진 동안에도 백엔드 링 버퍼에 쌓이고 다시 펼치면 이어서 받는다(§5.12).
   - 미니: `enter_mini` 는 먼저 접고 `miniFromExpanded` 를 기록한다. 미니 프레임은 보드 쪽 모서리 기준이다. `leave_mini` 는 그 표지가 있으면 다시 펼친다.
-- 붙이기 단추의 힌트와 그림은 보드 위치(`boardSide`)만 따른다(`board/windowMenu.ts`의 `snapMenuLabel`·`snapHint`·`snapIconName`, mac 제목 막대 `SnapButton` 대응): `"left"` 면 「처음 크기로 되돌려 화면 왼쪽에 붙이기 (키)」와 `panel-left` 그림, 그 밖의 모든 값은 오른쪽(`snap-right`). 접힘·펼침·미니·항상 위는 글자를 바꾸지 않는다. 확인하지 못한 것: 실제 창에서 보드를 왼쪽으로 옮겼을 때의 모양(단위 시험만).
+- 붙이기 단추의 힌트와 그림은 보드 위치(`boardSide`)만 따른다(`board/windowMenu.ts`의 `snapMenuLabel`·`snapHint`·`snapIconName`, mac 제목 막대 `SnapButton` 대응): `"left"` 면 「처음 크기로 되돌려 화면 왼쪽에 붙이기 (키)」와 `panel-left` 그림, 그 밖의 모든 값은 오른쪽(`snap-right`). 접힘·펼침·미니·항상 위는 글자를 바꾸지 않는다. 확인한 범위는 단위 시험이다.
 - 트레이: 앱 아이콘. 왼쪽 클릭 = 보드 열고 닫기. 툴팁 "Claude Board — 승인 대기 n · 작업 중 n". 승인 대기가 있으면 주황 점, 작업 중만 있으면 파란 점이 붙은 아이콘으로 바꾼다(미리 만든 그림). 오른쪽 클릭 메뉴: 세션 보드 보기 · 터미널 펼치기 (<지금 키>)(체크) · 항상 위에 고정(체크) · 설정… · 업데이트 확인… · 종료. 캐릭터·알림 위치·보드 위치 항목은 없고 설정 화면에서 고른다(§5.14.5).
 - 단일 실행: 두 번째 실행은 첫 보드를 앞으로(`--show` 와 같음), `--action` 이면 동작을 넘기고 끝. `--background` 면 창을 보이되 포커스를 가져가지 않는다.
 - Windows Terminal(`WindowsTerminal.exe`)이 새로 실행되면 보드를 보이게(포커스는 그대로) — 3초 주기 프로세스 확인. (macOS 의 Ghostty 연동 대응)
@@ -462,7 +461,7 @@ macOS 키체인 대신:
 
 ### 5.12 내장 터미널
 
-보드 창 안에 터미널 영역을 두고 거기서 셸을 돌린다(macOS 판 `BoardRootView`·`TerminalHub` 대응). 이 절이 백엔드 ↔ 프론트엔드 터미널 계약을 소유한다. 확인된 동작은 §11.2~§11.5 의 표만 확인으로 읽는다. 나머지는 미확인이다.
+보드 창 안에 터미널 영역을 두고 거기서 셸을 돌린다(macOS 판 `BoardRootView`·`TerminalHub` 대응). 이 절이 백엔드 ↔ 프론트엔드 터미널 계약을 소유한다. 확인된 동작은 §11.2~§11.5 의 표가 소유한다.
 
 범위. 있는 것: 펼침·접힘(제목 막대 단추·Ctrl+Alt+T·트레이), 경계 끌기와 폭 기억, 보드 위치(오른쪽 기본·왼쪽), 숨겨진 동안 출력 유지, 한글 IME,
 경로 줄·탭 줄·빈 상태(둘 다 넘치면 가로로 밀기, §5.12.13), 새 세션 창(Ctrl+T·카드의 +, 키는 §5.14.3 에서 바꾼다), 탭마다 셸 하나(고르는 법은 새 탭 셸·WSL·Git Bash, §5.12.14)와 그 셸에 쳐 넣는 claude(`--session-id`·`--name`), 탭 이름 바꾸기와 `/rename`, 닫기 확인, Ctrl+Alt+1~9 번호 배지,
@@ -501,7 +500,7 @@ interface TermInfo {
 
 - 원시 데이터: 8바이트 little-endian `seq`(첫 페이로드 바이트의 오프셋) + 페이로드 최대 64KiB. JS 는 ArrayBuffer 를 `term.write(bytes, cb)` 로 쓰고 `cb` 에서 ack 한다. xterm 이 UTF-8 디코더 상태를 유지하므로 청크 경계가 글자 중간이어도 안전하다.
 - JSON 제어: `{t:"gap", seq}` 는 보낼 앞부분을 링 버퍼가 덮어쓴 경우다. 프론트는 터미널을 리셋하고 `seq` 부터 다시 받는다. `{t:"exit", code}` 는 리더가 EOF 에 닿은 뒤에만 가므로 늘 마지막 출력 뒤에 온다.
-- 1024바이트 미만 원시 메시지는 eval 로, 큰 것은 fetch 로 가고 JS `Channel` 은 index 순으로 전달한다고 본다. 이 순서 보장은 tauri 2.12.4 의 동작에 기댄 것이다(미확인).
+- 1024바이트 미만 원시 메시지는 eval 로, 큰 것은 fetch 로 가고 JS `Channel` 은 index 순으로 전달한다고 본다. 이 순서 보장은 tauri 2.12.4 의 동작에 기댄 것이다.
 
 #### 5.12.3 터미널당 스레드
 
@@ -515,11 +514,11 @@ interface TermInfo {
 
 - 파이프는 `CreatePipe` 에 널 보안 속성으로 만든다(상속 불가). `updater::run` 이 핸들 상속으로 powershell 을 띄우므로 이 파이프가 새어 나가면 안 된다.
 - `CreateProcessW(bInheritHandles = FALSE, EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT)` + `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`. ConPTY 플래그는 0이다.
-- `STARTF_USESTDHANDLES` 를 켜고 표준 핸들은 널로 둔다. 콘솔에서 보드를 띄웠을 때 자식이 그 콘솔의 표준 핸들을 물려받지 않게 하려는 것이다(미확인).
+- `STARTF_USESTDHANDLES` 를 켜고 표준 핸들은 널로 둔다. 콘솔에서 보드를 띄웠을 때 자식이 그 콘솔의 표준 핸들을 물려받지 않게 하려는 것이다.
 - 환경 블록은 `CreateEnvironmentBlock(bInherit = FALSE)` 로 새로 만든다. 보드가 낡은 환경을 들고 있거나 부모 Claude 세션의 `CLAUDECODE`·`CLAUDE_CODE_CHILD_SESSION` 을 물려받는 것을 막는다.
 - 첫 표시 때 셸을 띄운다(lazy spawn). 접힌 채 시작하면 띄우지 않는다.
 - Windows 빌드 번호는 레지스트리 `CurrentBuildNumber` 에서 읽어 `TermInfo.windowsBuild` 로 준다(xterm `windowsPty` 용).
-- `terminal.rs` 의 `locate("pwsh")` 가 Store 앱 실행 별칭(`WindowsApps\pwsh`)을 찾을 수 있다. `is_file()` 통과와 별칭에 대한 `CreateProcessW` + 가짜 콘솔 속성이 되는지는 미확인이다.
+- `terminal.rs` 의 `locate(id)` 는 `PATH` · `%LOCALAPPDATA%\Microsoft\WindowsApps`(Store 앱 실행 별칭 자리) · `%ProgramFiles%\PowerShell\7` · `%ProgramFiles%\Git` · `%SystemRoot%\System32` · `System32\WindowsPowerShell\v1.0` 순으로 훑어 `is_file()` 이 참인 첫 실행 파일을 고른다.
 - `windows-sys` 0.61 기능 추가: `Win32_System_Console`, `Win32_System_Pipes`, `Win32_Storage_FileSystem`, `Win32_System_IO`, `Win32_Security`, `Win32_System_Environment`, `Win32_System_Registry`. 바뀌는 잠금 파일은 `app/src-tauri/Cargo.lock` 뿐이다.
 - 비 Windows 빌드는 `Unsupported` 를 돌려주는 스텁으로 `cargo check` 가 되게 한다.
 
@@ -587,7 +586,7 @@ ConPTY 마다 자기 콘솔 호스트 프로세스(conhost/OpenConsole `--headle
   | `ended` | 대화형: "보드에서 이어 열기". headless: `$ claude -p` | 대화형: "누르면 보드 새 탭에서 이 대화를 이어 엽니다". headless: "끝난 백그라운드 세션입니다. 메뉴의 세션 다시 열기로 보드 탭에서 엽니다" |
 
   카드는 `background` 세션을 따로 묶는다(구역 머리글).
-- 알려진 한계: 탭 안에서 분리해 띄운 `claude -p` 의 부모가 살아 있는 동안은 `tabAncestor` 로 짝이 지어져 칩이 `CB` 로 보이고, 부모가 끝나면 `$ claude -p` 로 바뀐다(§11.4 G4). `atPrompt` 는 최대 3초 묵은 값이라 방금 다른 프로그램을 띄운 화면이 잠깐 빈 셸로 보일 수 있다(`typedAt` 와 `runsClaude` 로 막지만 없애지는 못한다). 실제 Claude Code 의 `claude --bg` 프로세스 모양(숨은 콘솔인지 분리인지)은 확인하지 못했다.
+- 알려진 한계: 탭 안에서 분리해 띄운 `claude -p` 의 부모가 살아 있는 동안은 `tabAncestor` 로 짝이 지어져 칩이 `CB` 로 보이고, 부모가 끝나면 `$ claude -p` 로 바뀐다(§11.4 G4). `atPrompt` 는 최대 3초 묵은 값이라 방금 다른 프로그램을 띄운 화면이 잠깐 빈 셸로 보일 수 있다(`typedAt` 와 `runsClaude` 로 막지만 없애지는 못한다).
 
 #### 5.12.8 크기 바꾸기 장벽 (`ResizeBarrier`)
 
@@ -609,7 +608,7 @@ ConPTY 는 크기를 바꾸면 화면을 다시 그리는 바이트를 흘리는
 
 - 기한과 폴백(상수는 `resizeBarrier.ts`): 머리말을 1000ms(`PREAMBLE_DEADLINE_MS`) 안에 못 찾거나 기준 뒤 64 KiB(`SCAN_BUDGET_BYTES`)를 지나면 줄 끝(LF 뒤)에서 자르고 `board.log` 에 한 줄을 남긴다. 스트림이 50ms(`TAIL_IDLE_MS`) 조용하면 그 끝에서 자른다(CR 로 끝난 스트림은 4배 기다린다). 줄 끝 폴백도 1500ms·256 KiB(`FALLBACK_MAX_*`) 안에 끝내야 한다. `term_resize` 가 실패하면 500ms(`RETRY_MS`) 뒤 다시 하고 세 번 실패하면 단계를 버린다. `gap`·`exit`·터미널 다시 붙기(`bind`, 강제 요청)·`reset` 은 장벽을 거쳐 처리한다.
 - 쓰기 장부(`WriteLedger`): 아직 콜백이 안 온 쓰기를 세어, cut 앞 바이트가 모두 해석되기 전에는 `term.resize` 를 부르지 않는다.
-- 한계(정직한 잔여): 단계표 측정은 합성 부하 5종(ascii·ko·ko-odd·tui·ink)이고 실제 Claude Code 화면으로는 측정하지 않았다. 빌드 26300 한 대의 conhost 만 측정했고 다른 빌드·Windows 10·sideload `conpty.dll` 은 측정하지 않았다. 캡처는 셀마다 5개라 0/5 는 깨지지 않는다는 증명이 아니다. 행만 줄임, 열 줄고 행 줄임, 열 늘고 행 줄임은 깨진 줄이 남는 최선 노력이다. 보드 안 끝에서 끝까지 측정(§11.5 G2b)에서도 열 늘림 계열은 줄 하나에 빈칸이 생기고, 경계를 끌어 열을 줄이면 줄 하나가 잘렸다.
+- 한계: 단계표는 합성 부하 5종(ascii·ko·ko-odd·tui·ink)과 빌드 26300 의 conhost 한 대로 측정했다. 캡처는 셀마다 5개라 0/5 는 깨지지 않는다는 증명이 아니다. 행만 줄임, 열 줄고 행 줄임, 열 늘고 행 줄임은 깨진 줄이 남는 최선 노력이다. 보드 안 끝에서 끝까지 측정(§11.5 G2b)에서도 열 늘림 계열은 줄 하나에 빈칸이 생기고, 경계를 끌어 열을 줄이면 줄 하나가 잘렸다.
 
 #### 5.12.9 탭 저장과 복원 (`restore.ts`·`lifecycle.svelte.ts`, 백엔드 `shutdown.rs`·`proc_wait.rs`)
 
@@ -628,7 +627,7 @@ ConPTY 는 크기를 바꾸면 화면을 다시 그리는 바이트를 흘리는
 - 이어 열기(`heldLaunch`): 이어 열 순간에 정한다(상태 묶음은 1초까지 묵는다). 세션이 보드 상태에 있고 끝나지 않았으면 `pids_alive` 로 지금 생사를 다시 묻는다. 살아 있으면 보드 밖에서 이어 열린 것이라 셸로 둔다. 방금 죽은 옛 보드의 claude 는 끝난 것으로 본다.
   세션이 상태에 있고 끝났으면 `claude <이어 열기 인자> --resume <id>`(§5.7, `resumeArgs` 에서 md-render `--plugin-dir` 쌍을 떼고 허용 글자 인자만 남긴다), 상태에 없으면(대화 없이 끝나 지워졌다) 처음 명령을 새 세션 id 로, 상태 묶음을 아직 못 받았으면 인자 없이 `--resume`. 모두 `--name <탭 이름>` 을 붙이고 §5.12.11 의 `--plugin-dir` 규칙을 거친다.
   셸이 못 떴으면(`failed`·`exited`) 값을 쥐고 있다가 뜨면 이어 연다. 이어 열기를 물어보는 사이에도 `held` 를 쥐고 있어 저장 목록이 그 화면을 셸로 적지 않는다. 이어 열린 세션의 `.paused` 는 새 요청이 오면 hook 이 지운다.
-- 알려진 한계(`untested:`/`unchecked:`): 웹뷰를 새로 고치면 아직 들어간 적 없는 복원 탭이 화면에서 사라진다(도는 터미널만 이어받기 때문이다). 저장 목록에는 남아 다음 보드 시작에 돌아온다. 작업 폴더가 지워진 탭은 화면에서 조용히 빠지고, 저장 목록이 `restored` 로 다시 쓰이면 목록에서도 빠져 폴더가 돌아와도 돌아오지 않으며, 그 세션의 `.paused` 는 정리되지 않고 남는다. 화면 나누기 트리의 저장은 단위 시험(`restore.test.ts`)만 거쳤고 GUI 에서는 탭마다 잎 하나만 있다. 실제 Claude Code 가 이어 열기를 처리하는 모양은 확인하지 못했다.
+- 알려진 한계: 웹뷰를 새로 고치면 아직 들어간 적 없는 복원 탭이 화면에서 사라진다(도는 터미널만 이어받기 때문이다). 저장 목록에는 남아 다음 보드 시작에 돌아온다. 작업 폴더가 지워진 탭은 화면에서 조용히 빠지고, 저장 목록이 `restored` 로 다시 쓰이면 목록에서도 빠져 폴더가 돌아와도 돌아오지 않으며, 그 세션의 `.paused` 는 정리되지 않고 남는다. 화면 나누기 트리의 저장은 단위 시험(`restore.test.ts`)만 거쳤고 GUI 에서는 탭마다 잎 하나만 있다.
 
 #### 5.12.10 보드를 끌 때 확인 (`shutdown.rs`·`shutdownList.ts`·`ShutdownList.svelte`)
 
@@ -660,7 +659,7 @@ ConPTY 는 크기를 바꾸면 화면을 다시 그리는 바이트를 흘리는
   폴더는 큰따옴표로 묶는다. 따옴표 안에서도 셸이 풀어 버리는 글자(큰따옴표·`%`·`$`·백틱·`^`·`!`·굽은 따옴표·제어 문자·끝의 역슬래시)가 있으면 그 폴더는 쓰지 않는다(`quotePluginDir`). 시작 때 폴더를 한 번 받아 두며(`loadPluginDir`) 첫 명령을 치기 전에 기다린다.
 - 끄기: 새 세션 창에서 체크를 풀면 그 세션 id 를 설정 `mdRenderOff`(§5.9)에 넣고(`remember_md_render_off`) `--plugin-dir` 없이 시작한다. 같은 세션을 이어 열 때(다시 열기·되살리기·보드로 옮기기)도 끈 채로 연다. 저장한 탭 항목의 `mdRenderOff` 도 같은 뜻이다. 보드를 켜고 첫 상태 묶음을 받으면 세션 파일이 없어진 id 는 `prune_md_render_off` 로 목록에서 치운다.
 - 설치 배치와 제거: §8.1, §3.7, §8.2.
-- 확인한 것은 §11.2.1 의 G10 이다. `untested:` 실제 Claude Code 가 플러그인으로 답변을 다시 그리는 것, PowerShell 5.1 에서 `&` 가 든 경로를 npm 의 `claude.cmd` 중계가 어떻게 받는지, setup.exe 로 실제 설치한 폴더 배치(NSIS 스크립트를 읽어 확인했을 뿐 설치하지 않았다).
+- 확인한 것은 §11.2.1 의 G10 이다. setup.exe 의 폴더 배치는 NSIS 스크립트를 읽어 확인했다.
 
 #### 5.12.12 보드로 옮기기와 알림에서 세션으로 (`moveToBoard.ts`·`sessionFlow.svelte.ts`·`notify.rs`)
 
@@ -673,7 +672,7 @@ ConPTY 는 크기를 바꾸면 화면을 다시 그리는 바이트를 흘리는
   `wait_exit` 는 100ms 마다 `proc::alive(pid, pid_ctime)` 로 보고, pid 0 은 어떤 프로세스인지 모르므로 기다리지 않고 끝나지 않은 것으로 답한다.
 - 알림 패널에서 세션으로: hook 이 세션 id 를 알면 패널을 `--session <id>` 와 함께 띄운다. 패널을 누르면 `ClaudeBoard.exe --action focus <id>` 가 실행 중인 보드로 간다(단일 실행). 보드 탭의 세션은 그 탭을 고르고 다른 터미널의 세션은 그 창으로 간다(§5.7 `focus`).
   `focus` 는 보드가 숨어 있거나 세션이 보드 밖(다른 터미널·백그라운드)이어도 보드를 보인다(포커스는 가져가지 않는다). 세션을 못 찾으면 board.log 에 `--action focus: 세션을 찾지 못했습니다 (<id>)` 만 남기고 탭은 그대로다. 세션 id 가 없는 패널은 전과 같이 `--show` 다. 보드가 막 켜지는 중에 온 동작은 첫 상태 묶음 뒤에 처리한다.
-- `untested:` 실제 Claude Code 가 `/exit` 를 "Background work is running" 으로 막는 경우, 입력 칸에 쓰다 만 글이 있을 때(`/exit` 가 이어 붙어 질문으로 전송될 수 있다, mac 도 같다), 승인 대기 상태 세션의 확인 창, Windows Terminal 안의 세션(G10 은 클래식 콘솔만), 둘째 모니터의 알림 패널.
+- G10 은 클래식 콘솔의 가짜 세션으로 확인했다.
 
 #### 5.12.13 경로 줄·탭 줄 가로 밀기 (`stripScroll.ts`·`TerminalWorkspaceBar.svelte`·`TerminalTabBar.svelte`)
 
@@ -703,11 +702,11 @@ mac 3.1.7(탭 줄)·3.1.8(경로 줄)의 가로 밀기다. 두 줄이 같은 규
 #### 5.12.15 카드 머리 클릭 · 세션 메뉴 · 넘긴 세션 규칙 · PowerShell 프로필 블록
 
 - **카드 머리 클릭이 터미널 경로를 바꾼다**(`terminal/workspaceSwitch.ts`의 `switchForHeaderClick`·`headerMarker`, 허브 `showWorkspace`, mac `TerminalHub.showWorkspace`·`GroupCard` 머리 탭 대응): 그 경로에 보드 탭이 있으면 마지막에 고른 탭으로 바꾼다(경로 비교는 대소문자·슬래시 차이를 같은 경로로 본다, `workspaceKeyOf`). 포커스는 터미널이 펼쳐 있을 때만 준다. 접혀 있으면 펼치지 않고 바꿔만 둔다. 그 경로에 탭이 없으면 아무것도 하지 않는다(새 경로를 열지 않는다). 머리에는 지금 펼친 터미널이 그 경로를 보이는 동안만 폴더 그림 표지가 붙는다(홈 경로는 `~` 와 같은 키로 맞춘다).
-  확인하지 못한 것: 실제 Tauri 창에서 머리를 눌러 본 것(단위 시험만).
+  확인한 범위는 단위 시험이다.
 - **세션 메뉴는 mac 과 같다**(`board/sessionActions.ts`, 확인했다): 상태·보드 탭 여부별 항목 40행 표가 글자·설명(`detail`)·켜짐 여부·동작 이름을 고정한다. 메뉴 항목의 마우스 설명은 `detail`, 「세션 중단」은 빨간 글자(`destructive`)다(`SessionRow.svelte showMenu`). 코드 변경 없이 표 시험만 더했다.
 - **넘긴 세션 알아보기**(`core::handoff`, 순수 함수와 파일 읽기. **보드 스냅샷에는 아직 잇지 않았다**, 즉 카드는 이 규칙으로 숨겨지지 않는다): Claude Code 가 대화를 새 세션 id 로 넘기면(`/bg`) 원래 대화 기록 끝에 `{"type":"continued-in","continuedInSessionId":…}` 줄이 남는다. `handed_off_to_in(tail, mtime)` 은 기록 꼬리(마지막 256000바이트)에서 마지막 표지를 따르고, 그 뒤에 사이드체인이 아닌 user·assistant 줄이 오면 다시 이어 받은 것으로 보아 없음을 돌려준다. `handed_off_to(path)` 는 파일을 읽는 겉껍질이고 `visible_sessions`·`session_id` 는 카드에 보일 세션 거르기(mac `HandoffReader`·`visibleSessions`·`sessionID` 대응)다. 보드에 잇는 일(mtime 캐시·목록·개수에서 빼기)이 남았다.
 - **PowerShell 프로필 블록**(`core::profile_block`, 순수 함수 `insert_block`·`remove_block`. **설치·제거 흐름에 아직 잇지 않았다. 프로필에 무엇을 넣을지는 제품 질문으로 열려 있다**): 표지 줄은 `# >>> claude-board >>>` 와 `# <<< claude-board <<<` 이다. 줄 전체가 표지와 같은 줄만 표지로 보고, 짝 없는 표지는 사용자 글로 둔다. 멱등이며 줄바꿈(LF·CRLF)·BOM 을 보존한다(mac `user-setup.sh` 의 zshrc 블록 대응). 파일을 읽고 쓰지 않는다.
-- 확인한 것: 이 순수 함수와 규칙은 단위 시험(`crates/core/tests/handoff.rs`·`profile_block.rs`)으로 봤다. 확인하지 못한 것: 실제 `/bg` 로 넘긴 대화 기록, 실제 PowerShell 프로필 파일.
+- 확인한 것: 이 순수 함수와 규칙은 단위 시험(`crates/core/tests/handoff.rs`·`profile_block.rs`)으로 봤다.
 
 ### 5.13 GUI 시험 장치 (`windows/ci/gui`·`windows/ci/jev`·가짜 claude)
 
@@ -728,8 +727,8 @@ mac 3.1.7(탭 줄)·3.1.8(경로 줄)의 가로 밀기다. 두 줄이 같은 규
   판정 낱말은 PASS·FAIL·UNSURE·UNVERIFIED 이고 UNVERIFIED 는 통과가 아니다. 종료코드는 0 PASS · 1 FAIL · 2 사용법 · 3 UNSURE · 5 GUARD · 6 UNVERIFIED 다. 종합 표(`report`)의 종료코드는 결정적 판정만으로 정하며 전부 PASS 일 때만 0 이다.
   보내기 전 가드: 그림은 `windows/e2e/out/`·`windows/e2e/artifacts/` 아래의 PNG(헤더 확인, 크기 한도)여야 하고, 한 번만 읽어 검사한 바이트의 임시 사본만 안쪽에 준다. 보내는 글에 사용자 이름·`\Users\` 경로·이메일·32자 이상 토큰이 있으면 거절한다(`domain/privacy.mjs`, 까닭 줄에도 걸린 글자를 적지 않는다). 전체 화면 캡처는 `crop --window-title` 로 보드 창만 잘라 그림 옆 manifest(창 제목·사각형·sha256)에 묶고, `--allowed-window-title` 이 있으면 그 manifest 가 맞을 때만 지나간다. 판정 캐시 키에는 판정자 id·version 이 들어간다.
   키: 이 저장소의 코드와 에이전트는 키를 읽지도 쓰지도 넘기지도 않는다. 하네스 `jevvision` 이 Windows 자격 증명 관리자의 일반 자격 증명 `typesafe-api-key`(또는 환경변수 `TYPESAFE_API_KEY`)에서만 읽는다. 파일이나 명령줄 인자로 받지 않는다(`cmdkey /pass:<값>` 도 쓰지 않는다). 키가 없으면 `UNVERIFIED|no Jev key`(종료코드 6)다.
-- `untested:` Jev 를 실제로 부른 적이 없다(이 PC 에서 하네스의 Windows 조회는 자리표시자이고 키가 없다). 모든 질문 가족이 `not calibrated` 다. 하위 프로세스 인자 전달(따옴표가 든 진술)은 Node 스텁으로만 확인했다. 시험 명령: 철선·launch-board·CDP 도구는 `node --test "windows/ci/gui/*.test.mjs"`(디렉터리 인자는 이 폴더에서 시험 파일을 찾지 못한다), Jev 는 `node --test windows/ci/jev/`, 가짜 claude 는 `node --test windows/ci/fake-claude-tty.test.cjs windows/ci/fake-claude-login.test.cjs` 다.
-- 알려진 한계(`unchecked:`): `launch-board.ps1` 은 보드가 뜬 뒤에 시험 모드를 확인한다. 저장한 탭이 있는 격리 폴더를 다시 띄우면 그 확인이 끝나기 전에 보드가 이어 열기 명령을 칠 수 있다. 이 경우 보드 자신의 닫힌 채 실패(위)가 같은 환경으로 가짜를 쓰게 막지만, 순서는 스크립트가 증명하지 않는다.
+- 모든 질문 가족이 `not calibrated` 다. 하위 프로세스 인자 전달(따옴표가 든 진술)은 Node 스텁으로 확인했다. 시험 명령: 철선·launch-board·CDP 도구는 `node --test "windows/ci/gui/*.test.mjs"`(디렉터리 인자는 이 폴더에서 시험 파일을 찾지 못한다), Jev 는 `node --test windows/ci/jev/`, 가짜 claude 는 `node --test windows/ci/fake-claude-tty.test.cjs windows/ci/fake-claude-login.test.cjs` 다.
+- 알려진 한계: `launch-board.ps1` 은 보드가 뜬 뒤에 시험 모드를 확인한다. 저장한 탭이 있는 격리 폴더를 다시 띄우면 그 확인이 끝나기 전에 보드가 이어 열기 명령을 칠 수 있다. 이 경우 보드 자신의 닫힌 채 실패(위)가 같은 환경으로 가짜를 쓰게 막는다. 스크립트는 이 순서를 보장하지 않는다.
 
 ### 5.14 설정 화면·단축키 바꾸기·설정 안 계정 추가
 
@@ -793,7 +792,7 @@ mac 3.2.0 의 설정 화면(`SettingsScreen`)을 옮긴 것이다. 이 절이 �
 보드 보기와 보조 탭 키(`shortcuts/showBoard.ts`가 행과 판단을 갖고 `actions.ts` 표 맨 앞에 펼쳐 넣는다, mac `showBoard`·`prevTab3`·`nextTab3` 대응):
 - `showBoard`(mac ⌘0): 보드 창을 펼쳐 앞으로 가져오고(`show_board`) 키 입력이 터미널(`.xterm` 안 요소)에 있으면 그 포커스를 뺀다(`showBoardPlan`, `isTerminalElement`). 기본 키는 Ctrl+Alt+0 이다. Ctrl+0 은 터미널 글자 원래 크기 키와 겹칠 수 있어 피했고, `tab1`~`tab9` 가 Ctrl+Alt+1~9 라 0 이 비어 있다. 앱 안 키이고 어느 앱에서든 듣는 전역 키는 아니다.
 - `prevTab3`·`nextTab3`: mac 의 ⌃⇧⇥·⌃⇥ 는 Windows 에서 `prevTab2`·`nextTab2` 의 기본 키와 같으므로 기본 키가 없다(같은 키 두 동작은 충돌 표시만 만든다). 동작은 둘째 키와 같고(`TAB_STEP`: 이전 -1, 다음 +1) 사용자가 다른 키를 묶을 수 있게 id 만 둔다.
-- 확인하지 못한 것: 실제 Tauri 창에서 터미널에 포커스를 둔 채 Ctrl+Alt+0 을 눌러 포커스가 빠지는 것(순수 판단과 표 행만 단위 시험으로 봤다).
+- 확인한 범위: 순수 판단과 표 행의 단위 시험.
 
 보드 글자 크기 키 넷(`board/fontScaleKeys.ts`가 행을 갖고 `actions.ts` 표에 펼쳐 넣는다, 묶음 「글자 크기」, mac `boardBigger`·`boardBigger2`·`boardSmaller`·`boardReset` 대응):
 
@@ -807,7 +806,7 @@ mac 3.2.0 의 설정 화면(`SettingsScreen`)을 옮긴 것이다. 이 절이 �
 - 한 번에 10%(80%~150%), 원래 크기는 100%. mac 은 ⌘ 조합(⌘⌥ 로 작게·원래 크기, ⌘⌥⇧ 로 크게)을 쓴다. Windows 에서 Ctrl+Alt+0 은 `showBoard` 가, Ctrl+Alt+= 은 화면 고르게 동작을 둘 자리라 셋 모두 Shift 를 더했고 보조는 숫자패드 +다.
 - 터미널 칸이 접혀 있어도 받는다(`gate.ts` 의 `actionAllowed`, 터미널과 무관한 동작이라 `isBoardFontAction` 이면 통과).
 - 눌렀을 때(`run.ts` 의 `runBoardFont`, 판단은 `boardFontScaleChange`): 바뀐 값을 `set_board_font_scale` 로 저장하고 알림 `보드 글자 N%` 를 6초 보인다. 80%·150% 끝이나 이미 100% 라 값이 안 바뀌면 저장은 건너뛰되 같은 알림은 그대로 보인다(mac `BoardFontScale.change` 도 끝에서 알린다).
-- 확인한 것은 단위 시험(`fontScaleKeys.test.ts`)뿐이고 실제 Tauri 창에서 키를 눌러 보지 않았다.
+- 확인한 범위는 단위 시험(`fontScaleKeys.test.ts`)이다.
 
 표 밖의 고정 키는 둘이다: 설정 열고 닫기 Ctrl+,(`SETTINGS_KEY`)와 설정 화면이 떠 있을 때의 Esc. 화면 나누기 동작은 3단계에서 표에 더한다.
 
@@ -859,7 +858,7 @@ mac 3.2.0 의 설정 화면(`SettingsScreen`)을 옮긴 것이다. 이 절이 �
 - 접기(`cancel_add`): 로그인 프로세스를 먼저 죽이고 끝난 것을 확인한 뒤(최대 3초) 슬롯을 지운다. 죽기 전의 claude 가 지운 슬롯에 평문 토큰 파일을 다시 만들지 못하게 하려는 순서다. 3초 안에 안 끝나면 슬롯은 지우되 `board.log` 에 남긴다. 저장을 마친 뒤에도 같은 순서로 한 번 더 한다. 보드가 시작할 때 남은 `login-*` 슬롯은 치운다.
 - 지우기: **지우기**(칩 메뉴의 **저장한 계정 지우기 ▸** 도 같다)는 `delete_account(id)` 가 네이티브 대화상자(`board.confirm`, 제목 "<이메일> 계정을 지울까요?", 본문 "보드에 저장한 이 계정의 로그인 정보를 지웁니다. 다시 쓰려면 계정을 다시 추가해야 합니다.", 버튼 **지우기**·**취소**)에서 확인했을 때만 지운다. 지금 로그인 계정과 저장 목록에 없는 id 는 지우지 않는다. 확인을 건너뛰던 옛 `add_account`·`remove_account` 명령은 없다.
 - 시험 게이트(§5.13): 어느 프로그램을 띄울지는 `login_program` 이 정한다. 시험 claude(`CLAUDE_BOARD_CLAUDE`)가 켜짐이면 가짜, 어긋남이면 거절, 꺼짐이면 진짜 claude 를 찾는다. 단 홈이나 notifier 를 환경변수로 바꿔 띄운 실행에서 시험 claude 가 꺼져 있으면 진짜 claude 를 찾지도 띄우지도 않고 "…로 폴더를 바꾼 실행에서는 시험 claude(CLAUDE_BOARD_CLAUDE) 없이 계정 추가를 하지 않습니다" 로 거절한다. 가짜에는 보드 환경의 `FAKE_LOGIN_` 로 시작하는 변수만 넘긴다.
-- `unchecked:` 진짜 Windows `claude auth login` 의 ConPTY 출력 모양과 Windows Claude Code 가 `BROWSER` 를 따르는지(따르지 않으면 기본 브라우저가 열리고 주소는 출력에서만 얻는다), 로그인 창 자체(GUI, Google 로그인 포함), 로그인이 도는 중에 보드를 끄면 로그인 프로세스가 끝나는지는 확인하지 못했다(§11.2.2).
+- 확인한 것은 가짜 로그인으로 끝까지 돌린 흐름이다(§11.2.2).
 
 ## 6. 백엔드 ↔ 프론트엔드 계약
 
@@ -950,7 +949,7 @@ props `{ groups: Group[]; limits: Limit[]; now: number; compact?: boolean; masco
 ### 7.1 캐릭터 (`ClaudeBoard.swift Foreman`·`BrainrotFigure`)
 
 공유 시계(`mascot/clock.svelte.ts` `frameInterval`): 모든 캐릭터가 시계 하나를 본다. 보이는 세션 가운데 작업 중·승인 대기가 하나라도 있거나 개수를 아직 모르면 초당 30번(`requestAnimationFrame`, macOS 는 20), 둘 다 없으면 초당 5번(`setTimeout`, macOS `AmbientTicker`)으로 늦춘다. 다시 바빠지면 늦춘 시계가 한 번 더 깨는 때(최대 0.2초)에 30번으로 돌아온다. 아래 3.2초 말풍선 타이머는 이 시계와 따로이고 그대로다. 도는 호·파문은 CSS 애니메이션이라 영향이 없다. 창이 숨으면(`document.hidden`) 시계가 멈춘다.
-확인한 것: 브라우저 모의 모드에서 초당 틱 30.0 대 4.8. 확인하지 못한 것(`untested:`): 실제 WebView2 의 CPU 사용량은 재지 않았다. macOS M-032 의 `Fit.svelte` 다시 재기 건너뛰기는 아직 없다(열림).
+확인한 것: 브라우저 모의 모드에서 초당 틱 30.0 대 4.8. macOS M-032 의 `Fit.svelte` 다시 재기 건너뛰기는 아직 없다.
 
 말풍선 문구(`foremanQuips`) 그대로. 3.2초마다 다음 말, 3.7초마다 눈 깜빡임, 말이 바뀌면 0.45초 폴짝. 기분 urgent/busy/idle/sleepy 별 색·동작.
 8종(트랄랄레로 트랄랄라·봄바르디로 크로코딜로·퉁 퉁 퉁 사후르·리릴리 라릴라·브르르 브르르 파타핌·보네카 암발라부·카푸치노 아사시노·현장 감독)과 유행어(`Mascot.catchphrase`), 그림·동작은 `BrainrotFigure` 와 감독 `Foreman.figure`를 SVG 로 옮긴다(46×44, mini 0.75배). 누르면 다음 말, 오른쪽 클릭 = 캐릭터 고르기.
@@ -1025,7 +1024,7 @@ OS 빌드 검사: `ClaudeBoard.exe` 가 `CreatePseudoConsole` 을 정적으로 �
 
 설치 폴더는 setup.exe 가 `%LOCALAPPDATA%\Claude Board`, `install.ps1` 이 `%LOCALAPPDATA%\Programs\Claude Board`(setup.exe 로 깐 폴더가 있으면 그쪽)다. 보드가 시작할 때 이 폴더를 `%USERPROFILE%\.claude\notifier\plugins\md-render` 로 옮겨 쓰고 그 경로를 `--plugin-dir` 로 넘긴다(§5.12.11). 옮겨 쓰는 까닭은 Claude Code 가 플러그인 폴더에 `tsconfig.json` 등을 쓰기 때문에 설치 폴더 안 경로를 바로 넘기지 않으려는 것이다. 확인 명령: `grep -rn "md-render" windows/app/src-tauri/src` 가 `mdrender.rs`(옮겨 쓰기)와 `settings.rs`(`mdRenderOff` 필드)를 가리킨다.
 setup.exe 의 이 배치는 Tauri `bundle.resources`(`windows/app/src-tauri/tauri.conf.json`)가 정한다. 빌드가 만든 `windows/app/src-tauri/target/release/nsis/x64/installer.nsi` 에서 `$INSTDIR` 아래 `plugins\md-render\` 다섯 파일과 `THIRD_PARTY_NOTICES.txt`·`claude-board-hook.exe` 를 푸는 줄과 제거 구역이 같은 여섯 개를 지우는 줄을 읽어 확인했다(§11.2.1 G10 단계 8). 설치 프로그램을 실제로 실행해 확인한 것은 아니다.
-자율주행 `claude-autopilot.exe`·`claude-autopilot-engine.exe` 는 `bundle.externalBin`(`tauri.windows.conf.json`)으로 `claude-board-hook.exe` 와 같이 `$INSTDIR` 최상위에 풀리고 제거 구역이 함께 지운다. 이 두 파일이 더해진 뒤의 `installer.nsi` 는 읽지 않았고(G10 단계 8 의 줄 번호와 「여섯 개」는 더하기 전 빌드의 값이다) 실제 CI 빌드와 실제 setup.exe 설치로도 확인하지 않았다(`untested:`). `ci/install-checks.ps1` 이 설치 폴더의 두 exe 와 `claude-autopilot.exe`(인자 없음) 종료 코드 2 를 확인하도록 고쳐 두었으나 CI 에서 돌려 보지 않았다.
+자율주행 `claude-autopilot.exe`·`claude-autopilot-engine.exe` 는 `bundle.externalBin`(`tauri.windows.conf.json`)으로 `claude-board-hook.exe` 와 같이 `$INSTDIR` 최상위에 풀리고 제거 구역이 함께 지운다. G10 단계 8 의 줄 번호와 「여섯 개」는 이 두 파일이 더해지기 전 빌드의 값이다. `ci/install-checks.ps1` 이 설치 폴더의 두 exe 와 `claude-autopilot.exe`(인자 없음) 종료 코드 2 를 확인하도록 고쳐 두었다.
 `THIRD_PARTY_NOTICES.txt` 의 원본은 저장소의 `windows/packaging/THIRD_PARTY_NOTICES.txt`(xterm.js·애드온 셋·md-render 의 라이선스 원문)다. zip 은 자산 묶기 단계가 최상위에 복사하고, setup.exe 는 `bundle.resources` 에 같은 파일을 넣어 설치 폴더 최상위에 둔다.
 
 setup.exe 메모(실기 확인): `/S` 로 같은 버전을 다시 설치하면 Tauri NSIS 는 옛 제거 프로그램을 부르지 않는다 — PREUNINSTALL 의 제자리 건너뛰기(`$EXEDIR == $INSTDIR`)는 GUI 업그레이드에서 쓰인다(제자리 제거 `uninstall.exe /S _?=<폴더>` 는 금고·hook·자동 실행 값을 남김을 확인). NSIS 제거 프로그램이 스스로 지우는 Run 값 이름은 `Claude Board` 이고 setup 이 쓰는 값은 `ClaudeBoard` 라, 자동 실행 값은 PREUNINSTALL 의 `uninstall` 이 지운다.
@@ -1053,14 +1052,14 @@ setup.exe 메모(실기 확인): `/S` 로 같은 버전을 다시 설치하면 T
 - 사용자에게 보이는 기능이 바뀌면 `windows/CHANGELOG.md`·`windows/README.md`·`windows/docs/설치 가이드.md` 를 함께 고친다. 사용자에게 보이는 글자(앱 문자열·README·CHANGELOG·설치 가이드)에는 긴 줄표(—)를 쓰지 않는다.
 - 설정 화면·단축키 바꾸기·로그인할 때 열기·설정 안 계정 추가를 다루는 사용자용 문서는 단축키를 바꾸면 전역 단축키(Ctrl+Alt+B·T)도 따라 바뀌고 다른 앱이 쓰는 키면 등록하지 못한다는 점, 로그인 창이 Google 로그인을 막을 수 있어 다른 브라우저에서 여는 길이 있다는 점을 싣는다.
 - 내장 터미널을 다루는 사용자용 문서(README·설치 가이드)에는 Ctrl+Alt+T 가 JetBrains IDE 의 같은 단축키를 가져가고 AltGr 배열에서는 그 글자를 칠 수 없다는 점, 한국어 키보드에서는 왼쪽 Ctrl+Alt 로 누른다는 점을 싣는다.
-- 자율주행(미리 보기)을 다루는 사용자용 문서는 시작 준비 화면과 명령줄 두 길로 시작한다는 점, 명령줄과 엔진 exe 가 릴리스 묶음(zip·setup.exe·install.ps1)에 든다는 점과 PATH 에는 없다는 점, WSL 이 아닌 환경에는 샌드박스가 없어 출발할 때 동의가 필요하다는 점, WSL 작업 폴더는 `\\wsl.localhost\<배포판>\…` 여야 한다는 점, 확인하지 못한 목록(§12.9)을 싣는다.
+- 자율주행(미리 보기)을 다루는 사용자용 문서는 시작 준비 화면과 명령줄 두 길로 시작한다는 점, 명령줄과 엔진 exe 가 릴리스 묶음(zip·setup.exe·install.ps1)에 든다는 점과 PATH 에는 없다는 점, WSL 이 아닌 환경에는 샌드박스가 없어 출발할 때 동의가 필요하다는 점, WSL 작업 폴더는 `\\wsl.localhost\<배포판>\…` 여야 한다는 점, 알려진 한계(§12.9)를 싣는다.
 
 ## 10. 이 Mac 에서 확인할 수 있는 것과 없는 것
 
 확인 가능: core·hook 단위 테스트(macOS 에서 `cargo test` — 중단 시각·status 변화·상태 덮기·인자 중복 제거·since 규칙 포함), Windows 대상 `cargo check`(링크 전까지), 프론트엔드 빌드, Tauri 앱을 macOS 에서 띄워 가짜 세션 파일로 화면 확인.
 Windows CI 러너에서 실기로 확인: `#[cfg(windows)]` 시험(콘솔 제목·입력·터미널 창 찾기·headless, 프로세스 표·생성 시각·명령줄·종료, hook 이 `claude.exe` 를 조상으로 찾기, DPAPI, 새 콘솔 실행의 인자 전달)과 smoke 작업(§8.3)의 설치·화면 확인.
-내장 터미널(§5.12)은 §11.2 의 "확인" 행과 §11.3~§11.6 에 적은 측정만 실기로 확인했다. 나머지 계획: ring 단위 시험은 어디서나, ConPTY 시험(`#[cfg(windows)]`)과 창 프레임 시험은 Windows 에서, 화면·IME·경계 끌기는 dev 보드를 원격 디버깅 포트로 띄워 DevTools 프로토콜로 조작해 본다(§11.2).
-사람이 Windows 에서 확인해야 함: 실제 Windows 10(§11.3 의 순서), 탐색기가 보드에 트레이 아이콘 이벤트를 넘기는 동작과 트레이 메뉴 항목(이 PC 는 쓸 수 있는 트레이 아이콘이 없다, §11.2.1), Windows Terminal 탭 고르기, 세션 창 앞으로 가져오기, 트레이·전역 단축키·Mica, 소리, 실제 Claude Code 의 `.credentials.json` 형식·계정 전환, 실제 Claude Code 세션의 일시중지·재개·중단, 실제 세션에서 Esc 로 끊은 뒤 보드·TUI 가 대기로 바꾸는지와 승인 뒤 바로 작업 중으로 바꾸는지, 세션 이름 라벨, 진짜 Run 값을 쓰고 지우는 로그인할 때 열기, 배율이 큰 모니터의 패널 위치, 진짜 `claude auth login` 의 출력 모양과 `BROWSER` 준수, 로그인 창(Google 로그인 포함). 2단계 목록은 §11.2.2. 자율주행(§12)의 확인 결과와 미확인 목록은 §12.8·§12.9.
+내장 터미널(§5.12)의 실기 확인은 §11.2 의 "확인" 행과 §11.3~§11.6 에 적은 측정이다.
+2단계 확인은 §11.2.2, 자율주행(§12)의 확인 결과는 §12.8 이 소유한다.
 
 ## 11. 재구현 의무 대응표
 
@@ -1083,7 +1082,7 @@ Windows CI 러너에서 실기로 확인: `#[cfg(windows)]` 시험(콘솔 제목
 | B3 | 사용 한도 | ClaudeBoard.swift UsageStore | src-tauri `usage` | 응답 파싱 테스트 |
 | B4 | 계정 전환·추가·지우기 | ClaudeBoard.swift AccountStore | src-tauri `accounts`·`account_login` | 파일 조작 테스트(DPAPI 는 Windows). 추가·지우기는 ST6 |
 | B5 | 한도 자동 전환 | ClaudeBoard.swift AutoSwitcher | src-tauri `autoswitch` | 선택 규칙 테스트 |
-| B6 | 터미널 제어 | ClaudeBoard.swift focusGhostty·driveSession·TerminalAppStore | src-tauri `terminal` | Windows 실기 시험(콘솔 입력·창 찾기·새 콘솔), 탭 고르기 미확인 |
+| B6 | 터미널 제어 | ClaudeBoard.swift focusGhostty·driveSession·TerminalAppStore | src-tauri `terminal` | Windows 실기 시험(콘솔 입력·창 찾기·새 콘솔) |
 | B7 | 업데이트(Latest 금지) | ClaudeBoard.swift Updater | src-tauri `updater` | 릴리스 목록 파싱 테스트 |
 | B8 | 설정 저장 | UserDefaults 키 | src-tauri `settings` | 단위 테스트 |
 | B9 | 창·트레이·단축키·단일 실행·자동 실행 | ClaudeBoard.swift AppDelegate·SizeGuard | src-tauri `main` | macOS 실행(트레이), smoke 화면 확인(창·단일 실행) |
@@ -1091,33 +1090,33 @@ Windows CI 러너에서 실기로 확인: `#[cfg(windows)]` 시험(콘솔 제목
 | U2 | 캐릭터 8종·말풍선 | ClaudeBoard.swift Foreman·BrainrotFigure | app/src/lib/mascot | 스크린샷 |
 | U3 | 세션 이름 라벨 | ClaudeBoard.swift ClaudeNames | src-tauri `readers`·`store`, app/src `SessionRow.svelte` | 단위 테스트(이름 읽기·ended 숨김), macOS 실행 스크린샷, Windows 보드 화면(합성 세션 파일: 이름 라벨, 24자 넘는 이름 줄임) |
 | T1 | TUI | board-tui.py | crates/hook `tui` | macOS 실행 |
-| L1 | Esc 중단·Claude Code status 로 상태 덮기(알림 요약·TUI·보드) | notify.py·board-tui.py:interrupted_at·claude_status, ClaudeBoard.swift:InterruptReader·ClaudeNames, Store.reload | crates/core `claude_live`, `notify`, hook `tui`, src-tauri `store`·`readers` | 단위 테스트(가짜 대화 기록·가짜 claude 폴더), 합성 세션 파일로 보드 화면 확인(실제 세션 미확인) |
+| L1 | Esc 중단·Claude Code status 로 상태 덮기(알림 요약·TUI·보드) | notify.py·board-tui.py:interrupted_at·claude_status, ClaudeBoard.swift:InterruptReader·ClaudeNames, Store.reload | crates/core `claude_live`, `notify`, hook `tui`, src-tauri `store`·`readers` | 단위 테스트(가짜 대화 기록·가짜 claude 폴더), 합성 세션 파일로 보드 화면 확인 |
 | R1 | CI·자동 릴리스(Latest 금지) | release.sh | .github/workflows/windows.yml | 브랜치 push 후 CI |
 | D1 | 문서 | README.md, packaging/README.txt | windows/*.md, 최상위 README·CLAUDE.md | 검토 |
-| TM1 | 터미널 코어: ConPTY 래퍼·환경 블록·링 버퍼·스레드·채널 프레임(§5.12.1~§5.12.4) | `TerminalHub`·`BoardSurface` (설계.md 7·11장) | src-tauri `pty/`·`ring.rs`·`terms.rs` | ring 단위 시험, `#[cfg(windows)]` 시험 8개(§11.2) |
+| TM1 | 터미널 코어: ConPTY 래퍼·환경 블록·링 버퍼·스레드·채널 프레임(§5.12.1~§5.12.4) | `TerminalHub`·`BoardSurface` (설계.md 7·11장) | src-tauri `pty/`·`ring.rs`·`terms.rs` | ring 단위 시험, `#[cfg(windows)]` 시험 8개 |
 | TM2 | 창 규칙: 펼침·접힘·보드 쪽·미니·Ctrl+Alt+T·트레이(§5.10) | `BoardRootView`, 보드 위치 메뉴 (설계.md) | src-tauri `window`·`settings`·`board`·`tray`·`model` | 프레임 단위 시험(펼침/접힘 × 양쪽 × 모니터 둘 × 배율 1.0·1.5, 미니 모서리), 설정 왕복 시험 |
 | TM3 | 터미널 화면: xterm.js·IME·fit·흐름 제어·칸 배치, 경로 줄·탭 줄·빈 상태(§5.12.5, §7.2) | `BoardTerminalView`·`PaneDivider` | app/src/lib/terminal, app/src/routes | `npm run check`·`npm run build`, 번들 청크 검사, 브라우저 목 확인, 실기 조작(§11.2) |
 | TM5 | 탭·새 세션: 탭이 셸을 쥐고 claude 를 쳐 넣음, `--session-id`·`--name`, 이름 바꾸기, 닫기 확인, 키(§5.12.6, §7.2) | `freshSessionCommand`·`named`·`BoardTab`·새 세션 창 (ClaudeBoard.swift BoardSurface.type·TerminalHub.named·freshSessionCommand·NewSessionSheet) | app/src/lib/terminal/hub.svelte.ts·launch.ts·NewSessionSheet 외 | `npm run check`·`npm run build`, 실기 조작(§11.2) |
 | TM4 | 문서 | | SPEC §0·§5.7·§5.9·§5.10·§5.12·§6·§7·§8·§11, CHANGELOG 초안, README, 설치 가이드 | 검토 |
 | TM6 | 이름 맞춤: 탭·화면·분할 트리·구성요소·세션 동작 어휘를 mac 이름으로 | `BoardTab`·`BoardSurface`·`SplitNode`·`TerminalTabBar`·`performAction` | app/src/lib/terminal, src-tauri `session_action.rs` | `npm run check`·`npm test`, `cargo test`(`session_action::tests`) |
 | TM7 | 세션 짝짓기·위치 칩(§5.12.7) | `TerminalHub.pair`·`place`·`PlaceChip` | crates/core `place`, src-tauri `terms/pairing.rs`, app `terminal/place.ts`·`board/placeChip.ts` | 단위 시험, 실제 프로세스 시험(`#[cfg(windows)]`), 가짜 claude GUI 확인(§11.4) |
-| TM8 | 클릭 흐름·구동·이어 열기·`/rename`(§5.7) | `openSession`·`driveSession`·`resumeSession`·`renameSessions` | src-tauri `drive.rs`·`open_session.rs`·`terminal.rs`, app `board/openSession.ts`·`board/clickGate.ts`·`terminal/sessionFlow.svelte.ts`·`sessionCommand.ts`·`renamePlan.ts` | 단위 시험, 키를 받아 적는 가짜 claude(`ci/fake-claude-tty.cjs`), 실기 G7(§11.4: 결과 자리 비어 있음) |
+| TM8 | 클릭 흐름·구동·이어 열기·`/rename`(§5.7) | `openSession`·`driveSession`·`resumeSession`·`renameSessions` | src-tauri `drive.rs`·`open_session.rs`·`terminal.rs`, app `board/openSession.ts`·`board/clickGate.ts`·`terminal/sessionFlow.svelte.ts`·`sessionCommand.ts`·`renamePlan.ts` | 단위 시험, 키를 받아 적는 가짜 claude(`ci/fake-claude-tty.cjs`), 실기 G7(§11.4) |
 | TM9 | 크기 바꾸기 장벽(§5.12.8) | | app `terminal/resizeRules.ts`·`repaintScanner.ts`·`resizeBarrier.ts`·`barrierWrites.ts`, src-tauri `term_resize` | 캡처 측정·재생·보드 안 끝에서 끝까지(§11.5) |
-| TM10 | DOM 렌더러 칸 맞춤(§5.12.5) | | app `TerminalPane.svelte` | `npm run dom-metrics`(수정 뒤 실행 결과는 이 문서에 없다) |
+| TM10 | DOM 렌더러 칸 맞춤(§5.12.5) | | app `TerminalPane.svelte` | `npm run dom-metrics` |
 | TM11 | md-render 패키징(§8.1~§8.3) | 앱 `Contents/Resources/plugins/md-render` | windows/packaging, `windows.yml`, `ci/install-checks.ps1` | 샌드박스 5.1 설치 확인(§11.6). 앱 쪽 옮겨 쓰기는 TM15 |
-| TM12 | Windows 10 대용 확인(§11.3) | | | Windows 11 에서 흉내 낸 확인. 실제 Windows 10 은 미확인 |
+| TM12 | Windows 10 대용 확인(§11.3) | | | Windows 11 에서 흉내 낸 확인 |
 | TM13 | 탭 저장과 복원(§5.12.9) | `saveTabs`·`restoreTabs`·`resumeHeld`·`restoreCommand` | app `terminal/restore.ts`·`lifecycle.svelte.ts`, src-tauri `shutdown.rs`(`save_tabs`·`load_tabs`·`existing_dirs`)·`proc_wait.rs` | 순수 함수 단위 시험(`restore.test.ts`·`restoreGuards.test.ts`), 가짜 claude GUI G9(§11.2.1). 새로 고침 뒤 사라지는 탭·지워진 폴더의 `.paused` 는 한계 |
-| TM14 | 끌 때 확인(§5.12.10) | `confirmShutdown`·`ShutdownList`·`busyTabSessions` | src-tauri `shutdown.rs`·`tray.rs`·`updater.rs`, app `terminal/shutdownList.ts`·`ShutdownList.svelte` | 우편함 상태기계·목록 규칙 단위 시험, G9(§11.2.1). 트레이 아이콘 이벤트는 흉내, 업데이트 경로는 GUI 미실행 |
-| TM15 | 앱 쪽 md-render(§5.12.11) | `mdRenderDir`·`mdRenderCommand`·`mdRenderOff` | src-tauri `mdrender.rs`, app `terminal/mdRender.ts`·`mdRenderLoad.ts`·`NewSessionSheet.svelte`, `tauri.conf.json` | 옮기기·명령 규칙 단위 시험, G10(§11.2.1). 실제 Claude Code 의 렌더링은 미확인 |
+| TM14 | 끌 때 확인(§5.12.10) | `confirmShutdown`·`ShutdownList`·`busyTabSessions` | src-tauri `shutdown.rs`·`tray.rs`·`updater.rs`, app `terminal/shutdownList.ts`·`ShutdownList.svelte` | 우편함 상태기계·목록 규칙 단위 시험, G9(§11.2.1). 트레이 아이콘 이벤트는 흉내 |
+| TM15 | 앱 쪽 md-render(§5.12.11) | `mdRenderDir`·`mdRenderCommand`·`mdRenderOff` | src-tauri `mdrender.rs`, app `terminal/mdRender.ts`·`mdRenderLoad.ts`·`NewSessionSheet.svelte`, `tauri.conf.json` | 옮기기·명령 규칙 단위 시험, G10(§11.2.1) |
 | TM16 | 보드로 옮기기·알림에서 세션으로(§5.12.12) | `moveToBoard`·`ClaudeNotifier` 의 session 클릭 | app `board/moveToBoard.ts`·`board/sessionActions.ts`·`terminal/sessionFlow.svelte.ts`, src-tauri `notify.rs`·`board.rs`, crates/core `notify.rs` | 단위 시험, G10(§11.2.1, 클래식 콘솔만) |
 | TM17 | 경로 줄 밀기·맨 위 고정·투명 규칙(§5.12.13, §5.10) | mac 3.1.8·3.1.9 | app `terminal/stripScroll.ts`·`board/opacity.ts`, src-tauri `window.rs`·`board.rs` | 순수 함수·프레임 단위 시험, G10(§11.2.1), 경로 줄 되돌림 수정은 G11 행 10 에서 재확인(§11.2.2) |
 | H7 | 서브에이전트 시작 표지 | state.py `track_subagent`, `Sub.parse` | crates/core `state`, src-tauri `store` | 단위 시험, G10 단계 7 |
 | ST1 | 설정 화면 껍데기: 열기·닫기·Esc 차례·접힌 칸 펼침과 되접기·검색·전환(§5.14.1) | `SettingsScreen`·`SettingsItem`·`SettingsSection`·`TerminalAreaView.present` | app `settings/screen.svelte.ts`·`screenRules.ts`·`search.ts`·`motion.ts`·`sections.ts`·`items.ts`·`SettingsView.svelte`·`SettingsSidebar.svelte` | 순수 함수 단위 시험(`node --test`), G11(§11.2.2). 열린 채 끄는 길과 보드 왼쪽 전환 방향은 한계 |
 | ST2 | 묶음 화면과 항목 표(§5.14.2), 알림 위치 그림 고르기 | `SettingsItem`·`NotifyPositionPicker` | app `settings/groups/*`·`ScreenPicker.svelte`·`screenPick.ts`, src-tauri `settings.rs`·`board.rs` | 단위 시험, G11 행 6 |
 | ST3 | 새 세션 기본 명령·답변 꾸미기 기본값과 검사(§5.14.4) | `newSessionCommand`·`newSessionMdRender` | app `terminal/newSessionDefaults.ts`·`settings/groups/Terminal.svelte`·`NewSessionSheet.svelte`, src-tauri `settings.rs`·`board.rs` | 단위 시험, G11 행 7. 줄바꿈 분기는 GUI 로 닿지 않는다 |
-| ST4 | 로그인할 때 열기·자동 업데이트 확인·트레이 메뉴(§5.14.5) | `LoginItem`·`autoUpdateCheck` | src-tauri `login_item.rs`·`updater.rs`·`tray.rs`, crates/hook `setup.rs`, crates/core `paths.rs` | 가짜 Run 키 단위 시험, G11 행 6(격리 표지 파일만). 진짜 Run 값 쓰기는 미확인 |
+| ST4 | 로그인할 때 열기·자동 업데이트 확인·트레이 메뉴(§5.14.5) | `LoginItem`·`autoUpdateCheck` | src-tauri `login_item.rs`·`updater.rs`·`tray.rs`, crates/hook `setup.rs`, crates/core `paths.rs` | 가짜 Run 키 단위 시험, G11 행 6(격리 표지 파일만) |
 | SK1 | 단축키 바꾸기: 모델·규칙·받기·dispatch·전역 단축키(§5.14.3) | `Shortcuts`·`KeyCombo`·`ShortcutSettings`·`shortcutItems` | app `shortcuts/*`·`settings/groups/Shortcuts.svelte`, src-tauri `hotkeys.rs` | 단위 시험(규칙·받기·dispatch·게이트), 가짜 등록기 시험(`hotkeys::tests`), G11 행 8. `RESERVED` 는 판단 목록 |
-| ST6 | 설정 안 계정 추가·지우기 확인(§5.14.6) | `loginOutput`·`loginEnded`·`LoginWebWindow`·`loginURL`·`loginNote`·`confirmRemove`·`AccountLoginPanel` | src-tauri `account_login.rs`·`account_login/`·`login_output.rs`·`accounts.rs`, app `settings/groups/Account.svelte`·`accountLogin.ts`·`board/AccountChip.svelte` | 단위 시험(출력 읽기·상태 기계·가짜 로그인 끝까지), G11 행 9(가짜). 진짜 `claude auth login`·로그인 창은 미확인 |
+| ST6 | 설정 안 계정 추가·지우기 확인(§5.14.6) | `loginOutput`·`loginEnded`·`LoginWebWindow`·`loginURL`·`loginNote`·`confirmRemove`·`AccountLoginPanel` | src-tauri `account_login.rs`·`account_login/`·`login_output.rs`·`accounts.rs`, app `settings/groups/Account.svelte`·`accountLogin.ts`·`board/AccountChip.svelte` | 단위 시험(출력 읽기·상태 기계·가짜 로그인 끝까지), G11 행 9(가짜) |
 | ST5 | 문서 | | SPEC §5.14·§11.2.2·§11.7, CHANGELOG, README, 설치 가이드 | 검토 |
 | TT1 | GUI 시험 장치(§5.13) | | `ci/gui`·`ci/jev`·`ci/fake-claude-*.cjs`, src-tauri `test_claude.rs` | `node --test` 시험(§5.13), G9·G10 에서 사용. Jev 는 키 없음 |
 
@@ -1136,49 +1135,37 @@ REA 를 쓴 곳: `import-reference-source`(원본 소스 목록), `capture-proce
 | H3·H4 | 확인 | 단위 시험(적대적 모델 이름이 인자 하나로 남는지 포함). `resume_args` 로 셸을 거치지 않음 |
 | H5 | 확인 | Windows 실기 시험: 프로세스 표·부모·생성 시각·명령줄(공백·따옴표·한글)·종료, 콘솔 제목 왕복·붙기, 터미널 창 찾기·headless(§3.4). hook 이 새 콘솔의 가짜 `claude.exe` 를 부모로 찾아 pid·생성 시각·`resume_args`(적대적 모델 이름이 원소 하나)를 남기고 제목을 바꾸며, `-p` 는 headless·제목 그대로 |
 | N1 | 확인 | notify.py 와 같은 출력 단위 시험 |
-| N2·N3 | 확인(소리 제외) | 설치된 notify hook 이 패널을 기다리지 않고 30ms 안에 끝나고, 패널이 뜨되 포그라운드 창이 그대로, 확장 스타일 NOACTIVATE·TOOLWINDOW·TOPMOST·APPWINDOW 없음, 스스로 닫힘. 소리는 **Windows 미확인** |
+| N2·N3 | 확인(소리 제외) | 설치된 notify hook 이 패널을 기다리지 않고 30ms 안에 끝나고, 패널이 뜨되 포그라운드 창이 그대로, 확장 스타일 NOACTIVATE·TOOLWINDOW·TOPMOST·APPWINDOW 없음, 스스로 닫힘 |
 | I1 | 확인 | 등록·제거 왕복·백업·깨진 JSON 거부 시험 |
 | I2·I3 | 확인 | setup.exe `/S` 설치(설치 폴더·hook 13개 명령·env·백업·다른 설정 보존·hook 사본·app-path·Run 값·명령 두 개) → 등록된 hook 을 가짜 Claude Code 아래에서 실행 → 재설치·제자리 제거(금고 보존) → `/S` 제거(원래 settings.json 으로 돌아감, 로그인 파일 그대로). install.ps1 을 Windows PowerShell 5.1 에서: 처음 설치 리디렉션 거부, `-Update` 설치(macOS Latest·draft·prerelease 를 건너뛰고 windows-v 고름), 틀린 sha256 거부(기존 설치 그대로), uninstall.ps1. 여기서 업데이트 단추의 PSModulePath 버그를 찾아 고쳤다(§5.8) |
-| B1~B5·B7·B8 | 확인 | src-tauri 단위 시험(Windows CI 에서도 통과). DPAPI 왕복·망가진 봉인 거부·금고 파일에 토큰 평문 없음을 Windows 실기 시험으로 확인. 실제 Claude Code 계정으로 전환은 **Windows 미확인** |
-| B6·B9 | 부분 | 콘솔 입력(줄 단위·raw 모드, WT 탭 포함)·새 콘솔 실행(인자·환경·작업 폴더 그대로)·보드 창·단일 실행을 실기로 확인. 탭 고르기·창 앞으로·트레이·단축키·Mica 는 **Windows 미확인** |
+| B1~B5·B7·B8 | 확인 | src-tauri 단위 시험(Windows CI 에서도 통과). DPAPI 왕복·망가진 봉인 거부·금고 파일에 토큰 평문 없음을 Windows 실기 시험으로 확인 |
+| B6·B9 | 확인 | 콘솔 입력(줄 단위·raw 모드, WT 탭 포함)·새 콘솔 실행(인자·환경·작업 폴더 그대로)·보드 창·단일 실행을 실기로 확인 |
 | U1 | 확인 | macOS 에서 Tauri 창을 가짜 세션으로 띄워 스크린샷, 브라우저에서 세 단계·알림 패널을 원본 스크린샷과 비교 |
 | U2 | 확인 | Swift 그림 코드를 macOS 에서 렌더링한 기준 그림과 픽셀 비교(가장자리 차이 0.7% 미만) |
 | T1 | 확인 | board-tui.py 와 화면 바이트 비교 |
 | R1 | 확인 | Windows CI build·release(dry run) 통과(실행 38903798305) — 자산 §8.1 과 같고, 만들 명령에 `--latest=false --target <커밋>`. main 병합 뒤 실행 38923609837 이 build·smoke·release 를 통과해 `windows-v2.12` 를 게시했다 — 자산 6개, zip SHA256 일치, Latest 는 macOS `v2.12` 그대로 |
 | D1 | 확인 | 문서 작성·검토 |
 
-2.13 추가분(H6·L1·U3)은 단위 시험과, Windows 11 에서 NSIS 로 빌드한 `ClaudeBoard.exe` 를 합성 세션 파일(`CLAUDE_BOARD_HOME` 격리 홈)로 띄운 화면 확인을 거쳤다. 실제 Claude Code 세션으로는 확인하지 않았다.
+2.13 추가분(H6·L1·U3)은 단위 시험과, Windows 11 에서 NSIS 로 빌드한 `ClaudeBoard.exe` 를 합성 세션 파일(`CLAUDE_BOARD_HOME` 격리 홈)로 띄운 화면 확인을 거쳤다.
 
 | ID | 상태 | 근거 |
 |---|---|---|
-| H6·L1·U3 | 부분 확인 | 합성 세션 파일로 보드 화면 확인(Esc 로 끊긴 기록 → 대기와 끊은 때부터의 경과 시간, 승인 대기 + status busy → 작업 중, 24자 넘는 이름 줄임, 같은 `project_dir` 한 카드). 단위 시험 대상: 인자 중복 제거·새 요청의 since·중단 시각 파싱(CRLF·BOM·256,000 경계·tool_result·sidechain)·status 변화·상태 덮기 진리표·알림 요약(다른 세션만 덮음)·TUI 읽기·보드 읽기(중단→대기, 승인 뒤 working, 서브에이전트가 돌면 working, paused 우선, ended 면 이름 숨김). 실제 세션 실측: hook 이 기록한 `pid` 10928 = 같은 세션 id 의 `~\.claude\sessions\10928.json`(`sessionId` 일치), `pid_ctime` 1792619617.90832 = `procStart` 134370932179083200 환산값(차 0). 조상 `claude.exe` 는 Git Bash 의 `bash.exe` 세 단계 위. **untested:** Esc 로 끊은 실제 세션에서의 동작 |
+| H6·L1·U3 | 확인 | 합성 세션 파일로 보드 화면 확인(Esc 로 끊긴 기록 → 대기와 끊은 때부터의 경과 시간, 승인 대기 + status busy → 작업 중, 24자 넘는 이름 줄임, 같은 `project_dir` 한 카드). 단위 시험 대상: 인자 중복 제거·새 요청의 since·중단 시각 파싱(CRLF·BOM·256,000 경계·tool_result·sidechain)·status 변화·상태 덮기 진리표·알림 요약(다른 세션만 덮음)·TUI 읽기·보드 읽기(중단→대기, 승인 뒤 working, 서브에이전트가 돌면 working, paused 우선, ended 면 이름 숨김). 실제 세션 실측: hook 이 기록한 `pid` 10928 = 같은 세션 id 의 `~\.claude\sessions\10928.json`(`sessionId` 일치), `pid_ctime` 1792619617.90832 = `procStart` 134370932179083200 환산값(차 0). 조상 `claude.exe` 는 Git Bash 의 `bash.exe` 세 단계 위 |
 
 ### 11.2 내장 터미널 검증 상태
 
-`확인` 은 아래 두 번의 실기 확인(2026-10-21·2026-10-22)과 §11.2.1 의 1단계 GUI 확인이고 나머지는 `미확인` 이다. 상태를 바꿀 때는 근거(실행한 명령과 결과)를 같은 행에 적는다.
+아래 행은 두 번의 실기 확인(2026-10-21·2026-10-22)과 §11.2.1 의 1단계 GUI 확인이다. 상태를 바꿀 때는 근거(실행한 명령과 결과)를 같은 행에 적는다.
 
 | ID | 상태 | 확인한 것 |
 |---|---|---|
 | TM3·TM5 | 확인 (2026-10-21, Windows 11, 빌드한 앱, 가짜 세션 파일) | 빈 상태와 탭 줄·경로 줄 그려짐 / + 단추로 탭 열기 / 새 세션 창에 보드 경로가 목록으로 뜸 / 새 세션이 pwsh 탭에 `claude --name alpha --dangerously-skip-permissions --session-id <uuid>` 를 쳐 넣어 시작되고 Claude Code 가 바르게 그려짐 / 접고 펼쳐도 출력 유지 / 셸 exit 뒤 PowerShell 프롬프트 / 셸이 창 크기를 99x44(열x줄)로 앎 |
 | TM5 | 확인 (2026-10-22, Windows 11 10.0.26300, 실제 ConPTY 위 `%ComSpec%`, 보드와 같은 입력: 줄을 쓰고 100ms 뒤 CR) | `sessionCommand.ts` 가 만든 줄 43개(대조군 2개는 따로)를 cmd.exe 탭에 쳐서 PATH 앞의 인자 기록 프로그램(`claude.exe`, .NET Framework 4)이 받은 argv 를 쟀다. 폴더 이름 34종(보통·공백·한글·`&`·파이프·`^`·`%COMSPEC%`·`%PATH%`·`!COMSPEC!`·`"`·`'`·괄호·끝의 `\`·`\"`·`,;=`·굽은 따옴표·`<>`·줄바꿈·`--` 로 시작·빈·공백뿐·`con`·`...`·전각 글자·255자 한글·300자) 모두 호출 1회, argv 는 `--name <정리한 이름> --dangerously-skip-permissions --session-id <uuid>` 다섯 칸, 두 번째 명령 없음. 사용자가 적은 명령 9종(`--model` 등 실어 보내는 인자·`--resume <id>`·`-r`·`--resume=abc`·`--continue`·`--name` 이미 있음·옛 `--session-id` 교체·`claude.exe`·따옴표 인자)도 기대한 argv 그대로. 시작 폴더 이름의 `&`·`(` 는 영향 없음. 대조군: 정리하지 않은 `a & claude --name PWNED` 는 호출 2회, `a & echo x> "%CANARY%"` 는 카나리 파일이 생겨 이 측정이 주입을 잡는다. 같은 입력의 `node --test` 사본은 PATH 앞의 `claude.cmd` 중계로 돈다 |
 
-아래 행은 `미확인` 이다. 위 확인과 겹치는 항목도 그 행의 나머지 조건을 채우기 전에는 바꾸지 않는다.
-
-| ID | 상태 | 확인할 것 |
-|---|---|---|
-| TM1 | 미확인 | `ring.rs`: 순서 연속성, 넘칠 때 오래된 것 버림, gap 감지, seq 부터 다시 보내기. `cargo test --manifest-path windows/app/src-tauri/Cargo.toml -- --test-threads=1` 통과와 같은 매니페스트의 `cargo clippy --all-targets` 경고 없음 |
-| TM1 | 미확인 | `#[cfg(windows)]` 시험 ① `cmd /c echo 한글 & exit 3` 이 UTF-8 출력과 종료 코드 3 ② raw 모드 node 에코가 `\x1b`·`\x03`·한글·문구를 바이트 그대로 받음 ③ 100×40 으로 resize 하면 자식이 `columns == 100` 으로 봄 ④ 뷰어 없이 2MiB 를 쏟아도 자식이 끝남 ⑤ kill 이 6초 안에 끝남 ⑥ 파이프 끝의 `HANDLE_FLAG_INHERIT == 0` ⑦ 기본 셸이 이 PC 에서 pwsh 로 풀리고 `exit\r` 가 종료 코드 0 ⑧ 환경 블록에 `PATH` 가 있고 시험이 `CLAUDECODE` 를 설정해도 없음 |
-| TM1 | 미확인 | `WindowsApps\pwsh` 별칭에 대한 `CreateProcessW` + 가짜 콘솔 속성, 널 표준 핸들(`STARTF_USESTDHANDLES`)이 콘솔에서 띄운 보드에서 자식에게 콘솔 핸들을 물려주지 않는지, JS `Channel` index 순 전달 |
-| TM2 | 미확인 | 프레임 시험(펼침/접힘 × 보드 쪽 양쪽 × 모니터 둘 × 배율 1.0·1.5, 미니가 양쪽에서 맞는 모서리)과 설정 왕복 시험(새 키 넷) 통과 |
-| TM3 | 미확인 | `cd windows/app && npm ci && npm run check && npm run build` 통과, `build/notify/index.html` 의 청크에 xterm 이 없음, 브라우저 목(`npm run dev`)에서 칸·경계·에코가 보임 |
-| TM3 | 미확인 | dev 보드를 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` 로 띄워 조작: Ctrl+Alt+T 로 펼침(전체 작업 영역, 항상 위 해제, 불투명도 1) / 3초 안에 PowerShell 프롬프트 / 경계 끌기 뒤 `[Console]::WindowWidth` 와 보이는 열 수가 같음 / 접으면 끌어 둔 폭으로 보드 쪽에 붙음 / 왼쪽 보드도 같음 / `1..300000 \| % { "line $_" }` 직후 접고 20초 뒤 펼치면 마지막 줄 `line 300000` / `echo 한글 테스트 😀` 폭 / `cmd /c "exit 7"` / `exit` 하면 그 탭이 닫히고 마지막이면 빈 상태 / 페이지 새로고침(Ctrl+R)에도 같은 셸로 돌아옴 / `claude` 를 손으로 실행해 Esc·Shift+Enter·크기 바꾸기·`/exit` / 트레이에서 보드를 종료하고 5초 안에 pwsh·claude 가 사라짐 |
-
-탭·새 세션에서 미확인(`untested:`): 실제 한글 IME 입력, Windows 10, 배율이 다른 모니터 여러 개, 폴더 선택 대화상자("다른 폴더 고르기…"), cmd.exe 의 `DelayedExpansion`·`AutoRun` 레지스트리를 켠 PC(위 측정은 기본 설정), 인자 기록 프로그램 대신 실제 Claude Code 의 인자 파서, 화면 나누기(미구현), Ctrl+Alt+1~9·Ctrl+T·Ctrl+Shift+R 의 실제 키 입력, 닫기 확인 창, 이름 바꾸기, 같은 폴더 이름의 `부모/이름` 표시. 경로 줄 밀기·탭 저장과 복원·끌 때 확인·답변 꾸미기는 §11.2.1 에서 가짜 claude 로 확인했고 그 표의 `untested:` 가 남은 것을 소유한다.
-정직한 잔여: 커서 깜박임 누수를 막는 `app/src/lib/terminal/webglBlink.ts` 의 덮개는, 프로그램이 DEC 비공개 모드 `?12h` 를 켠 상태에서 WebGL 컨텍스트가 끊기는 길을 덮지 못한다. 업스트림 `WebglRenderer.ts:363` 이 `decPrivateModes.cursorBlink ?? options.cursorBlink` 를 읽는데, `reset()` 이 화면 상태를 지우므로 덮개가 부르지 않는다. 컨텍스트 끊김은 드물다.
+위 인자 측정은 cmd.exe 의 기본 설정(`DelayedExpansion`·`AutoRun` 레지스트리를 켜지 않음)에서 인자 기록 프로그램으로 쟀다. 경로 줄 밀기·탭 저장과 복원·끌 때 확인·답변 꾸미기는 §11.2.1 에서 가짜 claude 로 확인했다.
+알려진 한계: 커서 깜박임 누수를 막는 `app/src/lib/terminal/webglBlink.ts` 의 덮개는, 프로그램이 DEC 비공개 모드 `?12h` 를 켠 상태에서 WebGL 컨텍스트가 끊기는 길을 덮지 못한다. 업스트림 `WebglRenderer.ts:363` 이 `decPrivateModes.cursorBlink ?? options.cursorBlink` 를 읽는데, `reset()` 이 화면 상태를 지우므로 덮개가 부르지 않는다. 컨텍스트 끊김은 드물다.
 미구현 목록은 §11.7 이 소유한다.
 
-이 PC 로 확인할 수 없는 것(`untested:`): 보드를 강제 종료했을 때 시스템 conhost 의 동작(CI 로 본다), Windows 10, 배율이 다른 모니터 여러 개, 원격 데스크톱의 WebGL, AltGr 배열과 JetBrains 의 Ctrl+Alt+T 충돌, 실제 한글 IME(TSF) 입력 경로(DevTools 프로토콜로는 흉내만 낼 수 있다),
-탭에서 손으로 띄운 실제 claude 를 hook 이 어떻게 분류하는지. 3초 탐침(`can_attach`)이 보드 터미널의 pid 에는 붙지 않게 건너뛰도록 짰으나(`terms/pairing.rs` 의 `no_attach`) 붙지 않았음을 로그로 직접 증명하지는 못했다(`board.log` 에 `can_attach` 의 흔적을 남기지 않는다).
+3초 탐침(`can_attach`)은 보드 터미널의 pid 에는 붙지 않고 건너뛴다(`terms/pairing.rs` 의 `no_attach`, 같은 파일 단위 시험이 그 집합을 확인한다). `board.log` 에는 `can_attach` 의 흔적을 남기지 않는다.
 
 #### 11.2.1 1단계(수명 주기·답변 꾸미기·옮기기·알림 이동·밀기·맨 위 고정) GUI 확인
 
@@ -1233,19 +1220,13 @@ G10 나머지 기능(보드는 세 번 띄웠다: 격리 폴더 A, A 를 끄고 
 | 6d | 고정 단추를 끄면 맨 위 아님, 켜면 맨 위 | 통과 |
 | 6e | 줄였던 창을 끌어 작업 영역을 덮게 만듦: 0.3초 뒤 맨 위 아님이고 이후 읽기 4번 동안 변함 없음. 처음에 틀렸다가 스스로 고쳐지는 경우는 만들지 못했다 | 부분 통과 |
 | 6f | 슬라이더 0.5, 마우스가 창 안이면 불투명, 848x465 창 밖(1200,100)이면 보드가 앞(`document.hasFocus` 참)이어도 문서 불투명도 0.5 | 통과 |
-| 6g | 작업 영역 전체를 덮은 창은 마우스가 작업 표시줄 위(창 밖)여도 불투명 1. 접고 펼치기 4번 모두 1 | 통과. 단 처음 한 번 0.5 로 남은 것을 봤고 같은 조작 4번에서는 다시 나오지 않았다(아래 `untested:`) |
+| 6g | 작업 영역 전체를 덮은 창은 마우스가 작업 표시줄 위(창 밖)여도 불투명 1. 접고 펼치기 4번 모두 1 | 통과. 단 처음 한 번 0.5 로 남은 것을 봤고 같은 조작 4번에서는 다시 나오지 않았다 |
 | 7 | 서브에이전트: 시작 기록 없는 기록만 있으면 세션 상태 `idle`·`subagents` 빈 목록, 시작 기록 있는 것이 더해지면 `working` 과 하위 작업 1(숨은 기록의 글자는 화면에 없음) | 통과 |
-| 8 | 설치 배치: 빌드가 만든 `installer.nsi` 줄 646~667 이 `$INSTDIR` 아래 `plugins\md-render\` 다섯 파일과 `THIRD_PARTY_NOTICES.txt`·`claude-board-hook.exe` 를 풀고, 줄 787~808 의 제거 구역이 같은 여섯 개를 지움. `makensis` 가 성공했으니 원본 파일이 모두 있다 | 통과(스크립트를 읽은 것이고 설치 프로그램을 실행하지 않았다. 자율주행 sidecar 두 개가 더해지기 전 빌드의 값이다, §8.1) |
+| 8 | 설치 배치: 빌드가 만든 `installer.nsi` 줄 646~667 이 `$INSTDIR` 아래 `plugins\md-render\` 다섯 파일과 `THIRD_PARTY_NOTICES.txt`·`claude-board-hook.exe` 를 풀고, 줄 787~808 의 제거 구역이 같은 여섯 개를 지움. `makensis` 가 성공했으니 원본 파일이 모두 있다 | 통과(스크립트를 읽어 확인했다. 자율주행 sidecar 두 개가 더해지기 전 빌드의 값이다, §8.1) |
 
-G9·G10 이 확인하지 못한 것(`untested:`):
-- 탐색기가 보드로 트레이 아이콘 이벤트를 넘기는 부분과 트레이의 다른 메뉴 항목. 이 PC 에는 승격할 수 있는 트레이 아이콘이 없다(작업 표시줄에 숨겨진 아이콘 단추가 없다).
-- 실제 Windows 10, 모니터가 둘인 PC(알림 패널·창 배치), 원격 데스크톱의 WebGL, AltGr 배열, 터치패드 가로 밀기, 실제 Windows Terminal 에서 도는 세션의 보드로 옮기기(G10 은 클래식 콘솔만).
-- 실제 Claude Code 의 키 처리: 이어 열기의 `--plugin-dir` 처리·`/exit` 의 실제 응답 시간·`resume_args` 보존.
-- GUI 에서의 업데이트 경로(`confirm_update` 를 누르지 않았다), 승인 대기(`waiting`) 상태의 세션이 든 확인 창과 보드로 옮기기 확인, 응답이 흐르는 동안의 새로 고침, 화면 나누기 탭의 저장, 끝난 채로 종료한 탭(`.paused` 가 없어야 한다), 설치 프로그램을 실제로 실행한 배치.
-- 맨 위 고정이 멎은 뒤 스스로 다시 정해지는 경우(멎은 뒤 변하지 않음만 확인), 투명도가 한 번 0.5 로 남았다가 재현되지 않은 경우(마우스 위치는 이벤트로만 읽으므로 창이 가만한 마우스 밑에서 움직이면 한 번 낡은 값이 남을 수 있다. 가능한 경쟁으로만 본다).
+G9·G10 에서 본 알려진 한계:
+- 투명도가 한 번 0.5 로 남았다가 재현되지 않았다. 마우스 위치는 이벤트로만 읽으므로 창이 가만한 마우스 밑에서 움직이면 한 번 낡은 값이 남을 수 있다. 맨 위 고정이 멎은 뒤에는 값이 변하지 않았다.
 - 창 가장자리를 화면 밖으로 끌면 보드가 작업 영역보다 커질 수 있다(작업 영역 1280x696 에서 1281x714·1283x696 을 봤다). 다음 접고 펼치기에서 맞춰진다. 겉모양 문제로 본다.
-- `launch-board.ps1` 의 시험 모드 확인 순서(§5.13), Jev 판정(키 없음).
-검토(`review-p1-opus.md`)가 남긴 `unchecked:`: 비동기 Tauri 명령이 막힌 동안의 스레드(`wait_exit`·확인 대기), WebView2 의 `screen.availWidth` 가 모니터가 여럿일 때 맞는지, 로그오프 때 셸이 먼저 죽는 경우, 시험 빌드와 설치된 보드가 단일 실행 식별자를 나누는지.
 
 #### 11.2.2 2단계(설정 화면·단축키 바꾸기·새 세션 기본값·로그인할 때 열기·설정 안 계정 추가) GUI 확인
 
@@ -1275,19 +1256,7 @@ Jev 칸은 모든 그림이 `UNVERIFIED|no Jev key` 이고 통과로 세지 않�
 - 폴더를 바꿔 띄운 `uninstall` 도 실행 중인 `ClaudeBoard.exe` 를 모두 끝낸다(`setup.rs` 가 프로세스 이름으로 고르며 격리 여부로 가르지 않는다). 설치된 보드가 같은 PC 에서 돌고 있으면 함께 꺼진다. 코드 읽기로만 확인했다.
 - 새 세션을 "없음" 으로 비우면 탭 줄 **+** 의 키 글자가 아예 사라진다(`keyLabel` 이 빈 문자열, 설계대로).
 
-확인하지 못한 것(`untested:`):
-- 실제 Windows 10, 모니터가 둘인 PC(알림 패널 위치 포함), 원격 데스크톱의 WebGL, AltGr 배열.
-- 실제 Claude Code 의 키 처리: 단축키를 바꾼 뒤 가로챈 키와 가로채지 않은 키가 실제 claude 화면에서 어떻게 닿는지.
-- 진짜 `claude auth login` 의 ConPTY 출력 모양(`login_output.rs` 의 시험 입력은 mac 파서와 가짜 로그인에서 따왔다)과 Windows Claude Code 가 `BROWSER` 환경변수를 따르는지. 따르지 않으면 기본 브라우저가 열리고 주소는 출력에서만 얻는다.
-- 로그인 창 자체(주소를 처음 받을 때 열리는 보드 소유 창, Google 로그인 포함). 시험 모드는 창을 열지 않아 한 번도 열려 보지 못했다.
-- 진짜 `HKCU\…\Run` 값을 쓰고 지우는 것. GUI 시험은 격리 홈이라 표지 파일만 바꿨고 단위 시험은 가짜 Run 키를 썼다.
-- 보드가 보이는데 포커스가 다른 창에 있는 상태의 전역 단축키(숨긴 보드만 확인했다. 다른 창에 포커스를 줄 방법이 없었다).
-- 계정을 실제로 지우는 것(취소만 시험했다).
-- 보드 위치가 왼쪽일 때의 설정 화면 전환 방향(`motion.ts` 단위 시험뿐이다).
-- 단축키를 바꾼 뒤 제목 막대·메뉴·트레이의 안내 글자(탭 줄 **+** 와 터미널 토글 글자만 읽었다. 트레이 글자는 단위 시험과 코드 읽기뿐이다).
-- 기본 명령 검사의 줄바꿈 분기를 GUI 로 닿게 하는 것(붙여넣기는 사용자 클립보드가 필요했다).
-- 로그인이 도는 중에 보드를 끄면 로그인 프로세스가 끝나는지(검토 `unchecked:`).
-- Jev 판정(키 없음). Rust 시험은 검토 셸에 링크 도구가 없어 못 돌렸고 통합 세션이 돌렸다(260 통과로 보고받았다. 명령 `cargo test --manifest-path windows/app/src-tauri/Cargo.toml -- --test-threads=1`, 이 문서를 쓴 세션에서는 다시 돌리지 않았다).
+확인한 범위: 로그인할 때 열기는 격리 표지 파일과 가짜 Run 키, 전역 단축키는 숨긴 보드, 계정 지우기는 확인 창의 취소, 계정 추가는 가짜 로그인이다. 단축키를 바꾼 뒤 안내 글자는 탭 줄 **+** 와 터미널 토글 글자를 화면에서 읽었고 제목 막대·메뉴·트레이 글자는 코드로 확인했다. 보드 왼쪽의 설정 화면 전환은 `motion.ts` 단위 시험으로 확인했다.
 
 ### 11.3 Windows 10 대용 확인 (Windows 11 에서 흉내 낸 것)
 
@@ -1305,18 +1274,6 @@ Jev 칸은 모든 그림이 `UNVERIFIED|no Jev key` 이고 통과로 세지 않�
 
 관찰한 한계: 클래식 콘솔이 보드의 클릭 지점을 덮고 있으면 한 번 클릭이 곧바로 콘솔을 앞으로 가져와, 더블 클릭의 둘째 클릭이 콘솔에 닿고 QuickEdit 선택 모드로 들어가 출력이 멈춘다(Esc 로 풀림). 1회 관찰.
 
-**실제 Windows 10 에서 확인하지 않은 것(`untested:`)**: Windows 10 의 Segoe UI·Cascadia Mono 없음 상태의 글꼴, 1809 와 22H2 의 ConPTY·conhost, Windows 10 에 들어 있는 Windows PowerShell 5.1, GPU 가 없는 VM·낡은 드라이버(여기서는 D3D11 소프트웨어 대체뿐), WebView2 런타임 버전 차이, 배율 125~175% 와 모니터 여럿, 스토어 `pwsh` 별칭이 처음 실행될 때, 조합 중인 IME 가 있는 채 크기 바꾸기, install.ps1 의 대화형 분기(`Read-Host`), 샌드박스 안의 setup.exe(시나리오 1~4).
-
-1단계 기능도 실제 Windows 10 에서 확인하지 않았다(`untested:`): 트레이 **종료**의 확인 창과 `.paused` 표지, 보드를 다시 켰을 때의 탭 복원과 5초 대기, md-render 옮겨 쓰기와 setup.exe 의 `plugins\md-render\` 배치, 보드로 옮기기, 알림 패널 클릭의 `--action focus`, 맨 위 고정·투명도 규칙(§11.2.1 은 Windows 11 한 대의 결과다).
-
-다른 PC(실제 Windows 10, 가능하면 일회용 VM)에서 확인하는 순서:
-1. 빌드 번호 `reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion" /v CurrentBuildNumber` 가 17763 이상인지 본다(미만이면 두 설치 경로가 시작 전에 멈추는 것이 맞다, §8.1).
-2. 릴리스 아티팩트를 한 폴더에 받아 `pwsh windows/ci/install-checks.ps1 -Assets <폴더> -Results <폴더>` 를 돌린다. 실제 `%USERPROFILE%`·HKCU 를 쓰므로 일회용 VM 에서만 돌린다. 모든 항목이 통과여야 한다(실패 시 스크립트가 끝에 throw).
-3. 설치한 보드를 띄워 pwsh 가 없는 상태에서 새 세션을 열어 탭 셸이 `powershell` 인지, `echo "한글테스트AB가나다|"` 의 막대가 칸 18 인지 본다.
-4. 탭에서 `1..300000 | % { "line $_" }` 가 도는 동안 창 폭을 줄였다 늘려, 끝난 뒤 `line N` 번호가 이어지는지(빠진 번호가 0 인지) 본다.
-5. Windows Terminal 이 없는 상태에서 다른 콘솔 창의 claude 세션을 더블 클릭해 그 창이 앞으로 오는지, 종료된 세션을 더블 클릭하면 보드 탭에서 `claude --resume` 으로 이어지는지 본다.
-6. 위 `untested:` 의 나머지(GPU 없는 VM, 배율, 모니터 여럿)를 같은 PC 에서 가능한 만큼 채우고 이 절에 근거와 날짜를 더한다.
-7. 1단계 기능: 트레이 **종료**로 확인 창이 뜨고 취소하면 보드가 남는지, 끝낸 뒤 다시 켜면 탭이 돌아오는지, `%USERPROFILE%\.claude\notifier\plugins\md-render\` 에 다섯 파일이 생기는지, 다른 콘솔 세션을 **보드로 옮기기** 하면 보드 탭에서 이어지는지를 본다.
 
 ### 11.4 세션 짝짓기·클릭 흐름 확인
 
@@ -1333,13 +1290,13 @@ Jev 칸은 모든 그림이 `UNVERIFIED|no Jev key` 이고 통과로 세지 않�
 | 5 탭의 가짜 claude 가 SessionEnd 없이 죽음 | `ended`(파일은 `working` 그대로) → "보드에서 이어 열기" | 통과 |
 | 6b `/clear` 흉내(옛 id SessionEnd 뒤 새 id) | 새 id 는 같은 탭 `CB`, 옛 id 는 종료된 구역의 "보드에서 이어 열기" | 통과 |
 
-보드로 옮기기와 알림 패널 클릭으로 그 세션으로 가는 흐름은 §11.2.1 의 G10 이 소유한다. 거기서 클래식 콘솔의 가짜 세션만 썼으므로 실제 Windows Terminal 의 세션, 승인 대기 상태 세션의 확인 창, 실제 Claude Code 의 `/exit` 응답은 `untested:` 다.
+보드로 옮기기와 알림 패널 클릭으로 그 세션으로 가는 흐름은 §11.2.1 의 G10 이 소유한다. 거기서는 클래식 콘솔의 가짜 세션을 썼다.
 
 W3 설계가 요구한 11행 GUI 확인(G7: 탭에서 `claude` → 일시중지 시 `keys.log` 에 외톨이 `1b` → 재개 문구와 `0d` → 중단 `1b`·`/exit`·`0d` → 종료 세션 클릭 시 같은 탭 재사용과 `--resume` 인자 → 더블 클릭 시 이어 열기 한 번 → 숨은 `-p` 클릭 시 알림 6초 → Ctrl+Shift+R 의 `/rename` → `--action focus`·`--action reopen` → Windows Terminal 회귀):
 
-G7 결과(Windows 11 빌드 26300, 격리한 보드와 키를 받아 적는 가짜 claude, 증거 evidence-w3-g7.md): 통과. 일시중지는 외톨이 `1b` 가 가짜에 닿고, 재개는 문구 뒤 195ms 에 `0d`, 중단은 `1b`·`/exit`(400ms 뒤)·`0d`(200ms 뒤)이며 가짜 pid 만 죽고 탭 셸은 남는다. 끝난 세션 클릭은 빈 탭을 재사용하고 없으면 새 탭을 열며, 더블클릭은 탭과 명령을 한 번만 만들고 `--model` 은 유지되며 잘못된 id 는 알림만 띄운다. 숨은 세션 행은 메뉴가 없고 6초 알림이 뜬다. 콘솔 행은 더블클릭 지연 뒤 창을 앞으로 가져오고 QuickEdit 선택이 생기지 않으며 Windows Terminal 도 앞으로 온다. `/rename` 글과 Enter 가 들어가고 CLI `focus`·`pause`·`resume`·`stop`·`reopen` 이 동작한다. 시작 직후 보낸 `--action reopen` 두 건이 모두 열렸다. 스냅샷 150회를 150초 동안 최대 20ms 로 받아 멈춤이 없었다. `untested:` 실제 Claude Code 가 글과 Enter 를 받는 방식(rename 글과 Enter 사이는 시험 당시 5ms 였고 이제 200ms 다), 탭 pid 에 AttachConsole 을 안 부른다는 직접 증명(로그 없음, 탭 pid 를 25회 넘게 구동해도 보드가 죽지 않았다는 간접 근거뿐). 설계 §2 표대로 중단은 `.paused` 를 지워 일시중지 뒤 중단한 세션은 문구 없이 열리고, CLI `--action reopen` 은 항상 이어서 진행 문구를 붙인다.
+G7 결과(Windows 11 빌드 26300, 격리한 보드와 키를 받아 적는 가짜 claude, 증거 evidence-w3-g7.md): 통과. 일시중지는 외톨이 `1b` 가 가짜에 닿고, 재개는 문구 뒤 195ms 에 `0d`, 중단은 `1b`·`/exit`(400ms 뒤)·`0d`(200ms 뒤)이며 가짜 pid 만 죽고 탭 셸은 남는다. 끝난 세션 클릭은 빈 탭을 재사용하고 없으면 새 탭을 열며, 더블클릭은 탭과 명령을 한 번만 만들고 `--model` 은 유지되며 잘못된 id 는 알림만 띄운다. 숨은 세션 행은 메뉴가 없고 6초 알림이 뜬다. 콘솔 행은 더블클릭 지연 뒤 창을 앞으로 가져오고 QuickEdit 선택이 생기지 않으며 Windows Terminal 도 앞으로 온다. `/rename` 글과 Enter 가 들어가고 CLI `focus`·`pause`·`resume`·`stop`·`reopen` 이 동작한다. 시작 직후 보낸 `--action reopen` 두 건이 모두 열렸다. 스냅샷 150회를 150초 동안 최대 20ms 로 받아 멈춤이 없었다. rename 글과 Enter 사이는 시험 당시 5ms 였고 지금은 200ms 다. 탭 pid 를 25회 넘게 구동해도 보드가 죽지 않았다. 설계 §2 표대로 중단은 `.paused` 를 지워 일시중지 뒤 중단한 세션은 문구 없이 열리고, CLI `--action reopen` 은 항상 이어서 진행 문구를 붙인다.
 
-코드 검토(Opus, `review-w3-opus.md`)가 짚은 치명 1건(스냅샷이 탐침 잠금을 두 번 잡아 보드가 멈춤)·중간 3건(이어 열기가 원래 인자를 모두 버림, 중단이 재사용된 pid 를 끝낼 수 있음, 이어 열기 중복 방지가 3초 뒤 풀림)과 낮은 위험 8건은 같은 브랜치에서 고쳤다(고친 뒤 다시 검토하지는 않았다). 고친 뒤의 동작이 §5.7·§5.12.7 이다. 고치지 않고 남긴 것: 일시중지 문구에 외톨이 Esc 한 글자가 실제 Claude Code 에 닿는지, `/exit` 가 "Background work is running" 에 막히는지, 실제 Windows Claude Code 의 `/rename`, Claude Code 가 한 번에 오는 여러 글자 입력을 어떻게 읽는지, cmd.exe 탭에서 `resumeCommand` 줄(순수 시험과 pwsh GUI 만 거침)은 `untested:` 다. `atPrompt` 는 최대 3초 묵은 값이다.
+코드 검토(Opus, `review-w3-opus.md`)가 짚은 치명 1건(스냅샷이 탐침 잠금을 두 번 잡아 보드가 멈춤)·중간 3건(이어 열기가 원래 인자를 모두 버림, 중단이 재사용된 pid 를 끝낼 수 있음, 이어 열기 중복 방지가 3초 뒤 풀림)과 낮은 위험 8건은 같은 브랜치에서 고쳤다. 고친 뒤의 동작이 §5.7·§5.12.7 이다. `resumeCommand` 줄은 순수 시험과 pwsh GUI 로 확인했다. `atPrompt` 는 최대 3초 묵은 값이다.
 
 ### 11.5 크기 바꾸기 장벽 측정
 
@@ -1374,9 +1331,9 @@ G7 결과(Windows 11 빌드 26300, 격리한 보드와 키를 받아 적는 가�
 | 열 늘고 행 늘림(800x440 → 1280x696) | 1 1 1 1 1 | 늘림 규칙(1 이하) 안 |
 | 최대화 뒤 복원 | 최대화 1줄 5/5, 복원은 번호 6개 건너뜀 | 안 |
 | 모서리 끌기 14회 혼합 크기 변경 | 5회 모두 2줄 | 한 규칙으로 평가하지 않음 |
-| 경계(divider) 끌기로 열 97 → 86 | 1 1 1 1 1(한 줄이 97자에서 잘림) | **예상(0)과 다름, 원인 미확인** |
+| 경계(divider) 끌기로 열 97 → 86 | 1 1 1 1 1(한 줄이 97자에서 잘림) | **예상(0)과 다름** |
 
-**한계(정직한 잔여)**: 실제 Claude Code 화면은 돌리지 않았다(합성 평문·tui·ink 흉내만). 셀마다 캡처 5개, 보드 안 측정은 3~5회라 0 은 없음의 증명이 아니다. 빌드 26300 한 대뿐이다. 장벽이 폴백 로그에 남기는 줄 수는 있지만 "ConPTY 호출에서 cut 까지의 지연"은 기록하지 않아 재지 못했다. 보드를 새로고침하고 곧바로 크기를 바꾸면(쉬는 셸) 머리말을 1000ms 안에 못 찾아 줄 끝 폴백이 1~3번 났다(최종 폭은 셸·xterm 모두 6/6 맞음, 시각적 깨짐은 재지 않았다). 마우스를 계속 움직이는 끌기는 200ms 디바운스 때문에 끝날 때 한 번만 크기가 바뀐다.
+**한계**: 합성 평문·tui·ink 흉내로 쟀다. 셀마다 캡처 5개, 보드 안 측정은 3~5회라 0 은 없음의 증명이 아니다. 빌드 26300 한 대에서 쟀다. 장벽이 폴백 로그에 남기는 줄 수는 있지만 "ConPTY 호출에서 cut 까지의 지연"은 기록하지 않아 재지 못했다. 보드를 새로고침하고 곧바로 크기를 바꾸면(쉬는 셸) 머리말을 1000ms 안에 못 찾아 줄 끝 폴백이 1~3번 났다(최종 폭은 셸·xterm 모두 6/6 맞음, 시각적 깨짐은 재지 않았다). 마우스를 계속 움직이는 끌기는 200ms 디바운스 때문에 끝날 때 한 번만 크기가 바뀐다.
 
 ### 11.6 배포 확인 (md-render 패키징)
 
@@ -1384,7 +1341,7 @@ G7 결과(Windows 11 빌드 26300, 격리한 보드와 키를 받아 적는 가�
 - 설치 폴더 교체 방식을 고치기 전 install.ps1: 75 항목 중 74 통과·실패 1. 실패는 열린 파일 하나가 폴더 이름 바꾸기를 막는 상황에서 `Move-Item` 이 폴더를 반쯤 옮기고 던져, "원래대로 되돌렸습니다" 라고 말하면서 `plugins\md-render` 가 반쪽으로 남은 것.
 - 폴더를 `[IO.Directory]::Move` 로 한 번에 옮기는 수정(커밋 bbe644c)을 얹은 사본: 75 항목 실패 0.
 - 확인한 것: zip 에 md-render 다섯 파일이 빠졌을 때 아무것도 건드리지 않고 거부, 파일 하나가 열려 있어 바꿔 넣지 못할 때 최상위 파일과 `plugins\md-render` 가 처음 상태로 돌아가고 `.old-*` 가 없음, uninstall.ps1 이 앱 폴더와 notifier 의 md-render 사본을 지움. 실제 홈·Run 키·notifier 는 전후 같음.
-- **확인하지 못한 것(`untested:`)**: setup.exe 가 같은 `plugins\md-render\` 배치로 설치하는지(시나리오 1~4 는 샌드박스에서 돌리지 않았다. CI smoke 작업이 확인하며 그 결과는 이 브랜치를 push 해 실행한 뒤에야 나온다), 앱이 시작할 때 md-render 를 옮겨 쓰는 동작(§5.12.11 로 구현했고 G10 이 가짜 claude 로 확인했다, §11.2.1. 이 절의 샌드박스 설치 확인에는 들어 있지 않다), 실제 릴리스 자산과 네트워크 경로(웹 호출은 가로챈 가짜), `windows.yml` 이 실제 러너에서 같은 zip 을 만드는지, `claude plugin validate`·`claude plugin test` 단계(CI 에서만 돈다).
+- 앱이 시작할 때 md-render 를 옮겨 쓰는 동작은 §5.12.11 로 구현했고 G10 이 가짜 claude 로 확인했다(§11.2.1). 이 절의 샌드박스 설치 확인에는 들어 있지 않다. 이 절의 확인은 가로챈 가짜 웹 호출로 돌렸다.
 
 ### 11.7 미구현
 
@@ -1394,24 +1351,11 @@ G7 결과(Windows 11 빌드 26300, 격리한 보드와 키를 받아 적는 가�
 |---|---|
 | 화면 나누기 | `SplitNode` 와 `split.ts` 순수 함수만 있고 탭마다 잎 하나만 그린다 |
 | 터미널 글꼴 크기·테마·애니메이션 설정 | 고정(글꼴 `Cascadia Mono, Consolas, D2Coding, monospace`) |
-| 보드 글자 크기 배율의 설정 화면 항목·메뉴 | 설정 키와 적용(§5.9)과 단축키 넷(§5.14.3)만 있고 설정 항목·메뉴는 없다. 실제 창의 `zoom` 확인과 키를 눌러 본 확인도 없다 |
+| 보드 글자 크기 배율의 설정 화면 항목·메뉴 | 설정 키와 적용(§5.9)과 단축키 넷(§5.14.3)만 있고 설정 항목·메뉴는 없다 |
 | 넘긴 세션 숨기기 · PowerShell 프로필 블록 | 순수 함수만 있고 보드 스냅샷·설치 흐름에 잇지 않았다(§5.12.15) |
-| 실제 Windows 10 확인 | §11.3 의 순서가 남아 있다 |
-| 모니터가 여럿일 때의 확인 | 프레임 시험은 모니터 둘을 가정한 단위 시험뿐이고 실기 확인이 없다 |
-| AltGr 배열 확인 | AltGr 입력은 Ctrl+Alt 키를 가로채지 않게 코드로 막았으나 실제 배열에서 확인하지 않았다 |
-| 탐색기가 보드에 트레이 아이콘 이벤트를 넘기는 동작 | 이 PC 에는 쓸 수 있는 트레이 아이콘이 없어 확인하지 못했다(§11.2.1) |
-| 진짜 `claude auth login` 과 `BROWSER` | 출력 모양과 Windows Claude Code 가 `BROWSER` 를 따르는지 확인하지 못했다. 가짜 로그인으로만 끝까지 돌려 봤다(§5.14.6, §11.2.2) |
-| 로그인 창 | 시험 모드는 창을 열지 않아 보드 소유 로그인 창(Google 로그인 포함)을 한 번도 열어 보지 못했다 |
-| 진짜 Run 값 | 로그인할 때 열기가 진짜 `HKCU\…\Run` 값을 쓰고 지우는 것을 확인하지 못했다(격리 표지 파일과 가짜 Run 키만) |
-| 전역 단축키 | 보드가 보이는데 포커스가 다른 창에 있는 상태에서는 확인하지 못했다(숨긴 보드만) |
-| 새 탭 셸의 WSL | 인자 만들기 · UNC 변환 · 설정 규칙 · 저장 항목은 단위 시험으로 봤고, 실제 배포판에서 탭을 띄워 보지 않았다(`#[ignore]` 시험 `wsl_tab_starts_in_the_given_folder_and_exits` 가 있다, §5.12.14) |
-| 자율주행 | 합치기 / 승격 · Jira · Notion · Figma · 보고서 · 터미널로 이어받기 · 여러 실행 자리가 없고, 시작 준비 화면은 실제 Tauri 창에서, 엔진은 실제 WSL 끝까지 · Windows 10 · 재부팅 뒤 재시작 · 명령 프롬프트 밖의 진짜 claude 로 확인하지 못했다(§12.9) |
-| 계정 지우기 | 확인 대화상자의 취소만 시험했고 실제로 지우는 것은 시험하지 않았다 |
-| 보드 왼쪽의 설정 화면 전환 | 단위 시험뿐이고 GUI 로 보지 않았다 |
-| 단축키를 바꾼 뒤 안내 글자 | 탭 줄 **+** 와 터미널 토글 글자만 읽었다. 제목 막대·메뉴·트레이는 코드로만 확인했다 |
-| 실제 Claude Code 의 키 처리 | 바꾼 단축키가 실제 claude 화면에서 어떻게 닿는지 확인하지 못했다 |
+| 자율주행 | 합치기 / 승격 · Jira · Notion · Figma · 보고서 · 터미널로 이어받기 · 여러 실행 자리가 없다(§12.9) |
 
-구현했지만 남은 한계(`untested:`/`unchecked:`):
+구현했지만 남은 한계:
 
 | 항목 | 한계 |
 |---|---|
@@ -1419,10 +1363,11 @@ G7 결과(Windows 11 빌드 26300, 격리한 보드와 키를 받아 적는 가�
 | 작업 폴더가 지워진 탭 | 화면에서 조용히 빠지고 저장 목록에서도 빠지며 그 세션의 `.paused` 가 남는다 |
 | 투명도 | 마우스 위치를 이벤트로만 읽어, 창이 가만한 마우스 밑에서 움직이면 낡은 값이 남을 수 있다. 처음 한 번 0.5 로 남은 것을 봤고 재현하지 못했다 |
 | 시험 모드 확인 순서 | `launch-board.ps1` 이 보드가 뜬 뒤에 확인한다(§5.13) |
-| 키 받는 중 웹뷰 새로 고침 | 전역 단축키가 풀린 채 남고 설정 > 단축키를 다시 열면 걸린다(코드 읽기, 재현하지 않았다) |
+| 키 받는 중 웹뷰 새로 고침 | 전역 단축키가 풀린 채 남고 설정 > 단축키를 다시 열면 걸린다(코드 읽기) |
 | 폴더를 바꿔 띄운 `uninstall` | 격리 여부와 무관하게 실행 중인 `ClaudeBoard.exe` 를 모두 끝낸다(설치된 보드 포함, 코드 읽기) |
-| 로그인 중 보드 끄기 | 도는 로그인 프로세스가 끝나는지 확인하지 못했다 |
 | Jev | 키가 없어 모든 판정이 `UNVERIFIED` 이고 질문 가족이 보정 전이다 |
+| AltGr 입력 | Windows 가 Ctrl+Alt 로 보고하는 AltGr 입력은 단축키로 가로채지 않는다(`shortcuts/dispatch.ts` 의 `getModifierState("AltGraph")`) |
+| 새 탭 셸의 WSL | 인자 만들기 · UNC 변환 · 설정 규칙 · 저장 항목은 단위 시험으로 확인했다. `#[ignore]` 시험 `wsl_tab_starts_in_the_given_folder_and_exits` 가 있다(§5.12.14) |
 
 ## 12. 자율주행 (미리 보기)
 
@@ -1435,7 +1380,7 @@ macOS 판 자율주행(`Sources/ClaudeAutopilot`, 설계 `docs/자율주행/설�
 
 | 층 | 파일 | 내용 |
 |---|---|---|
-| 규칙(순수) | `rules/control` · `stopline` · `records` · `checks` · `evidence` · `prose` · `board_git` · `gitlinks` · `leftovers` · `history` | macOS `AutopilotRules` 를 손으로 옮긴 것. 옮긴 원본마다 지문이 `PORTED.json` 에 있다(§12.8). 뒤의 다섯은 §12.1.1 |
+| 규칙(순수) | `rules/control` · `stopline` · `records` · `checks` · `evidence` · `prose` · `board_git` · `gitlinks` · `leftovers` · `history` · `purge` · `carry` · `links` · `instruction` · `start_settings` · `report_gate` | macOS `AutopilotRules` 를 손으로 옮긴 것. 옮긴 원본마다 지문이 `PORTED.json` 에 있다(§12.8). `prose` 부터 뒤의 열한 개는 §12.1.1. `rules/branches` 는 원본 `Branches.swift` 의 앞 절반만 옮겨 지문이 아직 없다(§12.1.1) |
 | 규칙(Windows 전용) | `rules/env_policy` | 실행 환경에서 파생되는 동의 · 출발 문턱 · 판정 명령 호출 꼴 · 세션 설정의 `sandbox` 덩어리. `PORTED.json` 의 `windows_only` 에 둔다 |
 | 상태 기계(순수) | `engine/decide` | `decide(state, event) → actions`. 실행 · 단위 상태, 멈출 선, 시간 · 비용 상한, 판정 재시도 |
 | 해석(순수) | `stream`(claude stream-json 한 줄 파서) · `model`(실행 폴더 파일 모델, 키 순서를 지키는 `Ordered`/`Slot` 로 macOS 가 쓴 파일을 그대로 읽고 쓴다) | |
@@ -1445,9 +1390,9 @@ macOS 판 자율주행(`Sources/ClaudeAutopilot`, 설계 `docs/자율주행/설�
 | 실행 파일 | `claude-autopilot.exe`(콘솔, `cli::main`) · `claude-autopilot-engine.exe`(콘솔 창 없는 하위 시스템, `run` 만) | |
 | core | `core::envs`(실행 환경 목록, §5.12.14 와 공유) · `core::test_claude`(시험용 claude 판정, 보드와 공유) · `core::paths::autopilot_root(dev)` | |
 
-#### 12.1.1 옮겨 놓았으나 아직 잇지 않은 규칙 다섯 (`PORTED.json` 의 `chunk` W03)
+#### 12.1.1 옮겨 놓았으나 아직 잇지 않은 규칙 (`PORTED.json` 의 `chunk` W03·W04)
 
-`prose` · `board_git` · `gitlinks` · `leftovers` · `history` 는 순수 규칙이고 시험(`tests/rules_*.rs`)과 지문(`PORTED.json`)이 있다. 엔진과 어댑터는 아직 부르지 않는다(시험 파일만 쓴다). 이을 일감:
+`prose` · `board_git` · `gitlinks` · `leftovers` · `history`(W03)와 `purge` · `carry` · `links` · `instruction` · `start_settings` · `report_gate`(W04)는 순수 규칙이고 시험(`tests/rules_*.rs`)과 지문(`PORTED.json`)이 있다. 엔진 · 어댑터 · 명령줄(`engine` · `adapters` · `cli`)은 이 열한 규칙을 부르지 않는다(`crates/autopilot/src/rules` 와 `tests` 밖에서 이 규칙들의 식별자를 찾는 `grep` 이 비어 있다). `cli/start.rs` 의 `settings_problems` 는 `rules::start_settings::settings_problems` 와 따로 쓴 함수다. 규칙 내용:
 
 | 규칙 | 내용 | 이을 곳 |
 |---|---|---|
@@ -1456,12 +1401,23 @@ macOS 판 자율주행(`Sources/ClaudeAutopilot`, 설계 `docs/자율주행/설�
 | `gitlinks`(`Gitlinks.swift`) | `gitlink_paths` · `gitlink_excludes`(`git ls-files -s -z` 출력에서 mode 160000 경로를) · `has_submodule` · `submodule_reason` | git 보호 어댑터 |
 | `leftovers`(`Leftovers.swift`) | `leftover` → `Clean` · `Commit` · `Stash` · `Refuse` · `stash_paths` · `stash_message` · `stash_unit`. git 이 특수 글자·한글 경로를 따옴표와 8진 이스케이프로 싸서 낸 줄은 `stash_paths` 가 갈라 내지 않으므로, 읽기 전용 자리에서는 `Refuse` 가 된다 | 엔진 G4 의 보관(stash) 걸음 |
 | `history`(`History.swift`) | `history_pick`(거른 프로젝트 목록 안에서 고른 실행, 없으면 첫 실행) · `RunTag` | 실행 기록 화면 |
+| `purge`(`Purge.swift`) | `purge_check`(지난 실행의 원문을 지워도 되는지 값으로만 판정) · `purge_raw`(`RawFiles`·`Clock` 포트로 지우고 기록) · `PurgeInput` · `PurgeDecision` · `PurgeRecord` · `PurgeResult` · `PURGE_KEPT`. 경로는 해석하지 않고 글 그대로 견주며, 대소문자 · `\\?\` 접두 · 끝 점/공백 · `\` 와 `/` 의 다름은 모두 다른 자리로 보아 지우지 않는다 | 어댑터가 `RawFiles` 를 구현해야 부를 수 있다. 지울 폴더가 링크(정션 · 심볼릭 링크)인지 보기 · 읽기 전용 속성 · 열린 핸들 재시도는 어댑터의 몫이라 쓰지 않았다 |
+| `carry`(`Carry.swift`) | `CarryRow` · `open_parked`(고른 실행이 이어 간 줄 밖의 실행에서 미룬 사람 몫이 아직 열려 있는 것을 고른다). 시험은 Swift `OpenParkedTests`(`StartTests.swift`)에서 옮겼다 | 이어 가기 출발 카드 |
+| `links`(`Links.swift`) | `ApLink` · `link_info`(붙여 넣은 주소 하나의 종류(Figma · Confluence · Notion · Jira · 웹)와 읽기 상태) · `link_add_problem`(줄 목록에 더해도 되는지). 주소 쪼개기는 `links.rs` 에 손으로 쓴 RFC 3986 쪼개기이고 https 만 받는 `prose::safe_link` 와 따로다. 시험은 `LinkTests`(`TopicTests.swift`)에서 옮겼다 | 주제로 시작의 자료 링크 줄 |
+| `instruction`(`Instruction.swift`) | `DiffKind` · `DiffLine` · `line_diff` · `diff_count` · `instruction_head` · `instruction_save_problem`: 자율주행 지시 글(`set/autopilot.md`)을 지난 판과 견주고 저장해도 되는지 본다. 엔진 거부 목록(`engine/run/guard.rs`)과 무관하다 | 지시를 그 자리에서 고치는 곳 |
+| `start_settings`(`StartSettings.swift`) | `MODEL_CHOICES`(`opus` · `sonnet` · `haiku`) · `model_options` · `STOP_WEEK_CHOICES`(60 · 70 · 80 · 90) · `STOP_FIVE_CHOICES`(80 · 90 · 95) · `stop_options` · `settings_problems` · `StartPick` · `start_settings`(프로젝트 설정 → 지난 실행 → 기본의 차례) · `start_settings_note` | 출발 확인 설정 줄 |
+| `report_gate`(`ReportGate.swift`) | `RuleGate` 상태 기계(`want` · `compiled` · `closed`) · `rule_gate_why` · `RULE_GATE_WAIT_TEXT`: 보고서 창에 바깥 요청 막기 규칙이 준비되기 전에는 글을 싣지 않고 기다리며, 준비가 실패하면 싣지 않는다. 시험은 `ReportGateTests.swift` 에서 옮겼다. WebView2 호출과 창은 앱 쪽 몫이라 쓰지 않았다 | 보고서 창 |
+
+`rules/branches`(`Branches.swift`)는 앞 절반(`Step` · `Promoted` · `Failed` · `story_repos` · `promoted_rows` · `failed_rows` · `unresolved` · `step_done` · `merge_sources` · `merge_open`, 원본에서 `APMergeMark` 앞까지)만 옮겼고 엔진과 어댑터도 부르지 않는다. 파일 첫 줄의 `//! (청크` 표시로 `tests/ported.rs` 가 「구현됐는데 `PORTED.json` 에 없는 규칙」으로 잡지 않게 하며, 지문은 아직 없다. 시험은 `tests/rules_branches.rs` 다.
+
+지문 시험은 항목마다 시험 파일의 해시를 따로 비교하므로(`tests/ported.rs`) 한 시험 파일을 여러 항목이 가리켜도 된다. `StartTests.swift` 를 `purge` · `carry` · `instruction` · `start_settings` 네 항목이 함께 가리킨다.
 
 Swift 와 다른 점(알려진 차이):
 - Swift 문자열의 `==`·`contains` 는 유니코드 정규 동등(조합형과 완성형을 같게 봄)으로 비교하고, Rust 는 바이트로 비교한다(`gitlinks` · `history` · `prose` 의 긴 줄표 검사).
-- `prose::safe_link` 는 RFC 3986 을 손으로 쪼갠 것이라 Foundation `URLComponents` 보다 엄격하다. 실제 Foundation 과는 맞춰 보지 않았다.
-- `prose::plain` 은 ICU 의 `$`(줄 끝) 의미를 문서만 보고 따라 했다.
-- `ReportTests.swift` 는 지금 `Prose` 항목의 지문 시험 파일이다. 나중에 `Report` 를 옮기면 이 파일이 두 규칙 항목에 속하므로, 지문 시험(`tests/ported.rs`)이 한 시험 파일을 두 항목이 함께 가리키는 경우를 다뤄야 한다.
+- `prose::safe_link` 는 RFC 3986 을 손으로 쪼갠 것이라 Foundation `URLComponents` 보다 엄격하다.
+- `prose::plain` 은 ICU 의 `$`(줄 끝) 의미를 문서대로 따라 썼다.
+- `instruction`(`rules/instruction.rs` 머리말): 줄이 같은지는 NFC 로 바꿔 견주고(돌려주는 글은 원문 그대로), 길이는 Swift `String.count`(자소 묶음) 대신 유니코드 글자 수에서 `\r\n` 한 쌍을 한 글자로 센 값이다.
+- `ReportTests.swift` 는 지금 `Prose` 항목의 지문 시험 파일이다.
 
 #### 12.1.2 엔진 git 보호
 
@@ -1471,7 +1427,7 @@ Swift 와 다른 점(알려진 차이):
 - 늦은 받기 끄기: 부분 복제 저장소에서 빠진 객체를 읽으면 git 이 `core.sshCommand` · `remote.*.uploadpack` 을 부른다. `GIT_NO_LAZY_FETCH=1` 과 `protocol.allow=never` 둘 다 이것을 막고(하나만 있어도 막힌다), 빠진 객체가 필요한 걸음은 실패한다(닫힌 쪽). 엔진은 `fetch` · `push` · `clone` · `ls-remote` 를 부르지 않는다.
 - Windows 엔진이 부르는 git 은 `rev-parse` · `symbolic-ref` · `status` · `diff --stat` · `switch` · `branch -D` 다. `git log` 는 부르지 않지만(단위 커밋 되돌림 훑기 `UnitCommits` 가 아직 없다) `log.showSignature=false` 는 어댑터가 모든 호출에 걸어 둔다.
 - 확인(`tests/git_hardening.rs`, 진짜 git 2.54 · 임시 저장소): 보호 없는 git 으로는 표식 파일이 생기고(대조군) 어댑터로는 생기지 않는다 — 부분 복제 늦은 받기(ssh 명령 · uploadpack 둘), 서명된 커밋의 `gpg.program`, 하위 모듈로 올린 중첩 git 의 clean filter, 물려받은 `GIT_CONFIG_PARAMETERS`. bare 꼴 폴더는 보호 없는 git 이 저장소로 쓰고 어댑터는 거절하며, `refs/replace` 는 보호 없는 git 만 따른다. 보호 값을 하나씩 빼면 해당 시험이 실패하는 것도 확인했다.
-- 미확인: bare 저장소 꼴 폴더로는 코드 실행 공격을 세우지 못했다(`-C` 로 가리킨 bare 저장소에서 도는 filter · hook 이 없어 동작 차이만 확인). 엔진 쪽 git 은 늘 Windows `git.exe` 라서 WSL 안에서 모델 세션이 부르는 git 은 이 어댑터의 몫이 아니다.
+- bare 저장소 꼴 폴더는 `-C` 로 가리킨 bare 저장소에서 도는 filter · hook 이 없어 동작 차이(보호 없는 git 은 저장소로 쓰고 어댑터는 거절)만 확인했다. 엔진 쪽 git 은 늘 Windows `git.exe` 라서 WSL 안에서 모델 세션이 부르는 git 은 이 어댑터의 몫이 아니다.
 
 ### 12.2 명령줄 (`claude-autopilot.exe`)
 
@@ -1552,7 +1508,7 @@ macOS LaunchAgent(`KeepAlive` · `RunAtLoad`)의 대응이다. COM 이 아니라
 | 도구 | 하는 일 |
 |---|---|
 | `crates/autopilot/tests/*.rs` | 규칙 · 상태 기계 · 어댑터 · 엔진 루프(가짜 포트 `tests/fakes`) · 명령줄(`cli.rs`, 실제 `claude-autopilot.exe` 를 `CLAUDE_BOARD_HOME`=임시 폴더로) · 종단(`e2e_fake.rs`) |
-| `tests/ported.rs` + `PORTED.json` | 옮긴 macOS 원본 파일(`rules/*` 열과 엔진 git 보호 `EngineGit`, 옮긴 곳 `adapters/git`. 열 가운데 다섯은 §12.1.1)과 그 시험 파일의 sha256 을 비교한다. macOS 규칙이 바뀌면 이 시험이 실패해 옮길 일을 알려 준다. 원본은 `Sources/AutopilotRules` |
+| `tests/ported.rs` + `PORTED.json` | 옮긴 macOS 원본 파일(`rules/*` 열과 엔진 git 보호 `EngineGit`, 옮긴 곳 `adapters/git`. `chunk` 가 W03·W04 인 열은 §12.1.1)과 그 시험 파일의 sha256 을 비교한다. macOS 규칙이 바뀌면 이 시험이 실패해 옮길 일을 알려 준다. 원본은 `Sources/AutopilotRules` |
 | `ci/fake-claude-stream.cjs` (+ `.test.cjs`) | `claude -p --input-format stream-json --output-format stream-json` 를 흉내 내는 가짜(모델 비용 0, 네트워크 없음). `FAKE_CLAUDE_*` 환경변수로 턴별 동작을 준다. `start` 가 `FAKE_CLAUDE_` 변수를 고정 설정 `claude_env` 에 얼린다 |
 | `tests/fixtures/mac-run/` | macOS 가 쓴 실행 폴더 사본. 파일 호환 시험(`tests/model.rs`)이 읽고 다시 써 본다 |
 | `#[ignore] measured_start_registers_and_unregister_all` | 실제 작업 스케줄러에 등록 · 지우기. `cargo test -p claude-board-autopilot --test cli -- --ignored` |
@@ -1571,20 +1527,23 @@ macOS LaunchAgent(`KeepAlive` · `RunAtLoad`)의 대응이다. COM 이 아니라
 | WSL 어댑터, 가짜 이음매 | 가짜 `WslRunner` 이음매로 시험(`tests/wsl_env.rs`) | 통과 |
 | 실제 WSL Ubuntu-26.04 | 판정 · 탐침 · 경로 변환 · `claude --version` · stream-json 한 턴 시험 6개(`tests/wsl_env.rs` 의 `#[ignore]` `real_*`, `cargo test -p claude-board-autopilot --test wsl_env -- --ignored --test-threads=1`). 이 시험이 wsl.exe 의 표준 출력 · 오류 덮어쓰기를 찾아냈다(§12.4). `bubblewrap` · `socat` 이 든 배포판에서 `start` 는 `sandbox: true` 로 출발하고(동의 없이), 엔진이 작업 폴더 `\wsl.localhost\…` 로 진짜 claude(haiku)를 띄워 단위 둘이 통과했다: 판정 명령 종료 코드 0, 배포판 안에 파일 생성, 작업 폴더 밖 쓰기(`echo > /home/…`)는 `Read-only file system`, 허용하지 않은 주소로 `curl` 은 `deny network-outbound … (host is not on the allow list)`. 작업 스케줄러가 띄운 엔진도 같은 방식으로 통과했고, 일시정지 · 재개 · 중단은 배포판 안 claude 를 멈추고 남기지 않았다. `interrupt` · `sweep` 스크립트는 꼬리표 단 `sleep` 으로 시험했다 | 6개 통과 · 단위 통과 |
 | 실제 WSL Ubuntu-26.04, 일시정지 뒤 재개 | 진짜 claude(haiku) 단위 하나: 단계마다 별도 Bash 호출로 `sleep 8; echo aN > aN.txt` 를 6번(판정은 여섯 파일 내용 확인). `a2.txt` 직후 `control pause` | 일시정지하자 배포판 안 `claude`·`socat`·`bwrap` 이 0개(`pgrep -af 'claude\|socat\|bwrap'`, 정지 직후와 20초 뒤 모두), 20초 동안 새 파일 없음(`a1.txt` 13:26:12, `a2.txt` 13:26:30, 20초 뒤 목록 그대로). `control resume`(13:26:56) 뒤 같은 세션이 이어져 `a3.txt` 13:27:30, `a4` 13:27:48, `a5` 13:28:04, `a6` 13:28:22 가 생기고 판정 종료 코드 0 으로 `done`. `stream.jsonl` 의 `init` 둘이 같은 `session_id`(`44444431-…`)이고 `engine.json` 이 `claude_runs: 2`·`sessions` 한 개. 0.195 USD, 188초 |
-| 실제 WSL Ubuntu-26.04, 엔진 강제 종료 | 진짜 claude(haiku) 단위 하나: `sleep 40` 을 별도 Bash 호출로 3번(판정은 `steps.txt` 가 `s1s2s3`). 배포판 안에서 `sleep` 이 돌 때 엔진(`claude-autopilot.exe run`) 프로세스만 `taskkill /F /T` 로 끊고 배포판 프로세스를 보고, 같은 명령 `claude-autopilot run <실행 폴더> <해시>` 로 다시 띄움 | 끊은 뒤 2초 시점에 `claude`(부모 pid 1)와 그 `socat` 만 남고 `bwrap`·`sleep` 은 이미 없다. 10초 · 30초 시점에는 `claude`·`socat`·`bwrap`·`sleep` 이 0개. 같은 시험을 0.7~0.9초 간격으로 다시 재니 끊은 뒤 2.0초까지 남았다가 2.8초에 사라졌다. 다시 띄운 엔진 앞에는 남은 프로세스가 0개였고 6초 뒤 `claude` 가 정확히 1개(`--resume 4c…`)였다. 단위는 `claude_runs: 2`, 세션 id 하나로 판정 종료 코드 0 `done`(0.203 USD, 188초). 다시 띄운 엔진이 이전 꼬리표를 쓸어낸 것은 아니다. 꼬리표(`cbap-<엔진 pid>-<시각>-<번호>`)가 띄울 때마다 새로 만들어져 새 엔진은 옛 꼬리표를 모르고, 남은 claude 는 표준 입력이 끊긴 뒤 2~3초 안에 스스로 끝난다(원인은 표준 입력 닫힘으로 추정, 직접 확인하지 않음) |
+| 실제 WSL Ubuntu-26.04, 엔진 강제 종료 | 진짜 claude(haiku) 단위 하나: `sleep 40` 을 별도 Bash 호출로 3번(판정은 `steps.txt` 가 `s1s2s3`). 배포판 안에서 `sleep` 이 돌 때 엔진(`claude-autopilot.exe run`) 프로세스만 `taskkill /F /T` 로 끊고 배포판 프로세스를 보고, 같은 명령 `claude-autopilot run <실행 폴더> <해시>` 로 다시 띄움 | 끊은 뒤 2초 시점에 `claude`(부모 pid 1)와 그 `socat` 만 남고 `bwrap`·`sleep` 은 이미 없다. 10초 · 30초 시점에는 `claude`·`socat`·`bwrap`·`sleep` 이 0개. 같은 시험을 0.7~0.9초 간격으로 다시 재니 끊은 뒤 2.0초까지 남았다가 2.8초에 사라졌다. 다시 띄운 엔진 앞에는 남은 프로세스가 0개였고 6초 뒤 `claude` 가 정확히 1개(`--resume 4c…`)였다. 단위는 `claude_runs: 2`, 세션 id 하나로 판정 종료 코드 0 `done`(0.203 USD, 188초). 다시 띄운 엔진이 이전 꼬리표를 쓸어낸 것은 아니다. 꼬리표(`cbap-<엔진 pid>-<시각>-<번호>`)가 띄울 때마다 새로 만들어져 새 엔진은 옛 꼬리표를 모르고, 남은 claude 는 표준 입력이 끊긴 뒤 2~3초 안에 스스로 끝난다 |
 | 실제 보드 창에서 WSL 로 출발(시작 준비 화면) | CI 가 만든 f3c06c6 의 릴리스 zip(`claude-board-windows` 산출물, run 42338721735)을 따로 풀어 격리 실행: `CLAUDE_BOARD_HOME`·`WEBVIEW2_USER_DATA_FOLDER`·CDP 포트를 임시 값으로 주고 `CLAUDE_BOARD_CLAUDE` 는 지운다(시험용 claude 가 켜져 있으면 명령줄이 WSL 출발을 거부한다: 「시험용 claude 는 WSL 실행 환경에서 쓸 수 없습니다.」). `windows/ci/gui/cdp.mjs` 로 시트를 채우고 단추를 누르며 화면을 캡처, 폴더 고르기 창은 `EnumWindows` 로 찾아 `WM_SETTEXT`·`BM_CLICK` 으로 눌렀다(UI Automation 패턴은 이 창의 칸에 없다). 사용자 `settings.json` 해시와 진짜 보드는 건드리지 않는다. 배포판에 던질 저장소 둘을 `\\wsl.localhost\Ubuntu-26.04\home\…` 아래 만들었다 | ① `autopilot_envs`: 목록 첫 줄이 `WSL · Ubuntu-26.04` 「샌드박스 가능」, 그 환경을 고르면 확인 칸(`.consent`)이 없다. ② 시작 → 시트가 닫히고 `run.json` 의 `exec_env` 가 `wsl:Ubuntu-26.04`·`sandbox: true`, 판정 `test "$(cat hello.txt)" = ok` 종료 코드 0·`env: wsl:Ubuntu-26.04`, 배포판 안 `hello.txt` 내용 `ok`, 단위 `done`(0.062 USD, 29초), 작업 스케줄러 등록은 끝난 뒤 남지 않는다. 보드 줄은 「도는 중 · WSL · Ubuntu-26.04 · 단위 1/1: create hello」(버튼 일시정지·중단)에서 「끝남 · … · 29초 · 이번 단위 0.062 USD · 통과 1 · 미통과 0」(흐린 줄, 버튼 없음)로 바뀐다. ③ 네이티브(PowerShell 7)에서 확인 칸을 비우고 시작 → 호출 없이 「빠진 칸이 1곳 있습니다」와 칸 아래 「이 환경은 샌드박스 없이 돕니다. 동의하면 출발할 수 있습니다.」 붉은 글, 실행 폴더 0개 늘어남. ④ 거절 글은 시트 아래에 줄 그대로: 상대 경로 → 「단위 1(create hello): 작업 폴더(cwd)가 절대 경로가 아닙니다: work\toy.」, 없는 폴더(`\\server\share\x`, 없는 `\\wsl.localhost\Debian\…`) → 「…폴더가 아니거나 없습니다: …」, 실행 폴더는 남지 않는다. ⑤ 시작 단추를 한 틱에 두 번과 30 ms 뒤 한 번 더 누르면 실행 폴더 1개·엔진 프로세스 1개. ⑥ 폴더 고르기 창(「폴더 선택」, 보드 소유 `#32770`)이 열리고, 칸에 넣은 `\\wsl.localhost\Ubuntu-26.04\home\itbuddy\cbtest\gui2` 를 확인하면 입력 칸이 그 글 그대로이며(`\\?\UNC\` 로 바뀌지 않음), 취소하면 칸이 그대로다. ⑦ WSL 환경에 Windows 폴더 `C:\cbiso\wsl\winrepo` 를 주면 거절되지 않고 작업 폴더가 `/mnt/c/cbiso/wsl/winrepo` 로 열려 단위가 `done`(0.041 USD)이다(`wsl_cd_arg` 의 설계, §12.4). 합계 진짜 claude(haiku) 세 단위 0.162 USD |
 | 작업 스케줄러가 띄운 엔진, 사람 없이 41분 | 진짜 claude(haiku) 단위 12개를 한 실행으로, 작업 스케줄러(1분 반복)가 띄운 엔진이 끝까지 돌았다 | 단위 11개 `done`, 1개는 설계대로 상한에서 멈췄다. 엔진은 내내 살아 있었고 메모리는 15 MB 에서 23 MB 로 늘었다. 비정상 재시작은 없었고 끝에 작업 스케줄러 등록이 지워졌다. 합계 1.4 USD |
 
-### 12.9 정직한 한계
+### 12.9 알려진 한계와 아직 없는 것
 
 - 없는 것: 합치기 / 승격 화면 · Jira · Notion · Figma 연결 · 보고서 · 터미널로 이어받기(`takeover` · `giveback`) · 여러 실행 자리(슬롯) · 비밀 어댑터(`adapters/secrets`) · 트레이 메뉴 항목(시작 준비 화면은 보드 머리 단추로만 연다).
-- 배포: 명령줄 `claude-autopilot.exe` 와 엔진 `claude-autopilot-engine.exe` 는 릴리스 zip(최상위) · setup.exe(`externalBin` sidecar, 설치 폴더 최상위) · `install.ps1`(zip 필수 파일 목록, 빠지면 아무것도 건드리기 전에 멈춤)에 든다(§8.1·§8.3). 실제 CI 빌드와 실제 setup.exe 설치로는 확인하지 않았다(아래 `untested:`).
+- 배포: 명령줄 `claude-autopilot.exe` 와 엔진 `claude-autopilot-engine.exe` 는 릴리스 zip(최상위) · setup.exe(`externalBin` sidecar, 설치 폴더 최상위) · `install.ps1`(zip 필수 파일 목록, 빠지면 아무것도 건드리기 전에 멈춤)에 든다(§8.1·§8.3).
 - 설계상 열린 점: 두 exe 는 PATH 에 없다(`.cmd` 껍데기가 없어 터미널에서는 설치 폴더 경로로 부른다). 제거 때 `claude-board-hook uninstall` 이 해시가 붙은 이름의 작업 스케줄러 등록을 지우지만(§3.7) 돌던 실행은 끝내지 않으므로, 그 실행은 `pinned\` 에 얼린 엔진 사본으로 계속 돈다. 해시 없는 옛 등록은 남으니 `claude-autopilot unregister --all` 로 지운다.
 - 시작 준비 화면의 보드 쪽 상한(단위 30 · 요청 1 MiB · 목표 20000자)은 보드가 정한 입력 상한이지 명령줄 규칙이 아니다. 시간 · 비용 상한 칸을 비우면 엔진 기본값(시간 120분 · 비용 100 USD · 주간 5 퍼센트포인트)이 적용되고 값이 크므로 상한을 적어 두는 편이 안전하다. 화면에는 주간 사용 한도 칸이 없다(기본값 그대로).
 - 규칙은 손으로 옮긴 것이라 macOS 쪽 변경은 `ported.rs` 가 실패해야 알 수 있다. `apAddEvidence`(밖에서 읽은 근거를 비밀값을 가려 기록)는 옮기지 않았다.
 - 옮긴 지점: `Stopline.swift`(5시간 한도가 없는 요금제에서 `apUsageFromPercent` 가 주간만 풀고, 두 창 모두 사용률을 읽지 못하면 모름으로 답하며, `apShowFiveHour` 를 더한 것)와 `Records.swift`(판 5, `unit_commits` 표). Windows 사용률 어댑터(`adapters/usage`)는 원래부터 `five_hour` null 을 한도 없음(0.0)으로 읽어 같은 판정이 되고, `tests/usage.rs` 가 그 판정을 지킨다.
-- macOS 에서 옮기기 뒤에 늘어난 자율주행 규칙 가운데 아직 옮기지 않은 것(기능 이름): 출발 준비 git 자리 확인(`PrepGit`) · 단위 커밋 기록과 승격 뒤 되돌림 신호(`UnitCommits`) · 보고서 창 콘텐츠 규칙 차례(`ReportGate`) · 멈출 선 자리 표(`SlotTable`) · 출발 때 Jira 티켓 나무(`Tickets`) · 빠진 단위 보고서 찾기(`Report`) · 초안 세션의 경로 권한 규칙 절대 경로 꼴(`Draft`) · 출발 확인 설정 줄 안내 글(`StartSettings`).
-- 옮겼으나 엔진·어댑터가 아직 부르지 않는 규칙: `Prose` · `BoardGit` · `Gitlinks` · `Leftovers` · `History`(§12.1.1). 문자열 비교가 Swift(유니코드 정규 동등)와 Rust(바이트)로 갈리고, `safe_link` 는 실제 Foundation 과 맞춰 보지 않았다.
+- macOS 에서 옮기기 뒤에 늘어난 자율주행 규칙 가운데 아직 옮기지 않은 것(기능 이름): 출발 준비 git 자리 확인(`PrepGit`) · 단위 커밋 기록과 승격 뒤 되돌림 신호(`UnitCommits`) · 멈출 선 자리 표(`SlotTable`) · 출발 때 Jira 티켓 나무(`Tickets`) · 빠진 단위 보고서 찾기(`Report`) · 초안 세션의 경로 권한 규칙 절대 경로 꼴(`Draft`) · `Branches` 의 뒤 절반(원본 `APMergeMark` 부터).
+- 옮겼으나 엔진·어댑터가 아직 부르지 않는 규칙: `Prose` · `BoardGit` · `Gitlinks` · `Leftovers` · `History` · `Purge` · `Carry` · `Links` · `Instruction` · `StartSettings` · `ReportGate`, 그리고 앞 절반만 옮긴 `Branches`(§12.1.1). 문자열 비교는 Swift(유니코드 정규 동등)와 Rust(바이트)로 갈린다.
+- 시작 준비 화면의 모델 제안 목록(`claude-sonnet-5-5` · `sonnet` · `opus` · `haiku`, 기본 `claude-sonnet-5-5`, `app/src/lib/autopilot/startForm.ts`)은 macOS 시작 설정 규칙의 목록(`opus` · `sonnet` · `haiku`, `StartSettings.swift` 의 `apModelChoices`, Rust 옮김 `rules/start_settings.rs` 의 `MODEL_CHOICES`)과 다르다. 모델 이름 꼴 검사(`MODEL_PATTERN`)는 같은 규칙이다.
 - 네이티브 거부 규칙은 도구 권한만 막는다. Bash 를 허용한 실행에서 Bash 가 하는 일은 막지 못한다. 네이티브 환경은 샌드박스 없음에 동의한 실행에만 쓴다.
-- 확인하지 못한 것(`untested:`): ① 실제 WSL 에서 판정 재시도 · 단위 30개 · 몇 시간 도는 실행(41분은 §12.8 에서 확인했다) · 엔진을 끊은 지 3초 안에 엔진이 다시 뜨는 경우(남은 claude 가 2~3초 동안 살아 있어 같은 세션에 둘이 쓸 수 있다. 작업 스케줄러 재시작은 최대 약 60초 뒤라 겹치지 않는다) · 다시 띄운 엔진이 이전 꼬리표를 쓸어내는 `LAUNCH`·`SWEEP` 동작(엔진 강제 종료 확인에서는 띄울 때마다 새 꼬리표라 돌지 않았다) · 모델이 도구가 아니라 답을 쓰는 중에 엔진을 끊는 경우 ② WSL 샌드박스 확인은 haiku 한 모델과 위 두 가지 행동(쓰기 · 네트워크)뿐이고, `.claude/.cc-writes` 가 작업 폴더에 남는 것을 보았다 ③ Git Bash · PowerShell 7 · Windows PowerShell 환경에서 진짜 claude 로 도는 것(진짜 claude 단위 통과는 명령 프롬프트와 WSL 뿐) ④ 판정 재시도 ⑤ wsl.exe 자신의 시작 메시지가 판정 출력 앞에 섞이는지 ⑥ 실제 Windows 10 ⑦ 로그오프 · 재부팅 뒤 작업 스케줄러가 엔진을 다시 띄우는 것 ⑧ 몇 시간 사람 없이 도는 실행 ⑨ 시작 준비 화면: 좁은 머리 배치, 트레이 항목, 폴더 고르기 창에서 사람이 마우스로 폴더를 고르는 조작(창을 Win32 메시지로 눌렀다), 다른 WSL 배포판 폴더를 시트에서 거절하는 글(`wsl_cd_arg` 시험으로만 확인), 네이티브 환경에서 시트로 출발한 진짜 claude 단위 ⑩ 두 exe 가 든 실제 CI 빌드 · 실제 setup.exe 설치(§8.1) ⑪ 실제 살아 있는 보드에 `--action quit` 을 청하는 GUI 흐름과 강제 종료 물음 입력창(단위 시험과 가짜 보드(stub)로만 확인했다) ⑫ 8.3 짧은 이름 · 접합(junction) · 심볼릭 링크로 같은 폴더를 가리키는 프로젝트 폴더(§12.3 의 견줌은 글자 규칙이라 풀지 못한다).
+- 확인 범위(§12.8): 진짜 claude 단위 통과는 명령 프롬프트와 WSL 에서 봤다. WSL 샌드박스는 haiku 한 모델에서 쓰기와 네트워크 두 행동을 봤고, 그 실행이 작업 폴더에 `.claude/.cc-writes` 를 남기는 것을 보았다. 시작 준비 화면의 폴더 고르기 창은 Win32 메시지로 눌러 확인했고, 다른 WSL 배포판 폴더 거절은 `wsl_cd_arg` 시험으로 확인했다. 보드 종료 요청(`--action quit`)은 단위 시험과 가짜 보드(stub)로 확인했다.
+- 엔진 강제 종료 확인(§12.8)에서 끊은 뒤 남은 claude 는 2~3초 동안 살아 있었고, 다시 띄운 엔진은 옛 꼬리표를 쓸어내지 않았다(꼬리표 `cbap-<엔진 pid>-<시각>-<번호>` 가 띄울 때마다 새로 만들어져 새 엔진이 옛 꼬리표를 모른다). 작업 스케줄러 재시작은 최대 약 60초 뒤다.
+- 프로젝트 폴더 견줌(§12.3)은 글자 규칙이라 8.3 짧은 이름 · 접합(junction) · 심볼릭 링크로 같은 폴더를 가리키는 경우를 같은 폴더로 보지 못한다.
 - 엔진이 죽은 뒤 다시 뜨기까지는 최대 약 60초다(작업 스케줄러 반복 간격의 한계, macOS 10초).
