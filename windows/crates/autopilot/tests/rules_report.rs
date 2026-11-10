@@ -1,0 +1,686 @@
+//! 실행 보고서 틀(`rules::report`, 원본 `Report.swift`) 앞쪽 2/4(원본 1~251줄) 시험.
+//! 원본 시험: `ReportTests.swift` 의 `ResultParseTests` 셋을 같은 이름으로 옮겼다 — `아님`(인자 다섯, nil 포함) · `꼴` · `상한`.
+//! 이어서 `ReportRunTests` 셋 — `견본`(견본 기록 `Tests/AutopilotRulesTests/Report/sample-run.json` 을 그 자리에서 읽는다) · `칸` · `없음`.
+//! 이 구간의 선언(`APResultRecord` 계열·`apCut`·`apReportText`·`apParseResult`·`APReport*` 값 꼴·`apReportRun`)을 겨냥한 Swift 시험은 이 여섯뿐이다.
+//! 이름표 사전·`apReportDur`·`lastPart` 는 Swift 에서 골든(HTML)만 덮는다. 골든·그리기 시험은 뒤 구간이 옮겨질 때 따라간다.
+//!
+//! 끝의 `extra_` 시험은 Swift 시험에 없는 것(자르기 경계·덩어리·수 글·칸별 상한·목록 거르기 순서·값 꼴 처음 값·기록 읽기 칸별 규칙·이름표 사전·걸린 시간)이다.
+
+use std::cell::RefCell;
+use std::path::Path;
+
+use claude_board_autopilot::ports::Row;
+use claude_board_autopilot::rules::formats::grapheme_len;
+use claude_board_autopilot::rules::report::{
+    cut, kind_label, kind_text, last_part, merge_label, outcome_label, parse_result, report_dur, report_run, report_text, report_text_n, run_label, test_label,
+    unit_class, unit_label, ReportCheck, ReportOrigin, ReportRun, ReportSource, ReportUnit, ResultCarry, ResultChange, ResultFlow, ResultRecord, ResultState,
+    ResultTest, REPORT_FLOW_MAX, REPORT_LIST_MAX, REPORT_TAIL_MAX, REPORT_TEXT_MAX,
+};
+use serde_json::{json, Value};
+
+// ── Swift: ResultParseTests ──────────────────────────
+
+#[test]
+fn 아님() {
+    // @Test("JSON 객체가 아니면 nil", arguments: [nil, "", "[1,2]", "글", "{\"headline\":"])
+    let args: [Option<&str>; 5] = [None, Some(""), Some("[1,2]"), Some("글"), Some("{\"headline\":")];
+    for t in args {
+        assert_eq!(parse_result(t), None, "{t:?}");
+    }
+}
+
+#[test]
+fn 꼴() {
+    let r = parse_result(Some(
+        r#"{"unit": "글", "outcome": 3, "headline": {"x": 1}, "summary": ["가", 2, null, {"y": 1}, true, ""],
+ "tests": [{"name": "시험", "result": "pass"}, "글"], "changes": {"what": "x"}, "refs": {"z": "끝", "a": "https://example.com", "m": ["x"], "b": 7},
+ "sequence": [{"title": "그림"}]}"#,
+    ))
+    .unwrap();
+    assert!(r.title.is_empty() && r.outcome == "3" && r.headline.is_empty());
+    assert_eq!(r.summary, ["가", "2"]);
+    assert_eq!(r.tests, [ResultTest { name: "시험".into(), result: "pass".into(), note: "".into() }]);
+    assert!(r.changes.is_empty());
+    let keys: Vec<&str> = r.refs.iter().map(|x| x.key.as_str()).collect();
+    assert!(keys == ["a", "b", "z"] && r.refs[1].value == "7");
+    assert_eq!(r.flows, [ResultFlow { title: "그림".into(), source: "".into() }]);
+}
+
+#[test]
+fn 상한() {
+    let long = "가".repeat(REPORT_TEXT_MAX + 10);
+    let many = (0..(REPORT_LIST_MAX + 5)).map(|i| format!("\"{i}\"")).collect::<Vec<_>>().join(",");
+    let r = parse_result(Some(&format!("{{\"headline\": \"{long}\", \"summary\": [{many}]}}"))).unwrap();
+    assert!(grapheme_len(&r.headline) == REPORT_TEXT_MAX + 1 && r.headline.ends_with('…'));
+    assert_eq!(r.summary.len(), REPORT_LIST_MAX);
+}
+
+// ── Swift: ReportRunTests ────────────────────────────
+
+// 가짜 읽을 곳 — 견본 기록의 사전을 그대로. 결과 기록은 글(객체면 JSON 글로, 글이면 그대로). 원본: `FixtureSource`
+struct FixtureSource {
+    j: Value,
+    origin: ReportOrigin,
+    reads: RefCell<Vec<String>>,
+}
+
+impl FixtureSource {
+    fn new(j: Value) -> Self {
+        FixtureSource { j, origin: ReportOrigin::Folder, reads: RefCell::new(Vec::new()) }
+    }
+    fn read(&self, s: String) {
+        self.reads.borrow_mut().push(s);
+    }
+}
+
+impl ReportSource for FixtureSource {
+    fn origin(&self) -> ReportOrigin {
+        self.origin
+    }
+    fn run(&self) -> Option<Row> {
+        self.read("run".into());
+        self.j.get("run").and_then(Value::as_object).cloned()
+    }
+    fn queue(&self) -> Vec<Row> {
+        self.read("queue".into());
+        // Swift: `j["queue"] as? [[String: Any]] ?? []`
+        let Some(Value::Array(a)) = self.j.get("queue") else { return Vec::new() };
+        a.iter().map(|v| v.as_object().cloned()).collect::<Option<Vec<_>>>().unwrap_or_default()
+    }
+    fn engine(&self, n: i64) -> Option<Row> {
+        self.read(format!("engine {n}"));
+        self.j.get("engines")?.get(n.to_string())?.as_object().cloned()
+    }
+    fn result(&self, n: i64) -> Option<String> {
+        self.read(format!("result {n}"));
+        match self.j.get("results")?.get(n.to_string())? {
+            Value::String(s) => Some(s.clone()),
+            o => Some(o.to_string()),
+        }
+    }
+}
+
+fn fixture(name: &str) -> Value {
+    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../Tests/AutopilotRulesTests/Report").join(name);
+    serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
+}
+
+#[test]
+fn 견본() {
+    // @Test("견본 기록: 단위 상태는 queue 가 먼저, 판정·거부·결과 기록 상태")
+    let r = report_run("x", &FixtureSource::new(fixture("sample-run.json"))).unwrap();
+    assert_eq!(r.units.iter().map(|u| u.status.as_str()).collect::<Vec<_>>(), ["done", "failed", "capped", "skipped"]);
+    assert_eq!(r.units.iter().map(|u| u.result_state).collect::<Vec<_>>(), [ResultState::Ok, ResultState::Ok, ResultState::Missing, ResultState::Missing]);
+    assert!(r.units[1].checks.iter().map(|c| c.n).collect::<Vec<_>>() == [1, 2, 3]);
+    assert!(r.units[1].checks.iter().map(|c| c.exit).collect::<Vec<_>>() == [Some(1), Some(1), Some(1)]);
+    assert_eq!(r.units[1].last_exit, Some(1));
+    assert_eq!(r.units[2].denials, ["Bash: git push origin live"]);
+    assert!(r.mode == "worktree" && r.repos == ["todo-api"] && r.bases == ["todo-api: live"] && r.work == "autopilot/20261030-0900-todo-api");
+    assert!(r.harness_same == Some(true) && r.harness_files == 3 && r.moved.is_empty() && r.stashed == 0);
+}
+
+#[test]
+fn 칸() {
+    // @Test("작업 키는 스토리가 있을 때만, 종류가 없으면 결과 기록의 것, 깨진 결과 기록")
+    let src = FixtureSource::new(json!({
+        "run": {"title": "t", "state": "running"},
+        "queue": [{"title": "a", "status": "", "tickets": ["SHOP-2"]}, {"title": "b", "story": "SHOP-1", "tickets": ["SHOP-3"]}],
+        "engines": {"1": {"status": "running", "checks": [{"exit": 0, "tail": "x".repeat(REPORT_TAIL_MAX + 50)}]}},
+        "results": {"1": "{\"unit\": {\"kind\": \"fix\"}}", "2": "이건 JSON 이 아님"},
+    }));
+    let r = report_run("x", &src).unwrap();
+    assert!(r.units[0].status == "running" && r.units[0].task.is_empty() && r.units[0].kind == "fix");
+    assert!(r.units[0].checks[0].n == 1 && grapheme_len(&r.units[0].checks[0].tail) == REPORT_TAIL_MAX + 1 && r.units[0].checks[0].tail.starts_with('…'));
+    assert!(r.units[1].status == "pending" && r.units[1].task == "SHOP-3" && r.units[1].story == "SHOP-1");
+    assert!(r.units[1].result_state == ResultState::Broken && r.units[1].result.is_none());
+    assert_eq!(*src.reads.borrow(), ["run", "queue", "engine 1", "result 1", "engine 2", "result 2"]);
+}
+
+#[test]
+fn 없음() {
+    // @Test("run 이 없으면 nil")
+    assert_eq!(report_run("x", &FixtureSource::new(json!({}))), None);
+}
+
+// ── Swift 시험에 없는 것 ──────────────────────────────
+
+#[test]
+fn extra_수_글_지수_꼴() {
+    // 지수 17 이상·-5 아래는 `e+XX`·`e-XX`(이 구간에서 정한 꼴, Foundation 경계는 확인하지 못함)
+    let f = |s: &str| report_text(Some(&serde_json::from_str::<Value>(s).unwrap()));
+    assert_eq!(f("1e20"), "1e+20");
+    assert_eq!(f("1.5e-7"), "1.5e-07");
+    assert_eq!(f("1e16"), "10000000000000000");
+    assert_eq!(f("0.00001"), "0.00001");
+    assert_eq!(f("-2.5"), "-2.5");
+}
+
+#[test]
+fn extra_상수() {
+    assert_eq!((REPORT_TEXT_MAX, REPORT_LIST_MAX, REPORT_FLOW_MAX, REPORT_TAIL_MAX), (4000, 200, 20_000, 2000));
+}
+
+#[test]
+fn extra_cut_경계() {
+    assert_eq!(cut("", 0), "");
+    assert_eq!(cut("abc", 3), "abc");
+    assert_eq!(cut("abcd", 3), "abc…");
+    assert_eq!(cut("abc", 0), "…");
+    assert_eq!(cut("가나다", 3), "가나다"); // 바이트(9)는 3 보다 크지만 글자는 3
+    assert_eq!(cut("가나다라", 3), "가나다…");
+    assert_eq!(cut("가나다라", 0), "…");
+}
+
+#[test]
+fn extra_cut_덩어리는_쪼개지_않는다() {
+    // 결합 부호: e + U+0301 은 한 글자
+    assert_eq!(cut("e\u{301}e\u{301}e\u{301}", 3), "e\u{301}e\u{301}e\u{301}");
+    assert_eq!(cut("e\u{301}e\u{301}e\u{301}x", 3), "e\u{301}e\u{301}e\u{301}…");
+    assert_eq!(cut("e\u{301}e\u{301}e\u{301}x", 2), "e\u{301}e\u{301}…");
+    // 가족 이모지(ZWJ 열) 하나가 한 글자
+    let fam = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+    assert_eq!(cut(&format!("{fam}{fam}a"), 2), format!("{fam}{fam}…"));
+    assert_eq!(cut(&format!("{fam}{fam}a"), 1), format!("{fam}…"));
+    // 한글 자모 열은 한 글자
+    assert_eq!(cut("\u{1112}\u{1161}\u{11AB}\u{1112}\u{1161}\u{11AB}x", 2), "\u{1112}\u{1161}\u{11AB}\u{1112}\u{1161}\u{11AB}…");
+    // Windows 글: CR LF 는 한 글자
+    assert_eq!(cut("a\r\nb\r\nc", 3), "a\r\nb…");
+    assert_eq!(cut("a\r\nb", 3), "a\r\nb");
+}
+
+#[test]
+fn extra_cut_긴_글도_빠르게_정확히() {
+    let s = "나".repeat(REPORT_FLOW_MAX + 1);
+    let c = cut(&s, REPORT_FLOW_MAX);
+    assert_eq!(grapheme_len(&c), REPORT_FLOW_MAX + 1);
+    assert!(c.ends_with('…') && c.starts_with('나'));
+}
+
+#[test]
+fn extra_report_text_꼴() {
+    assert_eq!(report_text(Some(&json!("글"))), "글");
+    assert_eq!(report_text(Some(&json!(3))), "3");
+    assert_eq!(report_text(Some(&json!(-3))), "-3");
+    assert_eq!(report_text(Some(&json!(18_446_744_073_709_551_615u64))), "18446744073709551615");
+    let f: Value = serde_json::from_str("7.0").unwrap();
+    assert_eq!(report_text(Some(&f)), "7");
+    assert_eq!(report_text(Some(&json!(1.5))), "1.5");
+    assert_eq!(report_text(Some(&json!(0.1))), "0.1");
+    assert_eq!(report_text(Some(&json!(true))), "");
+    assert_eq!(report_text(Some(&json!(false))), "");
+    assert_eq!(report_text(Some(&json!(null))), "");
+    assert_eq!(report_text(Some(&json!(["x"]))), "");
+    assert_eq!(report_text(Some(&json!({"x": 1}))), "");
+    assert_eq!(report_text(None), "");
+}
+
+#[test]
+fn extra_report_text_상한은_글에만_걸린다() {
+    assert_eq!(report_text_n(Some(&json!("abcdef")), 3), "abc…");
+    assert_eq!(report_text_n(Some(&json!("abc")), 3), "abc");
+    assert_eq!(report_text_n(Some(&json!(123_456_789)), 3), "123456789");
+    let long = "x".repeat(REPORT_TEXT_MAX + 1);
+    assert_eq!(grapheme_len(&report_text(Some(&json!(long)))), REPORT_TEXT_MAX + 1);
+    assert_eq!(report_text(Some(&json!("x".repeat(REPORT_TEXT_MAX)))).len(), REPORT_TEXT_MAX);
+}
+
+fn parse(v: Value) -> ResultRecord {
+    parse_result(Some(&v.to_string())).unwrap()
+}
+
+#[test]
+fn extra_칸별_상한과_이름() {
+    let r = parse(json!({
+        "unit": {"title": "t".repeat(301), "kind": "k".repeat(41), "ref": "r".repeat(301)},
+        "outcome": "o".repeat(41),
+        "tests": [{"name": "n".repeat(501), "result": "p".repeat(41), "note": "ok"}],
+        "changes": [{"what": "w", "where": "p".repeat(501)}],
+        "decisions_applied": [{"what": "d", "basis": "b"}],
+        "sequence": [{"title": "s".repeat(301), "mermaid": "m".repeat(REPORT_FLOW_MAX + 1)}],
+        "next_start": [{"title": "a", "why": "b"}],
+        "new_work": [{"title": "c", "why": "d"}],
+        "new_tickets": [{"temp": "T".repeat(21), "title": "u".repeat(301), "why": "y".repeat(1001)}],
+        "next": "다음",
+    }));
+    // 상한 + 1 글자를 주면 앞 상한 글자 + … 가 나온다(글자 수만 재면 상한이 하나 어긋나도 모른다)
+    let cap = |c: &str, n: usize| format!("{}…", c.repeat(n));
+    assert_eq!(r.title, cap("t", 300));
+    assert_eq!(r.kind, cap("k", 40));
+    assert_eq!(r.r#ref, cap("r", 300));
+    assert_eq!(r.outcome, cap("o", 40));
+    assert_eq!(r.tests[0].name, cap("n", 500));
+    assert_eq!(r.tests[0].result, cap("p", 40));
+    assert_eq!(r.tests[0].note, "ok");
+    assert_eq!(r.changes[0].what, "w");
+    assert_eq!(r.changes[0].place, cap("p", 500));
+    assert_eq!(r.decisions[0].what, "d");
+    assert_eq!(r.decisions[0].basis, "b");
+    assert_eq!(r.flows[0].title, cap("s", 300));
+    assert_eq!(r.flows[0].source, cap("m", REPORT_FLOW_MAX));
+    assert_eq!(r.next_start, [ResultCarry { title: "a".into(), why: "b".into() }]);
+    assert_eq!(r.new_work, [ResultCarry { title: "c".into(), why: "d".into() }]);
+    assert_eq!(r.new_tickets[0].temp, cap("T", 20));
+    assert_eq!(r.new_tickets[0].title, cap("u", 300));
+    assert_eq!(r.new_tickets[0].why, cap("y", 1000));
+    assert_eq!(r.next, "다음");
+    // 상한 안이면 그대로
+    let ok = parse(json!({"unit": {"title": "t".repeat(300)}}));
+    assert_eq!(ok.title, "t".repeat(300));
+}
+
+#[test]
+fn extra_목록은_앞_200개를_먼저_자른_뒤_객체만_고른다() {
+    // 앞 200 개 중 객체가 아닌 것은 버려져도 201 번째 이후 객체가 채우지 않는다
+    let mut tests: Vec<Value> = (0..REPORT_LIST_MAX).map(|i| if i % 2 == 0 { json!("글") } else { json!({"name": format!("{i}")}) }).collect();
+    tests.push(json!({"name": "밖"}));
+    let r = parse(json!({"tests": tests}));
+    assert_eq!(r.tests.len(), REPORT_LIST_MAX / 2);
+    assert!(r.tests.iter().all(|t| t.name != "밖"));
+    // 글 목록도 앞 200 개를 먼저 자르고 빈 것을 거른다
+    let mut sum: Vec<Value> = (0..REPORT_LIST_MAX).map(|i| if i < 100 { json!("") } else { json!("x") }).collect();
+    sum.push(json!("밖"));
+    let r = parse(json!({"summary": sum, "risks": ["r1", null, "r2"]}));
+    assert_eq!(r.summary.len(), 100);
+    assert_eq!(r.risks, ["r1", "r2"]);
+}
+
+#[test]
+fn extra_새_티켓은_스무_개까지() {
+    let t: Vec<Value> = (0..30).map(|i| json!({"temp": format!("TMP-{i}")})).collect();
+    let r = parse(json!({"new_tickets": t}));
+    assert_eq!(r.new_tickets.len(), 20);
+    assert_eq!(r.new_tickets[19].temp, "TMP-19");
+}
+
+#[test]
+fn extra_참고는_키_차례_쉰_개_빈_값_거름_키_예순자() {
+    let mut refs = serde_json::Map::new();
+    for i in 0..60 {
+        refs.insert(format!("k{i:02}"), json!(format!("v{i}")));
+    }
+    let r = parse(json!({"refs": refs}));
+    assert_eq!(r.refs.len(), 50);
+    assert_eq!(r.refs[0].key, "k00");
+    assert_eq!(r.refs[49].key, "k49");
+    // 쉰 개를 먼저 고른 뒤 빈 값을 거른다(빈 값 하나가 있으면 49 개)
+    let mut refs = serde_json::Map::new();
+    for i in 0..60 {
+        refs.insert(format!("k{i:02}"), if i == 3 { json!("") } else { json!("v") });
+    }
+    assert_eq!(parse(json!({"refs": refs})).refs.len(), 49);
+    // 키 글자 수 상한
+    let r = parse(json!({"refs": {"a".repeat(61): "x", "b": "y".repeat(1001)}}));
+    assert_eq!(r.refs.len(), 2);
+    assert!(r.refs[0].key.ends_with('…') && grapheme_len(&r.refs[0].key) == 61);
+    assert_eq!(grapheme_len(&r.refs[1].value), 1001);
+    // refs 가 객체가 아니면 비어 있다
+    assert!(parse(json!({"refs": ["a"]})).refs.is_empty());
+    assert!(parse(json!({"refs": "a"})).refs.is_empty());
+}
+
+#[test]
+fn extra_빈_객체와_공백() {
+    assert_eq!(parse_result(Some("{}")), Some(ResultRecord::default()));
+    assert_eq!(parse_result(Some(" \n{ } \n")), Some(ResultRecord::default()));
+    assert_eq!(parse_result(Some("{} x")), None);
+    assert_eq!(parse_result(Some("null")), None);
+}
+
+#[test]
+fn extra_unit_이_객체면_세_칸을_읽는다() {
+    let r = parse(json!({"unit": {"title": "제목", "kind": 5, "ref": null}}));
+    assert_eq!((r.title.as_str(), r.kind.as_str(), r.r#ref.as_str()), ("제목", "5", ""));
+}
+
+#[test]
+fn extra_값_꼴_처음_값() {
+    let u = ReportUnit::default();
+    assert_eq!((u.status.as_str(), u.result_state, u.n, u.started, u.last_exit), ("pending", ResultState::Missing, 0, None, None));
+    assert!(u.checks.is_empty() && u.denials.is_empty() && u.result.is_none());
+    assert_eq!((u.active_sec, u.cost, u.turns, u.retries), (0.0, 0.0, 0, 0));
+    let c = ReportCheck::default();
+    assert_eq!((c.n, c.exit, c.sec, c.tail.as_str(), c.timed_out, c.interrupted), (0, None, 0.0, "", false, false));
+    let r = ReportRun::default();
+    assert_eq!(r.origin, ReportOrigin::Folder);
+    assert_eq!((r.harness_same, r.harness_files, r.stashed), (None, 0, 0));
+    assert!(r.units.is_empty() && r.repos.is_empty() && r.bases.is_empty() && r.moved.is_empty() && r.harness_changed.is_empty());
+    assert_eq!(ResultState::default(), ResultState::Missing);
+    assert_eq!(ResultState::Ok.raw(), "ok");
+    assert_eq!(ResultState::Missing.raw(), "missing");
+    assert_eq!(ResultState::Broken.raw(), "broken");
+    let ch = ResultChange::default();
+    assert_eq!((ch.what.as_str(), ch.place.as_str()), ("", ""));
+}
+
+// ── Swift 시험에 없는 것: 기록 → 보고서 값(2/4) ────────
+
+fn run_of(j: Value) -> ReportRun {
+    report_run("id", &FixtureSource::new(j)).unwrap()
+}
+
+// run 은 비워 두고 단위 하나만 보고 싶을 때
+fn unit_of(q: Value, e: Value) -> ReportUnit {
+    run_of(json!({"run": {}, "queue": [q], "engines": {"1": e}})).units.remove(0)
+}
+
+fn glyphs(n: usize) -> String {
+    "가".repeat(n)
+}
+
+#[test]
+fn extra_실행_칸_상한과_꼴() {
+    let r = run_of(json!({"run": {
+        "title": glyphs(400), "project": glyphs(130), "model": glyphs(90), "state": glyphs(50), "reason": glyphs(1100), "epic": glyphs(90),
+        "started": 10.5, "ended": 20,
+    }}));
+    assert_eq!(r.id, "id");
+    for (got, max) in [(&r.title, 300), (&r.project, 120), (&r.model, 80), (&r.state, 40), (&r.reason, 1000), (&r.epic, 80)] {
+        assert!(grapheme_len(got) == max + 1 && got.ends_with('…'), "{max}");
+    }
+    assert_eq!((r.started, r.ended), (Some(10.5), Some(20.0)));
+    // 수가 아닌 시각(글·불리언·널)은 비고, 글 자리의 수는 글이 된다
+    let r = run_of(json!({"run": {"started": "5", "ended": true, "title": 7, "state": null, "reason": ["x"]}}));
+    assert!(r.started.is_none() && r.ended.is_none() && r.title == "7" && r.state.is_empty() && r.reason.is_empty());
+    // 바탕은 읽을 곳이 알려 준다
+    let mut src = FixtureSource::new(json!({"run": {}}));
+    src.origin = ReportOrigin::Records;
+    assert_eq!(report_run("z", &src).unwrap().origin, ReportOrigin::Records);
+    assert_eq!(run_of(json!({"run": {}})).origin, ReportOrigin::Folder);
+}
+
+#[test]
+fn extra_저장소와_가지() {
+    // repos 는 키 차례로, 이름은 마지막 조각. 출발 가지는 글일 때만. 작업 가지는 worktree.branch 가 먼저고 없을 때 처음 만난 work
+    let r = run_of(json!({"run": {
+        "worktree": {"mode": "in_place", "repo": "/x/ignored", "repos": ["/y/ignored"]},
+        "branches": {"repos": {
+            "/b/zeta": {"base": {"branch": "main"}, "work": "w-zeta"},
+            "/a/alpha": {"base": {"branch": 3}, "work": "w-alpha"},
+            "/c/gamma": "글",
+        }},
+    }}));
+    assert_eq!(r.mode, "in_place");
+    assert_eq!(r.repos, ["alpha", "zeta", "gamma"]);
+    assert_eq!(r.bases, ["zeta: main"]);
+    assert_eq!(r.work, "w-alpha");
+    let r = run_of(json!({"run": {"worktree": {"branch": "wb"}, "branches": {"repos": {"/a/alpha": {"work": "w-alpha"}}}}}));
+    assert_eq!(r.work, "wb");
+    // 빈 글 work 도 그대로 넣는다(Swift: `let w = e["work"] as? String`)
+    let r = run_of(json!({"run": {"branches": {"repos": {"/a/x": {"work": ""}, "/b/y": {"work": "later"}}}}}));
+    assert_eq!(r.work, "later");
+    // repos 가 비면 worktree.repo, 그것도 없으면 worktree.repos(글만, 마지막 조각, 정렬)
+    assert_eq!(run_of(json!({"run": {"worktree": {"repo": "/q/one/", "repos": ["/z/b"]}}})).repos, ["one"]);
+    assert_eq!(run_of(json!({"run": {"worktree": {"repos": ["/z/b", 5, "/a/c", null]}}})).repos, ["b", "c"]);
+    assert_eq!(run_of(json!({"run": {"worktree": {"repos": ["C:\\w\\zz", "D:\\w\\aa"]}}})).repos, ["aa", "zz"]);
+    assert_eq!(run_of(json!({"run": {"worktree": {"repo": 5}}})).repos, Vec::<String>::new());
+    assert!(run_of(json!({"run": {"worktree": "x", "branches": 3}})).repos.is_empty());
+}
+
+#[test]
+fn extra_움직인_가지와_숨긴_변경() {
+    let r = run_of(json!({"run": {"branches": {
+        "moved": [{"repo": "/a/todo-api", "branch": "live"}, {"repo": 3}],
+        "stashed": [1, "x", null],
+    }}}));
+    assert_eq!(r.moved, ["todo-api live", " "]);
+    assert_eq!(r.stashed, 3);
+    // 객체가 아닌 원소가 하나라도 있으면 통째로 빈 배열
+    assert!(run_of(json!({"run": {"branches": {"moved": [{"repo": "/a/b", "branch": "c"}, "글"]}}})).moved.is_empty());
+    assert_eq!(run_of(json!({"run": {"branches": {"stashed": "x"}}})).stashed, 0);
+}
+
+#[test]
+fn extra_하네스_칸() {
+    let r = run_of(json!({"run": {"harness": {"files": 7.9, "same": false, "changed": [
+        {"path": "a.md", "change": "changed"}, {"path": "b", "change": "added"}, {"path": "c", "change": "removed"}, {"path": "d", "change": "weird"}, {"path": 5},
+    ]}}}));
+    assert_eq!(r.harness_files, 7);
+    assert_eq!(r.harness_same, Some(false));
+    assert_eq!(r.harness_changed, ["a.md (바뀜)", "b (더함)", "c (없어짐)", "d (weird)", " ()"]);
+    // 앞 30 개만
+    let many: Vec<Value> = (0..40).map(|i| json!({"path": format!("p{i}"), "change": "added"})).collect();
+    let r = run_of(json!({"run": {"harness": {"changed": many}}}));
+    assert_eq!(r.harness_changed.len(), 30);
+    assert_eq!(r.harness_changed[29], "p29 (더함)");
+    // 객체 아닌 원소가 하나라도 있으면 빈 배열. same 이 불리언이 아니면 None. 없으면 모두 처음 값
+    assert!(run_of(json!({"run": {"harness": {"changed": [{"path": "a"}, 1]}}})).harness_changed.is_empty());
+    let r = run_of(json!({"run": {"harness": {"same": "yes", "files": "3"}}}));
+    assert_eq!((r.harness_same, r.harness_files), (None, 0));
+    let r = run_of(json!({"run": {"harness": 5}}));
+    assert_eq!((r.harness_same, r.harness_files, r.harness_changed.len()), (None, 0, 0));
+}
+
+#[test]
+fn extra_단위_상태와_이름과_가지() {
+    // 이름: queue 의 것이 먼저(널이어도 queue 의 것 = 빈 글), 키가 없을 때만 엔진의 것
+    assert_eq!(unit_of(json!({}), json!({"title": "엔진"})).title, "엔진");
+    assert_eq!(unit_of(json!({"title": "큐"}), json!({"title": "엔진"})).title, "큐");
+    assert_eq!(unit_of(json!({"title": null}), json!({"title": "엔진"})).title, "");
+    // 상태: queue → 엔진 → pending
+    assert_eq!(unit_of(json!({"status": "done"}), json!({"status": "failed"})).status, "done");
+    assert_eq!(unit_of(json!({"status": ""}), json!({"status": "failed"})).status, "failed");
+    assert_eq!(unit_of(json!({}), json!({"status": ""})).status, "pending");
+    assert_eq!(unit_of(json!({"status": 3}), json!({})).status, "pending");
+    // 가지: 엔진 → queue
+    assert_eq!(unit_of(json!({"branch": "qb"}), json!({"branch": "eb"})).branch, "eb");
+    assert_eq!(unit_of(json!({"branch": "qb"}), json!({"branch": ""})).branch, "qb");
+    // 합치기 상태
+    assert_eq!(unit_of(json!({}), json!({"merge": {"state": "merged"}})).merge, "merged");
+    assert_eq!(unit_of(json!({}), json!({"merge": "merged"})).merge, "");
+    // 엔진 기록이 없으면 처음 값
+    let r = run_of(json!({"run": {}, "queue": [{"title": "a"}]}));
+    assert_eq!(r.units[0], ReportUnit { n: 1, title: "a".into(), ..ReportUnit::default() });
+    // 차례는 1부터
+    let r = run_of(json!({"run": {}, "queue": [{}, {}, {}]}));
+    assert_eq!(r.units.iter().map(|u| u.n).collect::<Vec<_>>(), [1, 2, 3]);
+}
+
+#[test]
+fn extra_단위_글_상한() {
+    let long = glyphs(1100);
+    let u = unit_of(
+        json!({"title": long, "kind": glyphs(50), "story": glyphs(90), "tickets": [glyphs(90)]}),
+        json!({"reason": long}),
+    );
+    for (got, max) in [(&u.title, 300), (&u.kind, 40), (&u.reason, 1000), (&u.story, 80), (&u.task, 80)] {
+        assert!(grapheme_len(got) == max + 1 && got.ends_with('…'), "{max}");
+    }
+}
+
+#[test]
+fn extra_단위_수_칸() {
+    let u = unit_of(
+        json!({}),
+        json!({"active_sec": 12.5, "cost_usd": 0.25, "turns": 2.9, "try": -2.9, "started": 5, "ended": 6.5}),
+    );
+    assert_eq!((u.active_sec, u.cost, u.turns, u.retries, u.started, u.ended), (12.5, 0.25, 2, -2, Some(5.0), Some(6.5)));
+    // 글·불리언·1e15 이상은 처음 값
+    let u = unit_of(json!({}), json!({"active_sec": "9", "cost_usd": true, "turns": 1e15, "try": "1", "started": "5"}));
+    assert_eq!((u.active_sec, u.cost, u.turns, u.retries, u.started), (0.0, 0.0, 0, 0, None));
+    assert_eq!(unit_of(json!({}), json!({"turns": 999_999_999_999_999i64})).turns, 999_999_999_999_999);
+}
+
+#[test]
+fn extra_단위_작업_키() {
+    // 스토리가 있고 tickets 의 처음 것이 있을 때만. 글이 아닌 처음 원소는 빈 글
+    assert_eq!(unit_of(json!({"story": "S", "tickets": ["A", "B"]}), json!({})).task, "A");
+    assert_eq!(unit_of(json!({"tickets": ["A"]}), json!({})).task, "");
+    assert_eq!(unit_of(json!({"story": "S", "tickets": []}), json!({})).task, "");
+    assert_eq!(unit_of(json!({"story": "S", "tickets": [{"x": 1}, "B"]}), json!({})).task, "");
+    assert_eq!(unit_of(json!({"story": "S", "tickets": [4]}), json!({})).task, "4");
+    assert_eq!(unit_of(json!({"story": "S", "tickets": "A"}), json!({})).task, "");
+}
+
+#[test]
+fn extra_판정_칸() {
+    let u = unit_of(
+        json!({}),
+        json!({"checks": [
+            {"try": 4, "exit": 2, "sec": 1.5, "tail": "끝", "timed_out": true, "interrupted": true},
+            {"exit": "x", "timed_out": 1, "interrupted": "yes"},
+            {"try": 0.9, "exit": 3.7},
+        ]}),
+    );
+    assert_eq!(
+        u.checks,
+        [
+            ReportCheck { n: 5, exit: Some(2), sec: 1.5, tail: "끝".into(), timed_out: true, interrupted: true },
+            ReportCheck { n: 2, exit: None, sec: 0.0, tail: "".into(), timed_out: false, interrupted: false },
+            ReportCheck { n: 1, exit: Some(3), sec: 0.0, tail: "".into(), timed_out: false, interrupted: false },
+        ]
+    );
+    assert_eq!(u.last_exit, Some(3));
+    // 마지막 판정에 종료 코드가 없으면 엔진의 check_exit, 판정이 없어도 마찬가지
+    let u = unit_of(json!({}), json!({"checks": [{"exit": 1}, {}], "check_exit": 9}));
+    assert_eq!(u.last_exit, Some(9));
+    assert_eq!(unit_of(json!({}), json!({"check_exit": 4})).last_exit, Some(4));
+    assert_eq!(unit_of(json!({}), json!({"checks": [{"exit": 1}, {}]})).last_exit, None);
+    assert_eq!(unit_of(json!({}), json!({"checks": [{"exit": 0}], "check_exit": 9})).last_exit, Some(0));
+    // 앞 50 번만, 객체 아닌 원소가 하나라도 있으면 통째로 비어 있다
+    let many: Vec<Value> = (0..60).map(|_| json!({"exit": 0})).collect();
+    let u = unit_of(json!({}), json!({"checks": many}));
+    assert_eq!((u.checks.len(), u.checks[49].n), (50, 50));
+    assert!(unit_of(json!({}), json!({"checks": [{"exit": 0}, 5]})).checks.is_empty());
+}
+
+#[test]
+fn extra_판정_출력_끝부분() {
+    let tail_of = |t: String| unit_of(json!({}), json!({"checks": [{"tail": t}]})).checks.remove(0).tail;
+    // 상한과 같으면 그대로, 넘으면 끝 상한 글자 앞에 …
+    let exact = "x".repeat(REPORT_TAIL_MAX);
+    assert_eq!(tail_of(exact.clone()), exact);
+    let over = format!("{}{}", "a".repeat(5), "b".repeat(REPORT_TAIL_MAX));
+    assert_eq!(tail_of(over), format!("…{}", "b".repeat(REPORT_TAIL_MAX)));
+    // 글자는 덩어리 단위(CR LF 는 한 글자)
+    let crlf = format!("앞{}", "\r\n".repeat(REPORT_TAIL_MAX));
+    assert_eq!(tail_of(crlf), format!("…{}", "\r\n".repeat(REPORT_TAIL_MAX)));
+    // 긴 글은 10만 글자에서 한 번 더 잘린다(첫 자름이 붙인 … 가 끝 상한 글자 안에 든다)
+    let huge = "y".repeat(100_050);
+    assert_eq!(tail_of(huge), format!("…{}…", "y".repeat(REPORT_TAIL_MAX - 1)));
+}
+
+#[test]
+fn extra_거부_칸() {
+    let u = unit_of(
+        json!({}),
+        json!({"denials": [
+            {"tool": "Bash", "what": "git push"}, {"tool": "Read"}, {"what": "홀로"}, {}, {"tool": 3, "what": 4},
+        ]}),
+    );
+    assert_eq!(u.denials, ["Bash: git push", "Read", "홀로", "", "4"]);
+    assert!(unit_of(json!({}), json!({"denials": [{"tool": "x"}, "y"]})).denials.is_empty());
+    let many: Vec<Value> = (0..40).map(|i| json!({"tool": format!("t{i}")})).collect();
+    let d = unit_of(json!({}), json!({"denials": many})).denials;
+    assert_eq!((d.len(), d[29].as_str()), (30, "t29"));
+    let d = unit_of(json!({}), json!({"denials": [{"tool": "T", "what": glyphs(400)}]})).denials;
+    assert_eq!(grapheme_len(&d[0]), "T: ".len() + 301);
+}
+
+#[test]
+fn extra_결과_기록_상태와_종류() {
+    // 없으면 Missing, 읽히면 Ok 와 값, 깨지면 Broken. 종류는 queue 의 것이 먼저고 비었을 때만 결과 기록의 것
+    let go = |q: Value, res: Value| {
+        let src = FixtureSource::new(json!({"run": {}, "queue": [q], "results": {"1": res}}));
+        report_run("x", &src).unwrap().units.remove(0)
+    };
+    let u = go(json!({"kind": "dev"}), json!({"unit": {"kind": "fix"}, "headline": "요약"}));
+    assert_eq!((u.kind.as_str(), u.result_state), ("dev", ResultState::Ok));
+    assert_eq!(u.result.as_ref().unwrap().headline, "요약");
+    let u = go(json!({}), json!({"unit": {"kind": "fix"}}));
+    assert_eq!((u.kind.as_str(), u.result_state), ("fix", ResultState::Ok));
+    let u = go(json!({}), json!("[1]"));
+    assert_eq!((u.kind.as_str(), u.result_state, u.result.is_none()), ("", ResultState::Broken, true));
+    let u = unit_of(json!({"kind": "x"}), json!({}));
+    assert_eq!((u.result_state, u.result.is_none()), (ResultState::Missing, true));
+}
+
+#[test]
+fn extra_queue_가_객체가_아니면_단위가_없다() {
+    let r = run_of(json!({"run": {}, "queue": [{"title": "a"}, 5]}));
+    assert!(r.units.is_empty());
+}
+
+#[test]
+fn extra_마지막_경로_조각() {
+    for (p, want) in [
+        ("/Users/toy/workspace/todo-api", "todo-api"),
+        ("todo-api", "todo-api"),
+        ("/a/b/", "b"),
+        ("/a/b//", "b"),
+        ("a//b", "b"),
+        ("C:\\work\\todo-api", "todo-api"),
+        ("C:\\work\\todo-api\\", "todo-api"),
+        ("C:/work/todo-api", "todo-api"),
+        ("D:\\", "D:"),
+        ("/", "/"),
+        ("//", "/"),
+        ("\\", "\\"),
+        ("", ""),
+    ] {
+        assert_eq!(last_part(p), want, "{p:?}");
+    }
+}
+
+#[test]
+fn extra_이름표_사전() {
+    let unit = [("pending", "대기"), ("running", "진행 중"), ("done", "통과"), ("failed", "미통과"), ("capped", "상한에서 멈춤"), ("stopped", "중단"), ("skipped", "건너뜀")];
+    for (k, v) in unit {
+        assert_eq!(unit_label(k), Some(v), "{k}");
+    }
+    assert_eq!((unit_label("Done"), unit_label(""), unit_label("other")), (None, None, None));
+    for (k, v) in [("done", "ok"), ("failed", "fail"), ("capped", "cap"), ("running", "run")] {
+        assert_eq!(unit_class(k), Some(v), "{k}");
+    }
+    for k in ["pending", "stopped", "skipped", ""] {
+        assert_eq!(unit_class(k), None, "{k}");
+    }
+    let run = [
+        ("starting", "출발 중"), ("running", "도는 중"), ("waiting_limit", "한도 대기"), ("waiting_stopline", "멈출 선 대기"), ("waiting_precheck", "환경 확인 대기"),
+        ("paused", "일시정지"), ("stopped", "중단됨"), ("done", "끝남"), ("error", "오류로 멈춤"),
+    ];
+    for (k, v) in run {
+        assert_eq!(run_label(k), Some(v), "{k}");
+    }
+    assert_eq!(run_label("pending"), None);
+    let kinds = [("fix", "고침"), ("dev", "개발"), ("feature", "개발"), ("story", "개발"), ("test", "시험"), ("doc", "문서"), ("docs", "문서"), ("env", "환경")];
+    for (k, v) in kinds {
+        assert_eq!(kind_label(k), Some(v), "{k}");
+        assert_eq!(kind_text(&k.to_uppercase()), v, "{k}");
+    }
+    assert_eq!((kind_label("FIX"), kind_label("")), (None, None));
+    assert_eq!((kind_text("Other"), kind_text("")), ("Other".to_string(), String::new()));
+    for (k, v) in [("done", "끝냄"), ("failed", "끝내지 못함"), ("parked", "보류"), ("capped", "상한")] {
+        assert_eq!(outcome_label(k), Some(v), "{k}");
+    }
+    assert_eq!(outcome_label("skipped"), None);
+    assert_eq!(test_label("pass"), Some(("통과", "ok")));
+    assert_eq!(test_label("fail"), Some(("실패", "fail")));
+    assert_eq!(test_label("skip"), Some(("건너뜀", "")));
+    assert_eq!(test_label("other"), None);
+    for (k, v) in [("merged", "스토리 가지에 합침"), ("nothing", "합칠 커밋 없음"), ("not_merged", "스토리 가지에 합치지 않음")] {
+        assert_eq!(merge_label(k), Some(v), "{k}");
+    }
+    assert_eq!(merge_label("x"), None);
+}
+
+#[test]
+fn extra_걸린_시간() {
+    for (sec, want) in [
+        (0.0, "0분"),
+        (0.9, "0분"),
+        (1.0, "1초"),
+        (59.9, "59초"),
+        (60.0, "1분"),
+        (119.0, "1분"),
+        (3599.0, "59분"),
+        (3600.0, "1시간 0분"),
+        (3725.0, "1시간 2분"),
+        (7200.0, "2시간 0분"),
+        (-5.0, "0분"),
+        (f64::NAN, "0분"),
+        (f64::INFINITY, "0분"),
+        (f64::NEG_INFINITY, "0분"),
+    ] {
+        assert_eq!(report_dur(sec), want, "{sec}");
+    }
+}
