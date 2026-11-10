@@ -1,15 +1,16 @@
-//! 가지 기록 읽기·합치기 상태 규칙(`rules::branches`) 시험 — 전반(R-Branches-a)만. 원본: `Tests/AutopilotRulesTests/BranchesTests.swift`.
-//! Swift 시험 6개 가운데 이 파일이 옮긴 것은 `MergeOpenTests`(→ `merge_open_표`)와 `StoryReposTests`(→ `story_repos_표`)다.
-//! 남은 넷(`MarkRow`·`DiscardRow`·`CarriesRow`·`FinishRootRow` 표)은 R-Branches-b 가 옮긴다.
+//! 가지 기록 읽기·합치기 상태 규칙(`rules::branches`) 시험. 원본: `Tests/AutopilotRulesTests/BranchesTests.swift`.
+//! Swift 시험 6개(`MergeOpenTests`·`MergeMarkTests`·`StoryReposTests`·`DiscardRowsTests`·`CarriesBaseTests`·`FinishRootTests`)가 각각 `merge_open_표`·
+//! `merge_mark_표`·`story_repos_표`·`discard_rows_표`·`carries_base_표`·`finish_root_표` 로 옮겨졌다.
 //! 표의 줄은 Swift 에서 기계로 옮겼고 표 길이를 세어 줄이 빠지면 실패한다. 끝의 `extra_` 시험은 Swift 시험에 없는 것(직접 호출·경계·Windows 경로)이다.
 
 use claude_board_autopilot::rules::branches::{
-    failed_rows, merge_open, merge_sources, promoted_rows, step_done, story_repos, unresolved, Obj, Promoted, Step,
+    carries_base, discard_rows, failed_rows, finish_root, merge_mark, merge_open, merge_sources, promoted_rows, step_done, story_repos, unresolved,
+    MergeMark, Obj, Promoted, RefFate, Step,
 };
 use serde_json::{json, Value};
 
-// 아래 세 표(TOYS·OPEN_ROWS·STORY_ROWS)는 Swift 시험 파일에서 기계로 옮긴 것이다(손으로 다시 치지 않았다): #"…"# → r#"…"#, 나머지 글자는 그대로.
-// R-Branches-b 는 TOYS 를 그대로 쓴다(MarkRow 가 같은 장난감을 읽는다).
+// 아래 표(TOYS·OPEN_ROWS·STORY_ROWS·mark_rows·discard_table·CARRIES_ROWS·FINISH_ROOT_ROWS)는 Swift 시험 파일에서 기계로 옮긴 것이다(손으로 다시 치지 않았다):
+// #"…"# → r#"…"#, 나머지 글자는 그대로, 열거형 값(`.promoted("x")` 등)은 같은 뜻의 Rust 값으로. MarkRow 는 TOYS 를 같이 읽는다.
 
 struct OpenRow {
     note: &'static str,
@@ -23,6 +24,39 @@ struct StoryRow {
     note: &'static str,
     story: &'static str, // stories.<키> 의 JSON("nil" 은 값 없음), 또는 "toy:<실행 id>:<스토리 키>"
     repos: &'static str, // 결과 JSON
+}
+
+struct MarkRow {
+    note: &'static str,
+    branches: &'static str, // branches JSON, 또는 "toy:<실행 id>"
+    mark: Option<MergeMark>,
+    label: Option<&'static str>,
+    with_autopilot: bool, // 보드가 넘기는 값 — Swift 기본값 true
+}
+
+struct DiscardRow {
+    note: &'static str,
+    fate: RefFate,
+    is_source: bool,
+    recorded: bool,                   // 그 가지에 버린 줄이 이미 있음(Swift 기본값 false)
+    discarded: Option<&'static str>, // JSON, None 이면 적지 않음
+    failed: Option<&'static str>,
+}
+
+struct CarriesRow {
+    note: &'static str,
+    source: &'static str,
+    after: Option<&'static str>,
+    base: Option<&'static str>,
+    want: bool,
+}
+
+struct FinishRootRow {
+    note: &'static str,
+    flag: bool,
+    run_dev: Option<bool>,
+    dev: bool,
+    refuse: bool,
 }
 
 const TOYS: &[(&str, &str)] = &[
@@ -233,6 +267,10 @@ fn 표_길이() {
     assert_eq!(TOYS.len(), 26, "Swift 장난감 표 줄 수");
     assert_eq!(OPEN_ROWS.len(), 108, "Swift openRows 줄 수");
     assert_eq!(STORY_ROWS.len(), 33, "Swift storyRows 줄 수");
+    assert_eq!(mark_rows().len(), 51, "Swift markRows 줄 수");
+    assert_eq!(discard_table().len(), 10, "Swift discardRows 줄 수");
+    assert_eq!(CARRIES_ROWS.len(), 8, "Swift carriesRows 줄 수");
+    assert_eq!(FINISH_ROOT_ROWS.len(), 6, "Swift finishRootRows 줄 수");
 }
 
 // Swift: MergeOpenTests.표 — 버리지도 마지막 자율주행 단계에 합치지도 않은 합칠 쪽, 또는 안 한 마지막 기존 가지 단계가 있으면 남았다
@@ -245,6 +283,22 @@ fn merge_open_표() {
         };
         assert!(!br.is_empty() || r.branches == "{}", "{}: 장난감 기록을 찾지 못했다", r.note);
         assert_eq!(merge_open(&br, &steps(r.steps), r.with_autopilot), r.open, "{}", r.note);
+    }
+}
+
+
+// Swift: MergeMarkTests.표 — 가지 기록 없음은 nil, 합칠 쪽마다 버림·합침·기다림 — 모두 같으면 그것(합침은 마지막으로 받은 가지), 섞이면 섞인 수
+#[test]
+fn merge_mark_표() {
+    for r in mark_rows() {
+        let br = match r.branches.strip_prefix("toy:") {
+            Some(id) => object(toy(id)),
+            None => object(r.branches),
+        };
+        assert!(!br.is_empty(), "{}: 장난감 기록을 찾지 못했다", r.note);
+        let m = merge_mark(&br, r.with_autopilot);
+        assert_eq!(m, r.mark, "{}", r.note);
+        assert_eq!(m.map(|m| m.label()).as_deref(), r.label, "{}", r.note);
     }
 }
 
@@ -264,6 +318,36 @@ fn story_repos_표() {
         };
         let want: Value = serde_json::from_str(r.repos).expect("repos JSON");
         assert_eq!(serde_json::to_value(story_repos(v.as_ref())).unwrap(), want, "{}", r.note);
+    }
+}
+
+
+// Swift: DiscardRowsTests.표 — 지운 가지는 버린 줄, 지우지 못한 가지는 못 한 줄
+#[test]
+fn discard_rows_표() {
+    for r in discard_table() {
+        let (d, f) = discard_rows("story:S1", "/r/a", "f/S1", &r.fate, r.is_source, r.recorded, 5.0);
+        let want = |s: Option<&str>| s.map(|j| serde_json::from_str::<Value>(j).expect("JSON"));
+        assert_eq!(d.map(Value::Object), want(r.discarded), "{}", r.note);
+        assert_eq!(f.map(Value::Object), want(r.failed), "{}", r.note);
+    }
+}
+
+// Swift: CarriesBaseTests.표 — 이 실행의 가지를 합치는 단계에서 앞 단계 가지가 출발 가지면 센다
+#[test]
+fn carries_base_표() {
+    for r in CARRIES_ROWS {
+        assert_eq!(carries_base(r.source, r.after, r.base), r.want, "{}", r.note);
+    }
+}
+
+// Swift: FinishRootTests.표 — 뿌리는 그 실행이 출발한 뿌리, --dev 는 맞는지만 본다
+#[test]
+fn finish_root_표() {
+    for r in FINISH_ROOT_ROWS {
+        let (dev, refuse) = finish_root(r.flag, r.run_dev);
+        assert_eq!(dev, r.dev, "{}", r.note);
+        assert_eq!(refuse, r.refuse, "{}", r.note);
     }
 }
 
@@ -373,3 +457,152 @@ fn extra_windows_repo_paths_are_kept_verbatim() {
     let v = json!({"repos": {"C:\\w\\a": {"head": "h"}, "/mnt/c/w/b": {"head": "h"}}});
     assert_eq!(story_repos(Some(&v)).keys().map(String::as_str).collect::<Vec<_>>(), vec!["/mnt/c/w/b", "C:\\w\\a"]);
 }
+
+#[test]
+fn extra_merge_mark_label_and_has_waiting() {
+    assert_eq!(MergeMark::Promoted("main".to_string()).label(), "main 까지 올림");
+    assert_eq!(MergeMark::Promoted("Main".to_string()).label(), "Main 에 합침");
+    assert_eq!(MergeMark::Mixed { promoted: 0, discarded: 0, waiting: 3 }.label(), "기다림 3");
+    assert_eq!(MergeMark::Mixed { promoted: 2, discarded: 0, waiting: 1 }.label(), "합침 2 · 기다림 1");
+    assert_eq!(MergeMark::Mixed { promoted: 0, discarded: 0, waiting: 0 }.label(), "");
+    assert!(MergeMark::Waiting.has_waiting());
+    assert!(MergeMark::Mixed { promoted: 1, discarded: 1, waiting: 1 }.has_waiting());
+    assert!(!MergeMark::Mixed { promoted: 1, discarded: 1, waiting: 0 }.has_waiting());
+    assert!(!MergeMark::Discarded.has_waiting());
+    assert!(!MergeMark::Promoted("live".to_string()).has_waiting());
+}
+
+#[test]
+fn extra_merge_mark_empty_into_counts_as_last_text_but_not_as_promoted() {
+    // `into` 가 빈 글자인 줄은 합친 줄로는 세지 않지만(source 집합에서 빠짐) 원본 compactMap 은 빈 글자도 글자로 본다
+    let br = object(r#"{"promoted":[{"into":"live","source":"autopilot"},{"into":"","source":"autopilot"}],"repos":{"/r/a":{}}}"#);
+    assert_eq!(merge_mark(&br, true), Some(MergeMark::Promoted(String::new())));
+    // promoted 가 배열이 아니면 줄이 없다 → 합친 줄 없음 → 기다림
+    let br = object(r#"{"promoted":"x","repos":{"/r/a":{}}}"#);
+    assert_eq!(merge_mark(&br, true), Some(MergeMark::Waiting));
+}
+
+#[test]
+fn extra_merge_mark_promoted_and_waiting_without_discard_is_mixed() {
+    // Swift 표에 없는 조합: 한 스토리는 합치고 한 스토리는 기다림(버림 없음) → 섞임이지 「마지막으로 받은 가지」가 아니다
+    let br = object(
+        r#"{"promoted":[{"into":"live","repo":"/r/a","source":"story:S1"}],"repos":{"/r/a":{}},"stories":{"S1":{"repos":{"/r/a":{"branch":"f/S1","head":"h1"}}},"S2":{"repos":{"/r/a":{"branch":"f/S2","head":"h2"}}}}}"#,
+    );
+    let m = merge_mark(&br, false).expect("mark");
+    assert_eq!(m, MergeMark::Mixed { promoted: 1, discarded: 0, waiting: 1 });
+    assert_eq!(m.label(), "합침 1 · 기다림 1");
+    assert!(m.has_waiting());
+}
+
+#[test]
+fn extra_discard_rows_write_the_time_like_foundation() {
+    let (d, _) = discard_rows("autopilot", r"C:\w\a", "b", &RefFate::Deleted { head: "h".to_string() }, false, false, 5.0);
+    assert_eq!(serde_json::to_string(&Value::Object(d.unwrap())).unwrap(), r#"{"source":"autopilot","repo":"C:\\w\\a","branch":"b","head":"h","at":5}"#);
+    let (d, _) = discard_rows("autopilot", "/r", "b", &RefFate::Missing, true, false, 5.5);
+    assert_eq!(d.unwrap().get("at"), Some(&json!(5.5)));
+    // 못 한 줄은 op 가 맨 앞이고 why 가 있다
+    let (d, f) = discard_rows("autopilot", "/r", "b", &RefFate::Failed("x".to_string()), true, true, 1.0);
+    assert!(d.is_none());
+    assert_eq!(Value::Object(f.unwrap()), json!({"op":"discard","source":"autopilot","repo":"/r","branch":"b","why":"x","at":1}));
+}
+
+#[test]
+fn extra_carries_base_needs_equal_after_and_base() {
+    assert!(!carries_base("autopilot", None, None));
+    assert!(carries_base("autopilot", Some("dev"), Some("dev")));
+    assert!(!carries_base("branch:x", Some("dev"), Some("dev")));
+    assert!(carries_base("story:S1", Some(""), Some("")));
+}
+
+// ---- 후반 표(Swift 시험 파일에서 기계로 옮김) ----
+
+fn mark_rows() -> Vec<MarkRow> {
+    vec![
+        MarkRow { note: "repos 가 없으면 가지 기록 없는 실행(nil)", branches: r#"{"promoted":[{"into":"dev","source":"autopilot"}]}"#, mark: None, label: None, with_autopilot: true },
+        MarkRow { note: "repos 가 비었으면 버린 줄이 있어도 nil", branches: r#"{"discarded":[{"source":"autopilot"}],"repos":{}}"#, mark: None, label: None, with_autopilot: true },
+        MarkRow { note: "repos 가 객체가 아니면 nil", branches: r#"{"repos":["/r/a"]}"#, mark: None, label: None, with_autopilot: true },
+        MarkRow { note: "가지는 있고 합친 줄·버린 줄이 없으면 합치기 기다림", branches: r#"{"repos":{"/r/a":{}}}"#, mark: Some(MergeMark::Waiting), label: Some("합치기 기다림"), with_autopilot: true },
+        MarkRow { note: "빈 promoted·discarded 도 합치기 기다림", branches: r#"{"discarded":[],"promoted":[],"repos":{"/r/a":{}}}"#, mark: Some(MergeMark::Waiting), label: Some("합치기 기다림"), with_autopilot: true },
+        MarkRow { note: "버린 줄이 있으면 버림", branches: r#"{"discarded":[{"repo":"/r/a","source":"autopilot"}],"repos":{"/r/a":{}}}"#, mark: Some(MergeMark::Discarded), label: Some("버림"), with_autopilot: true },
+        MarkRow { note: "5-3b ②: 합칠 쪽이 아닌 버린 줄(스토리 기록이 없는 story:S1)은 세지 않는다 → master 까지 올림(전에는 실행 전체가 버림)", branches: r#"{"discarded":[{"repo":"/r/a","source":"story:S1"}],"promoted":[{"into":"master","repo":"/r/a","source":"autopilot"}],"repos":{"/r/a":{}}}"#, mark: Some(MergeMark::Promoted("master".to_string())), label: Some("master 까지 올림"), with_autopilot: true },
+        MarkRow { note: "5-3b ②: 버린 줄은 source 가 있는 객체만 센다(전에는 무엇이든 하나 있으면 버림)", branches: r#"{"discarded":["x"],"repos":{"/r/a":{}}}"#, mark: Some(MergeMark::Waiting), label: Some("합치기 기다림"), with_autopilot: true },
+        MarkRow { note: "5-3b ②: 한 스토리는 live 에 합치고 한 스토리는 버림 → 섞임", branches: r#"{"discarded":[{"repo":"/r/a","source":"story:S1"}],"promoted":[{"into":"live","repo":"/r/a","source":"story:S2"}],"repos":{"/r/a":{}},"stories":{"S1":{"repos":{"/r/a":{"branch":"f/S1","head":"h1"}}},"S2":{"repos":{"/r/a":{"branch":"f/S2","head":"h2"}}}}}"#, mark: Some(MergeMark::Mixed { promoted: 1, discarded: 1, waiting: 0 }), label: Some("합침 1 · 버림 1"), with_autopilot: false },
+        MarkRow { note: "5-3b ②: 합침·버림·기다림이 섞임", branches: r#"{"discarded":[{"repo":"/r/a","source":"story:S1"}],"promoted":[{"into":"dev","repo":"/r/a","source":"story:S2"}],"repos":{"/r/a":{}},"stories":{"S1":{"repos":{"/r/a":{"branch":"f/S1","head":"h1"}}},"S2":{"repos":{"/r/a":{"branch":"f/S2","head":"h2"}}},"S3":{"repos":{"/r/a":{"branch":"f/S3","head":"h3"}}}}}"#, mark: Some(MergeMark::Mixed { promoted: 1, discarded: 1, waiting: 1 }), label: Some("합침 1 · 버림 1 · 기다림 1"), with_autopilot: false },
+        MarkRow { note: "5-3b ②: 버림과 기다림만", branches: r#"{"discarded":[{"repo":"/r/a","source":"story:S1"}],"repos":{"/r/a":{}},"stories":{"S1":{"repos":{"/r/a":{"branch":"f/S1","head":"h1"}}},"S2":{"repos":{"/r/a":{"branch":"f/S2","head":"h2"}}}}}"#, mark: Some(MergeMark::Mixed { promoted: 0, discarded: 1, waiting: 1 }), label: Some("버림 1 · 기다림 1"), with_autopilot: false },
+        MarkRow { note: "5-3b ②: 모든 스토리를 합침 → 마지막으로 받은 가지(기존 가지끼리 올린 master 까지)", branches: r#"{"promoted":[{"into":"live","repo":"/r/a","source":"story:S1"},{"into":"live","repo":"/r/a","source":"story:S2"},{"into":"master","repo":"/r/a","source":"branch:live"}],"repos":{"/r/a":{}},"stories":{"S1":{"repos":{"/r/a":{"branch":"f/S1","head":"h1"}}},"S2":{"repos":{"/r/a":{"branch":"f/S2","head":"h2"}}}}}"#, mark: Some(MergeMark::Promoted("master".to_string())), label: Some("master 까지 올림"), with_autopilot: false },
+        MarkRow { note: "5-3b ②: Jira 단위만 있는 실행의 쓰이지 않은 자율주행 가지를 지운 줄은 세지 않는다", branches: r#"{"discarded":[{"repo":"/r/a","source":"autopilot"}],"promoted":[{"into":"live","repo":"/r/a","source":"story:S1"}],"repos":{"/r/a":{}},"stories":{"S1":{"repos":{"/r/a":{"branch":"f/S1","head":"h1"}}}}}"#, mark: Some(MergeMark::Promoted("live".to_string())), label: Some("live 에 합침"), with_autopilot: false },
+        MarkRow { note: "5-3b ②: 스토리 없는 단위가 있는 Jira 실행은 자율주행 가지도 합칠 쪽 — 그 가지만 버림 → 섞임", branches: r#"{"discarded":[{"repo":"/r/a","source":"autopilot"}],"promoted":[{"into":"live","repo":"/r/a","source":"story:S1"}],"repos":{"/r/a":{}},"stories":{"S1":{"repos":{"/r/a":{"branch":"f/S1","head":"h1"}}}}}"#, mark: Some(MergeMark::Mixed { promoted: 1, discarded: 1, waiting: 0 }), label: Some("합침 1 · 버림 1"), with_autopilot: true },
+        MarkRow { note: "5-3b ②④: 가지를 만들지 않은 스토리는 세지 않는다", branches: r#"{"promoted":[{"into":"live","repo":"/r/a","source":"story:S2"}],"repos":{"/r/a":{}},"stories":{"S1":{"repos":{"/r/a":{"branch":"f/S1"}}},"S2":{"repos":{"/r/a":{"branch":"f/S2","head":"h2"}}}}}"#, mark: Some(MergeMark::Promoted("live".to_string())), label: Some("live 에 합침"), with_autopilot: false },
+        MarkRow { note: "5-3b ④: 보드 밖에서 지운 가지를 버린 것으로 적은 줄(left missing)도 버림", branches: r#"{"discarded":[{"branch":"autopilot/x","left":"missing","repo":"/r/a","source":"autopilot"}],"repos":{"/r/a":{}}}"#, mark: Some(MergeMark::Discarded), label: Some("버림"), with_autopilot: true },
+        MarkRow { note: "discarded 가 배열이 아니면 버린 것 없음", branches: r#"{"discarded":{"source":"autopilot"},"repos":{"/r/a":{}}}"#, mark: Some(MergeMark::Waiting), label: Some("합치기 기다림"), with_autopilot: true },
+        MarkRow { note: "dev 에 합침", branches: r#"{"promoted":[{"into":"dev","repo":"/r/a","source":"autopilot"}],"repos":{"/r/a":{}}}"#, mark: Some(MergeMark::Promoted("dev".to_string())), label: Some("dev 에 합침"), with_autopilot: true },
+        MarkRow { note: "마지막으로 받은 가지가 master 면 까지 올림", branches: r#"{"promoted":[{"into":"dev","repo":"/r/a","source":"autopilot"},{"into":"master","repo":"/r/a","source":"branch:dev"}],"repos":{"/r/a":{}}}"#, mark: Some(MergeMark::Promoted("master".to_string())), label: Some("master 까지 올림"), with_autopilot: true },
+        MarkRow { note: "main 도 까지 올림", branches: r#"{"promoted":[{"into":"main","repo":"/r/a","source":"autopilot"}],"repos":{"/r/a":{}}}"#, mark: Some(MergeMark::Promoted("main".to_string())), label: Some("main 까지 올림"), with_autopilot: true },
+        MarkRow { note: "마지막은 promoted 의 차례로 고른다(시각이 아니다)", branches: r#"{"promoted":[{"at":20,"into":"master","repo":"/r/a","source":"autopilot"},{"at":10,"into":"dev","repo":"/r/a","source":"autopilot"}],"repos":{"/r/a":{}}}"#, mark: Some(MergeMark::Promoted("dev".to_string())), label: Some("dev 에 합침"), with_autopilot: true },
+        MarkRow { note: "into 가 없는 줄은 건너뛰고 그 앞 줄", branches: r#"{"promoted":[{"into":"live","repo":"/r/a","source":"autopilot"},{"repo":"/r/a","source":"autopilot"}],"repos":{"/r/a":{}}}"#, mark: Some(MergeMark::Promoted("live".to_string())), label: Some("live 에 합침"), with_autopilot: true },
+        MarkRow { note: "into 가 있는 줄이 없으면 합치기 기다림", branches: r#"{"promoted":[{"repo":"/r/a","source":"autopilot"}],"repos":{"/r/a":{}}}"#, mark: Some(MergeMark::Waiting), label: Some("합치기 기다림"), with_autopilot: true },
+        MarkRow { note: "가지 이름은 대소문자를 가린다(Master 는 에 합침)", branches: r#"{"promoted":[{"into":"Master","repo":"/r/a","source":"autopilot"}],"repos":{"/r/a":{}}}"#, mark: Some(MergeMark::Promoted("Master".to_string())), label: Some("Master 에 합침"), with_autopilot: true },
+        MarkRow { note: "여러 저장소 스토리: 버린 줄이 있는 스토리는 합친 줄이 있어도 버림(엔진은 합친 뒤 버리지 않아 생기지 않는 꼴)", branches: r#"{"discarded":[{"repo":"/r/b","source":"story:S1"}],"promoted":[{"into":"dev","repo":"/r/a","source":"story:S1"},{"into":"live","repo":"/r/a","source":"story:S1"}],"repos":{"/r/a":{},"/r/b":{}},"stories":{"S1":{"repos":{"/r/a":{"branch":"f/S1","head":"h1","merged":["T1","T2"]},"/r/b":{"branch":"f/S1","unmerged":["T3"]}}}}}"#, mark: Some(MergeMark::Discarded), label: Some("버림"), with_autopilot: false },
+        MarkRow { note: "장난감 20261027-1909-zz-ap52-todo(저장소 1·버린 줄 1)", branches: "toy:20261027-1909-zz-ap52-todo", mark: Some(MergeMark::Discarded), label: Some("버림"), with_autopilot: true },
+        MarkRow { note: "장난감 20261027-1918-zz-ap52-jira(저장소 1·스토리 3·버린 줄 7) · 스토리 셋 모두 버림", branches: "toy:20261027-1918-zz-ap52-jira", mark: Some(MergeMark::Discarded), label: Some("버림"), with_autopilot: false },
+        MarkRow { note: "장난감 20261028-1043-zz-ap53-jira(저장소 1·스토리 2·합친 줄 3·버린 줄 3) · 5-3b ②: SHOP-12 는 live·master 까지, SHOP-20 은 버림(전에는 버림)", branches: "toy:20261028-1043-zz-ap53-jira", mark: Some(MergeMark::Mixed { promoted: 1, discarded: 1, waiting: 0 }), label: Some("합침 1 · 버림 1"), with_autopilot: false },
+        MarkRow { note: "장난감 merge-check-1(저장소 1·버린 줄 1)", branches: "toy:merge-check-1", mark: Some(MergeMark::Discarded), label: Some("버림"), with_autopilot: true },
+        MarkRow { note: "장난감 zz-ap51-inplace(저장소 1)", branches: "toy:zz-ap51-inplace", mark: Some(MergeMark::Waiting), label: Some("합치기 기다림"), with_autopilot: true },
+        MarkRow { note: "장난감 zz-ap51-jira(저장소 1·스토리 2) · 두 스토리 모두 기다림", branches: "toy:zz-ap51-jira", mark: Some(MergeMark::Waiting), label: Some("합치기 기다림"), with_autopilot: false },
+        MarkRow { note: "장난감 zz-ap51-judge(저장소 1)", branches: "toy:zz-ap51-judge", mark: Some(MergeMark::Waiting), label: Some("합치기 기다림"), with_autopilot: true },
+        MarkRow { note: "장난감 zz-ap51-long(저장소 1)", branches: "toy:zz-ap51-long", mark: Some(MergeMark::Waiting), label: Some("합치기 기다림"), with_autopilot: true },
+        MarkRow { note: "장난감 zz-ap51-wt(저장소 1)", branches: "toy:zz-ap51-wt", mark: Some(MergeMark::Waiting), label: Some("합치기 기다림"), with_autopilot: true },
+        MarkRow { note: "장난감 zz-ap52-p1(저장소 1·버린 줄 1)", branches: "toy:zz-ap52-p1", mark: Some(MergeMark::Discarded), label: Some("버림"), with_autopilot: true },
+        MarkRow { note: "장난감 zz-ap52-pj(저장소 1·스토리 3·버린 줄 8) · 스토리 셋 모두 버림", branches: "toy:zz-ap52-pj", mark: Some(MergeMark::Discarded), label: Some("버림"), with_autopilot: false },
+        MarkRow { note: "장난감 zz-ap53-cpu(저장소 1·버린 줄 1)", branches: "toy:zz-ap53-cpu", mark: Some(MergeMark::Discarded), label: Some("버림"), with_autopilot: true },
+        MarkRow { note: "장난감 zz-ap53-inplace(저장소 2·합친 줄 6)", branches: "toy:zz-ap53-inplace", mark: Some(MergeMark::Promoted("master".to_string())), label: Some("master 까지 올림"), with_autopilot: true },
+        MarkRow { note: "장난감 zz-ap53-jira(저장소 1·스토리 3·합친 줄 5·버린 줄 3) · 5-3b ②: SHOP-16·SHOP-12 는 live·master 까지, SHOP-20 은 버림(전에는 버림)", branches: "toy:zz-ap53-jira", mark: Some(MergeMark::Mixed { promoted: 2, discarded: 1, waiting: 0 }), label: Some("합침 2 · 버림 1"), with_autopilot: false },
+        MarkRow { note: "장난감 zz-ap53-wt(저장소 1·버린 줄 1)", branches: "toy:zz-ap53-wt", mark: Some(MergeMark::Discarded), label: Some("버림"), with_autopilot: true },
+        MarkRow { note: "장난감 zz-ap53-wt2(저장소 1·합친 줄 3)", branches: "toy:zz-ap53-wt2", mark: Some(MergeMark::Promoted("master".to_string())), label: Some("master 까지 올림"), with_autopilot: true },
+        MarkRow { note: "장난감 zz-ap53-wt3(저장소 1·버린 줄 1)", branches: "toy:zz-ap53-wt3", mark: Some(MergeMark::Discarded), label: Some("버림"), with_autopilot: true },
+        MarkRow { note: "장난감 zz-cpu-ap(저장소 1·버린 줄 1)", branches: "toy:zz-cpu-ap", mark: Some(MergeMark::Discarded), label: Some("버림"), with_autopilot: true },
+        MarkRow { note: "장난감 zz-cpu-ap2(저장소 1·버린 줄 1)", branches: "toy:zz-cpu-ap2", mark: Some(MergeMark::Discarded), label: Some("버림"), with_autopilot: true },
+        MarkRow { note: "장난감 zz-cpu-run(저장소 1·버린 줄 1)", branches: "toy:zz-cpu-run", mark: Some(MergeMark::Discarded), label: Some("버림"), with_autopilot: true },
+        MarkRow { note: "장난감 zz-merge-gui(저장소 1·버린 줄 1)", branches: "toy:zz-merge-gui", mark: Some(MergeMark::Discarded), label: Some("버림"), with_autopilot: true },
+        MarkRow { note: "장난감 zz-mr-before(저장소 2·스토리 3·버린 줄 10) · 스토리 셋 모두 버림", branches: "toy:zz-mr-before", mark: Some(MergeMark::Discarded), label: Some("버림"), with_autopilot: false },
+        MarkRow { note: "장난감 zz-mr-jira(저장소 2·스토리 3·합친 줄 7·못 한 줄 1·버린 줄 6) · 5-3b ②: SHOP-1 은 두 저장소 live·master 까지, SHOP-4·SHOP-6 은 버림(전에는 버림)", branches: "toy:zz-mr-jira", mark: Some(MergeMark::Mixed { promoted: 1, discarded: 2, waiting: 0 }), label: Some("합침 1 · 버림 2"), with_autopilot: false },
+        MarkRow { note: "장난감 zz-mr-jira2(저장소 2·스토리 3·합친 줄 5·못 한 줄 1·버린 줄 8) · 5-3b ②: SHOP-11 은 두 저장소 live 까지, SHOP-14·SHOP-21 은 버림(전에는 버림)", branches: "toy:zz-mr-jira2", mark: Some(MergeMark::Mixed { promoted: 1, discarded: 2, waiting: 0 }), label: Some("합침 1 · 버림 2"), with_autopilot: false },
+        MarkRow { note: "장난감 zz-mr-jira3(저장소 2·스토리 1·합친 줄 4·버린 줄 2) · 5-3b ②: SHOP-41 을 두 저장소 live 에 합침, 버린 줄은 쓰이지 않은 자율주행 가지뿐(전에는 버림)", branches: "toy:zz-mr-jira3", mark: Some(MergeMark::Promoted("live".to_string())), label: Some("live 에 합침"), with_autopilot: false },
+        MarkRow { note: "장난감 zz-mr-old(저장소 1·스토리 1·합친 줄 2·버린 줄 1) · 5-3b ②: SHOP-31 을 live 에 합침, 버린 줄은 쓰이지 않은 자율주행 가지뿐(전에는 버림)", branches: "toy:zz-mr-old", mark: Some(MergeMark::Promoted("live".to_string())), label: Some("live 에 합침"), with_autopilot: false },
+    ]
+}
+
+fn discard_table() -> Vec<DiscardRow> {
+    vec![
+        DiscardRow { note: "지운 합칠 쪽 가지 → 버린 줄", fate: RefFate::Deleted { head: "abc1234".to_string() }, is_source: true, recorded: false, discarded: Some(r#"{"at":5,"branch":"f/S1","head":"abc1234","repo":"/r/a","source":"story:S1"}"#), failed: None },
+        DiscardRow { note: "지운 작업 가지도 버린 줄", fate: RefFate::Deleted { head: "def5678".to_string() }, is_source: false, recorded: false, discarded: Some(r#"{"at":5,"branch":"f/S1","head":"def5678","repo":"/r/a","source":"story:S1"}"#), failed: None },
+        DiscardRow { note: "지우지 못함 → 못 한 줄", fate: RefFate::Failed("잠금 파일".to_string()), is_source: true, recorded: false, discarded: None, failed: Some(r#"{"at":5,"branch":"f/S1","op":"discard","repo":"/r/a","source":"story:S1","why":"잠금 파일"}"#) },
+        DiscardRow { note: "5-3b ④: 이미 없는 합칠 쪽 가지(보드 밖에서 지움)도 버린 줄로 적는다(전에는 적지 않아 합치기 기다림이 남음)", fate: RefFate::Missing, is_source: true, recorded: false, discarded: Some(r#"{"at":5,"branch":"f/S1","left":"missing","repo":"/r/a","source":"story:S1"}"#), failed: None },
+        DiscardRow { note: "5-3b ④: 같은 이름으로 다시 만든 합칠 쪽 가지는 남기되 버린 줄로 적는다", fate: RefFate::Foreign, is_source: true, recorded: false, discarded: Some(r#"{"at":5,"branch":"f/S1","left":"foreign","repo":"/r/a","source":"story:S1"}"#), failed: None },
+        DiscardRow { note: "같은 이름으로 다시 만든 작업 가지는 적지 않는다", fate: RefFate::Foreign, is_source: false, recorded: false, discarded: None, failed: None },
+        DiscardRow { note: "5-3b ④: 이미 버린 줄이 있는 가지가 없으면 다시 적지 않는다(버리기를 다시 눌러도 줄이 늘지 않게)", fate: RefFate::Missing, is_source: true, recorded: true, discarded: None, failed: None },
+        DiscardRow { note: "이미 버린 줄이 있는 남긴 가지도 다시 적지 않는다", fate: RefFate::Foreign, is_source: true, recorded: true, discarded: None, failed: None },
+        DiscardRow { note: "이미 버린 줄이 있어도 지운 가지는 적는다(같은 이름으로 다시 생겼다가 지움)", fate: RefFate::Deleted { head: "abc1234".to_string() }, is_source: true, recorded: true, discarded: Some(r#"{"at":5,"branch":"f/S1","head":"abc1234","repo":"/r/a","source":"story:S1"}"#), failed: None },
+        DiscardRow { note: "이미 없는 작업 가지는 적지 않는다", fate: RefFate::Missing, is_source: false, recorded: false, discarded: None, failed: None },
+    ]
+}
+
+const CARRIES_ROWS: &[CarriesRow] = &[
+    CarriesRow { note: "② live ← 자율주행 가지(after dev), 출발 가지 dev → 센다", source: "autopilot", after: Some("dev"), base: Some("dev"), want: true },
+    CarriesRow { note: "스토리 가지도 같다", source: "story:S1", after: Some("dev"), base: Some("dev"), want: true },
+    CarriesRow { note: "① dev ← 자율주행 가지(after 없음) → 세지 않는다", source: "autopilot", after: None, base: Some("dev"), want: false },
+    CarriesRow { note: "② 인데 출발 가지가 live → 세지 않는다", source: "autopilot", after: Some("dev"), base: Some("live"), want: false },
+    CarriesRow { note: "출발 가지를 모름 → 세지 않는다", source: "autopilot", after: Some("dev"), base: None, want: false },
+    CarriesRow { note: "5-3b ③: ③ master ← live(after live)는 출발 가지가 live 여도 세지 않는다(전에는 앞 실행의 커밋까지 셈)", source: "branch:live", after: Some("live"), base: Some("live"), want: false },
+    CarriesRow { note: "기존 가지끼리 올리는 단계는 출발 가지와 상관없이 세지 않는다", source: "branch:dev", after: Some("dev"), base: Some("dev"), want: false },
+    CarriesRow { note: "③ 인데 출발 가지가 dev → 세지 않는다", source: "branch:live", after: Some("live"), base: Some("dev"), want: false },
+];
+
+const FINISH_ROOT_ROWS: &[FinishRootRow] = &[
+    FinishRootRow { note: "시험 빌드 실행에 --dev → 시험 빌드 뿌리", flag: true, run_dev: Some(true), dev: true, refuse: false },
+    FinishRootRow { note: "시험 빌드 실행에 --dev 가 없어도 run.json 을 따른다(보드·옛 손 명령)", flag: false, run_dev: Some(true), dev: true, refuse: false },
+    FinishRootRow { note: "설치판 실행 → 설치판 뿌리", flag: false, run_dev: Some(false), dev: false, refuse: false },
+    FinishRootRow { note: "설치판 실행에 --dev → 거부(다른 뿌리의 승격 차례·기록으로 가지를 움직이지 않게)", flag: true, run_dev: Some(false), dev: false, refuse: true },
+    FinishRootRow { note: "run.json 에 dev 가 없는 옛 실행은 --dev 를 따른다", flag: true, run_dev: None, dev: true, refuse: false },
+    FinishRootRow { note: "옛 실행에 --dev 가 없으면 설치판 뿌리", flag: false, run_dev: None, dev: false, refuse: false },
+];

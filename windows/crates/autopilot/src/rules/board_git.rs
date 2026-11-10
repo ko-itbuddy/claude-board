@@ -56,7 +56,7 @@ fn is_sep(c: char) -> bool {
 
 /// `NSString.deletingLastPathComponent` 와 같은 꼴의 부모 경로. 끝의 구분자는 무시한다.
 /// POSIX(`/w/repo` → `/w`, `/repo` → `/`, `repo` → 빈 글)에 더해 `\` 구분자·드라이브(`C:\w\repo` → `C:\w`, `C:\repo` → `C:\`)도 푼다.
-fn parent_path(p: &str) -> String {
+pub(crate) fn parent_path(p: &str) -> String {
     let t = p.trim_end_matches(is_sep);
     if t.is_empty() {
         return if p.is_empty() { String::new() } else { p[..1].to_string() };
@@ -76,7 +76,7 @@ fn parent_path(p: &str) -> String {
 }
 
 /// 부모 경로가 뿌리(더 올라갈 데가 없는 자리)인가 — `/`, 빈 글, 드라이브 뿌리(`C:`·`C:\`·`C:/`), UNC 서버(`\\서버`), 접두 `\\?\` 드라이브.
-fn is_root(parent: &str) -> bool {
+pub(crate) fn is_root(parent: &str) -> bool {
     if parent.is_empty() {
         return true;
     }

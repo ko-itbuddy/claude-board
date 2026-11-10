@@ -16,15 +16,22 @@ pub mod rules {
     /// Windows 전용(실행 환경 → 동의·판정 호출 꼴). PORTED.json 의 windows_only 에 둔다
     pub mod env_policy;
     pub mod evidence;
+    pub mod formats;
     pub mod leftovers;
     pub mod links;
+    pub mod multirun;
     pub mod gitlinks;
     pub mod history;
+    pub mod inbox;
     pub mod instruction;
+    pub mod prep_git;
     pub mod prose;
     pub mod purge;
     pub mod records;
     pub mod report_gate;
+    pub mod scenarios;
+    pub mod sequence;
+    pub mod stack;
     pub mod start_settings;
     pub mod stopline;
 }

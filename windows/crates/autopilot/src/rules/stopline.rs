@@ -6,7 +6,7 @@ use claude_board_core::clock::{self, LocalTime};
 use serde_json::{Map, Value};
 
 // 사용량 값의 수 — 엔진 num() 과 같다(수, NSNumber 처럼 불리언, 수로 읽히는 글자). 원본: `apStopNum`
-fn stop_num(v: Option<&Value>) -> Option<f64> {
+pub(crate) fn stop_num(v: Option<&Value>) -> Option<f64> {
     match v? {
         Value::Number(n) => n.as_f64(),
         Value::Bool(b) => Some(f64::from(u8::from(*b))),
