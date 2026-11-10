@@ -158,20 +158,23 @@ import SwiftUI
 }
 
 // 1단계: 작업 경로 · 원천 칸 · 덧붙일 말
+// 두 칸(2단계 ②): 왼쪽(.main) 원천 칸·덧붙일 말, 오른쪽(.side) 작업 경로·에픽
 struct APImportStep1: View {
     @ObservedObject var s: APStart
     @ObservedObject var m: APImportInput
+    var part: APSheetPart = .main
     @ObservedObject private var cn = APConnections.shared   // 연결 목록·키체인 있음 여부가 늦게 읽혀도 서비스 잠금을 다시 그린다
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            pathBox
+        if part == .main {
             switch s.source {
             case "todo": todoBox
             case "list": listBox
             default: legacyBox
             }
-            if s.jira { APEpicBox(s: s) }
             requestBox
+        } else {
+            pathBox
+            if s.jira { APEpicBox(s: s) }
         }
     }
 
@@ -192,7 +195,8 @@ struct APImportStep1: View {
     }
 
     private var todoBox: some View {
-        APBox(title: "할 일 문서", note: "파일과 그 안의 절을 고릅니다 · 체크박스·목록 항목이 항목이고 [x] 는 끝난 것", axid: "ap-imp-todo-box") {
+        APBox(title: "할 일 문서", note: "파일과 그 안의 절을 고릅니다", axid: "ap-imp-todo-box",
+              info: "체크박스·목록 항목이 항목이고 [x] 는 끝난 것입니다. 파일은 저장소 안에서만 읽고 바로 가기(링크)는 따라가지 않습니다. 끝난 표시([x]·취소선·(완료))와 진행 중([~])인 항목은 가립니다") {
             TextField("저장소 안 경로(예: docs/TODO.md)", text: $m.file)
                 .textFieldStyle(.roundedBorder).boardFont(APType.label)
                 .accessibilityIdentifier("ap-imp-file-input")
@@ -211,12 +215,12 @@ struct APImportStep1: View {
                     APPickRow(on: m.section == h, axid: "ap-imp-section-\(i + 1)", action: { m.section = h }) { Text(h).boardFont(APType.body) }
                 }
             }
-            apNote("파일은 저장소 안에서만 읽고 바로 가기(링크)는 따라가지 않습니다. 끝난 표시([x]·취소선·(완료))와 진행 중([~])인 항목은 가립니다.")
         }
     }
 
     private var listBox: some View {
-        APBox(title: "바깥 목록", note: "연결이 있는 서비스만 · 메타 정보만 읽습니다", axid: "ap-imp-list-box") {
+        APBox(title: "바깥 목록", note: "연결이 있는 서비스만 · 메타 정보만 읽습니다", axid: "ap-imp-list-box",
+              info: "읽기 요청만 보냅니다(Jira 는 검색 GET, Notion 은 데이터베이스 질의). 끝난 상태(Done·Complete)와 진행 중(In Progress)인 항목은 가리고, Jira 번호는 단위의 티켓으로 그대로 넘깁니다") {
             ForEach([APService.atlassian, .notion], id: \.self) { svc in
                 let lock = m.serviceLock(svc)
                 APPickRow(on: m.service == svc.rawValue, enabled: lock == nil, help: lock ?? "", axid: "ap-imp-svc-\(svc.rawValue)", action: { m.service = svc.rawValue }) {
@@ -236,16 +240,15 @@ struct APImportStep1: View {
                 let q = apListQuery(m.query, service: svc)
                 if case .bad(let why) = q { apNote(why, APColor.fail) } else { apNote("읽을 것: " + q.label) }
             }
-            apNote("읽기 요청만 보냅니다(Jira 는 검색 GET, Notion 은 데이터베이스 질의). 끝난 상태(Done·Complete)와 진행 중(In Progress)인 항목은 가리고, Jira 번호는 단위의 티켓으로 그대로 넘깁니다.")
         }
     }
 
     private var legacyBox: some View {
-        APBox(title: "옛 자동화 폴더", note: "멈춘 자리 기록과 원장(글 파일)을 읽습니다", axid: "ap-imp-legacy-box") {
+        APBox(title: "옛 자동화 폴더", note: "멈춘 자리 기록과 원장(글 파일)을 읽습니다", axid: "ap-imp-legacy-box",
+              info: "이 폴더 안 글 파일(md·txt·json·jsonl·yaml·log 등, 깊이 3·40개·파일마다 256 KB 까지)만 읽고 바로 가기는 따라가지 않습니다. 비밀이 흔한 이름(.env·key·secret·token 등)은 읽지 않고, 읽은 글의 비밀 꼴은 가린 뒤 근거 묶음으로만 넘깁니다. 원장의 줄(제목·상태·id)이 항목입니다") {
             TextField("폴더 경로(예: ~/old-automation/state)", text: $m.folder)
                 .textFieldStyle(.roundedBorder).boardFont(APType.label)
                 .accessibilityIdentifier("ap-imp-folder")
-            apNote("이 폴더 안 글 파일(md·txt·json·jsonl·yaml·log 등, 깊이 3·40개·파일마다 256 KB 까지)만 읽고 바로 가기는 따라가지 않습니다. 비밀이 흔한 이름(.env·key·secret·token 등)은 읽지 않고, 읽은 글의 비밀 꼴은 가린 뒤 근거 묶음으로만 넘깁니다. 원장의 줄(제목·상태·id)이 항목입니다.")
         }
     }
 
@@ -301,7 +304,7 @@ struct APImportSourceBox: View {
         func n(_ k: String) -> Int { (c[k] as? NSNumber)?.intValue ?? 0 }
         let parts = [("source_done", "원천에서 끝남"), ("source_progress", "원천에서 진행 중"), ("records_done", "이미 끝남"), ("running", "도는 실행에서 진행 중"),
                      ("queue_state", "대기열에서 뺀·보류한 줄")].compactMap { k, l in (hidden[k] ?? 0) > 0 ? "\(l) \(hidden[k]!)" : nil }
-        return APBox(title: "원천", note: "늘 보입니다", axid: "ap-imp-source") {
+        return APBox(title: "원천", axid: "ap-imp-source") {
             HStack(spacing: 6) {
                 APChip(text: s.importSource?.label ?? s.source, color: Palette.accent, strong: true)
                 Text(g["origin"] as? String ?? "").boardFont(APType.mono).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)

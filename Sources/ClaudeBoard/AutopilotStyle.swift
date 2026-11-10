@@ -260,17 +260,19 @@ struct APBack: View {
     }
 }
 
-// 제목이 있는 상자
+// 제목이 있는 상자 — info 를 주면 제목 옆에 ⓘ 도움말(2단계 ②: 늘 붙어 있던 사용법 note 를 옮길 자리, 주지 않으면 전과 같은 꼴)
 struct APBox<Content: View>: View {
     let title: String
     var note = ""
     var tint: Color? = nil
     var axid = ""
+    var info = ""
     @ViewBuilder let content: () -> Content
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(title).boardFont(APType.label, weight: .bold).fixedSize()
+                if !info.isEmpty { APInfo(text: info) }
                 if !note.isEmpty { Text(note).boardFont(APType.note).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
                 Spacer(minLength: 0)
             }
@@ -439,5 +441,122 @@ struct APGoPill: View {
         .padding(.horizontal, mini ? 7 : 9).frame(height: mini ? 22 : 25)
         .background(Capsule().fill(color.opacity(hover ? 0.26 : 0.16)))
         .overlay(Capsule().stroke(color.opacity(0.45), lineWidth: 0.5))
+    }
+}
+
+// MARK: 2단계 ②에서 더한 부품(출발 준비·합치기 시트)
+
+// 시트 두 칸 — 시트 폭이 apSheetWideMin 이상이면 왼쪽 본문(읽을 것·입력)과 오른쪽 정할 것(+ 아래에 붙은 단추 자리)을 따로 스크롤한다.
+// 오른쪽 폭은 시트 폭의 약 1/3 을 440~540pt 로 묶고 나머지가 왼쪽이다. 그보다 좁으면 한 칸(본문 → 정할 것 차례로 가운데, 단추 자리는 아래).
+// 전에는 내용이 maxWidth 1000 왼쪽 정렬이라 넓은 시트(1679pt)의 오른쪽 40% 가 비고 아래 줄 단추가 시트 반대편 구석에 있었다(진단 d·e)
+let apSheetWideMin: CGFloat = 1100
+private struct APSheetWideKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues {
+    // 두 칸으로 그리는 중인가 — 합치기 시트의 단계 "바뀐 줄"처럼 두 칸이면 왼쪽(넓게)에, 한 칸이면 그 자리에 그리는 것이 본다
+    var apSheetWide: Bool {
+        get { self[APSheetWideKey.self] }
+        set { self[APSheetWideKey.self] = newValue }
+    }
+}
+
+// 화면 한 단계를 두 칸으로 나눌 때 어느 쪽을 그릴지(같은 보기를 두 번 만들어 왼쪽·오른쪽에 둔다)
+enum APSheetPart { case main, side }
+
+struct APSheetColumns<Main: View, Side: View, Foot: View>: View {
+    @ViewBuilder let main: () -> Main
+    @ViewBuilder let side: () -> Side
+    @ViewBuilder let foot: () -> Foot
+    var body: some View {
+        GeometryReader { g in
+            if g.size.width >= apSheetWideMin {
+                let sw = min(540, max(440, (g.size.width * 0.33).rounded()))
+                HStack(spacing: 0) {
+                    ScrollView(showsIndicators: true) {
+                        VStack(alignment: .leading, spacing: 12) { main() }
+                            .padding(16)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                    }
+                    Divider().opacity(0.45)
+                    VStack(spacing: 0) {
+                        ScrollView(showsIndicators: true) {
+                            VStack(alignment: .leading, spacing: 12) { side() }
+                                .padding(16)
+                                .frame(maxWidth: .infinity, alignment: .topLeading)
+                        }
+                        Divider().opacity(0.45)
+                        foot().padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 14)
+                    }
+                    .frame(width: sw)
+                    .background(Color.white.opacity(0.025))
+                }
+                .environment(\.apSheetWide, true)
+            } else {
+                VStack(spacing: 0) {
+                    ScrollView(showsIndicators: true) {
+                        VStack(alignment: .leading, spacing: 12) { main(); side() }
+                            .padding(16)
+                            .frame(maxWidth: 880, alignment: .topLeading)
+                            .frame(maxWidth: .infinity)
+                    }
+                    Divider().opacity(0.45)
+                    foot().padding(.horizontal, 16).padding(.vertical, 10)
+                        .frame(maxWidth: 880)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+        }
+    }
+}
+
+// 시트의 주 단추(다음·출발·지금 누를 합치기) — 꽉 찬 주황 넓은 단추(높이 38, 14pt 굵게). 놓인 자리의 폭을 채운다.
+// 잠기면 흐리게, 도움말에 까닭(까닭 글은 따로 한 번 보인다)
+struct APMainButton: View {
+    let title: String
+    var icon: String? = nil
+    var enabled = true
+    var help = ""
+    var axid = ""
+    let action: @MainActor () -> Void
+    @State private var hover = false
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if let icon { Image(systemName: icon).font(.system(size: 13.5, weight: .bold)) }
+                Text(title).boardFont(APType.label, weight: .bold).lineLimit(1)
+            }
+            .foregroundStyle(enabled ? Color(white: 0.07) : Color.secondary)
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity).frame(height: 38)
+            .background(RoundedRectangle(cornerRadius: 10).fill(enabled ? Palette.accent.opacity(hover ? 1 : 0.92) : Palette.accent.opacity(0.10)))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(enabled ? Color.white.opacity(hover ? 0.35 : 0.18) : Palette.accent.opacity(0.22), lineWidth: 0.5))
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .modifier(ClickableIf(active: enabled, hover: $hover))
+        .hint(help.isEmpty ? title : help)
+        .accessibilityIdentifier(axid)
+    }
+}
+
+// 시트 오른쪽 칸의 머리 — 상자 없이 제목(14 굵게)·ⓘ·뒤에 붙는 것. 오른쪽 칸 자체가 판이라 상자를 겹치지 않는다
+struct APSideHead<Trailing: View>: View {
+    let title: String
+    var sub = ""
+    var info = ""
+    @ViewBuilder var trailing: () -> Trailing
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(title).boardFont(APType.label, weight: .bold).fixedSize()
+            if !sub.isEmpty { Text(sub).boardFont(APType.body).foregroundStyle(.secondary).fixedSize() }
+            if !info.isEmpty { APInfo(text: info) }
+            Spacer(minLength: 4)
+            trailing()
+        }
+    }
+}
+extension APSideHead where Trailing == EmptyView {
+    init(title: String, sub: String = "", info: String = "") {
+        self.init(title: title, sub: sub, info: info, trailing: { EmptyView() })
     }
 }

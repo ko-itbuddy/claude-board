@@ -5852,21 +5852,16 @@ struct APStartSheet: View {
             head
             steps
             Divider().opacity(0.35)
-            ScrollView(showsIndicators: true) {
-                SwiftUI.Group {
-                    switch s.step {
-                    case 1: APStep1(s: s)
-                    case 2: APStep2(s: s)
-                    case 3: APStep3(s: s)
-                    default: APConfirm(s: s)
-                    }
+            // 단계마다 두 칸(APSheetColumns): 왼쪽 본문, 오른쪽 정할 것과 아래 줄(APStartFoot). 좁으면 한 칸
+            SwiftUI.Group {
+                switch s.step {
+                case 1: APStep1(s: s)
+                case 2: APStep2(s: s)
+                case 3: APStep3(s: s)
+                default: APConfirm(s: s)
                 }
-                .padding(16)
-                .frame(maxWidth: 1000, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            Divider().opacity(0.35)
-            APStartFoot(s: s).padding(.horizontal, 16).padding(.vertical, 10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 460, minHeight: 440)
         .background(Backdrop())
@@ -5893,36 +5888,56 @@ struct APStartSheet: View {
         .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
     }
 
+    // 단계 표시 — 지금 단계는 번호를 채우고 이름을 굵게(14pt), 지난 단계는 체크, 뒤 단계는 흐리게. 아래에 이 단계에서 사람이 할 일 한 줄
     private var steps: some View {
         let names = ["원천 고르기", "보드가 준비", "단위 제안·출발 카드", "출발 확인"]
-        return WrapRow(spacing: 6) {
-            ForEach(0..<4, id: \.self) { i in
-                let n = i + 1
-                let can = n == 1 || (n == 2 && (s.preparing || s.prepared || (s.freshSource && !s.lines.isEmpty))) || (n >= 3 && s.prepared && !s.preparing)
-                Button {
-                    guard can, n != s.step, !s.starting else { return }
-                    if n == 4 { s.toConfirm() } else if n == 3 { s.toProposal() } else { s.step = n }
-                } label: {
-                    HStack(spacing: 5) {
-                        Text("\(n)").boardFont(APType.monoSmall, weight: .bold)
-                            .frame(width: 19, height: 19)
-                            .background(RoundedRectangle(cornerRadius: 4).fill(n == s.step ? Palette.accent : Color.white.opacity(can ? 0.14 : 0.06)))
-                        Text(names[i]).boardFont(APType.body, weight: n == s.step ? .bold : .regular).fixedSize()
+        let todo = ["어디서 일을 가져올지 고르고, 고른 원천의 내용을 확인합니다",
+                    s.preparing ? "보드가 혼자 준비하는 중입니다. 시트를 닫아도 뒤에서 이어 갑니다" : "보드가 준비한 결과에서 사람이 볼 것만 확인합니다",
+                    "이번 실행에 넣을 단위를 고릅니다. 출발 카드는 다음 단계에서 답합니다",
+                    "출발 카드에 답하고 가지·설정을 확인한 뒤 출발합니다"]
+        return VStack(alignment: .leading, spacing: 6) {
+            WrapRow(spacing: 4) {
+                ForEach(0..<4, id: \.self) { i in
+                    let n = i + 1
+                    let can = n == 1 || (n == 2 && (s.preparing || s.prepared || (s.freshSource && !s.lines.isEmpty))) || (n >= 3 && s.prepared && !s.preparing)
+                    let cur = n == s.step, past = n < s.step
+                    HStack(spacing: 4) {
+                        if i > 0 {
+                            Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold)).foregroundStyle(Color.secondary.opacity(0.5)).padding(.trailing, 2)
+                        }
+                        Button {
+                            guard can, n != s.step, !s.starting else { return }
+                            if n == 4 { s.toConfirm() } else if n == 3 { s.toProposal() } else { s.step = n }
+                        } label: {
+                            HStack(spacing: 6) {
+                                SwiftUI.Group {
+                                    if past && can { Image(systemName: "checkmark").font(.system(size: 10.5, weight: .heavy)) }
+                                    else { Text("\(n)").boardFont(APType.body, weight: .bold).monospacedDigit() }
+                                }
+                                .foregroundStyle(cur ? Color(white: 0.07) : (can ? Color.primary : Color.secondary.opacity(0.6)))
+                                .frame(width: 22, height: 22)
+                                .background(Circle().fill(cur ? Palette.accent : Color.white.opacity(can ? 0.14 : 0.05)))
+                                Text(names[i]).boardFont(cur ? APType.label : APType.body, weight: cur ? .bold : .regular).fixedSize()
+                            }
+                            .foregroundStyle(cur ? .primary : (can ? .secondary : Color.secondary.opacity(0.5)))
+                            .padding(.horizontal, 4).padding(.vertical, 3)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("ap-step-\(n)")
                     }
-                    .foregroundStyle(n == s.step ? .primary : (can ? .secondary : Color.secondary.opacity(0.5)))
-                    .padding(.horizontal, 6).padding(.vertical, 3)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("ap-step-\(n)")
             }
+            Text(todo[max(0, min(3, s.step - 1))]).boardFont(APType.body).foregroundStyle(Color.primary.opacity(0.78))
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("ap-step-todo")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 16).padding(.bottom, 8)
+        .padding(.horizontal, 16).padding(.bottom, 10)
     }
 }
 
-// 아래 줄 — 단계마다 이전·다음, 4단계는 출발과 잠금 까닭(와이어프레임 출발 확인 ⑩: 고정 안내는 누르기 전부터 단추 옆에)
+// 아래 줄 — 두 칸이면 오른쪽 칸 아래에 붙고, 한 칸이면 시트 아래. 막는 까닭은 여기 한 번만(4단계 "출발을 막는 것"도 여기), 그 아래 [이전] [다음/출발]
 struct APStartFoot: View {
     @ObservedObject var s: APStart
     @ObservedObject private var ap = AutopilotStore.shared   // 같은 경로에서 도는 실행이 끝나면 잠금이 풀리게
@@ -5930,35 +5945,49 @@ struct APStartFoot: View {
     @ObservedObject private var im = APStart.shared.imp      // 가져오기 입력이 바뀌면 다음 단추가 풀리게(7단계 ⑫-7a)
     @ObservedObject private var cn = APConnections.shared
     var body: some View {
-        HStack(alignment: .center, spacing: 8) {
-            if s.step > 1 { APButton(title: "이전", enabled: !s.starting, axid: "ap-prev") { s.step == 4 ? s.toProposal() : (s.step = s.step - 1) } }
-            message.frame(maxWidth: .infinity, alignment: .leading)
-            next
+        VStack(alignment: .leading, spacing: 8) {
+            message
+            HStack(alignment: .center, spacing: 8) {
+                if s.step > 1 { APButton(title: "이전", enabled: !s.starting, axid: "ap-prev") { s.step == 4 ? s.toProposal() : (s.step = s.step - 1) } }
+                next
+            }
+            if s.step == 4 {
+                apNote("출발하면 대기열과 자율주행 세트가 고정됩니다. 목표를 바꾸려면 멈추고 다시 출발합니다.")
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder private var message: some View {
         switch s.step {
         case 1:
-            if s.source == "topic" { apNote(tp.blocker ?? "원천은 하나만 고릅니다", tp.blocker == nil ? .secondary : APColor.limit) }
-            else if s.isImport { let b = im.blocker(s.source); apNote(b ?? "원천은 하나만 고릅니다", b == nil ? .secondary : APColor.limit) }
-            else { apNote(s.hasDraft ? "원천은 하나만 고릅니다" : (s.past.isEmpty ? "이어 갈 지난 실행이 아직 없습니다. 주제로 시작을 고를 수 있습니다" : "원천을 하나 고릅니다")) }
+            if s.source == "topic" { if let b = tp.blocker { apNote(b, APColor.limit) } }
+            else if s.isImport { if let b = im.blocker(s.source) { apNote(b, APColor.limit) } }
+            else if !s.hasDraft { apNote(s.past.isEmpty ? "원천을 하나 고릅니다. 이어 갈 지난 실행이 아직 없어 주제로 시작 등을 고릅니다" : "원천을 하나 고릅니다") }
+            else if s.units.isEmpty { apNote("이어 갈 단위가 없습니다", APColor.limit) }
+            else if let w = s.noDefs { apNote(w, APColor.limit) }
         case 2:
             if s.preparing, s.linkUndecided { apNote("못 읽은 링크가 있습니다. 줄마다 다시 읽거나 이 링크를 빼고 계속합니다", APColor.limit) }
-            else if s.preparing { apNote("준비하는 중입니다. 끝나면 다음으로 갈 수 있습니다. 시트를 닫아도 뒤에서 이어 갑니다") }
+            else if s.preparing { apNote("준비하는 중입니다. 끝나면 다음으로 갈 수 있습니다") }
             else if !s.gitBlocked.isEmpty { apNote("git 자리 확인에 걸린 저장소가 있어 준비를 멈췄습니다. 까닭을 확인해 고친 뒤 1단계에서 다시 준비합니다", APColor.limit) }
             else if s.source == "topic", !s.prepared { apNote("주제로 시작 준비가 멈췄습니다. 실패한 줄의 까닭을 보고 1단계에서 고친 뒤 다시 준비합니다", APColor.limit) }
             else if s.isImport, !s.prepared { apNote("가져오기 준비가 멈췄습니다. 실패한 줄의 까닭을 보고 1단계에서 고친 뒤 다시 준비합니다", APColor.limit) }
             else if !s.problems.isEmpty { apNote("엔진이 출발 전 확인에서 고칠 것을 찾았습니다. 단위 제안은 볼 수 있고 출발은 잠깁니다", APColor.limit) }
             else if s.mode == "in_place", !s.modeReason.contains("설정으로") { apNote("따로 작업 트리 확인이 실패해 원래 작업 트리에서 돕니다", APColor.limit) }
             else { apNote("준비가 끝났습니다") }
-        case 3: apNote(s.cards.isEmpty ? "출발 카드가 없습니다" : "출발 카드 \(s.cards.count)장은 출발 확인에서 답합니다")
+        case 3:
+            if !s.prepared { apNote("준비가 끝나야 출발 확인으로 갑니다", APColor.limit) }
         default:
             let l = s.locks
-            VStack(alignment: .leading, spacing: 2) {
-                if s.starting { apNote("출발하는 중입니다. 엔진이 가지·작업 트리를 만들고 LaunchAgent 를 올립니다", APColor.work) }
-                else if let first = l.first { apNote(first, APColor.limit) }
-                apNote("출발하면 대기열과 자율주행 세트가 고정됩니다. 목표를 바꾸려면 멈추고 다시 출발합니다.")
+            if s.starting { apNote("출발하는 중입니다. 엔진이 가지·작업 트리를 만들고 LaunchAgent 를 올립니다", APColor.work) }
+            else if l.count == 1 { apNote(l[0], APColor.limit).accessibilityIdentifier("ap-locks") }
+            else if l.count > 1 {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("출발을 막는 것 \(l.count)").boardFont(APType.body, weight: .bold).foregroundStyle(APColor.limit)
+                    ForEach(l, id: \.self) { apNote("· " + $0, APColor.limit) }
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("ap-locks")
             }
         }
     }
@@ -5967,39 +5996,40 @@ struct APStartFoot: View {
         switch s.step {
         case 1:
             if s.source == "topic" {
-                APButton(title: "다음: 보드가 준비", primary: true, enabled: tp.ready && (!s.preparing || s.topicRedoable), help: tp.blocker ?? "보드가 혼자 준비합니다(새 폴더면 이때 만듭니다)", axid: "ap-next") {
+                APMainButton(title: "다음: 보드가 준비", enabled: tp.ready && (!s.preparing || s.topicRedoable), help: tp.blocker ?? "보드가 혼자 준비합니다(새 폴더면 이때 만듭니다)", axid: "ap-next") {
                     s.prepareTopic()
                 }
             } else if s.isImport {
                 let b = im.blocker(s.source)
-                APButton(title: "다음: 보드가 준비", primary: true, enabled: b == nil && !s.preparing, help: b ?? "보드가 원천을 모으고 가져오기 세션으로 단위 초안을 씁니다", axid: "ap-next") {
+                APMainButton(title: "다음: 보드가 준비", enabled: b == nil && !s.preparing, help: b ?? "보드가 원천을 모으고 가져오기 세션으로 단위 초안을 씁니다", axid: "ap-next") {
                     s.prepareImport()
                 }
             } else {
-                APButton(title: "다음: 보드가 준비", primary: true, enabled: s.hasDraft && !s.units.isEmpty && s.noDefs == nil,
-                         help: s.units.isEmpty ? "이어 갈 단위가 없습니다" : "보드가 혼자 준비합니다", axid: "ap-next") {
+                APMainButton(title: "다음: 보드가 준비", enabled: s.hasDraft && !s.units.isEmpty && s.noDefs == nil,
+                             help: s.units.isEmpty ? "이어 갈 단위가 없습니다" : "보드가 혼자 준비합니다", axid: "ap-next") {
                     if s.prepared || s.preparing { s.step = 2 } else { s.prepare() }
                 }
             }
         case 2:
-            APButton(title: "다음: 단위 제안", primary: true, enabled: s.prepared && !s.preparing,
-                     help: s.source == "topic" && !s.prepared ? "초안 세션이 단위를 쓰고 기계 검사를 지나야 단위 제안으로 갑니다" : "", axid: "ap-next") { s.toProposal() }
-        case 3: APButton(title: "다음: 출발 확인", primary: true, enabled: s.prepared, axid: "ap-next") { s.toConfirm() }
+            APMainButton(title: "다음: 단위 제안", enabled: s.prepared && !s.preparing,
+                         help: s.source == "topic" && !s.prepared ? "초안 세션이 단위를 쓰고 기계 검사를 지나야 단위 제안으로 갑니다" : "", axid: "ap-next") { s.toProposal() }
+        case 3: APMainButton(title: "다음: 출발 확인", enabled: s.prepared, axid: "ap-next") { s.toConfirm() }
         default:
-            APButton(title: s.starting ? "출발하는 중" : "출발", icon: "steeringwheel", primary: true, enabled: s.locks.isEmpty && !s.starting,
-                     help: s.locks.first ?? "엔진을 출발시킵니다", axid: "ap-start-go") { s.start() }
+            APMainButton(title: s.starting ? "출발하는 중" : "출발", icon: "steeringwheel", enabled: s.locks.isEmpty && !s.starting,
+                         help: s.locks.first ?? "엔진을 출발시킵니다", axid: "ap-start-go") { s.start() }
         }
     }
 }
 
-// 1단계 원천 고르기 — 원천 다섯(이어 가기 말고는 잠금과 까닭), 이어 갈 실행, 작업 경로, 에픽(Jira 연결 프로젝트), 가져올 것
+// 1단계 원천 고르기 — 왼쪽: 원천 다섯(이어 가기 말고는 잠금과 까닭)과 고른 원천의 읽을 것(가져올 것·주제 글·링크·원천 칸),
+// 오른쪽: 고른 원천에서 정할 것(이어 갈 실행·작업 경로·남은 가지 경고·에픽·기술 스택)과 다음
 struct APStep1: View {
     @ObservedObject var s: APStart
     @ObservedObject private var cn = APConnections.shared   // 바깥 목록 원천의 잠금(연결·키체인 있음)이 늦게 읽혀도 다시 그리게(7단계 ⑫-7a)
     @State private var pickRun = false
     @State private var openParked = false
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        APSheetColumns {
             if let p = s.presetRoot {
                 HStack(spacing: 6) {
                     Image(systemName: "folder").font(.system(size: 13)).foregroundStyle(Palette.accent)
@@ -6008,26 +6038,42 @@ struct APStep1: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("ap-preset-root")
             }
-            APBox(title: "어디서 일을 가져올까요?", note: "하나만 고릅니다") {
-                source("continue", "지난 실행 이어 가기", continueSummary, lock: continueLock)
-                source("todo", "저장소 할 일 문서", "docs/TODO.md 같은 파일과 그 안의 절을 고릅니다. 항목마다 가져오기 세션이 단위 초안을 씁니다", lock: nil)
-                source("list", "바깥 목록", "Jira 필터·에픽이나 Notion 데이터베이스. 연결이 있을 때만 고를 수 있습니다", lock: s.imp.listLock)
-                source("legacy", "옛 자동화 옮기기", "다른 도구로 돌던 자동화의 멈춘 자리 기록과 원장을 가져옵니다. 비밀은 가린 근거 묶음으로만 넘깁니다", lock: nil)
-                source("topic", "주제로 시작", "주제 글과 자료 링크를 주면 초안 세션이 명세와 단위를 씁니다. 새 폴더에서도 됩니다", lock: nil,
-                       after: "자료 링크는 연결이 있으면 다음 단계(보드가 준비)에서 메타 정보만 읽고, 그 근거 묶음으로 초안 세션이 명세·단위·판정 시나리오를 씁니다")
+            APBox(title: "어디서 일을 가져올까요?", info: "원천은 하나만 고릅니다. 고른 원천에서 정할 것(작업 경로 등)은 오른쪽에 보입니다") {
+                source("continue", "지난 실행 이어 가기", continueSummary, lock: continueLock,
+                       help: "끝난 실행의 남은 단위·미룬 사람 몫·새로 찾은 일을 이어 갑니다")
+                source("todo", "저장소 할 일 문서", "docs/TODO.md 같은 문서의 항목을 가져옵니다", lock: nil,
+                       help: "docs/TODO.md 같은 파일과 그 안의 절을 고릅니다. 항목마다 가져오기 세션이 단위 초안을 씁니다")
+                source("list", "바깥 목록", "Jira 필터·에픽이나 Notion 데이터베이스", lock: s.imp.listLock,
+                       help: "Jira 필터·에픽이나 Notion 데이터베이스. 연결이 있을 때만 고를 수 있습니다")
+                source("legacy", "옛 자동화 옮기기", "다른 도구로 돌던 자동화의 기록과 원장을 가져옵니다", lock: nil,
+                       help: "다른 도구로 돌던 자동화의 멈춘 자리 기록과 원장을 가져옵니다. 비밀은 가린 근거 묶음으로만 넘깁니다")
+                source("topic", "주제로 시작", "주제 글과 자료 링크로 초안 세션이 명세·단위를 씁니다. 새 폴더에서도 됩니다", lock: nil,
+                       help: "자료 링크는 연결이 있으면 다음 단계(보드가 준비)에서 메타 정보만 읽고, 그 근거 묶음으로 초안 세션이 명세·단위·판정 시나리오를 씁니다")
             }
             if s.source == "topic" {
-                APTopicStep1(s: s, t: s.topic)
+                APTopicStep1(s: s, t: s.topic, part: .main)
             } else if s.isImport {
-                APImportStep1(s: s, m: s.imp)
+                APImportStep1(s: s, m: s.imp, part: .main)
+            } else if s.hasDraft {
+                importBox
+            }
+        } side: {
+            if s.source == "topic" {
+                APTopicStep1(s: s, t: s.topic, part: .side)
+            } else if s.isImport {
+                APImportStep1(s: s, m: s.imp, part: .side)
             } else {
                 if !s.past.isEmpty, s.source == "continue" { pastList }
                 if s.hasDraft { pathBox }
                 if !s.leftBranches.isEmpty { APLeftBranches(s: s) }
                 if !s.jira, let r = s.pastRun, r.merge?.hasWaiting == true { APUnmergedNote(s: s, run: r) }
                 if s.jira { APEpicBox(s: s) }
-                if s.hasDraft { importBox }
+                if !s.hasDraft, s.past.isEmpty || s.source != "continue" {
+                    apNote("원천을 고르면 여기에 그 원천에서 정할 것(작업 경로 등)이 보입니다.")
+                }
             }
+        } foot: {
+            APStartFoot(s: s)
         }
     }
 
@@ -6039,23 +6085,22 @@ struct APStep1: View {
 
     private var continueSummary: String {
         guard let r = s.pastRun else {
-            if s.past.isEmpty { return "끝난 자율주행 실행이 아직 없습니다" }
             if let p = s.presetRoot { let n = s.pastAt(p).count; return n == 0 ? "남은 단위·미룬 사람 몫을 이어 갑니다" : "이 경로의 끝난 실행 \(n)개 가운데 하나를 이어 갑니다" }
             return "끝난 실행 \(s.past.count)개 가운데 하나를 이어 갑니다"
         }
         return "\(apDay(r.started)) 실행 · 남은 단위 \(s.units.count) · 미룬 사람 몫 \(s.carryPark.count) · 새로 찾은 일 \(s.carryNew.count)"
     }
 
-    private func source(_ key: String, _ title: String, _ sub: String, lock: String?, after: String? = nil) -> some View {
-        APPickRow(on: s.source == key, enabled: lock == nil && !s.preparing && !s.starting, help: lock ?? "", axid: "ap-src-\(key)", action: { s.chooseSource(key) }) {
+    // 원천 줄 — 제목과 한 줄. 잠긴 줄은 설명 대신 까닭 한 줄(긴 글은 도움말)
+    private func source(_ key: String, _ title: String, _ sub: String, lock: String?, help: String) -> some View {
+        APPickRow(on: s.source == key, enabled: lock == nil && !s.preparing && !s.starting, help: lock.map { $0 + "\n\n" + help } ?? help, axid: "ap-src-\(key)", action: { s.chooseSource(key) }) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(title).boardFont(APType.label, weight: .semibold).fixedSize()
                     if lock != nil { APChip(text: "잠금", color: APColor.muted) }
                 }
-                apNote(sub)
-                if let lock { apNote(lock, APColor.limit.opacity(0.85)) }
-                if let after { apNote(after) }
+                if let lock { apNote(lock, APColor.limit.opacity(0.85)).lineLimit(1).truncationMode(.tail) }
+                else { apNote(sub).lineLimit(1).truncationMode(.tail) }
             }
         }
     }
@@ -6080,20 +6125,19 @@ struct APStep1: View {
 
     private var pathBox: some View {
         let r = s.pastRun
-        return APBox(title: "작업 경로", note: "이어 가기는 지난 실행이 돈 경로에서 잇습니다") {
+        return APBox(title: "작업 경로", axid: "",
+                     info: "이어 가기는 지난 실행이 돈 경로에서 잇습니다. 출발 가지와 어디서 도는지(따로 작업 트리·원래 작업 트리)는 보드가 준비한 뒤 출발 확인에서 봅니다") {
+            Text(s.root.replacingOccurrences(of: NSHomeDirectory(), with: "~")).boardFont(APType.mono).lineLimit(1).truncationMode(.head)
             HStack(spacing: 6) {
-                Text(s.root.replacingOccurrences(of: NSHomeDirectory(), with: "~")).boardFont(APType.mono).lineLimit(1).truncationMode(.head)
                 if let r { APChip(text: r.mode == "worktree" ? "지난번: 따로 작업 트리" : "지난번: 원래 작업 트리", color: APColor.muted) }
+                apNote(s.setText != nil ? "지난 자율주행 세트(\(apDay(s.setAt)))를 불러왔습니다" : "자율주행 세트의 지시가 없어 공통 규칙만으로 돕니다")
             }
-            apNote(s.setText != nil ? "이 경로의 지난 자율주행 세트(\(apDay(s.setAt)))를 불러왔습니다. 출발 가지와 어디서 도는지는 보드가 준비한 뒤 출발 확인에서 봅니다."
-                                    : "이 프로젝트에는 자율주행 세트의 지시가 없어 공통 규칙만으로 돕니다. 출발 가지와 어디서 도는지는 출발 확인에서 봅니다.")
             if let a = s.activeHere { apNote("이 경로에서 자율주행이 돌고 있습니다(\(a)). 그 실행이 끝난 뒤에 출발합니다", APColor.limit) }
         }
     }
 
     private var importBox: some View {
         APBox(title: "가져올 것", note: "고른 실행에서") {
-            if let w = s.noDefs { apNote(w, APColor.fail) }
             item("남은 단위", s.units.count, s.units.map { "\($0.title)(\(apUnitLabel($0.last)))" })
             item("미룬 사람 몫", s.carryPark.count, s.carryPark.map(\.title))
             item("새로 찾은 일", s.carryNew.count, s.carryNew.map(\.title))
@@ -6121,9 +6165,14 @@ struct APStep1: View {
     }
     private func item(_ name: String, _ n: Int, _ titles: [String]) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text("\(name) \(n)").boardFont(APType.body, weight: .semibold).frame(minWidth: 90, alignment: .leading).fixedSize()
-            Text(titles.isEmpty ? "없음" : titles.prefix(4).joined(separator: ", ") + (titles.count > 4 ? " 외 \(titles.count - 4)" : ""))
-                .boardFont(APType.body).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("\(name) \(n)").boardFont(APType.body, weight: .semibold).frame(width: 110, alignment: .leading)
+            if titles.isEmpty {
+                Text("없음").boardFont(APType.body).foregroundStyle(.secondary)
+            } else {
+                Text(titles.prefix(6).joined(separator: ", ") + (titles.count > 6 ? " 외 \(titles.count - 6)" : ""))
+                    .boardFont(APType.body).foregroundStyle(.primary.opacity(0.85)).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
         }
     }
 }
@@ -6138,7 +6187,7 @@ struct APLeftBranches: View {
             apNote("이어 가기는 같은 스토리·작업 키를 씁니다. 엔진은 이 실행이 만든 가지만 움직이므로 지난 실행의 가지가 남아 있으면 출발하지 않습니다. "
                    + "합치기·승격에서 그 스토리를 버리거나(dev 에 합치기 전), dev·live 에 합친 뒤 '합친 가지 지우기'와 '합치지 못한 작업 가지도 지우기'로 치운 뒤 이어 갑니다. "
                    + "뒤 실행이 같은 이름으로 다시 만든 가지면 그 실행의 합치기·승격에서 다룹니다.")
-            APButton(title: "합치기·승격 →", primary: true, help: "지난 실행의 합치기·승격을 엽니다. 이 준비는 남습니다", axid: "ap-left-merge") { s.toMerge() }
+            APButton(title: "합치기·승격 →", help: "지난 실행의 합치기·승격을 엽니다. 이 준비는 남습니다", axid: "ap-left-merge") { s.toMerge() }
         }
     }
 }
@@ -6149,10 +6198,11 @@ struct APUnmergedNote: View {
     @ObservedObject var s: APStart
     let run: APPastRun
     var body: some View {
-        APBox(title: "지난 실행의 일을 아직 합치지 않았습니다", note: "자율주행 가지 autopilot/\(run.id)", tint: APColor.wait, axid: "ap-unmerged") {
-            apNote("새 실행은 출발 확인에서 고른 출발 가지(dev 등)에서 시작하므로, 지난 실행이 통과시킨 단위의 커밋을 보지 않습니다. "
-                   + "이어서 하려면 합치기·승격에서 먼저 받는 가지에 합친 뒤 출발합니다. 그대로 출발해도 되고, 지난 가지는 남습니다.")
-            APButton(title: "합치기·승격 →", primary: true, help: "지난 실행의 합치기·승격을 엽니다. 이 준비는 남습니다", axid: "ap-unmerged-merge") { s.toMerge() }
+        APBox(title: "지난 실행을 아직 합치지 않았습니다", tint: APColor.wait, axid: "ap-unmerged",
+              info: "새 실행은 출발 확인에서 고른 출발 가지(dev 등)에서 시작하므로, 지난 실행이 통과시킨 단위의 커밋을 보지 않습니다. 이어서 하려면 합치기·승격에서 먼저 받는 가지에 합친 뒤 출발합니다. 그대로 출발해도 되고, 지난 가지는 남습니다.") {
+            Text("autopilot/\(run.id)").boardFont(APType.mono).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            apNote("새 실행은 지난 실행의 커밋을 보지 않습니다. 먼저 합치거나 그대로 출발합니다.")
+            APButton(title: "합치기·승격 →", help: "지난 실행의 합치기·승격을 엽니다. 이 준비는 남습니다", axid: "ap-unmerged-merge") { s.toMerge() }
         }
     }
 }
@@ -6209,46 +6259,89 @@ func apShortURL(_ u: String) -> String {
     return t.isEmpty ? apShort(u, 50) : apShort(t, 50)
 }
 
-// 2단계 보드가 준비 — 보드가 혼자 하는 일을 줄마다(이름·상태 꼬리표·걸린 시간·짧은 결과). 하는 중인 줄의 시계만 1초마다(시트 안에서만 돈다)
+// 2단계 보드가 준비 — 왼쪽: 보드가 혼자 하는 일을 줄마다(상태 꼬리표·이름·걸린 시간·짧은 결과, 끝난 줄은 덜 무겁게). 하는 중인 줄의 시계만 1초마다(시트 안에서만 돈다)
+// 오른쪽: 사람이 볼 것(알림·실패 줄의 자세한 것과 못 읽은 링크 고르기, git 자리·엔진 확인에 걸린 것)과 다음
 struct APStep2: View {
     @ObservedObject var s: APStart
+    private func attention(_ l: APPrepLine) -> Bool { l.state == "warn" || l.state == "fail" }
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            APBox(title: s.preparing ? "보드가 준비하는 중" : "보드가 준비한 일", note: "사람은 기다리기만 합니다") {
-                ForEach(s.lines) { l in line(l) }
-            }
-            if !s.gitBlocked.isEmpty { APGitBlocks(blocks: s.gitBlocked) }
-            if !s.problems.isEmpty { APProblems(problems: s.problems) }
-        }
-    }
-    private func line(_ l: APPrepLine) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 8) {
-                apPrepChip(l.state)
-                Text(l.title).boardFont(APType.label, weight: .semibold).lineLimit(1)
-                Spacer(minLength: 4)
-                if l.state == "run", let t = l.started {
-                    APTickText { now in apDur(now.timeIntervalSince1970 - t) }.boardFont(APType.note).foregroundStyle(.secondary)
-                } else if let sec = l.sec, l.state != "wait" {
-                    Text(sec < 1 ? "1초 안" : apDur(sec)).boardFont(APType.note).foregroundStyle(.secondary).fixedSize()
+        let att = s.lines.filter(attention)
+        APSheetColumns {
+            APBox(title: s.preparing ? "보드가 준비하는 중" : "보드가 준비한 일", info: "사람은 기다리기만 합니다. 알림·실패인 줄은 '사람이 볼 것'에 자세히 보입니다") {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(s.lines) { l in line(l) }
                 }
             }
-            if !l.note.isEmpty { apNote(l.note, l.state == "fail" ? APColor.fail : .secondary) }
+        } side: {
+            APSideHead(title: "사람이 볼 것", sub: att.isEmpty && s.gitBlocked.isEmpty && s.problems.isEmpty ? "" : "\(att.count + (s.gitBlocked.isEmpty ? 0 : 1) + (s.problems.isEmpty ? 0 : 1))")
+            if !s.gitBlocked.isEmpty { APGitBlocks(blocks: s.gitBlocked) }
+            if !s.problems.isEmpty { APProblems(problems: s.problems) }
+            ForEach(att) { l in attentionCard(l) }
+            if att.isEmpty, s.gitBlocked.isEmpty, s.problems.isEmpty {
+                apNote(s.preparing ? "아직 없습니다. 알림이나 실패가 생기면 여기에 보입니다." : "없습니다. 모든 줄이 끝났거나 하지 않아도 되는 줄입니다.")
+            }
+        } foot: {
+            APStartFoot(s: s)
+        }
+    }
+
+    // 왼쪽 줄 — 꼬리표·이름·시간(이름 바로 옆). 끝난 줄은 이름을 보통 굵기로, 알림·실패 줄은 한 줄 결과만(자세한 것은 오른쪽)
+    private func line(_ l: APPrepLine) -> some View {
+        let done = l.state == "done" || l.state == "skip"
+        let att = attention(l)
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                apPrepChip(l.state)
+                Text(l.title).boardFont(APType.body, weight: done ? .regular : .semibold).foregroundStyle(done ? Color.primary.opacity(0.85) : .primary).lineLimit(1)
+                if l.state == "run", let t = l.started {
+                    APTickText { now in apDur(now.timeIntervalSince1970 - t) }.boardFont(APType.caption).foregroundStyle(.secondary)
+                } else if let sec = l.sec, l.state != "wait" {
+                    Text(sec < 1 ? "1초 안" : apDur(sec)).boardFont(APType.caption).foregroundStyle(.secondary).fixedSize()
+                }
+                Spacer(minLength: 0)
+            }
+            if !l.note.isEmpty, !att { apNote(l.note).padding(.leading, 2) }
+            if !att {
+                ForEach(Array(l.detail.prefix(8).enumerated()), id: \.offset) { _, d in
+                    Text("· " + d).boardFont(APType.note).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(att ? 0.05 : 0.02)))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(att ? (l.state == "fail" ? APColor.fail : APColor.limit).opacity(0.35) : Color.clear, lineWidth: 0.5))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("ap-prep-\(l.id)")
+    }
+
+    // 오른쪽 카드 — 알림·실패 줄의 자세한 것. 못 읽은 링크(와이어프레임 출발 준비 ⑭)는 출발 전이라 사람이 고른다
+    private func attentionCard(_ l: APPrepLine) -> some View {
+        let c = l.state == "fail" ? APColor.fail : APColor.limit
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                apPrepChip(l.state)
+                Text(l.title).boardFont(APType.label, weight: .bold).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            if !l.note.isEmpty { Text(l.note).boardFont(APType.body).foregroundStyle(l.state == "fail" ? APColor.fail : .primary).fixedSize(horizontal: false, vertical: true) }
             ForEach(Array(l.detail.prefix(8).enumerated()), id: \.offset) { _, d in
                 Text("· " + d).boardFont(APType.note).foregroundStyle(l.state == "fail" ? APColor.fail : .secondary).fixedSize(horizontal: false, vertical: true)
             }
-            if l.id.hasPrefix("link-"), l.state == "fail" {   // 못 읽은 링크(와이어프레임 출발 준비 ⑭) — 출발 전이라 사람이 고른다
+            if l.detail.count > 8 { apNote("… \(l.detail.count - 8)줄 더") }
+            if l.id.hasPrefix("link-"), l.state == "fail" {
                 HStack(spacing: 6) {
                     APButton(title: "다시 읽기", axid: "ap-link-retry-\(l.id.dropFirst(5))") { s.retryLink(l.id) }
                     APButton(title: "이 링크 빼고 계속", axid: "ap-link-skip-\(l.id.dropFirst(5))") { s.skipLink(l.id) }
                 }
             }
         }
-        .padding(8)
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.03)))
+        .background(RoundedRectangle(cornerRadius: 11).fill(c.opacity(0.07)))
+        .overlay(RoundedRectangle(cornerRadius: 11).stroke(c.opacity(0.32), lineWidth: 0.5))
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("ap-prep-\(l.id)")
+        .accessibilityIdentifier("ap-attn-\(l.id)")
     }
 }
 
@@ -6277,14 +6370,17 @@ struct APProblems: View {
     }
 }
 
-// 3단계 단위 제안·출발 카드 — 줄 세운 단위(Jira 면 스토리별), 사용률 예산, 개수, 앞뒤 순서 경고, 뺀 항목 되살리기, 고를 수 없는 후보, 카드 수
+// 3단계 단위 제안·출발 카드 — 왼쪽: 줄 세운 단위(Jira 면 스토리별), 앞뒤 순서 경고, 뺀 항목 되살리기, 고를 수 없는 후보.
+// 오른쪽: 사용률 예산(예상 합계는 여기 한 곳), 개수, 생긴 출발 카드(세로로 모두, 답은 출발 확인에서)와 다음
 struct APStep3: View {
     @ObservedObject var s: APStart
     @State private var moving: String?
     @State private var showGone = false
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            APBox(title: "제안한 단위", note: "앞뒤 순서와 우선순위로 줄 세움 · 예상 주간 사용률, 그 아래 시간 · 예상 비용", axid: "ap-proposal") {
+        APSheetColumns {
+            APBox(title: "제안한 단위", note: "\(s.choosable.count)개", axid: "ap-proposal",
+                  info: "앞뒤 순서와 우선순위로 줄 세웠습니다. 줄 오른쪽은 예상 주간 사용률·시간·비용입니다(예상이 있을 때만). "
+                        + "예상은 지난 실행으로 보정한 값입니다(같은 모델의 통과 단위. 같은 프로젝트·같은 종류 표본이 3개보다 적으면 모든 프로젝트로 넓힙니다).") {
                 if s.jira {
                     ForEach(s.stories) { st in storyGroup(st) }
                     let loose = s.choosable.filter { $0.story == nil }
@@ -6296,50 +6392,56 @@ struct APStep3: View {
                     ForEach(s.choosable) { u in unitRow(u) }
                 }
                 if s.choosable.isEmpty { apNote("고를 수 있는 단위가 없습니다") }
-                apNote("예상은 지난 실행으로 보정한 값입니다(같은 모델의 통과 단위. 같은 프로젝트·같은 종류 표본이 3개보다 적으면 모든 프로젝트로 넓힙니다).")
             }
-            budgetBox
-            countRow
             ForEach(s.orderWarnings, id: \.self) { w in
                 Label(w, systemImage: "exclamationmark.triangle.fill").boardFont(APType.body).foregroundStyle(APColor.limit).fixedSize(horizontal: false, vertical: true)
             }
             goneBox
             if s.isImport { APImportHiddenBox(s: s) }
             otherBox
-            cardsLine
+        } side: {
+            budgetBox
+            countRow
+            Divider().opacity(0.3)
+            cardsList
+        } foot: {
+            APStartFoot(s: s)
         }
     }
 
     private func unitRow(_ u: APDraftUnit) -> some View {
         let e = s.estimate(u)
         let dec = s.cardDecision(u)
+        let hasEst = e.pp != nil || e.min != nil || e.usd != nil
         return VStack(alignment: .leading, spacing: 4) {
             APPickRow(on: u.checked, square: true, axid: "ap-unit-\(u.id)", action: { s.toggle(u.id) }) {
                 HStack(alignment: .top, spacing: 8) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("\(u.n). \(u.title)").boardFont(APType.label, weight: .semibold).fixedSize(horizontal: false, vertical: true)
-                        WrapRow(spacing: 4) {
-                            if !u.kind.isEmpty { APChip(text: apKind(u.kind), color: APColor.board) }
-                            APChip(text: u.last == "새 단위" ? (s.isImport ? "새 단위(가져오기 세션)" : "새 단위(초안 세션)") : u.last == "이어 감" ? "대기열 줄을 이음" : "지난번 " + apUnitLabel(u.last),
-                                   color: APColor.unit(u.last))
+                        WrapRow(spacing: 5) {
                             if let t = u.task { APTicket(key: t) }
-                            if !u.depends.isEmpty {
-                                APChip(text: "앞: " + u.depends.map { d in s.units.first { $0.id == d }.map { "\($0.n)" } ?? "지난 실행" }.joined(separator: "·"), color: APColor.muted)
-                            }
-                            APChip(text: e.short ? "표본 부족" : "표본 \(e.samples)" + (e.wide ? " · 모든 프로젝트" : ""), color: e.short ? APColor.limit : APColor.muted)
+                            APChip(text: u.last == "새 단위" ? "새 단위" : u.last == "이어 감" ? "대기열 줄을 이음" : "지난번 " + apUnitLabel(u.last),
+                                   color: APColor.unit(u.last))
                             if s.prerunPassed.contains(u.id) { APChip(text: "일하기 전부터 통과", color: APColor.judge, strong: true) }
                             if dec == "pending", u.checked { APChip(text: "출발 카드에서 정합니다", color: APColor.wait) }
                             if dec == "out", u.checked { APChip(text: "카드 답으로 뺌", color: APColor.muted, strong: true) }
+                            let extra = ([u.kind.isEmpty ? "" : apKind(u.kind)]
+                                         + [u.depends.isEmpty ? "" : "앞: " + u.depends.map { d in s.units.first { $0.id == d }.map { "\($0.n)" } ?? "지난 실행" }.joined(separator: "·")])
+                                .filter { !$0.isEmpty }.joined(separator: " · ")
+                            if !extra.isEmpty { Text(extra).boardFont(APType.note).foregroundStyle(.secondary) }
                         }
                         if !u.check.isEmpty { Text("판정 " + u.check).boardFont(APType.monoSmall).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
                         if s.isImport, !u.sourceKey.isEmpty { Text("원천 " + u.sourceKey).boardFont(APType.monoSmall).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
                         if let ch = s.importChanged[u.id] { APImportChangedNote(lines: ch) }
                     }
                     Spacer(minLength: 6)
-                    VStack(alignment: .trailing, spacing: 1) {
-                        Text(apPP(e.pp)).boardFont(APType.label, weight: .bold).monospacedDigit().fixedSize()
-                        Text(apMin(e.min)).boardFont(APType.note).foregroundStyle(.secondary).fixedSize()
-                        Text(e.usd.map { apUSD($0) + " USD" } ?? "비용 모름").boardFont(APType.note).foregroundStyle(.secondary).fixedSize()
+                    if hasEst {   // 예상이 하나라도 있을 때만(모두 모름이면 칸을 빼고, 표본 수는 도움말로)
+                        VStack(alignment: .trailing, spacing: 1) {
+                            if let pp = e.pp { Text(apPP(pp)).boardFont(APType.label, weight: .bold).monospacedDigit().fixedSize() }
+                            if e.min != nil { Text(apMin(e.min)).boardFont(APType.note).foregroundStyle(.secondary).fixedSize() }
+                            if let usd = e.usd { Text(apUSD(usd) + " USD").boardFont(APType.note).foregroundStyle(.secondary).fixedSize() }
+                        }
+                        .hint(e.short ? "표본 \(e.samples)개(3개보다 적어 덜 믿을 만합니다)" : "표본 \(e.samples)개" + (e.wide ? " · 모든 프로젝트" : ""))
                     }
                 }
             }
@@ -6371,7 +6473,7 @@ struct APStep3: View {
                     Text("제목은 Jira 연결(4단계) 뒤에 읽습니다").boardFont(APType.note).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 4)
-                Text("단위 \(list.count) · \(apPP(sum.pp))").boardFont(APType.body).foregroundStyle(.secondary).fixedSize()
+                Text("단위 \(list.count)" + (sum.pp.map { " · " + apPP($0) } ?? "")).boardFont(APType.body).foregroundStyle(.secondary).fixedSize()
             }
             Text("스토리 가지 " + s.storyPattern(st.kind).replacingOccurrences(of: "{story}", with: st.key ?? "‹키›")
                  + (st.isNew ? " · 스토리와 작업 티켓은 출발할 때 만들어 키를 받습니다(4단계)" : ""))
@@ -6405,17 +6507,24 @@ struct APStep3: View {
         .background(RoundedRectangle(cornerRadius: 9).fill(APColor.jira.opacity(0.06)))
     }
 
+    // 사용률 예산 — 고른 단위의 예상 합계(예상은 이 한 곳에서 합쳐 보인다)와 멈출 선까지 남은 주간 사용률
     private var budgetBox: some View {
         let picked = s.choosable.filter(\.checked)
         let sum = s.sum(picked)
-        return APBox(title: "사용률 예산", note: "고른 단위의 예상 합계와 멈출 선까지 남은 주간 사용률", axid: "ap-budget") {
-            HStack(spacing: 10) {
-                Text("이번 묶음 예상 " + apPP(sum.pp)).boardFont(APType.heading, weight: .bold).monospacedDigit()
-                if let b = s.budget { Text(String(format: "멈출 선(%.0f%%)까지 %.1f%%p 남음", s.stop7, b)).boardFont(APType.label).foregroundStyle(.secondary) }
+        return VStack(alignment: .leading, spacing: 6) {
+            APSideHead(title: "사용률 예산", info: "고른 단위의 예상 합계와 멈출 선까지 남은 주간 사용률입니다. 예상은 지난 실행으로 보정한 값입니다")
+            if let b = s.budget {
+                Text(String(format: "멈출 선(%.0f%%)까지 %.1f%%p 남음", s.stop7, b)).boardFont(APType.heading, weight: .bold).monospacedDigit()
             }
-            apNote((s.usage7.map { String(format: "주간 %.0f%% 에서 출발", $0) } ?? "주간 사용률을 몰라 멈출 선 없이 모두 넣었습니다")
-                   + " · 예상 시간 \(apDur(sum.min * 60))" + (sum.usd.map { " · 약 \(apUSD($0)) USD" } ?? ""))
+            Text(sum.pp.map { "고른 \(picked.count)개 예상 " + apPP($0) } ?? "고른 \(picked.count)개 · 예상 사용률은 표본이 모자라 모릅니다")
+                .boardFont(APType.body, weight: sum.pp == nil ? .regular : .semibold).foregroundStyle(sum.pp == nil ? .secondary : .primary)
+                .fixedSize(horizontal: false, vertical: true)
+            let parts = [s.usage7.map { String(format: "주간 %.0f%% 에서 출발", $0) } ?? "주간 사용률을 몰라 멈출 선 없이 모두 넣었습니다",
+                         sum.min > 0 ? "예상 시간 \(apDur(sum.min * 60))" : "", sum.usd.map { "약 \(apUSD($0)) USD" } ?? ""].filter { !$0.isEmpty }
+            apNote(parts.joined(separator: " · "))
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("ap-budget")
     }
 
     private var countRow: some View {
@@ -6423,7 +6532,7 @@ struct APStep3: View {
         return HStack(spacing: 8) {
             APButton(title: "− 하나 빼기", enabled: n > 0, axid: "ap-less") { s.setCount(n - 1) }
             APButton(title: "＋ 하나 더", enabled: n < s.choosable.count, axid: "ap-more") { s.setCount(n + 1) }
-            apNote("고른 \(n)개 · 대기열에 남는 후보 \(s.choosable.count - n)")
+            apNote("고른 \(n)개 · 남는 후보 \(s.choosable.count - n)")
         }
     }
 
@@ -6453,17 +6562,35 @@ struct APStep3: View {
         }
     }
 
-    private var cardsLine: some View {
+    // 생긴 출발 카드 — 세로로 모두(종류·제목·추천안). 답은 출발 확인에서
+    private var cardsList: some View {
         let kinds = Dictionary(grouping: s.cards, by: \.kind).mapValues(\.count)
         let parts = [("prerun", "판정 미리 통과"), ("next_start", "미룬 사람 몫"), ("size", "단위 크기")].compactMap { k, l in kinds[k].map { "\(l) \($0)" } }
-        return HStack(spacing: 8) {
-            Text(s.cards.isEmpty ? "출발 카드가 없습니다" : "출발 카드 \(s.cards.count)장이 생겼습니다").boardFont(APType.label, weight: .bold)
-            if !parts.isEmpty { apNote(parts.joined(separator: " · ")) }
-            Spacer(minLength: 4)
-            APButton(title: "출발 확인으로 →", primary: true, axid: "ap-to-confirm") { s.toConfirm() }
+        return VStack(alignment: .leading, spacing: 8) {
+            APSideHead(title: s.cards.isEmpty ? "출발 카드 없음" : "출발 카드 \(s.cards.count)장", sub: parts.joined(separator: " · "),
+                       info: "출발 카드는 사람이 정할 것을 객관식으로 묻습니다. 답은 다음 단계(출발 확인)에서 합니다") {
+                if !s.cards.isEmpty {
+                    APMinorButton(title: "출발 확인에서 답하기", icon: "arrow.right", help: "출발 확인으로 갑니다", axid: "ap-to-confirm") { s.toConfirm() }
+                }
+            }
+            ForEach(Array(s.cards.enumerated()), id: \.element.id) { i, c in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(c.label).boardFont(APType.caption, weight: .semibold).foregroundStyle(.secondary).lineLimit(1)
+                    Text("\(i + 1). \(c.title)").boardFont(APType.body, weight: .semibold).fixedSize(horizontal: false, vertical: true)
+                    if let rec = c.options.first(where: { $0.key == c.recommended }) {
+                        HStack(spacing: 5) {
+                            APChip(text: "추천", color: Palette.accent, strong: true)
+                            Text(rec.label).boardFont(APType.note).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.04)))
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("ap-step3-card-\(i)")
+            }
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 11).fill(Palette.accent.opacity(0.08)))
     }
 }
 
@@ -6486,41 +6613,41 @@ struct APConfirm: View {
     }
 
     var body: some View {
-        ScrollViewReader { outer in
-        VStack(alignment: .leading, spacing: 12) {
-            whereBox
-            if s.isImport { APImportSourceBox(s: s) }
-            if !s.problems.isEmpty { APProblems(problems: s.problems) }
-            if let e = s.startError { startErrorBox(e) }
-            if s.jira { ticketTree }
-            cardsBox.id("ap-cards-anchor")
-            dirtyFold
-            unitsFold
-            if s.source == "topic" { specFold; stackFold }
-            settingsFold
-            instructionFold
-            if s.locks.count > 1 {
-                APBox(title: "출발을 막는 것 \(s.locks.count)", tint: APColor.limit, axid: "ap-locks") {
-                    ForEach(s.locks, id: \.self) { apNote("· " + $0) }
-                }
+        ScrollViewReader { proxy in
+            APSheetColumns {
+                whereBox
+                if s.isImport { APImportSourceBox(s: s) }
+                if !s.problems.isEmpty { APProblems(problems: s.problems) }
+                if s.jira { ticketTree }
+                dirtyFold
+                unitsFold
+                if s.source == "topic" { specFold; stackFold }
+                settingsFold
+                instructionFold
+            } side: {
+                if let e = s.startError { startErrorBox(e) }
+                cardsBox
+            } foot: {
+                APStartFoot(s: s)   // 출발을 막는 까닭은 여기 한 번만(전에는 아래 줄·"출발을 막는 것" 상자·단추 도움말 세 곳)
             }
-        }
-        .onAppear {
-            if s.source == "topic" || (s.isImport && s.importDraftedSet) { open.insert("set"); open.insert("checks") }
-            if !s.judgeChanges.isEmpty { open.insert("set"); open.insert("judgediff") }   // 판정 차이(⑪-3)는 펼친 채로
-        }   // 주제로 시작: 초안 지시와 판정을 펼친 채로(⑪-2 보안 검토)
-        .onChange(of: s.flash) { _, _ in
-            hl = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { withAnimation(.easeOut(duration: 0.6)) { hl = false } }
-        }
-        .onChange(of: jump) { _, _ in withAnimation { outer.scrollTo("ap-cards-anchor", anchor: .top) } }
+            .onAppear {
+                if s.source == "topic" || (s.isImport && s.importDraftedSet) { open.insert("set"); open.insert("checks") }
+                if !s.judgeChanges.isEmpty { open.insert("set"); open.insert("judgediff") }   // 판정 차이(⑪-3)는 펼친 채로
+            }   // 주제로 시작: 초안 지시와 판정을 펼친 채로(⑪-2 보안 검토)
+            .onChange(of: s.flash) { _, _ in
+                hl = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { withAnimation(.easeOut(duration: 0.6)) { hl = false } }
+            }
+            .onChange(of: jump) { _, _ in withAnimation { proxy.scrollTo("ap-card-anchor-\(card)", anchor: .top) } }
         }
     }
+
+    private let nameW: CGFloat = 84   // 이름 칸 폭 — 프로젝트와 어디서·설정 줄이 같은 폭(전에는 62·84 가 섞였다)
 
     // 프로젝트와 어디서 — 접지 않고 늘 보인다
     private var whereBox: some View {
         let wt = s.mode == "worktree"
-        return APBox(title: "프로젝트와 어디서", note: "늘 보입니다", axid: "ap-where") {
+        return APBox(title: "프로젝트와 어디서", axid: "ap-where") {
             HStack(spacing: 6) {
                 Text(s.project ?? "?").boardFont(APType.label, weight: .bold).fixedSize()
                 Text(s.root.replacingOccurrences(of: NSHomeDirectory(), with: "~")).boardFont(APType.mono).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
@@ -6528,14 +6655,16 @@ struct APConfirm: View {
                 if s.jira, !s.epic.isEmpty { APChip(text: "에픽 \(s.epic)", color: APColor.jira) }
             }
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("어디서").boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: 62, alignment: .leading)
+                Text("어디서").boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: nameW, alignment: .leading)
                 VStack(alignment: .leading, spacing: 2) {
                     if s.rechecking { APChip(text: "다시 확인하는 중", color: APColor.work, strong: true) }
                     if wt {
-                        HStack(spacing: 6) { APChip(text: "따로 작업 트리", color: APColor.ok, strong: true); apNote("확인 ①~③ 통과") }
+                        HStack(spacing: 6) {
+                            APChip(text: "따로 작업 트리", color: APColor.ok, strong: true); apNote("확인 ①~③ 통과")
+                            APInfo(text: "원래 작업 트리와 기존 가지는 실행 중에도 마음대로 쓸 수 있습니다. 시험 환경 확인이 작업 트리에서 실패하면 엔진이 원래 작업 트리로 돌립니다.")
+                        }
                         Text("~/.claude-board/worktrees/\(s.id)/\((s.repos.first.map { ($0 as NSString).lastPathComponent }) ?? "")")
                             .boardFont(APType.monoSmall).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                        apNote("원래 작업 트리와 기존 가지는 실행 중에도 마음대로 쓸 수 있습니다. 시험 환경 확인이 작업 트리에서 실패하면 엔진이 원래 작업 트리로 돌립니다.")
                     } else if s.mode == "in_place" {
                         HStack(spacing: 6) { APChip(text: "원래 작업 트리", color: APColor.wait, strong: true) }
                         apNote("이유: " + s.modeReason, APColor.limit)
@@ -6546,7 +6675,7 @@ struct APConfirm: View {
                 }
             }
             ForEach(Array(s.repos.enumerated()), id: \.element) { i, r in baseRow(i, r) }
-            if !s.baseNote.isEmpty { apNote(s.baseNote + (s.repos.count > 1 ? ". 묶음은 저장소마다 고르고, 처음에는 같은 이름입니다" : "")) }
+            if !s.baseNote.isEmpty { apNote(s.baseNote + (s.repos.count > 1 ? ". 묶음은 저장소마다 고르고, 처음에는 같은 이름입니다" : "")).padding(.leading, nameW + 8) }
             newBranchRow
             promotionRow
         }
@@ -6560,7 +6689,7 @@ struct APConfirm: View {
         let chosen = s.bases[r] ?? ""
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
-                Text(s.repos.count > 1 ? (r as NSString).lastPathComponent : "출발 가지").boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: 62, alignment: .leading)
+                Text(s.repos.count > 1 ? (r as NSString).lastPathComponent : "출발 가지").boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: nameW, alignment: .leading)
                 ForEach(cand, id: \.self) { b in
                     APChoice(title: b, on: b == chosen, enabled: !s.rechecking && !s.starting,
                              help: "이 가지에서 새 가지를 만듭니다", axid: "ap-base-\(i)-\(b)") { s.setBase(r, b) }
@@ -6575,7 +6704,7 @@ struct APConfirm: View {
 
     @ViewBuilder private var newBranchRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text("새 가지").boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: 62, alignment: .leading)
+            Text("새 가지").boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: nameW, alignment: .leading)
             VStack(alignment: .leading, spacing: 2) {
                 if s.jira {
                     let picked = s.chosen + s.heldByCards
@@ -6607,7 +6736,7 @@ struct APConfirm: View {
         }.joined(separator: " · ")
         let probs = s.promotionProblems
         return HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text("승격 차례").boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: 62, alignment: .leading)
+            Text("승격 차례").boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: nameW, alignment: .leading)
             VStack(alignment: .leading, spacing: 3) {
                 Text((s.jira ? "스토리마다 " : "") + (text.isEmpty ? "승격할 가지(dev·live·master)가 없습니다" : text)).boardFont(APType.body).fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("ap-promotion-text")
@@ -6692,38 +6821,22 @@ struct APConfirm: View {
         }
     }
 
-    // 출발 카드 — 가로 한 줄로 넘긴다. 위에 지금 카드와 안 고른 수, ‹ ›, 모두 추천대로. 아래에 카드마다 점
+    // 출발 카드 — 오른쪽 칸에 세로로 모두 펼친다(전에는 300pt 가로 넘기기와 점 표시). 머리에 남은 수와 모두 추천대로
     private var cardsBox: some View {
         let left = s.cards.filter { s.answers[$0.id] == nil }.count
-        return APBox(title: "출발 카드 \(s.cards.count)장", note: "객관식, 추천안 표시", tint: cardsHL ? Palette.accent : nil, axid: "ap-cards") {
-            critiqueRow
-            if s.cards.isEmpty {
-                apNote("이번 출발에는 사람이 정할 카드가 없습니다")
-            } else {
-                ScrollViewReader { proxy in
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 6) {
-                            apNote("카드 \(min(card + 1, s.cards.count))/\(s.cards.count) · 안 고른 카드 \(left)")
-                            Spacer(minLength: 4)
-                            APButton(title: "모두 추천대로", enabled: left > 0, help: "아직 안 고른 카드만 추천안으로 채웁니다", axid: "ap-cards-all") { s.answerAllRecommended() }
-                            APButton(title: "‹", enabled: card > 0, axid: "ap-cards-prev") { card -= 1; withAnimation { proxy.scrollTo(card, anchor: .leading) } }
-                            APButton(title: "›", enabled: card + 1 < s.cards.count, axid: "ap-cards-next") { card += 1; withAnimation { proxy.scrollTo(card, anchor: .leading) } }
-                        }
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(alignment: .top, spacing: 10) {
-                                ForEach(Array(s.cards.enumerated()), id: \.element.id) { i, c in cardView(i, c).frame(width: 300).id(i) }
-                            }
-                        }
-                        HStack(spacing: 5) {
-                            ForEach(Array(s.cards.enumerated()), id: \.element.id) { i, c in
-                                Circle().fill(s.answers[c.id] != nil ? Palette.accent : Color.white.opacity(i == card ? 0.5 : 0.18)).frame(width: 6, height: 6)
-                            }
-                        }
-                    }
-                    .onChange(of: jump) { _, _ in withAnimation { proxy.scrollTo(card, anchor: .leading) } }
+        return VStack(alignment: .leading, spacing: 10) {
+            APSideHead(title: s.cards.isEmpty ? "출발 카드 없음" : "출발 카드 \(s.cards.count)장", sub: s.cards.isEmpty ? "" : (left > 0 ? "(\(left) 남음)" : "(모두 고름)"),
+                       info: "객관식입니다. 추천안에 '추천' 표시가 있습니다. 모두 고르면 출발할 수 있습니다") {
+                if !s.cards.isEmpty {
+                    APButton(title: "모두 추천대로", enabled: left > 0, help: "아직 안 고른 카드만 추천안으로 채웁니다", axid: "ap-cards-all") { s.answerAllRecommended() }
                 }
             }
+            critiqueRow
+            if s.cards.isEmpty { apNote("이번 출발에는 사람이 정할 카드가 없습니다") }
+            ForEach(Array(s.cards.enumerated()), id: \.element.id) { i, c in cardView(i, c).id("ap-card-anchor-\(i)") }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("ap-cards")
     }
 
     // 판정 비판(⑪-3): 반대 탐침·비판 세션 요약과 판정 고치기 차례(주제로 시작만 작성 세션이 고침, 최대 2번, 확인된 지적이 없으면 멈춤)
@@ -6732,11 +6845,15 @@ struct APConfirm: View {
         let unv = s.criticCards.filter { $0.kind == "critic_unverified" }.count, rd = s.criticCards.filter { $0.kind == "critic_reading" }.count
         let cs = s.criticSummary
         if !s.lines.filter({ ["probe", "critic"].contains($0.id) }).isEmpty {
+            let found = [probes > 0 ? "반대 탐침 \(probes)곳" : "", conf > 0 ? "비판 세션 확인 \(conf)" : "", unv > 0 ? "확인 안 됨 \(unv)" : "", rd > 0 ? "해석 \(rd)" : ""].filter { !$0.isEmpty }
             VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     APChip(text: "판정 비판", color: probes + conf > 0 ? APColor.limit : APColor.ok, strong: true)
-                    apNote("반대 탐침 \(probes)곳 · 비판 세션 확인 \(conf) · 확인 안 됨 \(unv) · 해석 \(rd)"
+                    apNote((found.isEmpty ? "걸린 것 없음" : found.joined(separator: " · "))
                            + ((cs["model"] as? String).map { " · 비판 모델 \($0)(작성 \(cs["author_model"] as? String ?? "?"))" } ?? ""))
+                    if s.source != "topic", probes + conf > 0 {
+                        APInfo(text: "이어 가기에는 판정을 고칠 작성 세션이 없어, 판정 고치기는 그 단위를 이번 실행에서 빼고 판정 놓침으로 남겨 다음 출발에서 고칩니다")
+                    }
                 }
                 .accessibilityElement(children: .combine).accessibilityIdentifier("ap-critique-sum")
                 if s.source == "topic" {
@@ -6753,8 +6870,6 @@ struct APConfirm: View {
                     case nil:
                         if s.fixing { APChip(text: "판정을 고치는 중", color: APColor.work, strong: true) }
                     }
-                } else if probes + conf > 0 {
-                    apNote("이어 가기에는 판정을 고칠 작성 세션이 없어, 판정 고치기는 그 단위를 이번 실행에서 빼고 판정 놓침으로 남겨 다음 출발에서 고칩니다")
                 }
             }
             .padding(.bottom, 4)
@@ -6766,11 +6881,11 @@ struct APConfirm: View {
         let letters = ["가", "나", "다", "라", "마"]
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 5) {
-                Text(c.label).boardFont(APType.note, weight: .semibold).foregroundStyle(.secondary).lineLimit(1)
+                Text(c.label).boardFont(APType.caption, weight: .semibold).foregroundStyle(.secondary).lineLimit(1)
                 Spacer(minLength: 2)
                 APChip(text: a == nil ? "답 기다림" : "고름", color: a == nil ? APColor.wait : APColor.ok, strong: true)
             }
-            Text("\(i + 1). \(c.title)").boardFont(APType.label, weight: .bold).fixedSize(horizontal: false, vertical: true)
+            Text("\(i + 1). \(c.title)").boardFont(APType.heading, weight: .bold).fixedSize(horizontal: false, vertical: true)
             if !c.why.isEmpty { apNote(c.why) }
             ForEach(Array(c.options.enumerated()), id: \.element.key) { j, o in
                 APPickRow(on: a == o.key, axid: "ap-card-\(i)-\(o.key)", action: { s.answer(c, o.key) }) {
@@ -6785,10 +6900,11 @@ struct APConfirm: View {
             }
             if s.policyLoaded.contains(c.id) { apNote("프로젝트 설정에 저장된 답을 불러왔습니다. 바꿀 수 있습니다.") }
         }
-        .padding(10)
-        .frame(maxHeight: .infinity, alignment: .top)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 11).fill(Color.white.opacity(0.05)))
-        .overlay(RoundedRectangle(cornerRadius: 11).stroke(a == nil ? APColor.wait.opacity(0.35) : Color.white.opacity(0.1), lineWidth: 0.5))
+        .overlay(RoundedRectangle(cornerRadius: 11).stroke(cardsHL && i == card ? Palette.accent : (a == nil ? APColor.wait.opacity(0.35) : Color.white.opacity(0.1)),
+                                                           lineWidth: cardsHL && i == card ? 1.5 : 0.5))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("ap-card-\(i)")
     }
@@ -6912,7 +7028,7 @@ struct APConfirm: View {
     }
     private func pubField(_ k: String, _ ph: String, _ b: Binding<String>, axid: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(k).boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: 84, alignment: .leading)
+            Text(k).boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: nameW, alignment: .leading)
             TextField(ph, text: b).textFieldStyle(.roundedBorder).boardFont(APType.body).frame(maxWidth: 280)
                 .accessibilityIdentifier(axid)
                 .onSubmit { s.setPublish() }
@@ -6922,7 +7038,7 @@ struct APConfirm: View {
     }
     private func pickRow(_ k: String, _ options: [String], _ cur: String, suffix: String = "", axid: String, _ act: @escaping @MainActor (String) -> Void) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(k).boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: 84, alignment: .leading)
+            Text(k).boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: nameW, alignment: .leading)
             WrapRow(spacing: 4) {
                 ForEach(options, id: \.self) { o in
                     APChoice(title: o + suffix, on: o == cur, enabled: !s.starting && !s.preparing && !s.rechecking, axid: "\(axid)-\(o)") { act(o) }
@@ -6933,7 +7049,7 @@ struct APConfirm: View {
     }
     private func row(_ k: String, _ v: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(k).boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: 84, alignment: .leading)
+            Text(k).boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: nameW, alignment: .leading)
             Text(v).boardFont(APType.body).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 4)
         }
@@ -6943,7 +7059,7 @@ struct APConfirm: View {
         let hooks = APConnections.shared.webhooks.filter { $0.scopes.contains("notify") }
         let on = Set(s.publish.notify ?? [])
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text("알림").boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: 84, alignment: .leading)
+            Text("알림").boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: nameW, alignment: .leading)
             if hooks.isEmpty {
                 Text("알림 webhook 이 없습니다(설정 › 연결에서 더함). 상태 알림·3시간 요약을 보내지 않습니다").boardFont(APType.body).fixedSize(horizontal: false, vertical: true)
             } else {
@@ -6993,7 +7109,7 @@ struct APConfirm: View {
                 }
             } else if let t = s.setText {
                 HStack(spacing: 6) {
-                    apNote("지시 글 · 펼쳐 둡니다")
+                    Text("지시 글").boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary)
                     Spacer(minLength: 4)
                     APButton(title: "이 자리에서 고치기", enabled: s.project != nil && !s.starting, help: "지시 글을 이 자리에서 고칩니다. 고친 판이 다음 출발의 기준이 됩니다", axid: "ap-set-edit") { s.beginEditSet() }
                 }
@@ -7819,22 +7935,30 @@ func apCircled(_ n: Int) -> String { n >= 1 && n <= 10 ? String(Array("①②③
 func apHome(_ p: String) -> String { p.replacingOccurrences(of: NSHomeDirectory(), with: "~") }
 
 // 합치기·승격 시트 — 창 전체를 덮는다(와이어프레임 합치기·승격 ⑪, 크기와 상관없음)
+// 두 칸일 때만(또는 한 칸일 때만) 그리기 — 합치기 시트의 "바뀐 줄"은 두 칸이면 왼쪽(넓게)에, 한 칸이면 누른 단계 바로 아래에
+struct APIfWide<Content: View>: View {
+    var wide = true
+    @ViewBuilder let content: () -> Content
+    @Environment(\.apSheetWide) private var isWide
+    var body: some View { if isWide == wide { content() } }
+}
+
+// 합치기·승격 시트 — 머리(전체 폭), 왼쪽: 요약·바뀐 파일·누른 단계의 바뀐 줄(넓게)·통과하지 못한 단위, 오른쪽: 엔진이 한 일·승격 단계(지금 누를 단계는 주 단추)·버리기, 아래: 나중에
 struct APMergeSheet: View {
     @ObservedObject var m: APMerge
     var body: some View {
         VStack(spacing: 0) {
             head
             Divider().opacity(0.35)
-            ScrollView(showsIndicators: true) {
-                SwiftUI.Group {
-                    if let v = m.v { content(v) } else { apNote("이 실행을 읽지 못했습니다. 실행 폴더가 지워졌을 수 있습니다.", APColor.fail) }
+            if let v = m.v {
+                APSheetColumns { left(v) } side: { right(v) } foot: { foot }
+            } else {
+                ScrollView {
+                    apNote("이 실행을 읽지 못했습니다. 실행 폴더가 지워졌을 수 있습니다.", APColor.fail).padding(16).frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(16)
-                .frame(maxWidth: 1000, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+                Divider().opacity(0.35)
+                foot.padding(.horizontal, 16).padding(.vertical, 10)
             }
-            Divider().opacity(0.35)
-            foot.padding(.horizontal, 16).padding(.vertical, 10)
         }
         .frame(minWidth: 460, minHeight: 440)
         .background(Backdrop())
@@ -7852,6 +7976,7 @@ struct APMergeSheet: View {
                     let sc = apStateChip(r)
                     APChip(text: sc.0, color: sc.1, strong: true)
                 }
+                APInfo(text: "실행이 끝나도 가지는 그대로 남고, 사람이 바뀐 줄을 본 뒤 단계마다 합칩니다. 가지를 움직이는 일은 모두 사람이 누를 때 엔진 finish 가 합니다")
                 Spacer(minLength: 4)
                 APButton(title: "다시 보기", icon: "arrow.clockwise", enabled: m.busy == nil && !m.reading, help: "run.json 과 가지를 다시 읽습니다(저장소에서 사람이 고친 뒤)", axid: "ap-merge-reload") { m.reload() }
                 APButton(title: "닫기", enabled: m.busy == nil, help: "가지는 그대로 남습니다", axid: "ap-merge-close") { m.close() }
@@ -7860,7 +7985,8 @@ struct APMergeSheet: View {
             // 첫 줄에 두면 줄이 시트보다 넓어져 머리 전체가 밀리고 실행 이름이 잘렸다(5-3b ⑤). 돌아가기는 둘째 줄(접힘), 하는 일은 셋째 줄(줄 바꿈)
             if let r = v?.run {
                 WrapRow(spacing: 6) {
-                    Text(r.name).boardFont(APType.label, weight: .bold).lineLimit(1)
+                    Text(r.title.isEmpty ? r.name : r.title).boardFont(APType.label, weight: .bold).lineLimit(1)
+                    if !r.title.isEmpty { Text(r.name).boardFont(APType.body).foregroundStyle(.secondary).lineLimit(1) }
                     Text("\(apDate(r.started)) → \(r.ended.map { apDay($0) == apDay(r.started) ? apClock($0) : apDate($0) } ?? "?")").boardFont(APType.mono).foregroundStyle(.secondary).fixedSize()
                     APChip(text: r.modeLabel, color: r.inPlace ? APColor.wait : APColor.muted)
                     if v?.jira == true { APChip(text: "Jira 연결" + (v?.epic.map { " · 에픽 \($0)" } ?? ""), color: APColor.jira) }
@@ -7876,59 +8002,67 @@ struct APMergeSheet: View {
             } else if m.reading {
                 Text("가지를 읽는 중").boardFont(APType.body).foregroundStyle(.secondary).accessibilityIdentifier("ap-merge-reading")
             }
-            if v?.run != nil {
-                apNote("실행이 끝나도 가지는 그대로 남고, 사람이 바뀐 줄을 본 뒤 단계마다 합칩니다. 자동으로 합치지 않습니다.")
-            }
         }
-        .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
+        .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 10)
     }
 
     private var foot: some View {
         HStack(spacing: 8) {
-            apNote(m.v?.jira == true ? "자동으로 합치지 않습니다 · 버리기는 스토리마다, dev 에 합치기 전에만" : "자동으로 합치지 않습니다 · 버리기는 합치기 전에만")
-                .frame(maxWidth: .infinity, alignment: .leading)
+            apNote("끝난 실행 줄을 하루 동안 숨깁니다")
+            Spacer(minLength: 4)
             APButton(title: "나중에", enabled: m.busy == nil, help: "보드의 끝난 실행 줄을 하루 동안 숨깁니다. 하루 뒤 다시 보입니다", axid: "ap-merge-later") { m.later() }
         }
     }
 
-    @ViewBuilder private func content(_ v: APMergeView) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if let r = m.result { resultBox(r) }
-            if v.run.active { apNote("이 실행은 아직 끝나지 않았습니다. 끝난 뒤에 합칩니다.", APColor.limit) }
-            else if !v.run.wrapped { apNote("이 실행은 끝 정리(하네스 끝 검사·기록)를 마치지 않아 엔진이 합치기·버리기를 받지 않습니다. 엔진이 다시 뜨면 이어서 정리합니다.", APColor.limit) }
-            if v.repos.isEmpty {
-                apNote("이 실행에는 엔진이 만든 가지가 없습니다(git 저장소에서 돌지 않았거나 가지 기능 전의 실행).", APColor.limit)
-            } else if !v.repos.allSatisfy({ FileManager.default.fileExists(atPath: $0) }) {
-                apNote("저장소를 찾지 못했습니다: " + v.repos.filter { !FileManager.default.fileExists(atPath: $0) }.map(apHome).joined(separator: ", "), APColor.fail)
-            }
-            if !v.gitBlocked.isEmpty {   // ⑦ 보드 git 받침: 바꿔치기·하위 모듈로 보드가 git 을 돌리지 않은 저장소
-                APBox(title: "보드가 git 을 돌리지 않은 저장소 \(v.gitBlocked.count)", note: "git 폴더가 출발 때와 다르거나 하위 모듈이 있습니다. 승격이 잠깁니다. 사람이 확인하세요", tint: APColor.fail, axid: "ap-merge-gitblocked") {
-                    ForEach(v.gitBlocked.sorted(by: { $0.key < $1.key }), id: \.key) { r, why in
-                        Text("\((r as NSString).lastPathComponent): \(why)").boardFont(APType.body).foregroundStyle(APColor.fail).fixedSize(horizontal: false, vertical: true)
-                    }
+    // 왼쪽 — 읽을 것
+    @ViewBuilder private func left(_ v: APMergeView) -> some View {
+        if v.run.active { apNote("이 실행은 아직 끝나지 않았습니다. 끝난 뒤에 합칩니다.", APColor.limit) }
+        else if !v.run.wrapped { apNote("이 실행은 끝 정리(하네스 끝 검사·기록)를 마치지 않아 엔진이 합치기·버리기를 받지 않습니다. 엔진이 다시 뜨면 이어서 정리합니다.", APColor.limit) }
+        if v.repos.isEmpty {
+            apNote("이 실행에는 엔진이 만든 가지가 없습니다(git 저장소에서 돌지 않았거나 가지 기능 전의 실행).", APColor.limit)
+        } else if !v.repos.allSatisfy({ FileManager.default.fileExists(atPath: $0) }) {
+            apNote("저장소를 찾지 못했습니다: " + v.repos.filter { !FileManager.default.fileExists(atPath: $0) }.map(apHome).joined(separator: ", "), APColor.fail)
+        }
+        if !v.gitBlocked.isEmpty {   // ⑦ 보드 git 받침: 바꿔치기·하위 모듈로 보드가 git 을 돌리지 않은 저장소
+            APBox(title: "보드가 git 을 돌리지 않은 저장소 \(v.gitBlocked.count)", note: "git 폴더가 출발 때와 다르거나 하위 모듈이 있습니다. 승격이 잠깁니다. 사람이 확인하세요", tint: APColor.fail, axid: "ap-merge-gitblocked") {
+                ForEach(v.gitBlocked.sorted(by: { $0.key < $1.key }), id: \.key) { r, why in
+                    Text("\((r as NSString).lastPathComponent): \(why)").boardFont(APType.body).foregroundStyle(APColor.fail).fixedSize(horizontal: false, vertical: true)
                 }
-            }
-            summaryBox(v)
-            harnessBox(v)
-            headsBox(v)
-            if v.jira {
-                ForEach(v.stories) { s in storyBox(v, s) }
-                if v.withAutopilot { stepsBox(v, title: "스토리 없는 단위 · 자율주행 가지", steps: m.autopilotSteps(v)); discardBox(v) }
-                else { unusedAutopilot(v) }
-                let ps = m.promoteSteps(v)
-                if !ps.isEmpty {
-                    APBox(title: "기존 가지 올리기", note: "스토리와 상관없이 한 번 · \(v.lastAuto ?? "live") 에 스토리를 하나라도 합친 뒤에만", axid: "ap-merge-promote") {
-                        ForEach(ps) { st in stepView(v, st) }
-                    }
-                }
-            } else {
-                if !v.discarded.contains("autopilot") { filesBox(v) }
-                unpassedBox(v)
-                stepsBox(v, title: "합치기·승격", steps: m.autopilotSteps(v) + m.promoteSteps(v))
-                discardBox(v)
             }
         }
+        summaryBox(v)
+        if harnessNotable(v) { harnessBox(v) }
+        if headsNotable(v) { headsBox(v) }
+        if !v.jira, !v.discarded.contains("autopilot") { filesBox(v) }
+        APIfWide { openDiffs(v) }
+        if !v.jira { unpassedBox(v) }
     }
+
+    // 오른쪽 — 정할 것(승격 단계·버리기)
+    @ViewBuilder private func right(_ v: APMergeView) -> some View {
+        if let r = m.result { resultBox(r) }
+        APSideHead(title: v.jira ? "스토리마다 합치기·승격" : "합치기·승격",
+                   info: "프로젝트 설정 '승격 차례'대로 단계마다 합칩니다" + (v.repos.count > 1 ? "(저장소마다 함께)" : "") + ". 실행이 끝나도 가지는 그대로 남습니다")
+        apNote("사람이 누를 때만 합칩니다. 자동으로 합치지 않습니다.")
+        if v.jira {
+            ForEach(v.stories) { s in storyBox(v, s) }
+            if v.withAutopilot { stepsBox(v, title: "스토리 없는 단위 · 자율주행 가지", steps: m.autopilotSteps(v)); discardBox(v) }
+            else { unusedAutopilot(v) }
+            let ps = m.promoteSteps(v)
+            if !ps.isEmpty {
+                APBox(title: "기존 가지 올리기", note: "스토리와 상관없이 한 번 · \(v.lastAuto ?? "live") 에 스토리를 하나라도 합친 뒤에만", axid: "ap-merge-promote") {
+                    ForEach(ps) { st in stepView(v, st) }
+                }
+            }
+        } else {
+            stepsBox(v, title: nil, steps: m.autopilotSteps(v) + m.promoteSteps(v))
+            discardBox(v)
+        }
+    }
+
+    // 하네스·가지 머리에 알릴 것이 있는가 — 없으면 요약 상자 안 한 줄로 접는다
+    private func harnessNotable(_ v: APMergeView) -> Bool { v.harnessSame == false }
+    private func headsNotable(_ v: APMergeView) -> Bool { !v.moved.isEmpty || !v.createdOther.isEmpty || (v.run.inPlace && !v.restored.isEmpty) }
 
     private func resultBox(_ r: APMergeResult) -> some View {
         APBox(title: r.ok ? "엔진이 한 일" : r.partial ? "엔진이 일부만 했습니다" : "엔진이 하지 않았습니다", note: r.title + " · 엔진 문장 그대로", tint: r.ok ? APColor.ok : APColor.fail, axid: "ap-merge-result") {
@@ -7936,20 +8070,52 @@ struct APMergeSheet: View {
         }
     }
 
-    // ① 요약 — 단위 결과 수, 일한 시간, 비용, 보고서 보기(3단계, 보고서 창 APReportViewer)
+    // ① 요약 — 단위 결과 수(0 은 그리지 않음), 일한 시간, 비용, 보고서 보기(3단계, 보고서 창 APReportViewer). 하네스·가지 머리에 알릴 것이 없으면 여기 한 줄씩
     private func summaryBox(_ v: APMergeView) -> some View {
         let u = v.run.units
         func n(_ s: String) -> Int { u.filter { $0.status == s }.count }
+        let unfinished = n("stopped") + n("pending") + n("running")
         return APBox(title: "요약", axid: "ap-merge-summary") {
             WrapRow(spacing: 6) {
-                APChip(text: "통과 \(n("done"))", color: APColor.ok, strong: true)
-                APChip(text: "미통과 \(n("failed"))", color: n("failed") > 0 ? APColor.fail : APColor.muted)
-                APChip(text: "상한에서 멈춤 \(n("capped"))", color: n("capped") > 0 ? APColor.cap : APColor.muted)
+                if n("done") > 0 { APChip(text: "통과 \(n("done"))", color: APColor.ok, strong: true) }
+                if n("failed") > 0 { APChip(text: "미통과 \(n("failed"))", color: APColor.fail, strong: true) }
+                if n("capped") > 0 { APChip(text: "상한에서 멈춤 \(n("capped"))", color: APColor.cap, strong: true) }
                 if n("skipped") > 0 { APChip(text: "건너뜀 \(n("skipped"))") }
-                if n("stopped") + n("pending") + n("running") > 0 { APChip(text: "끝까지 못 감 \(n("stopped") + n("pending") + n("running"))") }
+                if unfinished > 0 { APChip(text: "끝까지 못 감 \(unfinished)") }
                 Text("일한 시간 \(apDur(u.reduce(0) { $0 + $1.activeSec })) · \(apUSD(v.run.totalCost)) USD").boardFont(APType.body).monospacedDigit().foregroundStyle(.secondary).fixedSize()
                 APButton(title: "보고서 보기", icon: "doc.richtext", help: "결과 기록과 엔진 기록으로 그린 보고서(흐름 그림·단위별 기록)를 엽니다",
                          axid: "ap-merge-report") { APReportViewer.show(run: v.run.id, runDir: v.run.dir, title: v.run.title.isEmpty ? v.run.name : v.run.title) }
+            }
+            if !harnessNotable(v) {
+                SwiftUI.Group {
+                    if v.harnessSame == true {
+                        Label("하네스 출발 때와 같음 · " + (v.run.mode == "worktree" ? "자율주행 가지 기준 · 파일 \(v.harnessFiles)개"
+                                                    : (v.harnessFolders.count > 1 ? "저장소 \(v.harnessFolders.count)개 모두 같음" : "파일 \(v.harnessFiles)개")),
+                              systemImage: "checkmark.shield").boardFont(APType.body).foregroundStyle(APColor.ok)
+                    } else {
+                        apNote("하네스 기록 없음(하네스 지문 전 실행이거나 끝 검사를 하지 못함)")
+                    }
+                }
+                .accessibilityIdentifier("ap-merge-harness")
+            }
+            if !headsNotable(v) {
+                let bases = Set(v.run.bases.values).sorted().joined(separator: "·")
+                let commits = v.repos.compactMap { m.spans["all|" + $0]?.commits }.reduce(0, +)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Label("기존 가지 그대로", systemImage: "checkmark.circle").boardFont(APType.body).foregroundStyle(APColor.ok).fixedSize()
+                    if v.jira {
+                        let made = { (r: String, b: String) in (v.made[r] ?? []).contains(b) }
+                        let storyN = v.stories.flatMap(\.repos).filter { made($0.repo, $0.branch) }.count
+                        let taskN = v.stories.flatMap(\.tasks).filter { made($0.repo, $0.branch) }.count
+                        apNote("· 새 가지: 스토리 가지 \(storyN) · 작업 가지 \(taskN) · 출발 가지 \(bases)")
+                    } else if !v.run.work.isEmpty {
+                        Text("· 새 가지").boardFont(APType.body).foregroundStyle(.secondary).fixedSize()
+                        Text(v.run.work).boardFont(APType.mono, weight: .semibold).lineLimit(1).truncationMode(.middle)
+                        apNote((v.repos.count > 1 ? "저장소 \(v.repos.count)개 · " : "") + (m.spans.isEmpty ? "" : "커밋 \(commits)개 · ") + "출발 가지 \(bases)")
+                    }
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("ap-merge-heads")
             }
         }
     }
@@ -8009,16 +8175,45 @@ struct APMergeSheet: View {
         }
     }
 
-    // ④⑤ 바뀐 파일 — 출발 가지 머리에서 자율주행 가지까지(저장소마다). 파일을 누르면 바뀐 줄
+    // ④⑤ 바뀐 파일 — 출발 가지 머리에서 자율주행 가지까지(저장소마다). 파일을 누르면 바뀐 줄. 단계의 바뀐 줄(받는 가지 기준)과 커밋 수가 다를 수 있어 기준 가지를 적는다
     private func filesBox(_ v: APMergeView) -> some View {
-        APBox(title: "바뀐 파일", note: "출발 가지에서 자율주행 가지까지 · 파일을 누르면 바뀐 줄", axid: "ap-merge-files") {
+        let bases = Set(v.run.bases.values).sorted().joined(separator: "·")
+        return APBox(title: "바뀐 파일", note: "출발 가지 \(bases.isEmpty ? "?" : bases) 기준", axid: "ap-merge-files",
+                     info: "출발 가지 머리에서 자율주행 가지까지 바뀐 것입니다. 파일을 누르면 바뀐 줄이 보입니다. 승격 단계의 '바뀐 줄 보기'는 그 단계의 받는 가지 기준이라 커밋 수가 다를 수 있습니다") {
             if m.spans.isEmpty, m.reading { apNote("읽는 중입니다") }
             ForEach(v.repos, id: \.self) { r in
                 if let p = m.spans["all|" + r] {
-                    diffPanel("all|" + r, repo: r, p, title: v.repos.count > 1 ? (r as NSString).lastPathComponent : nil, ax: "all-" + (r as NSString).lastPathComponent)
+                    diffPanel("all|" + r, repo: r, p, title: v.repos.count > 1 ? (r as NSString).lastPathComponent : nil, ax: "all-" + (r as NSString).lastPathComponent, base: bases)
                 }
             }
         }
+    }
+
+    // 두 칸일 때 누른 단계·작업의 바뀐 줄 — 왼쪽에 넓게(한 칸이면 단계 바로 아래에 그린다)
+    @ViewBuilder private func openDiffs(_ v: APMergeView) -> some View {
+        let steps = m.allSteps(v).filter { m.openDiff.contains($0.id) && !v.discarded.contains($0.source) }
+        ForEach(steps) { st in
+            let ps = m.plansOf(st), many = ps.count > 1
+            APBox(title: "\(apCircled(st.num)) \(st.into) ← \(st.from)", note: "\(st.into) 기준 바뀐 줄 · \(st.into) 에 없는 커밋만", tint: Palette.accent, axid: "ap-merge-diffbox-\(st.ax)") {
+                ForEach(ps) { rp in
+                    if let p = rp.plan { diffPanel(st.id + "|" + rp.repo, repo: rp.repo, p, title: many ? (rp.repo as NSString).lastPathComponent : nil, ax: st.ax + (many ? "-" + (rp.repo as NSString).lastPathComponent : ""), base: st.into) }
+                }
+                HStack { Spacer(minLength: 0); APMinorButton(title: "닫기", icon: "xmark", axid: "ap-merge-diffbox-close-\(st.ax)") { m.toggleDiff(st.id) } }
+            }
+        }
+        ForEach(v.stories) { s in
+            ForEach(s.tasks.filter { t in m.openDiff.contains(t.spanKey) && taskHas(t) }) { t in
+                if let p = m.spans[t.spanKey] {
+                    APBox(title: "\(t.key ?? "단위 \(t.n)") · \(t.title)", note: "\(t.branch) · 스토리 가지 \(s.storyBranch(t.repo) ?? s.branch) 기준", tint: APColor.jira, axid: "ap-merge-diffbox-task-\(t.key ?? "\(t.n)")") {
+                        diffPanel(t.spanKey, repo: t.repo, p, title: nil, ax: "task-\(t.key ?? "\(t.n)")")
+                        HStack { Spacer(minLength: 0); APMinorButton(title: "닫기", icon: "xmark", axid: "ap-merge-diffbox-close-task-\(t.key ?? "\(t.n)")") { m.toggleDiff(t.spanKey) } }
+                    }
+                }
+            }
+        }
+    }
+    private func taskHas(_ t: APMergeTask) -> Bool {
+        !t.branch.isEmpty && m.existing[t.repo]?.contains(t.branch) == true && !m.foreign.contains(t.repo + "|" + t.branch)
     }
 
     // ⑥ 통과하지 못한 단위 — 그때까지 한 것은 자율주행 가지에 커밋되어 합치면 함께 간다(설계 판단: 와이어프레임의 "상한에서 멈춘 단위"를 미통과·중단까지)
@@ -8038,8 +8233,10 @@ struct APMergeSheet: View {
         }
     }
 
-    private func stepsBox(_ v: APMergeView, title: String, steps: [APMergeStep]) -> some View {
-        APBox(title: title, note: "프로젝트 설정 '승격 차례'대로" + (v.repos.count > 1 ? ", 저장소마다 함께" : "") + ", 사람이 누를 때만", axid: "ap-merge-steps") {
+    // 단계 묶음 — title 이 없으면 오른쪽 칸 머리("합치기·승격")가 제목이다
+    private func stepsBox(_ v: APMergeView, title: String?, steps: [APMergeStep]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let title { APSideHead(title: title) }
             if steps.contains(where: { v.discarded.contains($0.source) }) {
                 apNote("이 실행의 가지를 버렸습니다. 실행 기록과 보고서는 지난 실행에 남습니다.")
             } else if steps.isEmpty { apNote("승격할 가지(dev·live·master)가 없습니다", APColor.limit) }
@@ -8047,9 +8244,12 @@ struct APMergeSheet: View {
             ForEach(steps.filter { !v.discarded.contains($0.source) }) { st in stepView(v, st) }
             if !steps.isEmpty, steps.allSatisfy({ m.done($0) != nil }) { apNote("모든 단계를 마쳤습니다.", APColor.ok) }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("ap-merge-steps")
     }
 
-    // 단계 하나 — 머리(번호·받는 가지 ← 합칠 쪽·커밋 수·차례), 바뀐 줄 보기, 합치기 단추 또는 한 일, 저장소마다 미리 본 것
+    // 단계 하나 — 머리(번호·받는 가지 ← 합칠 쪽·받는 가지에 없는 커밋 수·차례)와 바뀐 줄 보기, 지금 누를 수 있으면 주 단추(넓게),
+    // 잠겼으면 단추 대신 까닭 글(예: "① 을 마친 뒤"), 한 뒤에는 한 일. 저장소마다 미리 본 것은 짧게(긴 git 설명은 ⓘ)
     private func stepView(_ v: APMergeView, _ st: APMergeStep) -> some View {
         let did = m.done(st)
         let lock = m.lockReason(st), shownLock = m.orderLock(st)
@@ -8057,10 +8257,12 @@ struct APMergeSheet: View {
         let total = ps.compactMap { $0.plan?.commits }.reduce(0, +)
         let many = ps.count > 1
         var info: [String] = []
-        if !m.plans.isEmpty, did == nil { info.append("커밋 \(total)" + (many ? " · " + ps.map { "\(($0.repo as NSString).lastPathComponent) \($0.plan?.commits ?? 0)" }.joined(separator: " · ") : "개")) }
+        if !m.plans.isEmpty, did == nil { info.append("\(st.into) 에 없는 커밋 \(total)개" + (many ? "(" + ps.map { "\(($0.repo as NSString).lastPathComponent) \($0.plan?.commits ?? 0)" }.joined(separator: " · ") + ")" : "")) }
         if let a = st.after { info.append("\(a) 에 합친 뒤에만") }
-        return VStack(alignment: .leading, spacing: 5) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
+        let planCovers = ps.contains { ["conflict", "error", "nosrc"].contains($0.plan?.state ?? "") || $0.plan?.wtDirty == true }
+        let orderWait = !m.afterDone(st)
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
                 Text(apCircled(st.num)).boardFont(APType.heading, weight: .bold).foregroundStyle(did != nil ? APColor.ok : (lock == nil ? Palette.accent : .secondary))
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(st.into) ← \(st.from)").boardFont(APType.mono, weight: .semibold).lineLimit(1).truncationMode(.middle)
@@ -8070,26 +8272,8 @@ struct APMergeSheet: View {
                     }
                 }
                 Spacer(minLength: 4)
-                APButton(title: m.openDiff.contains(st.id) ? "바뀐 줄 닫기" : "바뀐 줄 보기", enabled: !m.plans.isEmpty, help: "이 단계에서 \(st.into) 로 갈 바뀐 줄", axid: "ap-merge-diff-\(st.ax)") { m.toggleDiff(st.id) }
-                if did != nil {
-                    APChip(text: st.promote ? "올림" : "합침", color: APColor.ok, strong: true)
-                } else {
-                    APButton(title: st.promote ? "올리기" : "합치기", primary: true, enabled: lock == nil, help: lock ?? "엔진 finish 로 \(st.into) 에 합칩니다", axid: "ap-merge-do-\(st.ax)") { m.press(st) }
-                }
-            }
-            if let d = did {
-                let howOf = { (p: APPromoted) in (["ff": "앞으로 감기", "merge": "병합 커밋", "same": "이미 들어 있어 그대로"][p.how] ?? p.how) + (p.how == "merge" ? " \(p.to.prefix(7))" : "") }
-                let rows = m.doneRows(st)
-                apNote("\(d.at.map(apClock) ?? "?") 에 \(st.promote ? "올렸습니다" : "합쳤습니다") · "
-                       + (many && rows.count > 1 ? rows.map { "\(($0.repo as NSString).lastPathComponent) \(howOf($0))" }.joined(separator: " · ") : howOf(d)), APColor.ok)
-            } else if let shownLock { apNote(shownLock, shownLock.hasSuffix("누를 수 있습니다.") || shownLock.contains("읽는 중") ? .secondary : APColor.limit) }
-            // 지난번에 일부 저장소만 했다(엔진 branches.failed). 다시 누르면 한 저장소는 그대로로 넘어가고 남은 저장소만 한다
-            let left = did == nil ? m.leftover(st) : []
-            if !left.isEmpty {
-                let doneNames = m.doneRows(st).filter { r in !left.contains { $0.repo == r.repo } }.map { ($0.repo as NSString).lastPathComponent }
-                apNote("일부만 했습니다" + (doneNames.isEmpty ? "" : "(한 저장소: " + doneNames.joined(separator: "·") + ")") + ". 하지 못한 저장소: "
-                       + left.map { "\(($0.repo as NSString).lastPathComponent)(\($0.why))" }.joined(separator: " · ") + ". 까닭을 고친 뒤 다시 누르면 남은 저장소만 합칩니다.", APColor.fail)
-                    .accessibilityIdentifier("ap-merge-partial-\(st.ax)")
+                APButton(title: m.openDiff.contains(st.id) ? "바뀐 줄 닫기" : "바뀐 줄 보기", enabled: !m.plans.isEmpty, help: "이 단계에서 \(st.into) 로 갈 바뀐 줄(\(st.into) 기준)", axid: "ap-merge-diff-\(st.ax)") { m.toggleDiff(st.id) }
+                if did != nil { APChip(text: st.promote ? "올림" : "합침", color: APColor.ok, strong: true) }
             }
             // 차례에 막힌 단계의 "그대로"는 앞 단계 뒤에 달라지므로 보이지 않는다
             ForEach(ps) { rp in
@@ -8101,15 +8285,44 @@ struct APMergeSheet: View {
                        + (many ? "(" + parts.map { "\(($0.repo as NSString).lastPathComponent) \($0.plan!.withBase)" }.joined(separator: " · ") + ")" : "")
                        + "가 함께 갑니다. 경고만 합니다. '바뀐 줄 보기'에 그 커밋도 함께 보입니다.", APColor.limit)
             }
+            if let d = did {
+                let howOf = { (p: APPromoted) in (["ff": "앞으로 감기", "merge": "병합 커밋", "same": "이미 들어 있어 그대로"][p.how] ?? p.how) + (p.how == "merge" ? " \(p.to.prefix(7))" : "") }
+                let rows = m.doneRows(st)
+                apNote("\(d.at.map(apClock) ?? "?") 에 \(st.promote ? "올렸습니다" : "합쳤습니다") · "
+                       + (many && rows.count > 1 ? rows.map { "\(($0.repo as NSString).lastPathComponent) \(howOf($0))" }.joined(separator: " · ") : howOf(d)), APColor.ok)
+            } else if lock == nil {
+                APMainButton(title: st.promote ? "\(st.into) 로 올리기" : "\(st.into) 에 합치기", help: "엔진 finish 로 \(st.into) 에 합칩니다", axid: "ap-merge-do-\(st.ax)") { m.press(st) }
+            } else if let shown = shownLock ?? (planCovers ? nil : lock) {
+                // 잠긴 단계 — 흐린 단추 대신 까닭 글(차례를 기다리는 것은 회색, 그 밖은 주의 색)
+                Label(orderWait ? shown.replacingOccurrences(of: " 을 마치면 누를 수 있습니다.", with: " 을 마친 뒤").replacingOccurrences(of: " 에 스토리를 합치면 누를 수 있습니다.", with: " 에 스토리를 합친 뒤") : shown,
+                      systemImage: orderWait ? "clock" : "lock")
+                    .boardFont(APType.body, weight: .semibold)
+                    .foregroundStyle(orderWait || shown.contains("읽는 중") ? Color.secondary : APColor.limit)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .hint(lock ?? shown)
+                    .accessibilityIdentifier("ap-merge-do-\(st.ax)")
+            }
+            // 지난번에 일부 저장소만 했다(엔진 branches.failed). 다시 누르면 한 저장소는 그대로로 넘어가고 남은 저장소만 한다
+            let left = did == nil ? m.leftover(st) : []
+            if !left.isEmpty {
+                let doneNames = m.doneRows(st).filter { r in !left.contains { $0.repo == r.repo } }.map { ($0.repo as NSString).lastPathComponent }
+                apNote("일부만 했습니다" + (doneNames.isEmpty ? "" : "(한 저장소: " + doneNames.joined(separator: "·") + ")") + ". 하지 못한 저장소: "
+                       + left.map { "\(($0.repo as NSString).lastPathComponent)(\($0.why))" }.joined(separator: " · ") + ". 까닭을 고친 뒤 다시 누르면 남은 저장소만 합칩니다.", APColor.fail)
+                    .accessibilityIdentifier("ap-merge-partial-\(st.ax)")
+            }
             if m.openDiff.contains(st.id) {
-                ForEach(ps) { rp in
-                    if let p = rp.plan { diffPanel(st.id + "|" + rp.repo, repo: rp.repo, p, title: many ? (rp.repo as NSString).lastPathComponent : nil, ax: st.ax + (many ? "-" + (rp.repo as NSString).lastPathComponent : "")) }
+                APIfWide(wide: true) { apNote("바뀐 줄은 왼쪽에 보입니다.") }
+                APIfWide(wide: false) {
+                    ForEach(ps) { rp in
+                        if let p = rp.plan { diffPanel(st.id + "|" + rp.repo, repo: rp.repo, p, title: many ? (rp.repo as NSString).lastPathComponent : nil, ax: st.ax + (many ? "-" + (rp.repo as NSString).lastPathComponent : ""), base: st.into) }
+                    }
                 }
             }
         }
-        .padding(9)
+        .padding(11)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(did != nil ? 0.03 : 0.05)))
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(did != nil ? 0.03 : (lock == nil ? 0.07 : 0.04))))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(did == nil && lock == nil ? Palette.accent.opacity(0.45) : Color.white.opacity(0.07), lineWidth: did == nil && lock == nil ? 1 : 0.5))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("ap-merge-step-\(st.ax)")
     }
@@ -8122,11 +8335,14 @@ struct APMergeSheet: View {
         case "same": apNote(name + "바뀐 것이 없어(이미 들어 있음) 엔진이 '그대로'로 적고 이 단계를 마친 것으로 칩니다")
         case "ff", "merge":
             VStack(alignment: .leading, spacing: 3) {
-                apNote(name + (p.state == "ff" ? "앞으로 감기로 합칠 수 있습니다. \(st.into) 가 그대로라 커밋 \(p.commits)개를 그대로 얹습니다."
-                                               : "병합 커밋으로 합칩니다. \(st.into) 에 이 가지에 없는 커밋 \(p.behind)개가 있어 앞으로 감기가 안 됩니다. 단위 커밋 \(p.commits)개는 하나로 뭉치지 않고 그대로 남깁니다."))
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    apNote(name + (p.state == "ff" ? "커밋을 그대로 얹습니다(앞으로 감기)" : "병합 커밋 하나로 합칩니다(\(st.into) 에만 있는 커밋 \(p.behind)개)"))
+                    APInfo(text: p.state == "ff" ? "앞으로 감기(fast-forward)로 합칠 수 있습니다. \(st.into) 가 그대로라 커밋 \(p.commits)개를 그대로 얹고, 새 커밋을 만들지 않습니다."
+                                                 : "병합 커밋으로 합칩니다. \(st.into) 에 이 가지에 없는 커밋 \(p.behind)개가 있어 앞으로 감기가 안 됩니다. 단위 커밋 \(p.commits)개는 하나로 뭉치지 않고 그대로 남깁니다.")
+                }
                 if let w = p.wt {
                     if p.wtDirty { apNote("\(st.into) 가 걸린 작업 트리(\(apHome(w)))에 커밋하지 않은 변경이 있어 엔진이 합치지 않습니다. 커밋하거나 치운 뒤 '다시 보기'를 누릅니다.", APColor.fail) }
-                    else { apNote("\(st.into) 가 걸린 작업 트리(\(apHome(w)))도 그 자리에서 앞으로 감기로 함께 바뀝니다.") }
+                    else { apNote("\(st.into) 가 걸린 작업 트리(\(apHome(w)))도 그 자리에서 함께 바뀝니다.") }
                 }
             }
         case "conflict":
@@ -8134,7 +8350,7 @@ struct APMergeSheet: View {
                 apNote(name + "충돌 \(p.conflicts.count)개 파일이라 합치지 않습니다: " + p.conflicts.prefix(6).joined(separator: " · "), APColor.fail)
                 HStack(spacing: 6) {
                     APButton(title: "보드 탭에서 열기", icon: "terminal", help: "그 저장소를 보드 탭(셸)으로 열어 직접 풉니다. 이 시트는 닫힙니다", axid: "ap-merge-opentab-\(st.ax)") { m.openTab(r) }
-                    apNote("그 저장소를 보드 탭으로 열어 직접 풉니다. 푼 뒤 합치기·승격을 다시 열면 이 단계를 다시 봅니다.")
+                    APInfo(text: "그 저장소를 보드 탭으로 열어 직접 풉니다. 푼 뒤 합치기·승격을 다시 열면 이 단계를 다시 봅니다.")
                 }
             }
         case "error": apNote(name + "합칠 tree 를 만들지 못했습니다: \(p.error)", APColor.fail)
@@ -8142,8 +8358,8 @@ struct APMergeSheet: View {
         }
     }
 
-    // 바뀐 파일 목록과 고른 파일의 바뀐 줄(와이어프레임 ④⑤)
-    private func diffPanel(_ key: String, repo: String, _ p: APMergePlan, title: String?, ax: String) -> some View {
+    // 바뀐 파일 목록과 고른 파일의 바뀐 줄(와이어프레임 ④⑤). base 를 주면 머리에 기준 가지
+    private func diffPanel(_ key: String, repo: String, _ p: APMergePlan, title: String?, ax: String, base: String? = nil) -> some View {
         let add = p.files.compactMap { Int($0.add) }.reduce(0, +), del = p.files.compactMap { Int($0.del) }.reduce(0, +)
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
@@ -8151,6 +8367,7 @@ struct APMergeSheet: View {
                 Text("파일 \(p.files.count)개 · 커밋 \(p.commits)개").boardFont(APType.body, weight: .semibold)
                 Text("+\(add)").boardFont(APType.monoSmall).foregroundStyle(APColor.ok)
                 Text("−\(del)").boardFont(APType.monoSmall).foregroundStyle(APColor.fail)
+                if let base, !base.isEmpty { Text("· \(base) 기준").boardFont(APType.note).foregroundStyle(.secondary) }
             }
             if p.state == "nosrc" { apNote("가지가 없습니다(버렸거나 지워짐)") }
             else if p.files.isEmpty { apNote("바뀐 파일이 없습니다") }
@@ -8324,7 +8541,10 @@ struct APMergeSheet: View {
             } else {
                 apNote(t.branch.isEmpty ? "가지 없음" : "\(t.branch) · 지웠음")
             }
-            if has, let p, m.openDiff.contains(key) { diffPanel(key, repo: t.repo, p, title: nil, ax: "task-\(t.key ?? "\(t.n)")") }
+            if has, let p, m.openDiff.contains(key) {
+                APIfWide(wide: true) { apNote("바뀐 줄은 왼쪽에 보입니다.") }
+                APIfWide(wide: false) { diffPanel(key, repo: t.repo, p, title: nil, ax: "task-\(t.key ?? "\(t.n)")") }
+            }
         }
     }
 

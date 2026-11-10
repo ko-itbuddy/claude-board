@@ -569,13 +569,16 @@ struct APMCPServerInfo: Equatable, Identifiable {
 
 // MARK: 화면 — 1단계 주제로 시작 입력 판
 
+// 두 칸(2단계 ②): 왼쪽(.main) 주제 글·자료 링크, 오른쪽(.side) 작업 경로·기술 스택
 struct APTopicStep1: View {
     @ObservedObject var s: APStart
     @ObservedObject var t: APTopic
+    var part: APSheetPart = .main
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        if part == .main {
             topicBox
             linksBox
+        } else {
             pathBox
             stackBox
         }
@@ -583,12 +586,13 @@ struct APTopicStep1: View {
 
     // 주제 — 자유 입력 한 칸(와이어프레임 ⑤). 찾은 낱말은 아래에 꼬리표로
     private var topicBox: some View {
-        APBox(title: "주제", note: "자유 입력 한 칸 · 주제는 결정이 아니라 요청입니다", axid: "ap-topic-box") {
+        APBox(title: "주제", note: "결정이 아니라 요청입니다", axid: "ap-topic-box",
+              info: "자유 입력 한 칸입니다. 보드가 주제 글에서 기술 스택 이름과 버전 꼴을 낱말 대조로 찾습니다(모델을 부르지 않습니다). 명세·단위는 다음 단계의 초안 세션이 씁니다") {
             ZStack(alignment: .topLeading) {
                 TextEditor(text: $t.text)
                     .boardFont(APType.body)
                     .scrollContentBackground(.hidden)
-                    .frame(minHeight: 64, maxHeight: 140)
+                    .frame(minHeight: 110, maxHeight: 220)
                     .padding(4)
                     .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.25)))
                     .accessibilityIdentifier("ap-topic-text")
@@ -607,13 +611,13 @@ struct APTopicStep1: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("ap-topic-hits")
             }
-            apNote("보드가 주제 글에서 기술 스택 이름과 버전 꼴을 낱말 대조로 찾습니다(모델을 부르지 않습니다). 명세·단위는 다음 단계의 초안 세션이 씁니다.")
         }
     }
 
     // 자료 링크 — 줄마다 종류·주소·읽기 상태(연결됨·연결 필요·읽을 수 없음, 그 밖 웹 주소는 MCP 서버 고르기). 읽기는 2단계 "보드가 준비"에서 줄마다(와이어프레임 ⑥, 4단계 ⑩-2)
     private var linksBox: some View {
-        APBox(title: "자료 링크", note: "메타 정보만 읽습니다", axid: "ap-links-box") {
+        APBox(title: "자료 링크", note: "메타 정보만 읽습니다", axid: "ap-links-box",
+              info: "연결이 없는 서비스의 링크에는 '연결 필요', 열리지 않는 주소에는 '읽을 수 없음'이 붙습니다. 링크는 다음 단계(보드가 준비)에서 줄마다 읽고, 본문 전체가 아니라 메타 정보(제목·목차·핵심 칸·링크·요약, 가리킨 절)만 근거 묶음에 남깁니다. 연결이 없는 링크는 요청하지 않습니다") {
             ForEach(t.links) { l0 in
                 let l = t.linkView(l0)
                 VStack(alignment: .leading, spacing: 3) {
@@ -652,7 +656,6 @@ struct APTopicStep1: View {
                 APButton(title: "더하기", enabled: !t.linkInput.trimmingCharacters(in: .whitespaces).isEmpty, axid: "ap-link-add") { t.addLink() }
             }
             if let e = t.linkError { apNote(e, APColor.fail) }
-            apNote("연결이 없는 서비스의 링크에는 '연결 필요', 열리지 않는 주소에는 '읽을 수 없음'이 붙습니다. 링크는 다음 단계(보드가 준비)에서 줄마다 읽고, 본문 전체가 아니라 메타 정보(제목·목차·핵심 칸·링크·요약, 가리킨 절)만 근거 묶음에 남깁니다. 연결이 없는 링크는 요청하지 않습니다.")
         }
     }
 
@@ -679,7 +682,8 @@ struct APTopicStep1: View {
 
     // 작업 경로 — 기존 저장소 또는 새 폴더 만들기(와이어프레임 ⑦)
     private var pathBox: some View {
-        APBox(title: "작업 경로", note: "저장소 뿌리", axid: "ap-topic-path") {
+        APBox(title: "작업 경로", note: "저장소 뿌리", axid: "ap-topic-path",
+              info: "기존 저장소를 고르거나 새 폴더를 만듭니다. 단일 저장소인지 묶음인지(따로 작업 트리로 도는지)는 보드가 준비할 때 엔진이 봅니다") {
             HStack(spacing: 6) {
                 APChoice(title: "기존 저장소", on: t.pathMode == "existing", axid: "ap-path-existing") { t.pathMode = "existing" }
                 APChoice(title: "새 폴더 만들기", on: t.pathMode == "new", axid: "ap-path-new") { t.pathMode = "new" }
@@ -716,7 +720,6 @@ struct APTopicStep1: View {
                 if top != (r.input.hasPrefix("~") ? NSHomeDirectory() + r.input.dropFirst() : r.input) { apNote("저장소 뿌리(\(apHome(top)))를 작업 경로로 씁니다.") }
                 apNote(r.known ? "이 경로의 지난 실행 \(r.pastRuns)개가 있습니다." + (r.setAt.map { " 지난 자율주행 세트(\(apDay($0)))를 불러옵니다." } ?? " 세트에 지시가 없습니다.")
                        : "이 경로에서 처음 출발합니다.")
-                apNote("단일 저장소인지 묶음인지(따로 작업 트리로 도는지)는 보드가 준비할 때 엔진이 봅니다.")
             }
         }
     }
@@ -741,7 +744,8 @@ struct APTopicStep1: View {
 
     // 기술 스택 세 칸 — 기존 프로젝트는 감지해 잠금, 새 폴더는 주제에서 읽거나 고르거나 직접 입력(와이어프레임 ⑧⑨)
     private var stackBox: some View {
-        APBox(title: "기술 스택", note: "프론트 · 백엔드 · DB", axid: "ap-stack-box") {
+        APBox(title: "기술 스택", note: "프론트 · 백엔드 · DB", axid: "ap-stack-box",
+              info: "고른 스택은 초안 세션과 단위 세션에 넘기고 출발할 때 자율주행 세트 stack.json 에 남깁니다. 목록에 있는 스택은 보드가 공식 생성기로 뼈대를 만들고(바깥 레지스트리를 부르는 생성기도 있습니다), 직접 입력한 스택은 첫 단위 '프로젝트 구성'을 모델이 합니다") {
             if t.pathMode == "existing" && (t.repo?.top == nil || t.reading) {
                 apNote("기존 저장소를 고르면 빌드·설정 파일을 읽어 감지합니다.")
             } else if t.locked, let d = t.detected {
@@ -754,7 +758,6 @@ struct APTopicStep1: View {
                 headLine
                 ForEach(["front", "back", "db"], id: \.self) { slot in APSlotEditor(t: t, slot: slot) }
                 if !t.summary().isEmpty { apNote("고른 스택: " + t.summary()) }
-                apNote("고른 스택은 초안 세션과 단위 세션에 넘기고 출발할 때 자율주행 세트 stack.json 에 남깁니다. 목록에 있는 스택은 보드가 공식 생성기로 뼈대를 만들고(바깥 레지스트리를 부르는 생성기도 있습니다), 직접 입력한 스택은 첫 단위 '프로젝트 구성'을 모델이 합니다.")
             }
         }
         .onAppear { if t.pathMode == "new" || (t.detected?.isEmpty ?? false) { t.loadCatalog() } }
@@ -762,15 +765,15 @@ struct APTopicStep1: View {
     @ViewBuilder private var headLine: some View {
         let fromTopic = t.slots.values.contains { $0.origin == "topic" }
         WrapRow(spacing: 6) {
-            if t.pathMode == "existing" { APChip(text: "감지된 것 없음", color: APColor.limit, strong: true) }
+            if t.pathMode == "existing" { APChip(text: "감지된 것 없음", color: APColor.muted) }
             if fromTopic { APChip(text: "주제에서 읽음", color: Palette.accent, strong: true) }
-            APChip(text: t.catalogLabel, color: t.catalog?.origin == .stale || t.catalog?.origin == .builtin ? APColor.limit : APColor.muted)
+            APChip(text: t.catalogLabel, color: APColor.muted)
                 .accessibilityIdentifier("ap-catalog-label")
         }
         if fromTopic { apNote("주제에 버전이 없으면 추천 판을 넣었습니다. 확인해 주세요.") }
         else if t.pathMode == "existing" { apNote("빌드·설정 파일에서 스택을 찾지 못했습니다. 칸마다 고르거나 직접 적습니다.") }
         else { apNote("주제에 기술 스택이 없습니다. 칸마다 고르거나 직접 적습니다.") }
-        if let f = t.catalog?.failed, !f.isEmpty, t.catalog?.origin != .fresh { apNote("받지 못한 곳: " + f.joined(separator: ", "), APColor.limit) }
+        if let f = t.catalog?.failed, !f.isEmpty, t.catalog?.origin != .fresh { apNote("받지 못한 곳: " + f.joined(separator: ", ")) }
     }
     private func detectedRow(_ slot: String, _ s: APStackSlot?) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
