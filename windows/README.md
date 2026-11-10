@@ -169,7 +169,7 @@ Windows 11 한 대에서 확인했습니다: 탭 · 경로 줄 · 새 세션 · 
   보드의 시작 준비 화면은 실제 창에서 WSL 로 출발해 끝까지 확인했습니다(환경 목록에 WSL 이 샌드박스 가능으로 나오고 확인 칸이 없음 · 상대 경로와 없는 폴더는 명령줄의 거절 글이 그대로 뜸 · 동의 없는 네이티브는 막힘 · 시작을 두 번 눌러도 실행은 하나 · 폴더 고르기 창이 열림).
   작업 스케줄러가 띄운 엔진이 사람 없이 41분 동안 진짜 claude(haiku) 단위 12개를 돌렸습니다(11개 통과, 1개는 설계대로 상한에서 멈춤, 엔진은 내내 살아 있었고 메모리는 15 MB 에서 23 MB, 비정상 재시작 없음, 끝에 작업 스케줄러 등록이 지워짐, 합계 1.4 USD).
 - 확인하지 않은 것(미확인): 엔진을 끊고 3초 안에 다시 띄우는 경우(옛 claude 를 꼬리표로 쓸어내는 동작은 이 확인에서 돌지 않았습니다), Git Bash · PowerShell 환경의 진짜 claude 실행, 판정 재시도, 로그오프 · 재부팅 뒤 다시 뜨는 것, 몇 시간 도는 실행, 실제 Windows 10. 시작 준비 화면에서는 마우스로 폴더를 고르는 조작과 좁은 창의 머리 배치를 보지 않았습니다.
-- 보드를 제거해도 작업 스케줄러에 등록된 자율주행 작업은 남습니다. 제거 전에 `claude-autopilot unregister --all` 을 먼저 실행하세요.
+- 보드를 제거하면 작업 스케줄러에 등록된 자율주행 작업도 함께 지워집니다(이름에 해시가 붙은 현재 방식의 등록). 이전 방식으로 등록된 작업만 `claude-autopilot unregister --all` 로 지웁니다. 돌고 있던 실행은 멈추지 않고, 다시 뜨지 않을 뿐입니다.
 
 써 보는 방법은 [설치 가이드 4장](docs/설치%20가이드.md), 구조와 확인한 범위는 [SPEC 12장](docs/SPEC.md) 에 있습니다.
 
@@ -198,7 +198,7 @@ irm https://raw.githubusercontent.com/suhojang/claude-board/main/windows/packagi
 앱, `%USERPROFILE%\.claude\notifier\` 의 hook 실행 파일 · 세션 기록 · 보드가 옮겨 둔 답변 꾸미기 플러그인(`plugins\`), settings.json 의 hook 과 환경변수(백업 후), 로그인 자동 실행,
 `claude-board` · `claude-board-tui` 명령, 계정 전환용으로 저장한 로그인 정보와 그 목록의 깨진 백업(`accounts.json.broken-<시각>`)을 지웁니다. 지금 Claude Code 로그인은 그대로 둡니다.
 setup.exe 로 설치했다면 **설정 > 앱 > 설치된 앱** 에서 Claude Board 를 제거해도 같습니다.
-자율주행을 썼다면 제거 전에 `claude-autopilot unregister --all` 을 먼저 실행하세요. 제거는 작업 스케줄러에 등록된 자율주행 작업을 지우지 않습니다.
+자율주행을 썼다면 제거가 작업 스케줄러의 자율주행 등록도 지웁니다. 이전 방식의 등록이 남아 있으면 `claude-autopilot unregister --all` 로 지웁니다.
 
 ## 🍎 macOS 판과 다른 점
 
