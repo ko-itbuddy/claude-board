@@ -409,6 +409,7 @@ Claude Board 는 Claude Code 세션 상태를 한눈에 보여 주는 보드 창
     "/Applications/Claude Board.app/Contents/MacOS/ClaudeBoard" --open-tab --cwd <폴더> [--title <탭 이름>] [--launch] [--timeout <초>] -- claude <인자…>
   · -- 뒤 첫 인자는 claude 여야 합니다. 다른 명령은 받지 않고, 인자에 제어 문자(줄바꿈·탭은 됨)가 있어도 받지 않습니다.
     보드는 인자마다 따옴표로 묶어 그 폴더의 셸에 칩니다(보드가 직접 연 탭과 같은 길). 첫 요청 글에 줄바꿈이 있어도 한 인자로 넘어갑니다.
+    묶은 명령을 다시 읽어 요청한 인자 그대로가 아니면 치지 않고 refused 로 답합니다. 첫 요청 글에 따옴표 · ; · $( ) 같은 글자가 있어도 글 그대로 넘어갑니다.
   · 결과는 한 줄 JSON(ok·status·tab·session·pid·why)이고 성공이면 종료 코드 0, 실패면 1 입니다.
     opened: 새 탭을 열었습니다. 새 세션이면 보드가 --session-id 를 붙이고 그 id 를 session 에 돌려줍니다.
     exists: 같은 세션 id(--resume·--session-id)나 같은 이름(--name·--title, 대소문자 무시)의 claude 가 이미 보드 탭에서 돌아

@@ -535,7 +535,7 @@ final class TerminalAppStore: ObservableObject {
     }
 }
 
-func shellQuote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+func shellQuote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''", options: .literal) + "'" }   // ' + 결합 문자도 ' 로(.literal)
 
 // 사용자의 로그인 셸(passwd 의 셸) — 없으면 zsh
 func userShell() -> String {

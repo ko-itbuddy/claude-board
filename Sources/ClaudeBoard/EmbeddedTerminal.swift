@@ -828,14 +828,15 @@ final class SplitNode {
         return name
     }
 
-    // 셸에 칠 claude 명령에 --name <이름> 을 claude 바로 뒤에 붙인다(셸에 치므로 shlexQuote — 한글·공백 이름). claude 가 아니거나
-    // 사용자가 -n·--name 을 적었으면 그대로. --resume 과 함께 주면 --name 이 이긴다(실측 — 없으면 예전 대화 이름을 되살린다)
+    // 셸에 칠 claude 명령에 --name <이름> 을 claude 바로 뒤에 붙인다(셸에 치므로 따옴표로 묶음 — 한글·공백 이름). claude 가 아니거나
+    // 사용자가 -n·--name 을 적었으면 그대로. --resume 과 함께 주면 --name 이 이긴다(실측 — 없으면 예전 대화 이름을 되살린다).
+    // 낱말 단위로 끼운다(BoardRules withSessionName — 첫 요청 글 안의 -n 글자를 이름 옵션으로 보지 않는다)
     private func named(_ command: String, in s: BoardSurface) -> String {
-        guard let r = command.range(of: #"^\s*(\S*/)?claude(?=\s|$)"#, options: .regularExpression),
-              command.range(of: #"(^|\s)(-n|--name)(=|\s|$)"#, options: .regularExpression) == nil else { return command }
-        let name = pickName(s.tab?.name ?? s.folderName, for: s)
-        reservedNames[s.id] = (name, Date())
-        return command.replacingCharacters(in: r.upperBound..<r.upperBound, with: " --name " + shlexQuote(name))
+        withSessionName(command) {
+            let name = pickName(s.tab?.name ?? s.folderName, for: s)
+            reservedNames[s.id] = (name, Date())
+            return name
+        }
     }
 
     // ⇧⌘R 로 바꾼 탭 이름을 그 탭의 claude 세션들에 — 화면마다 /rename <이름>(나눈 탭은 번호로 나뉜다, 사용자 결정). 셸만 남은 화면·
@@ -1076,7 +1077,7 @@ final class SplitNode {
         }
         if FileManager.default.fileExists(atPath: transcriptPath(rec?["transcript_path"] as? String, dir, id)) {
             let resume = (rec?["resume_cmd"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? e["resume"] ?? "claude --resume \(id)"
-            return (mdRenderCommand(resume, args: rec?["args"] as? [String], off: off), id, dir)
+            return (mdRenderCommand(resume, off: off), id, dir)
         }
         let (c, i) = freshSessionCommand(command)
         return (c, i, dir)
@@ -1602,14 +1603,10 @@ struct ShutdownList: View {
 }
 
 // 새로 띄우는 claude 에 세션 id 를 붙인다(--session-id) — 보드가 그 세션을 미리 안다. claude 가 아니거나 이어 열기·이어 하기면 그대로.
-// 이미 --session-id 가 있으면 새 id 로 바꾼다(되살리기가 대화 없이 끝난 세션을 다시 띄울 때)
+// 이미 --session-id 가 있으면 새 id 로 바꾼다(되살리기가 대화 없이 끝난 세션을 다시 띄울 때). 낱말 단위로 고친다(BoardRules withFreshSession —
+// 글자 위 정규식으로 지우면 첫 요청 글의 닫는 따옴표까지 지워 셸이 다르게 읽을 수 있었다, 3.3.3 보안 고침)
 func freshSessionCommand(_ command: String) -> (String, String?) {
-    let has = { (pattern: String) in command.range(of: pattern, options: .regularExpression) != nil }
-    guard has(#"^\s*(\S*/)?claude(\s|$)"#), !has(#"(^|\s)(--resume|-r|--continue|-c)(=|\s|$)"#) else { return (command, nil) }
-    // 따옴표 안 공백이 상하지 않게 문자열을 쪼개지 않고 고친다
-    let base = command.replacingOccurrences(of: #"\s--session-id(=|\s+)\S+"#, with: "", options: .regularExpression)
-    let id = UUID().uuidString.lowercased()
-    return (base + " --session-id " + id, id)
+    withFreshSession(command, newID: UUID().uuidString.lowercased())
 }
 
 // 답변 마크다운 꾸미기(md-render) — 보드 탭 claude 에 --plugin-dir 로 넘기는 경로. 앱 안 Contents/Resources/plugins/md-render 를
@@ -1635,35 +1632,15 @@ let mdRenderDir: String? = {
     return dest
 }()
 
-// shlexQuote(state.py 의 shlex.quote 와 같은 인용)는 BoardRules/OpenTab.swift 로 옮겼다
-
-// shlex.quote 꼴 토큰 가운데 md-render 의 --plugin-dir(값이 /plugins/md-render 로 끝남) — 따옴표 없는 꼴, '…' 꼴(안의 ' 는 '"'"'),
-// '--plugin-dir=…' 꼴. 앞의 공백까지 잡아 지운다
-private let mdRenderTokenPattern = #"\s+(?:--plugin-dir(?:\s+|=)[A-Za-z0-9_@%+=:,./-]*/plugins/md-render|--plugin-dir\s+'[^']*(?:'"'"'[^']*)*/plugins/md-render'|'--plugin-dir=[^']*(?:'"'"'[^']*)*/plugins/md-render')(?=\s|$)"#
+// shlexQuote(state.py 의 shlex.quote 와 같은 인용)와 낱말 단위 고치기는 BoardRules/ShellCommand.swift
 
 // 보드 탭에서 띄우거나 이어 여는 claude 의 답변 꾸미기(사용자 결정 2026-10-17) — 기본으로 켜고(Ghostty·claude -p 에서 시작해 보드로 옮기거나
-// 이어 연 세션 포함), 새 세션 창에서 끄고 띄운 세션(isMdRenderOff)만 끈다. 명령에 든 md-render 의 --plugin-dir(옛 경로·옛 설치본·사용자가 적은 것)은
-// 빼고, 켜져 있으면 지금 경로를 한 번 붙인다. 사용자의 다른 --plugin-dir 은 둔다. 뺄 토큰은 세션 파일의 args(state.py 가 shlex.join 해
-// resume_cmd 를 만든 재료)를 알면 그 shlex.quote 꼴 그대로 찾고, 남은 것·args 를 모를 때(저장해 둔 명령·resume_cmd)는 shlex.quote 꼴 정규식으로.
-// 그래도 md-render 경로가 남으면(큰따옴표 등 다른 꼴로 사용자가 적음) 더 붙이지 않는다. claude 가 아닌 명령은 그대로
-func mdRenderCommand(_ command: String, args: [String]? = nil, off: Bool) -> String {
-    guard command.range(of: #"^\s*(\S*/)?claude(\s|$)"#, options: .regularExpression) != nil else { return command }
-    var out = command, i = 0
-    let args = args ?? []
-    while i < args.count {
-        var token: String?
-        if args[i].hasPrefix("--plugin-dir="), args[i].hasSuffix("/plugins/md-render") {
-            token = shlexQuote(args[i])
-        } else if args[i] == "--plugin-dir", i + 1 < args.count, args[i + 1].hasSuffix("/plugins/md-render") {
-            token = "--plugin-dir " + shlexQuote(args[i + 1])
-            i += 1
-        }
-        if let token { out = out.replacingOccurrences(of: " \(token) ", with: " ") }   // resume_cmd 는 --resume <id> 로 끝나 인자 뒤에 늘 공백이 있다
-        i += 1
-    }
-    out = out.replacingOccurrences(of: mdRenderTokenPattern, with: "", options: .regularExpression)
-    guard !off, let dir = mdRenderDir, !out.contains("/plugins/md-render") else { return out }
-    return out + " --plugin-dir " + shlexQuote(dir)
+// 이어 연 세션 포함), 새 세션 창에서 끄고 띄운 세션(isMdRenderOff)만 끈다. 명령에 든 md-render 의 --plugin-dir(옛 경로·옛 설치본·사용자가 적은 것,
+// 값이 /plugins/md-render 로 끝나는 낱말)은 빼고, 켜져 있으면 지금 경로를 한 번 붙인다. 사용자의 다른 --plugin-dir 은 둔다. claude 가 아니거나
+// 읽지 못하는 명령(닫히지 않은 따옴표 등)은 그대로. 낱말 단위로 고친다(BoardRules withMdRender — 3.3.2 까지는 따옴표 꼴 정규식으로 지워
+// 첫 요청 글 안의 같은 글자까지 지웠다, 3.3.3 보안 고침)
+func mdRenderCommand(_ command: String, off: Bool) -> String {
+    withMdRender(command, dir: off ? nil : mdRenderDir)
 }
 
 // 새 세션 창에서 꾸미기를 끄고 띄운 세션 id — 보드 설정 mdRenderOff. 그 세션은 이어 열 때도 끈 채로 연다. 끈 탭의 세션 id 가 바뀌면

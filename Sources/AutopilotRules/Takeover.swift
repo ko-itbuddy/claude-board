@@ -224,7 +224,7 @@ public func apTakeoverEnvPrefix(ceilings: [String]) -> String {
 // 셸에 넣는 글자 하나를 따옴표로(보드 shlexQuote 와 같은 꼴)
 public func apShellQuote(_ s: String) -> String {
     if !s.isEmpty, s.range(of: "[^A-Za-z0-9_@%+=:,./-]", options: .regularExpression) == nil { return s }
-    return "'" + s.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+    return "'" + s.replacingOccurrences(of: "'", with: "'\"'\"'", options: .literal) + "'"   // ' + 결합 문자도 ' 로(.literal, 보드 shlexQuote 와 같은 고침)
 }
 
 // MARK: - 돌려주기 확인
