@@ -1380,7 +1380,7 @@ macOS 판 자율주행(`Sources/ClaudeAutopilot`, 설계 `docs/자율주행/설�
 
 | 층 | 파일 | 내용 |
 |---|---|---|
-| 규칙(순수) | `rules/control` · `stopline` · `records` · `checks` · `evidence` · `prose` · `board_git` · `gitlinks` · `leftovers` · `history` · `purge` · `carry` · `links` · `instruction` · `start_settings` · `report_gate` | macOS `AutopilotRules` 를 손으로 옮긴 것. 옮긴 원본마다 지문이 `PORTED.json` 에 있다(§12.8). `prose` 부터 뒤의 열한 개는 §12.1.1. `rules/branches` 는 원본 `Branches.swift` 의 앞 절반만 옮겨 지문이 아직 없다(§12.1.1) |
+| 규칙(순수) | `rules/control` · `stopline` · `records` · `checks` · `evidence` · `prose` · `board_git` · `gitlinks` · `leftovers` · `history` · `purge` · `carry` · `links` · `instruction` · `start_settings` · `report_gate` · `branches` | macOS `AutopilotRules` 를 손으로 옮긴 것. 옮긴 원본마다 지문이 `PORTED.json` 에 있다(§12.8). `prose` 부터 뒤의 열두 개는 §12.1.1. `rules/prep_git` · `formats` · `sequence` · `inbox` · `multirun` · `stack` · `scenarios` 는 원본의 앞 절반만 옮겨 지문이 아직 없다(§12.1.1) |
 | 규칙(Windows 전용) | `rules/env_policy` | 실행 환경에서 파생되는 동의 · 출발 문턱 · 판정 명령 호출 꼴 · 세션 설정의 `sandbox` 덩어리. `PORTED.json` 의 `windows_only` 에 둔다 |
 | 상태 기계(순수) | `engine/decide` | `decide(state, event) → actions`. 실행 · 단위 상태, 멈출 선, 시간 · 비용 상한, 판정 재시도 |
 | 해석(순수) | `stream`(claude stream-json 한 줄 파서) · `model`(실행 폴더 파일 모델, 키 순서를 지키는 `Ordered`/`Slot` 로 macOS 가 쓴 파일을 그대로 읽고 쓴다) | |
@@ -1390,9 +1390,9 @@ macOS 판 자율주행(`Sources/ClaudeAutopilot`, 설계 `docs/자율주행/설�
 | 실행 파일 | `claude-autopilot.exe`(콘솔, `cli::main`) · `claude-autopilot-engine.exe`(콘솔 창 없는 하위 시스템, `run` 만) | |
 | core | `core::envs`(실행 환경 목록, §5.12.14 와 공유) · `core::test_claude`(시험용 claude 판정, 보드와 공유) · `core::paths::autopilot_root(dev)` | |
 
-#### 12.1.1 옮겨 놓았으나 아직 잇지 않은 규칙 (`PORTED.json` 의 `chunk` W03·W04)
+#### 12.1.1 옮겨 놓았으나 아직 잇지 않은 규칙 (`PORTED.json` 의 `chunk` W03·W04·W05)
 
-`prose` · `board_git` · `gitlinks` · `leftovers` · `history`(W03)와 `purge` · `carry` · `links` · `instruction` · `start_settings` · `report_gate`(W04)는 순수 규칙이고 시험(`tests/rules_*.rs`)과 지문(`PORTED.json`)이 있다. 엔진 · 어댑터 · 명령줄(`engine` · `adapters` · `cli`)은 이 열한 규칙을 부르지 않는다(`crates/autopilot/src/rules` 와 `tests` 밖에서 이 규칙들의 식별자를 찾는 `grep` 이 비어 있다). `cli/start.rs` 의 `settings_problems` 는 `rules::start_settings::settings_problems` 와 따로 쓴 함수다. 규칙 내용:
+`prose` · `board_git` · `gitlinks` · `leftovers` · `history`(W03)와 `purge` · `carry` · `links` · `instruction` · `start_settings` · `report_gate`(W04)와 `branches`(W05)는 순수 규칙이고 시험(`tests/rules_*.rs`)과 지문(`PORTED.json`)이 있다. 엔진 · 어댑터 · 명령줄(`engine` · `adapters` · `cli`)은 이 열두 규칙을 부르지 않는다(`crates/autopilot/src/rules` 와 `tests` 밖에서 이 규칙들의 식별자를 찾는 `grep` 이 비어 있다). 아래 앞 절반만 옮긴 일곱 규칙도 같다(`src` 의 `rules` 밖에서 `rules::prep_git` · `rules::formats` · `rules::sequence` · `rules::inbox` · `rules::multirun` · `rules::stack` · `rules::scenarios` 와 대표 식별자 `take_slot` · `parse_scenarios` · `detect_stack` · `parse_sequence` · `grapheme_len` · `PrepGitWorld` 를 찾는 `grep` 이 비어 있다). `cli/start.rs` 의 `settings_problems` 는 `rules::start_settings::settings_problems` 와 따로 쓴 함수다. 규칙 내용:
 
 | 규칙 | 내용 | 이을 곳 |
 |---|---|---|
@@ -1407,8 +1407,28 @@ macOS 판 자율주행(`Sources/ClaudeAutopilot`, 설계 `docs/자율주행/설�
 | `instruction`(`Instruction.swift`) | `DiffKind` · `DiffLine` · `line_diff` · `diff_count` · `instruction_head` · `instruction_save_problem`: 자율주행 지시 글(`set/autopilot.md`)을 지난 판과 견주고 저장해도 되는지 본다. 엔진 거부 목록(`engine/run/guard.rs`)과 무관하다 | 지시를 그 자리에서 고치는 곳 |
 | `start_settings`(`StartSettings.swift`) | `MODEL_CHOICES`(`opus` · `sonnet` · `haiku`) · `model_options` · `STOP_WEEK_CHOICES`(60 · 70 · 80 · 90) · `STOP_FIVE_CHOICES`(80 · 90 · 95) · `stop_options` · `settings_problems` · `StartPick` · `start_settings`(프로젝트 설정 → 지난 실행 → 기본의 차례) · `start_settings_note` | 출발 확인 설정 줄 |
 | `report_gate`(`ReportGate.swift`) | `RuleGate` 상태 기계(`want` · `compiled` · `closed`) · `rule_gate_why` · `RULE_GATE_WAIT_TEXT`: 보고서 창에 바깥 요청 막기 규칙이 준비되기 전에는 글을 싣지 않고 기다리며, 준비가 실패하면 싣지 않는다. 시험은 `ReportGateTests.swift` 에서 옮겼다. WebView2 호출과 창은 앱 쪽 몫이라 쓰지 않았다 | 보고서 창 |
+| `branches`(`Branches.swift`) | 끝난 실행의 가지 기록(`run.json` 의 `branches`)을 읽어 합치기 상태를 정한다. `Step` · `Promoted` · `Failed` · `story_repos` · `promoted_rows` · `failed_rows` · `unresolved` · `step_done` · `merge_sources` · `merge_open` · `MergeMark`/`merge_mark`(`label` · `has_waiting`) · `RefFate` · `discard_rows` · `carries_base` · `finish_root`. git 을 부르지 않고 JSON 값(`serde_json`)만 본다. 저장소 경로(`C:\w\a` · `/mnt/c/w/a`)는 JSON 키 · 글자 그대로 견주며 고치지 않는다. 시험은 `BranchesTests.swift` 에서 옮긴 `tests/rules_branches.rs` 다 | 합치기 / 승격 화면 |
 
-`rules/branches`(`Branches.swift`)는 앞 절반(`Step` · `Promoted` · `Failed` · `story_repos` · `promoted_rows` · `failed_rows` · `unresolved` · `step_done` · `merge_sources` · `merge_open`, 원본에서 `APMergeMark` 앞까지)만 옮겼고 엔진과 어댑터도 부르지 않는다. 파일 첫 줄의 `//! (청크` 표시로 `tests/ported.rs` 가 「구현됐는데 `PORTED.json` 에 없는 규칙」으로 잡지 않게 하며, 지문은 아직 없다. 시험은 `tests/rules_branches.rs` 다.
+앞 절반만 옮긴 일곱 규칙(`rules/prep_git` · `formats` · `sequence` · `inbox` · `multirun` · `stack` · `scenarios`)은 파일 첫 줄이 `//! (청크` 표시이고 `PORTED.json` 에 없다. 이 표시가 `tests/ported.rs` 가 「구현됐는데 `PORTED.json` 에 없는 규칙」으로 잡지 않게 하며, 뒤 절반을 옮길 때 이 줄을 지우고 항목을 넣는다. 시험은 `tests/rules_<이름>.rs` 일곱 파일이다. 엔진 · 어댑터 · 명령줄은 부르지 않는다. 옮긴 선언:
+
+| 규칙 | 옮긴 선언 |
+|---|---|
+| `prep_git`(`PrepGit.swift` 1~99줄) | `GitEntry` · `ConfigEntry` · `PrepGitWorld`(파일 시스템과 git 을 보는 포트) · `PrepGit`(`pin`) · `lexical` · `short_path` · `fsmonitor_is_bool` · `PREP_GIT_READ_ENV` · `prep_git_env` · `lfs_filter`. Windows 판단은 파일 머리말이 소유한다: 환경 변수의 `GIT_` 이름은 대소문자를 가리지 않고 빼며, `lexical` 은 `\` · 드라이브 · `\\?\` · `\\.\` · UNC · 뒤에 붙은 점과 공백을 한 가지 `/` 꼴로 맞춘다 |
+| `formats`(`Formats.swift` 1~136줄) | `Span` · `Block` · `Doc` · `doc_text` · `doc_code` · `doc_clamp` · `adf`(Jira 문서 형식) · `storage`(Confluence 저장 형식) · `grapheme_len` |
+| `sequence`(`Sequence.swift` 1~197줄) | `parse_sequence`(mermaid `sequenceDiagram` 의 작은 부분집합을 읽고 그 밖의 줄이 있으면 `Unsupported`) · `text_width` · `Seq*` 형 |
+| `inbox`(`Inbox.swift` 1~142줄) | `compose` · `parse` · `name_ok` · `bind` · `InboxEntry` · `now_for` · `next_for` |
+| `multirun`(`Multirun.swift` 1~168줄) | `usage_steps` · 자리 종류(`SlotKind`) · `SLOT_TTL` · `slot_size` · `slot_decide` · `SlotBook`(자리 표 읽기 · 쓰기 포트) · `take_slot` · `beat_slot` · `release_slot`. 값을 수로 읽는 `stop_num` 은 `rules::stopline` 의 것을 쓴다(복사본은 지웠다) |
+| `stack`(`Stack.swift` 1~152줄) | `StackSlot` · `StackSet` · `stack_candidates` · `detect_stack` |
+| `scenarios`(`Scenarios.swift` 1~235줄) | 종류 · `parse_scenarios` · `parse_criteria` · 수용 기준의 문제 · 카드 · 답 · `ToolNeed` · `tool_label` · `scenario_run`. 글자 수는 `formats::grapheme_len` 으로 센다 |
+
+`rules::board_git` 의 `parent_path` · `is_root` 와 `rules::stopline` 의 `stop_num` 은 `pub(crate)` 이다. `stop_num` 은 `multirun` 이 쓰고, `parent_path` · `is_root` 를 `board_git` 밖에서 부르는 코드는 아직 없다.
+
+손으로 쓴 읽기 도구(알려진 차이): 이 규칙들은 macOS 가 ICU 정규식과 자소 묶음(`Character`)으로 하는 일을 정규식 · `unicode-segmentation` 크레이트 없이 손으로 쓴 바이트 · 글자 스캐너와 글자 수 세기로 한다(`Cargo.toml` 의 유니코드 관련 의존성은 `unicode-normalization` 뿐이다). 어긋나는 자리는 파일마다 머리말이 소유한다.
+- `formats`: 글자 수와 자르기는 `grapheme_len` 이 UAX #29 의 주요 규칙(CRLF · 제어 · 결합 표시 · ZWJ 이모지 · 국기 쌍 · 한글 자모)만 옮겨, 그 밖의 드문 덩어리는 다르게 셀 수 있다. 가장자리 빈칸은 Zs 범주와 탭이다.
+- `sequence` · `inbox`: 길이 한도와 `prefix` 는 `char` 개수로 센다(원본은 자소 묶음). `hasPrefix` · `range(of:)` 는 정준 동치가 아니라 바이트 열로 견준다. `inbox` 의 `name_ok` 는 ICU `$` 와 달리 끝 줄바꿈이 붙은 이름을 받지 않는다.
+- `stack`: 모든 패턴을 바이트 스캐너로 옮겼고(패턴마다 원본 정규식이 주석에 있다) 대소문자 무시는 ASCII 만 접는다. `\s` 는 ICU 와 같은 집합 `[\t\n\f\r\p{Z}]` 이다.
+- `scenarios`: `criterion_id_ok` 는 ICU `$` 와 달리 줄바꿈이 붙은 id 를 거절하고, `scenario_path_ok` 는 `/` + 결합 글자 경로를 거절한다(둘 다 더 엄격한 쪽). 오류 글의 `prefix(60)` 은 `grapheme_len` 으로 자른다.
+- `multirun`: 실행 id 비교는 UTF-8 바이트 순이다(원본은 정규 동등 문자열 비교). 이 절반은 경로를 견주지 않는다.
 
 지문 시험은 항목마다 시험 파일의 해시를 따로 비교하므로(`tests/ported.rs`) 한 시험 파일을 여러 항목이 가리켜도 된다. `StartTests.swift` 를 `purge` · `carry` · `instruction` · `start_settings` 네 항목이 함께 가리킨다.
 
@@ -1508,7 +1528,7 @@ macOS LaunchAgent(`KeepAlive` · `RunAtLoad`)의 대응이다. COM 이 아니라
 | 도구 | 하는 일 |
 |---|---|
 | `crates/autopilot/tests/*.rs` | 규칙 · 상태 기계 · 어댑터 · 엔진 루프(가짜 포트 `tests/fakes`) · 명령줄(`cli.rs`, 실제 `claude-autopilot.exe` 를 `CLAUDE_BOARD_HOME`=임시 폴더로) · 종단(`e2e_fake.rs`) |
-| `tests/ported.rs` + `PORTED.json` | 옮긴 macOS 원본 파일(`rules/*` 열과 엔진 git 보호 `EngineGit`, 옮긴 곳 `adapters/git`. `chunk` 가 W03·W04 인 열은 §12.1.1)과 그 시험 파일의 sha256 을 비교한다. macOS 규칙이 바뀌면 이 시험이 실패해 옮길 일을 알려 준다. 원본은 `Sources/AutopilotRules` |
+| `tests/ported.rs` + `PORTED.json` | 옮긴 macOS 원본 파일(`rules/*` 열과 엔진 git 보호 `EngineGit`, 옮긴 곳 `adapters/git`. `chunk` 가 W03·W04·W05 인 열은 §12.1.1)과 그 시험 파일의 sha256 을 비교한다. 항목은 18개다(`grep -c '"rust":' windows/crates/autopilot/PORTED.json`). 첫 줄이 `//! (청크` 인 구현 파일은 항목이 없어도 통과시킨다. 지금 그런 파일은 `prep_git` · `formats` · `sequence` · `inbox` · `multirun` · `stack` · `scenarios` 일곱 개로, 앞 절반만 옮긴 것이다(§12.1.1). macOS 규칙이 바뀌면 이 시험이 실패해 옮길 일을 알려 준다. 원본은 `Sources/AutopilotRules` |
 | `ci/fake-claude-stream.cjs` (+ `.test.cjs`) | `claude -p --input-format stream-json --output-format stream-json` 를 흉내 내는 가짜(모델 비용 0, 네트워크 없음). `FAKE_CLAUDE_*` 환경변수로 턴별 동작을 준다. `start` 가 `FAKE_CLAUDE_` 변수를 고정 설정 `claude_env` 에 얼린다 |
 | `tests/fixtures/mac-run/` | macOS 가 쓴 실행 폴더 사본. 파일 호환 시험(`tests/model.rs`)이 읽고 다시 써 본다 |
 | `#[ignore] measured_start_registers_and_unregister_all` | 실제 작업 스케줄러에 등록 · 지우기. `cargo test -p claude-board-autopilot --test cli -- --ignored` |
@@ -1539,8 +1559,11 @@ macOS LaunchAgent(`KeepAlive` · `RunAtLoad`)의 대응이다. COM 이 아니라
 - 시작 준비 화면의 보드 쪽 상한(단위 30 · 요청 1 MiB · 목표 20000자)은 보드가 정한 입력 상한이지 명령줄 규칙이 아니다. 시간 · 비용 상한 칸을 비우면 엔진 기본값(시간 120분 · 비용 100 USD · 주간 5 퍼센트포인트)이 적용되고 값이 크므로 상한을 적어 두는 편이 안전하다. 화면에는 주간 사용 한도 칸이 없다(기본값 그대로).
 - 규칙은 손으로 옮긴 것이라 macOS 쪽 변경은 `ported.rs` 가 실패해야 알 수 있다. `apAddEvidence`(밖에서 읽은 근거를 비밀값을 가려 기록)는 옮기지 않았다.
 - 옮긴 지점: `Stopline.swift`(5시간 한도가 없는 요금제에서 `apUsageFromPercent` 가 주간만 풀고, 두 창 모두 사용률을 읽지 못하면 모름으로 답하며, `apShowFiveHour` 를 더한 것)와 `Records.swift`(판 5, `unit_commits` 표). Windows 사용률 어댑터(`adapters/usage`)는 원래부터 `five_hour` null 을 한도 없음(0.0)으로 읽어 같은 판정이 되고, `tests/usage.rs` 가 그 판정을 지킨다.
-- macOS 에서 옮기기 뒤에 늘어난 자율주행 규칙 가운데 아직 옮기지 않은 것(기능 이름): 출발 준비 git 자리 확인(`PrepGit`) · 단위 커밋 기록과 승격 뒤 되돌림 신호(`UnitCommits`) · 멈출 선 자리 표(`SlotTable`) · 출발 때 Jira 티켓 나무(`Tickets`) · 빠진 단위 보고서 찾기(`Report`) · 초안 세션의 경로 권한 규칙 절대 경로 꼴(`Draft`) · `Branches` 의 뒤 절반(원본 `APMergeMark` 부터).
-- 옮겼으나 엔진·어댑터가 아직 부르지 않는 규칙: `Prose` · `BoardGit` · `Gitlinks` · `Leftovers` · `History` · `Purge` · `Carry` · `Links` · `Instruction` · `StartSettings` · `ReportGate`, 그리고 앞 절반만 옮긴 `Branches`(§12.1.1). 문자열 비교는 Swift(유니코드 정규 동등)와 Rust(바이트)로 갈린다.
+- macOS 에서 옮기기 뒤에 늘어난 자율주행 규칙 가운데 아직 옮기지 않은 것(기능 이름): 단위 커밋 기록과 승격 뒤 되돌림 신호(`UnitCommits`) · 멈출 선 자리 표(`SlotTable`) · 출발 때 Jira 티켓 나무(`Tickets`) · 빠진 단위 보고서 찾기(`Report`) · 초안 세션의 경로 권한 규칙 절대 경로 꼴(`Draft`).
+- 앞 절반만 옮기고 뒤 절반이 아직 없는 규칙(파일 머리말이 남은 선언을 적는다): `PrepGit`(원본 100줄 이후: 경로 하나의 git 자리 확인과 막는 글) · `Formats`(Notion 블록과 문서 JSON 읽기 · 쓰기) · `Sequence`(줄바꿈 표지로 나눈 줄과 흐름 그림 SVG) · `Inbox`(모델에게 넘기는 글 · 턴 뒤 처리 · 받기 · 보내기) · `Multirun`(같은 경로 자리) · `Stack`(저장소 기술 스택 감지와 주제 낱말 · 충돌) · `Scenarios`(환경 확인 · 판정 걸음 · 판정 실행).
+- 옮겼으나 엔진·어댑터가 아직 부르지 않는 규칙: `Prose` · `BoardGit` · `Gitlinks` · `Leftovers` · `History` · `Purge` · `Carry` · `Links` · `Instruction` · `StartSettings` · `ReportGate` · `Branches`, 그리고 앞 절반만 옮긴 일곱 규칙(§12.1.1). 문자열 비교는 Swift(유니코드 정규 동등)와 Rust(바이트)로 갈린다.
+- 예정된 정리 하나: 규칙이 바깥과 말하는 입출력 트레이트가 `ports.rs` 가 아니라 규칙 파일 안에 있다 — `purge.rs` 의 `RawFiles`, `multirun.rs` 의 `SlotBook`, `prep_git.rs` 의 `PrepGitWorld`(`grep -n "pub trait" crates/autopilot/src/ports.rs crates/autopilot/src/rules/*.rs` 로 센다). 이 셋을 구현하는 어댑터는 `crates/autopilot/src` 에 없다(`RawFiles` · `SlotBook` 은 구현이 시험의 가짜뿐이다). 이 트레이트들을 `ports.rs` 로 옮기는 일이 예정되어 있다.
+- 예정된 정리 둘: 규칙은 `regex` · `unicode-segmentation` 크레이트가 아니라 손으로 쓴 스캐너와 글자 수 세기를 쓴다(`Cargo.toml` 에 두 크레이트가 없다, 어긋나는 자리는 §12.1.1). 두 크레이트로 바꾸는 일이 예정되어 있다.
 - 시작 준비 화면의 모델 제안 목록(`claude-sonnet-5-5` · `sonnet` · `opus` · `haiku`, 기본 `claude-sonnet-5-5`, `app/src/lib/autopilot/startForm.ts`)은 macOS 시작 설정 규칙의 목록(`opus` · `sonnet` · `haiku`, `StartSettings.swift` 의 `apModelChoices`, Rust 옮김 `rules/start_settings.rs` 의 `MODEL_CHOICES`)과 다르다. 모델 이름 꼴 검사(`MODEL_PATTERN`)는 같은 규칙이다.
 - 네이티브 거부 규칙은 도구 권한만 막는다. Bash 를 허용한 실행에서 Bash 가 하는 일은 막지 못한다. 네이티브 환경은 샌드박스 없음에 동의한 실행에만 쓴다.
 - 확인 범위(§12.8): 진짜 claude 단위 통과는 명령 프롬프트와 WSL 에서 봤다. WSL 샌드박스는 haiku 한 모델에서 쓰기와 네트워크 두 행동을 봤고, 그 실행이 작업 폴더에 `.claude/.cc-writes` 를 남기는 것을 보았다. 시작 준비 화면의 폴더 고르기 창은 Win32 메시지로 눌러 확인했고, 다른 WSL 배포판 폴더 거절은 `wsl_cd_arg` 시험으로 확인했다. 보드 종료 요청(`--action quit`)은 단위 시험과 가짜 보드(stub)로 확인했다.
