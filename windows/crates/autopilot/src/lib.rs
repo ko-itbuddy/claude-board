@@ -20,6 +20,7 @@ pub mod rules {
     pub mod leftovers;
     pub mod links;
     pub mod multirun;
+    pub mod new_repo;
     pub mod path_key;
     pub mod gitlinks;
     pub mod history;
@@ -33,6 +34,7 @@ pub mod rules {
     pub mod report_gate;
     pub mod scenarios;
     pub mod sequence;
+    pub mod slot_table;
     pub mod stack;
     pub mod start_settings;
     pub mod stopline;
@@ -40,6 +42,7 @@ pub mod rules {
 
 pub mod engine {
     pub mod decide;
+    pub mod prep_git;
     pub mod run;
 }
 
