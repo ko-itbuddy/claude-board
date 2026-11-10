@@ -43,6 +43,83 @@ function Install-ClaudeBoard {
   # 17763 = Windows 10 1809, ConPTY(CreatePseudoConsole)가 들어간 첫 빌드
   function Test-OsBuild([int]$Build) { return ($Build -ge 17763) }
 
+  #region quit-request
+  # 떠 있는 보드에 정상 종료를 청한다 - macOS install.sh 의 ask_board_quit 와 같은 길이다(SPEC 5.8). ClaudeBoard.exe --action quit - 은 보드의 종료와 같은
+  # 확인 창(작업 중인 보드 탭 세션이 있을 때만 뜬다)을 거치고, 끄면 끊길 세션에 일시중지 표지(.paused)를 남긴다(Stop-Process 는 확인·표지 없이 끊는다).
+  # 요청을 받은 보드는 %TEMP%\claude-board.quit 에 확인 창을 띄우는 동안 asking 을, 취소하면 cancel 을 쓴다. 요청은 바꿔 끼우기 전에 지금 깔린 보드 exe 로 보낸다.
+  # 돌려주는 값: none(떠 있는 보드 없음) · gone(보드가 꺼졌다) · legacy(5초 안에 표지도 종료도 없음 - 요청을 모르는 옛 보드) ·
+  #              cancel(확인 창에서 취소) · timeout(기다린 시간 안에 답이 없음). 기다리는 시간은 기본 120초(CLAUDE_BOARD_INSTALL_QUIT_WAIT 초로 바꾼다)
+  # CLAUDE_BOARD_TAB=1 은 보드 탭 셸의 환경 블록에 보드가 넣는다 - 이 셸에서 보드를 끄면 이 스크립트도 함께 끊긴다
+  function Test-BoardTab { return ($env:CLAUDE_BOARD_TAB -eq '1') }
+  # 실행 중인 보드 프로세스. -Main 이면 알림 패널(--notify)을 뺀 보드 본체만
+  function Get-BoardProcs([switch]$Main) {
+    $all = @(Get-Process -Name ClaudeBoard -ErrorAction SilentlyContinue | Where-Object { $_.Path })
+    if (-not $Main) { return $all }
+    $panels = @{}
+    try {
+      foreach ($c in @(Get-CimInstance -ClassName Win32_Process -Filter "Name = 'ClaudeBoard.exe'" -ErrorAction Stop)) {
+        if ("$($c.CommandLine)" -match '--notify') { $panels[[int]$c.ProcessId] = $true }
+      }
+    } catch { }
+    return @($all | Where-Object { -not $panels.ContainsKey([int]$_.Id) })
+  }
+  function Get-QuitMark([string]$Ack) {
+    try { return ([IO.File]::ReadAllText($Ack).Trim()) } catch { return '' }
+  }
+  function Request-BoardQuit {
+    $main = @(Get-BoardProcs -Main)
+    if ($main.Count -eq 0) { return 'none' }
+    $wait = 120
+    $n = 0
+    if ($env:CLAUDE_BOARD_INSTALL_QUIT_WAIT -and [int]::TryParse($env:CLAUDE_BOARD_INSTALL_QUIT_WAIT, [ref]$n) -and $n -gt 0) { $wait = $n }
+    $ack = Join-Path ([IO.Path]::GetTempPath()) 'claude-board.quit'
+    Remove-Item -LiteralPath $ack -Force -ErrorAction SilentlyContinue
+    try {
+      Start-Process -FilePath $main[0].Path -ArgumentList @('--action', 'quit', '-') -WindowStyle Hidden -ErrorAction Stop | Out-Null
+    } catch { return 'legacy' }
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while ($sw.Elapsed.TotalSeconds -lt 5 -and -not (Test-Path -LiteralPath $ack) -and @(Get-BoardProcs -Main).Count -gt 0) { Start-Sleep -Milliseconds 100 }
+    if (@(Get-BoardProcs -Main).Count -eq 0) { Remove-Item -LiteralPath $ack -Force -ErrorAction SilentlyContinue; return 'gone' }
+    if (-not (Test-Path -LiteralPath $ack)) { return 'legacy' }
+    Write-Host '   떠 있는 보드에 종료를 청했습니다. 작업 중인 세션이 있어 확인 창이 떴으면 답해 주세요(기다립니다)'
+    while ($sw.Elapsed.TotalSeconds -lt ($wait + 5)) {
+      if (@(Get-BoardProcs -Main).Count -eq 0) { Remove-Item -LiteralPath $ack -Force -ErrorAction SilentlyContinue; return 'gone' }
+      if ((Get-QuitMark $ack) -eq 'cancel') { Remove-Item -LiteralPath $ack -Force -ErrorAction SilentlyContinue; return 'cancel' }
+      Start-Sleep -Milliseconds 200
+    }
+    Remove-Item -LiteralPath $ack -Force -ErrorAction SilentlyContinue
+    return 'timeout'
+  }
+  # 보드를 끄고 앱 파일을 바꿔도 되는지 정한다. 돌려주는 값: keep(보드를 두고 파일만 바꾼다 - 보드 탭 안) · stopped(보드가 꺼졌거나 없다)
+  # 못 끄면 throw 한다(바꾼 것이 없는 채로). $Forced 는 보드가 이미 확인을 거친 길(보드의 업데이트 단추, -Update)이라 요청 없이 끈다
+  function Stop-BoardForInstall([bool]$Forced, [string]$What) {
+    $running = @(Get-BoardProcs)
+    if ($running.Count -eq 0) { return 'stopped' }
+    if (Test-BoardTab) { return 'keep' }
+    if (-not $Forced) {
+      $r = Request-BoardQuit
+      if ($r -eq 'cancel') { throw "보드 종료를 취소해 ${What}하지 않았습니다. 바꾼 것은 없습니다. 다시 실행하면 처음부터 합니다." }
+      if ($r -eq 'timeout') {
+        Write-Host '   보드가 아직 켜져 있습니다. 강제로 끄면 보드 탭에서 돌던 세션이 확인·일시중지 표지 없이 끊깁니다.'
+        $answer = $null
+        if (-not [Console]::IsInputRedirected) {
+          try { $answer = Read-Host '   강제로 끄고 계속할까요? [y/N]' } catch { $answer = $null }
+        }
+        if ($null -eq $answer -or $answer -notmatch '^[Yy]') {
+          throw "보드가 시간 안에 꺼지지 않았고 강제로 끄지도 않아 ${What}하지 않았습니다. 바꾼 것은 없습니다. 보드를 닫고 다시 실행하세요."
+        }
+      }
+    }
+    # 남은 것(알림 패널·요청을 모르는 옛 보드·강제로 끄기로 한 보드)은 끈다
+    $left = @(Get-BoardProcs)
+    if ($left.Count -gt 0) {
+      $left | Stop-Process -Force -ErrorAction SilentlyContinue
+      $left | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
+    }
+    return 'stopped'
+  }
+  #endregion quit-request
+
   # 출력은 UTF-8 로 — 보드의 업데이트 단추는 이 출력을 notifier\update.log 로 받는다. 끝나면 원래대로 돌린다
   $prevEncoding = $null
   try { $prevEncoding = [Console]::OutputEncoding; [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }
@@ -149,11 +226,12 @@ function Install-ClaudeBoard {
       # 3) 실행 중인 보드(알림 패널 포함)를 끄고 파일·폴더를 하나씩 바꿔 끼운다 — 하나라도 실패하면 모두 되돌린다.
       # 실행 중인 exe 도 이름은 바꿀 수 있으므로 원래 파일·폴더는 .old-<시각> 으로 비켜 두었다가 끝나면 지운다
       Write-Host "3) 앱 설치: $dir"
-      $procs = @(Get-Process -Name ClaudeBoard -ErrorAction SilentlyContinue | Where-Object { $_.Path })
-      if ($procs.Count -gt 0) {
-        $procs | Stop-Process -Force -ErrorAction SilentlyContinue
-        $procs | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
-      }
+      # 보드 탭 셸 안(CLAUDE_BOARD_TAB=1)이면 보드를 끄지 않는다(끄면 탭의 세션이 확인·일시중지 표지 없이 끊기고 이 스크립트도 함께 끊긴다).
+      # 보드의 업데이트 단추(-Update)는 보드가 이미 확인 창을 거쳤으니 바로 끈다. 그 밖(보드 밖 PowerShell)은 보드에 종료를 청해 확인 창을 거친다 -
+      # 취소하면 아무것도 바꾸지 않고 멈춘다(받은 파일은 finally 가 지운다)
+      $boardState = Stop-BoardForInstall ([bool]$Update) '설치'
+      $kept = ($boardState -eq 'keep')
+      if ($kept) { Write-Host '   보드 탭 안에서 실행 중이라 떠 있는 보드는 끄지 않고 파일만 바꿉니다.' }
       New-Item -ItemType Directory -Path $dir -Force | Out-Null
       Get-ChildItem -LiteralPath $dir -Filter '*.old-*' -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
       foreach ($u in $DirUnits) {
@@ -213,7 +291,7 @@ function Install-ClaudeBoard {
     $code = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     if ($code -ne 0) {
-      Start-Process -FilePath $app -ErrorAction SilentlyContinue
+      if (-not $kept) { Start-Process -FilePath $app -ErrorAction SilentlyContinue }
       throw "사용자 설정 중 실패했습니다(종료 코드 $code). 위 메시지를 확인하고 다시 실행하세요."
     }
 
@@ -230,11 +308,18 @@ function Install-ClaudeBoard {
     }
 
     # 5) 보드 띄우기
-    Write-Host '5) 보드 실행'
-    Start-Process -FilePath $app
+    if ($kept) {
+      Write-Host '5) 보드는 끄지 않았습니다 - 지금 떠 있는 보드는 옛 버전입니다'
+    } else {
+      Write-Host '5) 보드 실행'
+      Start-Process -FilePath $app
+    }
 
     Write-Host ''
     Write-Host '설치를 마쳤습니다.'
+    if ($kept) {
+      Write-Host '보드 탭에서 작업 중인 세션이 끊기지 않도록 보드를 끄지 않았습니다. 보드를 닫았다가 다시 열면 새 버전이 뜹니다.'
+    }
     if ($first) {
       Write-Host '이미 실행 중인 Claude Code 세션은 다시 시작해야 hook 이 적용됩니다.'
     }

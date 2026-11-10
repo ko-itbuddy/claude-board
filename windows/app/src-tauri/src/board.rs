@@ -882,8 +882,22 @@ pub fn action_arg(argv: &[String]) -> Option<(String, String)> {
     Some((action.to_string(), argv.get(i + 2)?.clone()))
 }
 
+/// 명령줄이 `--action quit` 인가 — 세션을 가리키지 않는 보드 동작(설치·제거 스크립트가 청하는 정상 종료)이라 `action_arg` 와 따로 판정한다.
+/// `action_arg` 에 넣으면 보드가 안 떠 있을 때 "세션을 찾지 못했습니다" 로 버려지는 길로 간다.
+pub fn is_quit_request(argv: &[String]) -> bool {
+    argv.iter()
+        .position(|a| a == "--action")
+        .and_then(|i| argv.get(i + 1))
+        .is_some_and(|name| crate::session_action::BoardAction::parse(name).is_some())
+}
+
 /// 두 번째 실행 — 첫 보드를 앞으로(`--show` 와 같음), `--action` 이면 동작을 넘긴다(중단은 확인 없이).
+/// `--action quit` 은 떠 있는 보드에 끊길 세션 확인 창을 거친 종료를 청한다.
 fn second_instance(app: &AppHandle, argv: Vec<String>) {
+    if is_quit_request(&argv) {
+        crate::shutdown::request_quit(app);
+        return;
+    }
     let Some(board) = app.try_state::<Arc<Board>>().map(|s| s.inner().clone()) else { return };
     match action_arg(&argv) {
         Some((action, id)) => {
@@ -994,6 +1008,10 @@ fn start_ticker(board: Arc<Board>) {
 }
 
 pub fn run(argv: Vec<String>, context: tauri::Context<tauri::Wry>) {
+    // 꺼 달라는 요청인데 보드가 안 떠 있으면(첫 실행이 이 프로세스) 보드를 띄우지 않고 끝낸다
+    if is_quit_request(&argv) {
+        return;
+    }
     let background = argv.iter().any(|a| a == "--background");
     let first_action = action_arg(&argv);
     let result = tauri::Builder::default()
@@ -1136,6 +1154,24 @@ mod tests {
         assert_eq!(action_arg(&v(&["ClaudeBoard.exe", "--action", "activate", "abc"])), None);
         assert_eq!(action_arg(&v(&["ClaudeBoard.exe", "--action", "stop"])), None);
         assert_eq!(action_arg(&v(&["ClaudeBoard.exe", "--show"])), None);
+        // quit 은 세션을 가리키지 않는 보드 동작이라 action_arg 로는 읽히지 않고 is_quit_request 가 따로 읽는다
+        assert_eq!(action_arg(&v(&["ClaudeBoard.exe", "--action", "quit", "-"])), None);
+    }
+
+    #[test]
+    fn quit_request_is_read_apart_from_session_actions() {
+        let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(is_quit_request(&v(&["ClaudeBoard.exe", "--action", "quit", "-"])));
+        assert!(is_quit_request(&v(&["ClaudeBoard.exe", "--background", "--action", "quit"])));
+        for argv in [
+            &["ClaudeBoard.exe", "--action", "stop", "abc"][..],
+            &["ClaudeBoard.exe", "--action", "Quit", "-"],
+            &["ClaudeBoard.exe", "--action"],
+            &["ClaudeBoard.exe", "quit"],
+            &["ClaudeBoard.exe", "--show"],
+        ] {
+            assert!(!is_quit_request(&v(argv)), "{argv:?}");
+        }
     }
 
     #[test]
