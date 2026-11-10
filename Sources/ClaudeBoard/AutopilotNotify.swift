@@ -185,21 +185,21 @@ struct APNoticeView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                Image(systemName: item.kind == .end ? "steeringwheel" : "arrow.triangle.merge").font(.system(size: 13, weight: .bold)).foregroundStyle(Palette.accent)
-                Text(item.title).font(.system(size: 13, weight: .bold)).lineLimit(1)
+                Image(systemName: item.kind == .end ? "steeringwheel" : "arrow.triangle.merge").font(.system(size: 15, weight: .bold)).foregroundStyle(Palette.accent)
+                Text(item.title).boardFont(APType.label, weight: .bold).lineLimit(1)
                 Spacer(minLength: 4)
-                Button { APNotices.shared.dismiss(item.id) } label: { Image(systemName: "xmark").font(.system(size: 10, weight: .bold)) }
+                Button { APNotices.shared.dismiss(item.id) } label: { Image(systemName: "xmark").font(.system(size: 12, weight: .bold)) }
                     .buttonStyle(.plain).foregroundStyle(.secondary).help("닫기(이 실행의 끝 알림은 다시 오지 않습니다. 보드의 끝난 실행 줄은 남습니다)")
                     .accessibilityLabel("닫기").accessibilityIdentifier("ap-notice-close-\(item.id)")
             }
-            Text(item.line).font(.system(size: 12)).lineLimit(2).accessibilityIdentifier("ap-notice-line-\(item.id)")
-            if !item.detail.isEmpty { Text(item.detail).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+            Text(item.line).boardFont(APType.body).lineLimit(2).accessibilityIdentifier("ap-notice-line-\(item.id)")
+            if !item.detail.isEmpty { Text(item.detail).boardFont(APType.note).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
             HStack {
                 Spacer(minLength: 0)
                 Button {
                     if item.kind == .end { APNotices.shared.open(item.run) } else { APNotices.shared.openMerge(item.run) }
                 } label: {
-                    Text(item.action).font(.system(size: 12, weight: .semibold)).padding(.horizontal, 10).padding(.vertical, 4)
+                    Text(item.action).boardFont(APType.body, weight: .semibold).padding(.horizontal, 10).padding(.vertical, 4)
                         .background(RoundedRectangle(cornerRadius: 7).fill(Palette.accent.opacity(hover ? 0.32 : 0.22)))
                 }
                 .buttonStyle(.plain)
