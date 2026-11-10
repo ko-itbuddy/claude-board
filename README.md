@@ -141,6 +141,14 @@ curl -fsSL https://github.com/suhojang/claude-board/releases/latest/download/ins
 - 🔌 **업데이트 · 종료**: 보드 탭 세션은 보드와 함께 꺼집니다. 그 가운데 일하는 중인 세션이 있으면 먼저 묻고, 보드가 다시 뜨면 탭을 되살립니다. 마지막에 보던 탭은 바로, 다른 탭은 그 탭에 들어갈 때 대화를 이어 엽니다(셸 탭에서 직접 친 claude 도). 끊긴 세션은 일시중지로 남아 ⋯ 메뉴의 **세션 재개** 로 하던 일을 이어 갑니다.
 - 🎨 **답변 마크다운 꾸미기**: 보드 탭의 claude 는 답변이 끝나면 제목 · 굵게 · 인라인 코드 · 목록 등을 색으로 다시 그립니다. 새 세션 창의 **답변 마크다운 꾸미기** 체크로 끕니다.
   [deepskyblue86/claude-markdown-mod](https://github.com/deepskyblue86/claude-markdown-mod)(md-render, MIT)를 들여온 것입니다.
+- 🔗 **바깥에서 탭 열기**: 다른 프로그램(스크립트, 다른 Claude Code 세션의 스킬 등)이 보드 탭에 claude 를 띄울 수 있습니다. 보드가 직접 연 탭과 똑같이 세션 목록 · 알림에 나오고, 보드를 다시 켜면 되살아납니다.
+  ```sh
+  "/Applications/Claude Board.app/Contents/MacOS/ClaudeBoard" --open-tab --cwd <폴더> [--title <탭 이름>] [--launch] [--timeout <초>] -- claude <인자…>
+  ```
+  `--` 뒤 첫 인자는 `claude` 여야 합니다(다른 명령은 받지 않습니다). 결과는 한 줄 JSON 으로 나오고 성공이면 종료 코드 0, 실패면 1 입니다. 예: `{"ok":true,"session":"…","status":"opened","tab":"역할-2"}`.
+  - `status`: `opened`(새 탭), `exists`(같은 세션 id 나 같은 이름의 claude 가 이미 보드 탭에서 돌아 그 탭을 앞으로만, `pid` 를 함께 줌), `reopened`(같은 세션 · 이름의 탭이 같은 폴더에서 셸 프롬프트로 남아 있어 그 탭에 다시 띄움. 다른 폴더면 새 탭). 실패는 `bad-args`, `board-off`(보드가 꺼져 있음. `--launch` 를 주면 켜고 엽니다), `refused`(같은 세션 · 이름이 보드 탭 밖에서 돌고 있음, 대화 기록이 없는 세션 이어 열기 등), `timeout`(보드가 답하지 않음) 이고 `why` 에 까닭이 있습니다.
+  - 탭 이름은 그 탭 claude 의 세션 이름이 됩니다. `--title` 과 `--name` 을 함께 줄 때는 같아야 하고, 하나만 주면 그 이름을 둘 다에 씁니다.
+  - 요청은 사용자만 쓰는 폴더(`~/Library/Application Support/Claude Board/open-tab/`)를 거쳐 넘깁니다. 웹 페이지에서 부를 수 있는 URL 주소는 두지 않았습니다.
 
 ### 🟠 승인이 필요할 때
 

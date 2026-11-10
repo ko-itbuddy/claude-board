@@ -76,6 +76,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
 | `sessions/<sid>.json` (`state`·`pid`·`tty`·`headless`·`cwd`·`project_dir`(claude 를 띄운 폴더 = hook 의 `CLAUDE_PROJECT_DIR`, cd·워크트리에도 그대로 — 보드·TUI 카드 묶음)·`topic`·`last_message`·`subagents`·`limit_hit`·`resume_cmd`·`transcript_path`·`model` …) | state.py | 보드, board-tui.py, notify.py(상태별 개수) |
 | `sessions/<sid>.mute`, `mute-all`, `notify-position` | 보드 | notify.py |
 | `login-launch-off` | 보드 (설정 > 일반 > 로그인할 때 열기를 끌 때, LaunchAgent plist 도 지움) | `user-setup.sh` (있으면 LaunchAgent 를 등록하지 않음), `Uninstall.command` 가 지움 |
+| (이 폴더 밖) `~/Library/Application Support/Claude Board/open-tab/`(시험 빌드는 `Claude Board Dev`, 0700) — 바깥에서 탭 열기 요청 `<요청 id>.req.json`(`id`·`cwd`·`title`·`argv`·`at`)과 답 `<요청 id>.reply.json`(`ok`·`status`·`tab`·`session`·`pid`·`why`). Claude Code 샌드박스·자율주행 모델 세션의 쓰기 범위 밖이라 그 안의 명령은 요청을 남기지 못한다 | 명령줄 도구 `ClaudeBoard --open-tab`(요청), 보드(답) | 보드(요청 — 폴더·파일이 이 사용자 것일 때만, 읽고 지움, 10분 지난 것은 버림), 명령줄 도구(답, 읽고 지움) |
 | `sessions/<sid>.paused` | 보드 (일시중지 때, 업데이트·종료로 끊기는 보드 탭 세션에도) | state.py (새 요청이 오면 지움), 보드 (일시중지 카드·재개) |
 | `plugins/md-render/` | 보드 (시작할 때 앱 안 사본에서 바뀐 파일만 옮김. Claude Code 가 안에 `tsconfig.json`·`.claude-plugin/types/` 를 더 씀, `Uninstall.command` 가 지움) | 보드 탭 claude (`--plugin-dir`) |
 | `context/<sid>.json` | 사용자의 상태줄 스크립트 (이 저장소에 없음) | 보드 (컨텍스트 사용량·effort) |
@@ -93,7 +94,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
 
 ### 실행 파일
 
-- `Sources/ClaudeBoard/` (22개 파일, 약 21,000줄 — 그 가운데 자율주행 `Autopilot.swift` 약 8,100줄·`AutopilotTopic.swift` 약 870줄·`AutopilotImport.swift` 약 340줄·`AutopilotPublish.swift` 약 770줄·`AutopilotReport.swift` 약 260줄·`AutopilotNotify.swift` 약 210줄) — 보드 앱 전체. AppKit 창 위에 SwiftUI 화면을 얹었다. 한 파일 `ClaudeBoard.swift` 이던 것을 2026-10-29 에
+- `Sources/ClaudeBoard/` (23개 파일, 약 21,600줄 — 그 가운데 자율주행 `Autopilot.swift` 약 8,100줄·`AutopilotTopic.swift` 약 870줄·`AutopilotImport.swift` 약 340줄·`AutopilotPublish.swift` 약 770줄·`AutopilotReport.swift` 약 260줄·`AutopilotNotify.swift` 약 210줄) — 보드 앱 전체. AppKit 창 위에 SwiftUI 화면을 얹었다. 한 파일 `ClaudeBoard.swift` 이던 것을 2026-10-29 에
   `tools/split-board.py` 로 맨 위 `// MARK: - ` 절마다 한 파일로 나눴다(코드는 옮기기만 했고 머리의 import 는 파일마다 같다 — 자율주행 `Autopilot.swift`·`AutopilotTopic.swift`·`AutopilotImport.swift`·`AutopilotReport.swift`·`AutopilotPublish.swift`·`AutopilotNotify.swift` 만 `AutopilotRules` 를 더 import 한다. 자율주행 절은 가지 `autopilot-stage2` 에 main 을 합칠 때 같은 스크립트로 떨어졌고, `AutopilotTopic.swift` 는 2단계 5-2b, `AutopilotReport.swift` 는 3단계, `AutopilotPublish.swift` 는 4단계 ⑩-1, `AutopilotNotify.swift` 는 ⑩-3, `AutopilotImport.swift` 는 7단계 ⑫-7a 에서 새로 만든 파일이다). 절 이름과 내용이 어긋난 곳이 있으니
   (`BoardView` 는 `BrainrotMascots.swift`, `Store` 는 `LimitSwitching.swift`, `AppDelegate` 는 `SettingsScreen.swift`) 파일 이름보다 아래 표나 grep 으로 찾는다.
 
@@ -110,6 +111,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
   | `BrainrotMascots.swift` | 브레인롯 캐릭터 | `Mascot`·`BrainrotFigure`, 터미널 앱 `TerminalAppStore`, 터미널 독 `EdgeDock`, 창 투명도, 보드 화면 `BoardView` |
   | `AppUpdate.swift` | 업데이트 | `Updater`(`releaseRepo`), `UpdateBanner` |
   | `EmbeddedTerminal.swift` | 내장 터미널 | `TerminalHub`·`BoardTab`·`BoardSurface`·`BoardTerminalView`·`BoardRootView`·`PaneDivider`, `confirmShutdown`, `mdRenderDir`, `boardLog` |
+  | `OpenTab.swift` | 바깥에서 탭 열기 | 명령줄 도구 `openTabCommandLine`(`--open-tab`), 요청 폴더를 읽어 탭을 여는 `OpenTabInbox`(같은 세션·이름 찾기는 `TerminalHub.openTabScreens`, 여는 길은 `TerminalHub.openExternal`·`run`) |
   | `Autopilot.swift` | 자율주행 | 뿌리 `autopilotRoot`, 실행·단위 모델(`APRun`·`APUnit`), `AutopilotStore`(원문 지우기 `purge` 포함), 기록 저장소 읽기 `APRecords`, 보드 본체 줄(`APRunLine`·`APRunCard`·`APEndedLine`·`APBar`), 자율주행 중 `APRunningScreen`·지난 실행 `APHistoryScreen`, 출발 `APStart`·`APStartSheet`(출발 확인의 설정 줄·승격 차례·자율주행 지시 그 자리 바꾸기, 4단계 ⑩-2 링크 읽기 줄 `readLink`·에픽 읽기 `refreshEpic` 은 엔진 `read`), 합치기·승격 `APMerge`·`APMergeSheet`, 엔진·git 부르기(`apEngine`·`apGit`), 터미널로 이어받기 단추·돌려주기 카드(`takeoverBox`, 8단계 ⑫-8) |
   | `AutopilotTopic.swift` | 자율주행 · 주제로 시작 | 출발 준비 1단계의 주제로 시작 입력 판 `APTopic`·`APTopicStep1`·`APSlotEditor`(주제 글·자료 링크(줄 상태 `linkView`·MCP 서버 고르기, 엔진 `read servers`)·작업 경로·기술 스택), 5-2b 규칙의 진짜 어댑터(`APFolderFiles`·`APBoardGit`·`APRepoFiles`·`APHTTPFeeds`·`APCatalogCacheFile`·`APRawRunFiles`·`APSystemClock`) |
   | `AutopilotImport.swift` | 자율주행 · 가져오기 | 출발 준비 1단계의 가져오기 입력 판 `APImportInput`·`APImportStep1`(작업 경로·할 일 문서 파일과 절·바깥 목록 서비스와 질의(연결 잠금 `serviceLock`·`listLock`)·옛 자동화 폴더·덧붙일 말), 단위 제안의 가린 항목과 되살리기 `APImportHiddenBox`, 출발 확인의 원천 줄 `APImportSourceBox`, 이어 간 줄의 바뀐 본문 `APImportChangedNote`. 준비 차례(`prepareImport`·엔진 `import gather|session`·`importUnits`·출발 때 `writeImportQueue`)는 `Autopilot.swift` 의 `APStart` 확장(파일 범위 private 칸을 써서) |
@@ -130,6 +132,10 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
   확인 창·`ghosttyQueue`·백그라운드·메인 큐·0.2초 타이머만 쥐고 판단은 BoardRules 의 `terminalControl`·`sessionControl`).
   창 크기에 따라 `BoardTier`(full·medium·mini)로 그린다. `$TMPDIR/claude-board.lock` 을 `flock` 해 한 번만 뜨고, 두 번째 실행은 `claude-board.show` 분산 알림만 보내고 끝난다.
   `--action pause|resume|stop|reopen|focus <세션 id>`·`--action autopilot-open|autopilot-merge <자율주행 실행 id>`(끝 알림 판을 누른 것과 같음)·`--action quit -`(install.sh 가 청하는 정상 종료 — ⌘Q 와 같은 확인 흐름, 받으면 `$TMPDIR/<instanceName>.quit` 에 `asking`, 확인 창에서 취소하면 `cancel`) 는 떠 있는 보드에 `claude-board.action` 분산 알림으로 넘긴다(메뉴와 같은 함수 — reopen 은 `reopenEnded`: 끝난 세션만, 이어서 진행 요청은 일시중지했던 세션에만. pause 는 메뉴 단추와 같은 `isPausable`: 작업 중·승인 대기만).
+  `--open-tab --cwd <폴더> [--title <탭 이름>] [--launch] [--timeout <초>] -- claude <인자…>`(첫 인자일 때만 — claude 인자에 든 `--action` 을 보드 옵션으로 읽지 않게, `main.swift` 맨 앞)은 다른 프로그램이 보드 탭에 claude 를 띄우는 입구다(`OpenTab.swift`, 규칙 BoardRules `OpenTab.swift`).
+  명령줄 도구가 요청을 `open-tab/` 폴더에 쓰고 `<instanceName>.open-tab` 분산 알림(내용 없음 — 알림은 같은 로그인의 누구나 보낼 수 있어 요청은 폴더에서만 읽는다)을 1초마다 보내며 답 파일을 기다려 한 줄 JSON 을 찍는다(성공 0·실패 1, 기다림이 끝나면 아직 가져가지 않은 요청은 거둠).
+  보드는 되살리기(`restoreTabs`) 뒤에만 읽고(되살린 끝에 한 번 더), 보드가 연 탭과 같은 길(`launch`·`run`, 탭 이름 = 세션 이름)로 연다 — 세션 목록·알림·쥔 탭 목록(되살리기)이 같다. 같은 세션 id·이름의 claude 가 보드 탭에서 돌면 앞으로만(`exists`), 셸만 남은 그 탭이 같은 폴더면 그 탭에(`reopened`, 다른 폴더면 새 탭), 보드 탭 밖에서 돌면 거절.
+  첫 인자 `claude` 만 받고(경로 꼴도 거절) 제어 문자(줄바꿈·탭 빼고 — 붙여넣기 끝 꼴 `ESC[201~` 로 셸에 키를 넣지 못하게)를 거절, 인자마다 `shlexQuote` 로 묶어 셸에 친다. URL scheme 은 두지 않았다(웹 페이지에서 부를 수 있어서).
   `EmbeddedTerminal.swift`(내장 터미널) — 창 내용은 `BoardRootView`([터미널 영역 │ `PaneDivider` │ 보드]). `TerminalHub` 가 탭(`BoardTab`)을 쥐고,
   탭(화면)마다 그 폴더의 로그인 셸을 띄우고, claude 명령은 셸의 줄 편집이 시작되면 그 셸에 붙여넣기 + Return 으로 넣는다(`BoardSurface.type`, claude 가 끝나면 셸 프롬프트로 남고 셸을 exit 하면 탭을 닫음.
   새 세션은 `--session-id`, 모든 길에 탭 이름을 `--name` 으로 붙이고 ⇧⌘R 은 `/rename` — `named`·`applyRenames`). `pair` 가 세션 파일의 `tty` = 탭 tty(headless 는 pid 조상이 탭)로 짝짓고
@@ -150,6 +156,7 @@ Claude Code hook ──> state.py  ──> ~/.claude/notifier/sessions/<session_
   보드 탭 짝짓기·자리(`TabPairing.swift`: 화면 값 `TabScreen` → `pairTabs`(tty 짝·headless 조상·셸만 남은 화면·넘긴 작업 따라가기·경로 상태 점, 결과 `TabPairing`)·자리 `sessionPlace`·`parkedScreen`·`shownSessionPlace`),
   세션 조작 순서(`SessionControl.swift`: 단계 `SessionSteps`(살아 있는 세션 재개 `resume` 은 줄바꿈 + `resumePrompt` — 첫 출력 전에 멈춰 입력 칸에 되돌아온 요청 아래 줄에 붙는다)·꺼진 세션 이어 열기의 첫 요청 `carryOnPrompt`·일시중지할 응답이 있는가 `isPausable`·일시중지 표지 `pausedMarkData`·끝나기 기다리기 한 번의 판단 `exitWait`, `SessionControl` 의 `pause`·`resumePaused`·`stop`·`moveToBoard`·`reopen`·`reopenEnded`·`open`),
   보드 기록 파일 자리(`BoardLog.swift`: 설치판 `boardLogPath`·시험 빌드는 따로 `boardLogPlace`),
+  바깥에서 탭 열기(`OpenTab.swift`: 명령줄 읽기 `parseOpenTabArgs`·요청 검사와 띄울 꼴 `openTabPrepare`(claude 만·제어 문자 거절·새 세션은 `--session-id`·`--title` 과 `--name` 은 같아야 함)·claude 인자 읽기 `claudeArgInfo`·이미 있는 탭 `planOpenTab`·요청 `OpenTabRequest`·답 `OpenTabReply`·요청 폴더 `openTabDir`·오래된 요청 `openTabStale`, 보드에서 옮긴 `shlexQuote` 와 셸 낱말 풀기 `shellWords`),
   업데이트 판단(`Updates.swift`: VERSION 본문 검증 `releaseVersion`·새 버전인지 `isNewerVersion`·확인하는 빌드 `updateEligible`·결과 `UpdateCheckResult`(손으로 확인한 안내 `notice`)·유스케이스 `checkForUpdate`),
   단축키 판정(`Shortcuts.swift`: 수정키 `KeyModifiers`(raw 값이 `NSEvent.ModifierFlags` 와 같고 보드 설정 `shortcuts` 에 그대로 남으므로 동작 id 처럼 바꾸지 않는다)·키 `KeyCombo`(`label`·`menuKey`)·
   동작 표와 사용자가 바꾼 키 `ShortcutTable`(`combo`·`set`·`conflicts`·`actionID`)·키 받기 판정 `recordShortcut`·시스템 단축키와 겹침 `systemShortcutTaken`).
