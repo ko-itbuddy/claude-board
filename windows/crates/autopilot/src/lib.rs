@@ -8,11 +8,16 @@ pub mod ports;
 pub mod stream;
 
 pub mod rules {
+    pub mod board_git;
     pub mod checks;
     pub mod control;
     /// Windows 전용(실행 환경 → 동의·판정 호출 꼴). PORTED.json 의 windows_only 에 둔다
     pub mod env_policy;
     pub mod evidence;
+    pub mod leftovers;
+    pub mod gitlinks;
+    pub mod history;
+    pub mod prose;
     pub mod records;
     pub mod stopline;
 }
