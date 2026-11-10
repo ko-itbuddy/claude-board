@@ -4,6 +4,7 @@
 type Scenarios = { applyMac1?: (s: typeof S) => void; FROZEN_NOW?: number };
 const scenarios: Scenarios = Object.values(import.meta.glob("./mock-scenarios.ts", { eager: true }))[0] as Scenarios ?? {};
 import type { StartRequest } from "./autopilot/startForm";
+import { normalizeBoardFontScale } from "./board/fontScale";
 import type { Account, AutopilotAction, AutopilotRun, Brain, Group, Session, Snapshot, State, Sub, TermId, TermInfo, TermSpec } from "./types";
 
 const SEC = 1000;
@@ -263,6 +264,7 @@ const S: Snapshot = {
     newSessionMdRender: true,
     autoUpdateCheck: true,
     terminalShell: null,
+    boardFontScale: 1,
   },
   claudeVersion: "2.1.301",
   terminals: [
@@ -483,6 +485,9 @@ export async function handle(cmd: string, a: Record<string, unknown>): Promise<u
       break;
     case "set_opacity":
       st.opacity = Number(a.v) || 1;
+      break;
+    case "set_board_font_scale":
+      st.boardFontScale = normalizeBoardFontScale(a.v);
       break;
     case "set_notify_position":
       st.notifyPosition = a.pos as Snapshot["settings"]["notifyPosition"];

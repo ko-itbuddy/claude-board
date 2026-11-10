@@ -4,6 +4,7 @@
 import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AutopilotEnvOption, StartRequest } from "./autopilot/startForm";
+import { normalizeBoardFontScale } from "./board/fontScale";
 import type {
   AccountLoginPayload, AutopilotAction, EnvChoice, BoardSide, ConfirmShutdownPayload, DriveStep, MascotKind, NotifyOptions, NotifyPosition, OpenSessionPayload, PidTarget, RenameCheck, SessionAction,
   SettingsEventPayload, SettingsTransition, ShortcutOverride, Snapshot, State, TabEntry, TermFrame, TermId, TermInfo, TermSpec,
@@ -206,6 +207,15 @@ export function setOpacity(v: number) {
     s.settings.opacity = v;
   });
   fire("set_opacity", { v });
+}
+
+/** 보드 글자 크기 배율 — 범위·단계 규칙은 board/fontScale.ts, 저장 전 백엔드도 같은 규칙으로 자른다 */
+export function setBoardFontScale(v: number) {
+  const scale = normalizeBoardFontScale(v);
+  optimistic((s) => {
+    s.settings.boardFontScale = scale;
+  });
+  fire("set_board_font_scale", { v: scale });
 }
 
 export function setNotifyPosition(pos: NotifyPosition) {

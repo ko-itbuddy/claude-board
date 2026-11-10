@@ -10,6 +10,8 @@
   import { AutopilotStart } from "$lib/autopilot/start.svelte";
   import EdgeDock from "$lib/board/EdgeDock.svelte";
   import AutopilotLine from "$lib/board/AutopilotLine.svelte";
+  import BoardScale from "$lib/board/BoardScale.svelte";
+  import { screenHeight } from "$lib/board/fontScale";
   import { orphanRuns } from "$lib/board/autopilotView";
   import GroupCard from "$lib/board/GroupCard.svelte";
   import Header from "$lib/board/Header.svelte";
@@ -126,7 +128,8 @@
     const t = ui.tier;
     if (t === "mini" || !contentEl || !listEl) return;
     // 목록 칸은 남는 높이를 다 받으므로, 창 높이에서 목록 칸을 빼면 나머지(제목 막대 포함) 높이다
-    const rest = 32 + contentEl.scrollHeight - listEl.offsetHeight;
+    // zoom 안쪽 높이는 배율만큼 크게 그려지므로 화면 높이로 바꿔서 센다(scale 1 이면 그대로)
+    const rest = 32 + screenHeight(contentEl.scrollHeight - listEl.offsetHeight, snap?.settings.boardFontScale ?? 1);
     if (Math.abs(fixed[t] - rest) > 0.5) fixed[t] = rest;
     pickTier();
   }
@@ -252,8 +255,9 @@
   {#if snap}
     <TitleBar mini={ui.tier === "mini"} counts={snap.counts} rows={snap.groups.length} {expanded} {side} />
     {#if ui.tier === "mini"}
-      <MiniBoard {snap} />
+      <BoardScale scale={snap.settings.boardFontScale}><MiniBoard {snap} /></BoardScale>
     {:else}
+      <BoardScale scale={snap.settings.boardFontScale}>
       <div class="content" bind:this={contentEl}>
         <Header {snap} full={ui.tier === "full"} onScrollTo={scrollAfterFilter} />
 
@@ -342,6 +346,7 @@
           <OpacitySlider value={snap.settings.opacity} />
         </div>
       </div>
+      </BoardScale>
       <!-- 터미널 열기 독 — 보드 위에 겹쳐 뜨므로 아래 배치는 그대로다 -->
       <EdgeDock terminals={snap.terminals} {side} />
     {/if}

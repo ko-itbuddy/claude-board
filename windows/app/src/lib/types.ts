@@ -114,6 +114,7 @@ export interface BoardSettings {
   newSessionMdRender: boolean;         // 새 세션의 답변 꾸미기 기본값
   autoUpdateCheck: boolean;            // 시작할 때와 하루마다 새 버전 확인
   terminalShell: string | null;        // 새 탭의 셸 키(list_envs 의 key), null 이면 기본 셸(pwsh → powershell → cmd)
+  boardFontScale: number;              // 보드 글자 크기 배율 0.8 ~ 1.5(0.1 단위, 기본 1) — 규칙은 board/fontScale.ts
 }
 
 // ── 설정 화면·단축키·계정 로그인(2단계) — 규칙은 settings/·shortcuts/ ────────────────

@@ -67,6 +67,8 @@ pub struct Settings {
     pub auto_update_check: bool,
     /// 새 터미널 탭의 셸 키(`EnvChoice` 키: `pwsh` · `powershell` · `cmd` · `git-bash` · `wsl` · `wsl:<배포판>`). null 이면 기본 셸(pwsh → powershell → cmd)
     pub terminal_shell: Option<String>,
+    /// 보드 글자 크기 배율(mac `boardFontScale`) — 0.8 ~ 1.5, 0.1 단위, 기본 1.0
+    pub board_font_scale: f64,
 }
 
 impl Default for Settings {
@@ -101,6 +103,7 @@ impl Default for Settings {
             new_session_md_render: true,
             auto_update_check: true,
             terminal_shell: None,
+            board_font_scale: 1.0,
         }
     }
 }
@@ -119,6 +122,7 @@ impl Settings {
         }
         let mut s: Settings = value.and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
         s.opacity = clamp_opacity(s.opacity);
+        s.board_font_scale = clamp_board_font_scale(s.board_font_scale);
         s.board_pane_width = clamp_pane_width(s.board_pane_width);
         if !SIDES.contains(&s.board_side.as_str()) {
             s.board_side = "right".into();
@@ -167,6 +171,7 @@ impl Settings {
             new_session_md_render: self.new_session_md_render,
             auto_update_check: self.auto_update_check,
             terminal_shell: self.terminal_shell.clone(),
+            board_font_scale: self.board_font_scale,
             notify_position,
         }
     }
@@ -271,6 +276,15 @@ pub fn clamp_opacity(v: f64) -> f64 {
     }
 }
 
+/// 보드 글자 크기 배율 — 숫자가 아니면 1.0, 0.8 ~ 1.5 로 자르고 0.1 단위로 맞춘다(프론트 `fontScale.ts` 와 같은 규칙).
+pub fn clamp_board_font_scale(v: f64) -> f64 {
+    if v.is_finite() {
+        ((v * 10.0).round().clamp(8.0, 15.0)) / 10.0
+    } else {
+        1.0
+    }
+}
+
 /// 보드 칸 폭 — 숫자가 아니면 기본값, 너무 좁으면 최소값.
 pub fn clamp_pane_width(v: f64) -> f64 {
     if v.is_finite() {
@@ -321,6 +335,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn board_font_scale_clamps_and_steps() {
+        assert_eq!(clamp_board_font_scale(9.0), 1.5);
+        assert_eq!(clamp_board_font_scale(0.1), 0.8);
+        assert_eq!(clamp_board_font_scale(1.26), 1.3);
+        assert_eq!(clamp_board_font_scale(f64::NAN), 1.0);
+        assert_eq!(clamp_board_font_scale(f64::INFINITY), 1.0);
+        assert_eq!(clamp_board_font_scale(1.0), 1.0);
+        // 파일에서 읽을 때도 같은 규칙: 범위 밖·모양 틀린 값
+        let dir = std::env::temp_dir().join(format!("cb-settings-scale-{}", crate::util::short_id()));
+        let path = dir.join("board-settings.json");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&path, br#"{"boardFontScale": 9}"#).unwrap();
+        assert_eq!(Settings::load(&path).board_font_scale, 1.5);
+        fs::write(&path, br#"{"boardFontScale": 0.1}"#).unwrap();
+        assert_eq!(Settings::load(&path).board_font_scale, 0.8);
+        assert_eq!(Settings::load(&dir.join("none.json")).board_font_scale, 1.0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn round_trip_and_defaults() {
         let dir = std::env::temp_dir().join(format!("cb-settings-{}", crate::util::short_id()));
         let path = dir.join("board-settings.json");
@@ -352,6 +386,8 @@ mod tests {
         s.new_session_md_render = false;
         s.auto_update_check = false;
         s.terminal_shell = Some("wsl:Ubuntu".into());
+        assert_eq!(s.board_font_scale, 1.0);
+        s.board_font_scale = 1.3;
         s.save(&path).unwrap();
         let back = Settings::load(&path);
         assert_eq!(back, s);
@@ -376,6 +412,7 @@ mod tests {
         assert_eq!(v["newSessionCommand"], "claude --model opus");
         assert_eq!((v["newSessionMdRender"].as_bool(), v["autoUpdateCheck"].as_bool()), (Some(false), Some(false)));
         assert_eq!(v["terminalShell"], "wsl:Ubuntu");
+        assert_eq!(v["boardFontScale"], 1.3);
         assert!(v.get("terminalTabs").is_none(), "탭 목록은 상태 묶음에 싣지 않고 load_tabs 로 읽는다");
         assert!(v.get("hiddenGroups").is_none());
         assert!(v.get("miniFromExpanded").is_none());
@@ -401,6 +438,7 @@ mod tests {
             "newSessionMdRender",
             "autoUpdateCheck",
             "terminalShell",
+            "boardFontScale",
         ];
         for k in stored {
             assert!(raw.get(k).is_some(), "{k}");

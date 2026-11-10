@@ -740,6 +740,12 @@ fn set_opacity(board: B<'_>, v: f64) {
     board.publish();
 }
 
+#[tauri::command(async)]
+fn set_board_font_scale(board: B<'_>, v: f64) {
+    board.update_settings(|s| s.board_font_scale = settings::clamp_board_font_scale(v));
+    board.publish();
+}
+
 /// 꾸미기를 끈 세션 id 가운데 세션 파일이 아직 있는 것만(입력 순서 그대로).
 fn kept_md_render_off(list: &[String], exists: impl Fn(&str) -> bool) -> Vec<String> {
     list.iter().filter(|id| exists(id)).cloned().collect()
@@ -1053,6 +1059,7 @@ pub fn run(argv: Vec<String>, context: tauri::Context<tauri::Wry>) {
             set_pinned,
             set_mascot,
             set_opacity,
+            set_board_font_scale,
             set_notify_position,
             set_board_mini,
             open_terminal,

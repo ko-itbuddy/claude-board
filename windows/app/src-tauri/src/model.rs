@@ -311,6 +311,8 @@ pub struct SettingsView {
     pub auto_update_check: bool,
     /// 새 터미널 탭의 셸 키(`wsl:<배포판>` · `pwsh` …). null 이면 기본 셸(pwsh → powershell → cmd)
     pub terminal_shell: Option<String>,
+    /// 보드 글자 크기 배율(0.8 ~ 1.5, 기본 1)
+    pub board_font_scale: f64,
     pub notify_position: String,
 }
 
