@@ -183,6 +183,170 @@ test('파서와 비교가 어긋남을 잡고 파일 이름을 댄다', () => {
   assert.deepEqual(withNew, ['new-tool', 'other']);
 });
 
+// ───────── windows.yml 의 paths 필터 = windows 시험이 저장소 밖에서 읽는 자리 + 이식 원본 macOS 파일 (plan W1-3 · C-333) ─────────
+// 필터에 없는 자리만 바뀐 push·PR 에는 이 workflow 가 안 돌아, 두 판이 어긋나도 Windows 러너가 못 잡는다.
+
+// 공유 시험 표 폴더. 읽는 쪽은 hook_table.rs · rules_table.rs · rulesTable.ts(`..` 를 조각조각 join 해서 아래 글 훑기가 못 본다)
+const SHARED_TABLES = ['hook-table', 'rules-table'];
+// Windows 코어·알림 패널·TUI 가 이식한 macOS 원본(SPEC §3·§4·§6.3). 시험이 직접 읽지는 않아 손으로 적는다. 늘릴 때는 근거를 적는다
+const PORT_SOURCES = ['state.py', 'notify.py', 'hooks.py', 'packaging/hooks.py', 'board-tui.py', 'ClaudeNotifier.swift'];
+
+/** `on:` 아래 이벤트별 `paths:` 목록 — 이 workflow 가 쓰는 모양(들여쓰기 2칸 단위, 따옴표 문자열 목록)만 읽는다 */
+function triggerPaths(text) {
+  const out = {};
+  let inOn = false;
+  let event = null;
+  let inPaths = false;
+  for (const raw of text.split('\n')) {
+    const line = raw.replace(/\s+#.*$/, '');
+    if (!line.trim() || line.trim().startsWith('#')) continue;
+    const indent = line.length - line.trimStart().length;
+    if (indent === 0) {
+      inOn = /^on:\s*$/.test(line);
+      event = null;
+      inPaths = false;
+      continue;
+    }
+    if (!inOn) continue;
+    if (indent === 2) {
+      const m = line.match(/^\s{2}([\w_]+):/);
+      event = m ? m[1] : null;
+      inPaths = false;
+    } else if (indent === 4 && event) {
+      inPaths = /^\s{4}paths:\s*$/.test(line);
+      if (inPaths) out[event] = [];
+    } else if (indent === 6 && event && inPaths) {
+      const m = line.match(/^\s{6}-\s*['"]?([^'"]+?)['"]?\s*$/);
+      assert.ok(m, `paths 항목을 읽지 못했다: ${raw}`);
+      out[event].push(m[1]);
+    }
+  }
+  return out;
+}
+
+/** 필터 하나가 경로 하나를 덮는가 — `dir/**` 는 그 아래 전부, 그 밖은 같은 경로 */
+function pathCovers(pattern, rel) {
+  if (pattern.endsWith('/**')) {
+    const dir = pattern.slice(0, -3);
+    return rel === dir || rel.startsWith(dir + '/');
+  }
+  return pattern === rel;
+}
+const pathCovered = (patterns, rel) => patterns.some((p) => pathCovers(p, rel));
+
+/** .rs 는 CARGO_MANIFEST_DIR(가장 가까운 Cargo.toml 폴더) 기준, 나머지는 파일 폴더 기준으로 상대 경로를 푼다 */
+function refBaseDir(file) {
+  let dir = path.dirname(file);
+  if (!file.endsWith('.rs')) return dir;
+  while (dir.startsWith(WIN) && !fs.existsSync(path.join(dir, 'Cargo.toml'))) dir = path.dirname(dir);
+  return dir;
+}
+
+/** windows/ 아래 소스·설정 파일(빌드 결과·의존성·문서 제외) */
+function walkSources(dir, hit) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (e.isDirectory()) {
+      if (['node_modules', 'target', 'docs', '.svelte-kit', 'build', 'dist', 'binaries'].includes(e.name)) continue;
+      walkSources(path.join(dir, e.name), hit);
+    } else if (/\.(rs|json|cjs|mjs|ts)$/.test(e.name) && !/(package-lock|Cargo\.lock)/.test(e.name)) {
+      hit(path.join(dir, e.name));
+    }
+  }
+}
+
+/**
+ * windows/ 밖을 읽는 자리 → 그 자리를 쓰는 파일들(저장소 기준 경로).
+ * (1) 글 속 `../` 둘 이상 문자열을 기준 폴더에서 풀어 windows/ 밖이면 잡는다. `.join("../../../x").join(name)` 처럼 끊겨도 맨 위 자리는 잡힌다.
+ * (2) PORTED.json 의 swift 원본·시험 경로(ported.rs 가 저장소 맨 위에서 읽어 sha256 을 견준다).
+ * 한계: `..` 를 조각조각 join 하는 모양(rulesTable.ts)은 못 본다 — SHARED_TABLES 가 대신한다.
+ */
+function outsideReads() {
+  const reads = new Map();
+  const add = (rel, by) => {
+    if (!reads.has(rel)) reads.set(rel, []);
+    reads.get(rel).push(by);
+  };
+  walkSources(WIN, (file) => {
+    if (file === __filename) return; // 이 시험의 설명 글에 든 `../../../` 는 참조가 아니다
+    const by = path.relative(REPO, file).split(path.sep).join('/');
+    const base = refBaseDir(file);
+    for (const m of read(file).matchAll(/(?<![./\w])((?:\.\.\/){2,}[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*)/g)) {
+      const rel = path.relative(REPO, path.resolve(base, m[1].replace(/\.$/, ''))).split(path.sep).join('/');
+      if (rel && !rel.startsWith('..') && rel !== 'windows' && !rel.startsWith('windows/')) add(rel, by);
+    }
+  });
+  const portedFile = path.join(WIN, 'crates', 'autopilot', 'PORTED.json');
+  if (fs.existsSync(portedFile)) {
+    for (const f of JSON.parse(read(portedFile)).files) {
+      add(f.swift, 'windows/crates/autopilot/PORTED.json');
+      for (const t of f.tests || []) add(t.swift, 'windows/crates/autopilot/PORTED.json');
+    }
+  }
+  return reads;
+}
+
+/** 필터의 빈 곳·군더더기를 글로 알린다. 빈 배열이면 맞다(글을 받아 보므로 시험이 글을 바꿔 넣어 볼 수 있다) */
+function filterProblems(workflowText) {
+  const t = triggerPaths(workflowText);
+  const problems = [];
+  const reads = outsideReads();
+  for (const ev of ['push', 'pull_request']) {
+    const patterns = t[ev];
+    if (!patterns || !patterns.length) {
+      problems.push(`windows.yml on.${ev}.paths 를 읽지 못했다`);
+      continue;
+    }
+    for (const [rel, by] of reads) {
+      if (!pathCovered(patterns, rel)) problems.push(`windows.yml ${ev}.paths 에 '${rel}' 가 없다 (읽는 파일: ${by[0]})`);
+    }
+    for (const dir of SHARED_TABLES) {
+      if (!pathCovered(patterns, `${dir}/x.json`)) problems.push(`windows.yml ${ev}.paths 에 '${dir}/**' 가 없다`);
+    }
+    for (const rel of PORT_SOURCES) {
+      if (!pathCovered(patterns, rel)) problems.push(`windows.yml ${ev}.paths 에 이식 원본 '${rel}' 가 없다`);
+    }
+    for (const p of patterns) {
+      const known =
+        p === 'windows/**' ||
+        p === '.github/workflows/windows.yml' ||
+        PORT_SOURCES.includes(p) ||
+        SHARED_TABLES.some((d) => p === `${d}/**`) ||
+        [...reads.keys()].some((r) => pathCovers(p, r));
+      if (!known) problems.push(`windows.yml ${ev}.paths 의 '${p}' 는 windows 가 읽지도 않고 이식 원본 목록에도 없다`);
+    }
+  }
+  const [a, b] = [t.push || [], t.pull_request || []];
+  if (sorted(a).join('\n') !== sorted(b).join('\n')) problems.push('windows.yml push 와 pull_request 의 paths 가 다르다');
+  return problems;
+}
+
+test('windows.yml paths 필터: windows 가 읽는 저장소 밖 자리와 이식 원본이 모두 있고 군더더기가 없다', () => {
+  const reads = outsideReads();
+  const keys = [...reads.keys()];
+  // 대조군: 있어야 마땅한 읽기가 보여야 훑기가 조용히 비지 않았다고 믿을 수 있다
+  assert.ok(keys.some((r) => r.startsWith('plugins/md-render')), '대조군: plugins/md-render 읽기가 보여야 한다');
+  assert.ok(keys.some((r) => r.startsWith('Sources/AutopilotRules/')), '대조군: PORTED.json 의 Swift 원본이 보여야 한다');
+  assert.ok(keys.includes('Sources/ClaudeAutopilot/main.swift'), '대조군: run_parts.rs 의 main.swift 읽기가 보여야 한다');
+  assert.ok(keys.some((r) => r === 'hook-table'), '대조군: hook_table.rs 의 hook-table 읽기가 보여야 한다');
+  assert.ok(keys.some((r) => r === 'rules-table'), '대조군: rules_table.rs 의 rules-table 읽기가 보여야 한다');
+  for (const rel of PORT_SOURCES) assert.ok(fs.existsSync(path.join(REPO, rel)), `${rel} 가 저장소에 없다 — PORT_SOURCES 를 고친다`);
+  assert.deepEqual(filterProblems(read(FILES.workflow)), []);
+});
+
+test('windows.yml paths 필터 시험이 빠진 자리를 잡는다(변이: 줄 하나씩 지운다)', () => {
+  const text = read(FILES.workflow);
+  const victims = ['plugins/md-render/**', 'hook-table/**', 'rules-table/**', 'state.py', 'board-tui.py', 'ClaudeNotifier.swift', 'Sources/AutopilotRules/**', 'Sources/ClaudeAutopilot/main.swift'];
+  for (const v of victims) {
+    const line = new RegExp(`^\\s*- '${v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'.*\\n`, 'gm');
+    const mutated = text.replace(line, '');
+    assert.notEqual(mutated, text, `시험 전제: ${v} 줄이 필터에 있다`);
+    assert.ok(filterProblems(mutated).some((p) => p.includes(v.replace(/\/\*\*$/, ''))), `${v} 를 빼도 시험이 못 잡는다`);
+  }
+  // 군더더기: windows 가 읽지도 않는 자리를 더하면 잡는다
+  const extra = text.replace(/^(\s*- 'windows\/\*\*'.*\n)/gm, "$1      - 'Package.swift'\n");
+  assert.ok(filterProblems(extra).some((p) => p.includes('Package.swift')), '읽지 않는 자리를 더해도 시험이 못 잡는다');
+});
+
 // ───────── install.ps1 이 자율주행 exe 가 빠진 zip 을 거절하는지(Windows PowerShell 5.1 에서 실제로) ─────────
 
 const POWERSHELL = process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe') : null;
