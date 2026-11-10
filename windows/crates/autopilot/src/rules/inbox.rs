@@ -1,15 +1,15 @@
-//! (청크 Inbox 1/2 전반만 이식됨 — 이 첫 줄은 `tests/ported.rs` 가 「구현됐는데 PORTED.json 에 없는 규칙」으로 잡지 않게 하는 표시다. R-Inbox-b 가 후반을 옮긴 뒤 이 줄을 지우고 PORTED.json 항목을 넣는다)
-//! 방향을 바꿀 말(`inbox/<시각>.md`)의 글 꼴·어느 단위에 붙일지·언제 넘길지를 정하는 규칙. 원본: `Sources/AutopilotRules/Inbox.swift`.
-//! 순수 함수만 있다(파일·시각·환경 없음).
+//! 방향을 바꿀 말(`inbox/<시각>.md`)의 글 꼴·어느 단위에 붙일지·언제 넘길지·모델에게 넘길 글을 정하는 규칙. 원본: `Sources/AutopilotRules/Inbox.swift`.
+//! 순수 함수와 포트(`InboxFiles`·`InboxOut`)뿐이다(파일·환경 없음, 시각은 `ports::Clock` 으로만).
 //!
-//! 이식된 선언(원본 순서, 원본 1~142 줄): `InboxTo`(APInboxTo) · `InboxNote`(APInboxNote) · `INBOX_MAX_CHARS`·`INBOX_MAX_BYTES`(apInboxMaxChars·Bytes) ·
+//! 이식된 선언(원본 순서, 전부): `InboxTo`(APInboxTo) · `InboxNote`(APInboxNote) · `INBOX_MAX_CHARS`·`INBOX_MAX_BYTES`(apInboxMaxChars·Bytes) ·
 //! `compose`(apInboxCompose) · `name_ok`(apInboxNameOK) · `InboxParse`(APInboxParse) · `parse`(apInboxParse) · `InboxEntry`(APInboxEntry) ·
 //! `INBOX_STATUSES`(apInboxStatuses) · `InboxBind`(APInboxBind) · `bind`(apInboxBind) · 비공개 `unit_word`(apInboxUnitWord) ·
-//! `now_for`(apInboxNowFor) · `next_for`(apInboxNextFor).
-//! 남은 선언(R-Inbox-b, 원본 「// 모델에게 넘기는 글」 주석(144 줄)부터 끝까지): `apInboxQuote`(비공개) · `apInboxScope`(비공개) · `apInboxNowText` ·
-//! `apInboxNextText` · `apInboxPassedText` · `APAfterTurn`·`apAfterTurn` · `APAfterCheck`·`apAfterCheck` · `apInboxCloseUnit` · `apInboxCloseRun` ·
-//! 포트·유스케이스(`APInboxRead`·`APInboxFiles`·`apInboxReceive`·`APInboxOut`·`APInboxSend`·`apInboxSend`) · `apInboxLabel` · `apInboxReceivedText`.
-//! 원본 시험 파일 끝의 `RestartTests`(멈추고 다시 출발, `Control.swift` 규칙)도 R-Inbox-b 몫이다 — 규칙은 `rules::control` 에 이미 있다.
+//! `now_for`(apInboxNowFor) · `next_for`(apInboxNextFor) · 비공개 `quote`(apInboxQuote) · 비공개 `INBOX_SCOPE`(apInboxScope) · `now_text`(apInboxNowText) ·
+//! `next_text`(apInboxNextText) · `INBOX_PASSED_TEXT`(apInboxPassedText) · `AfterTurn`·`after_turn`(APAfterTurn·apAfterTurn) ·
+//! `AfterCheck`·`after_check`(APAfterCheck·apAfterCheck) · `close_unit`(apInboxCloseUnit) · `close_run`(apInboxCloseRun) ·
+//! `InboxRead`·`InboxFiles`·`receive`(APInboxRead·APInboxFiles·apInboxReceive) · `InboxOut`·`InboxSend`·`send`(APInboxOut·APInboxSend·apInboxSend) ·
+//! `label`(apInboxLabel) · `received_text`(apInboxReceivedText).
+//! 원본 시험 파일 끝의 `RestartTests`(멈추고 다시 출발)가 시험하는 규칙은 `Control.swift` 몫이라 `rules::control` 에 있다. 시험만 `tests/rules_inbox.rs` 에 옮겼다.
 //!
 //! Foundation 과 다른 점(원본 Swift 는 `Character`=자소 묶음 단위, 여기는 유니코드 글자(`char`) 단위):
 //! - 본문 길이 한도(`count` ≤ 2000)와 머리 오류 글의 `prefix(40)`·`prefix(20)` 은 `chars()` 로 센다. 결합 글자·ZWJ 그림 글자는 원본이 하나로 세는 것을 여기서는 여럿으로 센다.
@@ -20,8 +20,14 @@
 //! - `compose` 의 `at` 은 `{:.3}` 으로 쓴다. 유한한 값은 `%.3f` 와 같고, NaN 은 `NaN`(Swift 는 `nan`)으로 나온다.
 //! - `apInboxBind` 에 `unit <= 0` 이 직접 들어오면 Swift 는 배열 범위 밖으로 죽는다. 여기는 「그 단위가 이 실행에 없음」으로 `late` 를 낸다(`parse` 는 1 이상만 내므로 닿지 않는다).
 //! - `InboxEntry` 의 Codable 은 serde 로 옮겼다: 옵셔널은 비면 키를 쓰지 않고, 정수인 시각은 정수로 쓴다(Swift JSONEncoder 와 같게). 키 차례는 선언 차례다.
+//! - `send` 의 글자 수 한도·`received_text` 의 80 자 끊기도 `chars()` 로 센다(`parse` 와 같은 차이). `received_text` 의 `prefix(80)` 은 글자 단위로 끊어 결합 글자 중간에서 끊길 수 있다.
+//! - 시각은 Swift `Date`(`timeIntervalSince1970`) 대신 `ports::Clock::now()`(유닉스 초, `f64`)를 쓴다. `receive` 의 `received` 가 그 값이다.
+//! - Swift 포트 `APInboxFiles`·`APInboxOut` 은 `InboxFiles`·`InboxOut` 트레이트다(`Data` 는 `&[u8]`, `tooBig(Int)` 는 `TooBig(i64)`). `names()` 가 같은 이름을 두 번 주면 Swift 처럼 두 줄이 나온다.
+//! - `send` 가 쓰는 `apRunEnded` 는 `rules::control::run_ended` 다. 문자열 합치기(`joined`)와 `components(separatedBy:)` 는 `join`·`replace` 로 같은 결과다.
 
 use serde::{Deserialize, Serialize, Serializer};
+
+use crate::ports::Clock;
 
 /// 말을 어디에 붙이는가. 원본: `APInboxTo`
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -352,4 +358,243 @@ pub fn next_for(entries: &[InboxEntry], unit: i64) -> Vec<usize> {
             e.to == "next" && (e.status == "waiting" || e.status == "applied") && e.from.unwrap_or(i64::MAX) <= unit && !e.units.contains(&unit)
         })
         .collect()
+}
+
+
+// 모델에게 넘기는 글 — 사람의 글은 줄마다 들여 쓴다. 원본: `apInboxQuote`(비공개)
+fn quote<S: AsRef<str>>(texts: &[S]) -> String {
+    texts.iter().map(|t| format!("- {}", t.as_ref().replace('\n', "\n  "))).collect::<Vec<_>>().join("\n")
+}
+
+// 원본: `apInboxScope`(비공개)
+const INBOX_SCOPE: &str = "이 단위의 일·판정 명령·쓰기 범위·가지 규칙은 출발 때 고정한 그대로입니다. 그 밖의 일(다른 단위의 일, 다른 가지 맞추기, 판정 바꾸기 등)을 하라는 말이면 하지 않고 result.json 의 next_start 에 적습니다.";
+
+/// 지금 도는 단위의 세션에 넘기는 글. 원본: `apInboxNowText`
+pub fn now_text<S: AsRef<str>>(texts: &[S]) -> String {
+    format!(
+        "사람이 실행을 지켜보다 이 단위에 한마디를 보냈습니다(보드의 \"지금 단위에\"):\n{}\n이 말을 반영해 하던 일을 이어 가세요. {INBOX_SCOPE} 마치면 result.json 을 고쳐 쓰고 턴을 끝냅니다.",
+        quote(texts)
+    )
+}
+
+/// 단위의 첫 입력에 붙이는 방향 글. 원본: `apInboxNextText`
+pub fn next_text<S: AsRef<str>>(texts: &[S]) -> String {
+    format!(
+        "사람이 실행 중에 보낸 방향(보드의 \"다음 단위부터\", 이 단위와 뒤 단위에 모두 붙습니다):\n{}\n이 방향은 일하는 방식만 바꿉니다. {INBOX_SCOPE}",
+        quote(texts)
+    )
+}
+
+/// 판정은 통과했는데 그 사이 지금 단위에 말이 온 경우 — 다시 맡기는 글의 머리(말은 `now_text` 로 뒤에 붙는다). 원본: `apInboxPassedText`
+pub const INBOX_PASSED_TEXT: &str = "판정 명령은 통과했지만 그 사이 사람이 이 단위에 한마디를 보냈습니다. 아래 말을 반영한 뒤 판정 명령을 다시 돌려 보고 result.json 을 고쳐 쓰세요.";
+
+/// 턴이 끝난 뒤의 다음 걸음. 원본: `APAfterTurn`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AfterTurn {
+    Check,
+    Again,
+}
+
+/// 턴이 끝난 뒤: 그 사이 이 단위에 말이 왔으면 판정 전에 같은 세션으로 한 번 더. 원본: `apAfterTurn`
+pub fn after_turn(waiting_now: bool) -> AfterTurn {
+    if waiting_now {
+        AfterTurn::Again
+    } else {
+        AfterTurn::Check
+    }
+}
+
+/// 판정 뒤의 다음 걸음. 원본: `APAfterCheck`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AfterCheck {
+    Pass,
+    Note,
+    Retry,
+    Fail,
+}
+
+/// 판정 뒤: 통과·말 없음 → 통과, 통과·말 있음 → 말을 넘기고 다시(시도 수는 세지 않음), 실패 → 시도가 남았거나 말이 있으면 다시, 아니면 미통과.
+/// 시도가 다 찼어도 그 사이 말이 왔으면 한 번 더 맡긴다(사람이 끼어든 것이라). 원본: `apAfterCheck`
+pub fn after_check(passed: bool, tries: i64, retries: i64, waiting_now: bool) -> AfterCheck {
+    if passed {
+        return if waiting_now { AfterCheck::Note } else { AfterCheck::Pass };
+    }
+    if tries < retries || waiting_now {
+        AfterCheck::Retry
+    } else {
+        AfterCheck::Fail
+    }
+}
+
+/// 단위가 끝날 때(통과·미통과·상한·중단·건너뜀) 그 단위에 아직 넘기지 못한 now 는 dropped. 바뀐 줄 수. 원본: `apInboxCloseUnit`
+pub fn close_unit(entries: &mut [InboxEntry], unit: i64, ended: &str) -> usize {
+    let mut k = 0;
+    for i in now_for(entries, unit) {
+        entries[i].status = "dropped".to_string();
+        entries[i].why = Some(format!("넘기기 전에 그 단위(단위 {unit})가 끝나({}) 넘기지 못했습니다", unit_word(ended)));
+        k += 1;
+    }
+    k
+}
+
+/// 실행이 끝날 때 남은 것: 기다리던 now 는 dropped, 한 번도 붙이지 못한 next 는 unused. 바뀐 줄 수. 원본: `apInboxCloseRun`
+pub fn close_run(entries: &mut [InboxEntry]) -> usize {
+    let mut k = 0;
+    for e in entries.iter_mut().filter(|e| e.status == "waiting") {
+        if e.to == "now" {
+            e.status = "dropped".to_string();
+            e.why = Some("넘기기 전에 실행이 끝났습니다".to_string());
+        } else {
+            e.status = "unused".to_string();
+            e.why = Some("붙일 단위가 시작하지 않고 실행이 끝났습니다".to_string());
+        }
+        k += 1;
+    }
+    k
+}
+
+// ── 포트와 유스케이스 ────────────────────────────────
+
+/// 엔진이 읽는 `inbox/` 의 파일 하나 — 폴더가 없거나 링크면 빈 목록, 파일은 링크가 아닌 보통 파일만 크기 상한 안에서만 글로. 원본: `APInboxRead`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InboxRead {
+    Text(String),
+    NotFile,
+    TooBig(i64),
+    Unreadable,
+}
+
+/// 엔진이 읽는 `inbox/`. 원본: `APInboxFiles`
+pub trait InboxFiles: Send + Sync {
+    fn names(&self) -> Vec<String>;
+    fn read(&self, name: &str) -> InboxRead;
+}
+
+/// 유스케이스(엔진): 새 파일만 읽어 받은 줄을 만든다 — 이름 꼴이 맞고 `known` 에 없는 것, 이름 차례로.
+/// 읽지 못한 파일도 bad 줄로 남겨 다시 읽지 않는다. 원본: `apInboxReceive`
+pub fn receive<S: AsRef<str>>(files: &dyn InboxFiles, known: &[InboxEntry], statuses: &[S], clock: &dyn Clock) -> Vec<InboxEntry> {
+    let seen: std::collections::HashSet<&str> = known.iter().map(|e| e.file.as_str()).collect();
+    let now = clock.now();
+    let mut names: Vec<String> = files.names().into_iter().filter(|n| name_ok(n) && !seen.contains(n.as_str())).collect();
+    names.sort();
+    let mut out = Vec::new();
+    for name in names {
+        let bad = |why: String| {
+            let mut e = InboxEntry::new(&name, "", "", now, "bad");
+            e.why = Some(why);
+            e
+        };
+        match files.read(&name) {
+            InboxRead::NotFile => out.push(bad("보통 파일이 아니라(링크·폴더) 읽지 않았습니다".to_string())),
+            InboxRead::TooBig(b) => out.push(bad(format!("파일이 {INBOX_MAX_BYTES}바이트보다 커서({b}바이트) 읽지 않았습니다"))),
+            InboxRead::Unreadable => out.push(bad("글(UTF-8)로 읽지 못했습니다".to_string())),
+            InboxRead::Text(t) => match parse(&t) {
+                InboxParse::Bad(why) => out.push(bad(why)),
+                InboxParse::Note(n) => {
+                    let b = bind(&n, statuses);
+                    let mut e = InboxEntry::new(&name, n.to.as_str(), &n.text, now, &b.status);
+                    e.sent = n.at;
+                    e.seen = n.unit;
+                    e.unit = b.unit;
+                    e.from = b.from;
+                    e.why = b.why;
+                    out.push(e);
+                }
+            },
+        }
+    }
+    out
+}
+
+/// 보드가 쓰는 `inbox/` — 있는지와 쓰기(임시 파일에 쓰고 이름을 바꿔 엔진이 반쯤 쓴 파일을 읽지 않게). 원본: `APInboxOut`
+pub trait InboxOut: Send + Sync {
+    fn exists(&self, name: &str) -> bool;
+    fn write(&self, name: &str, data: &[u8]) -> bool;
+}
+
+/// 보내기의 결과. 원본: `APInboxSend`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InboxSend {
+    Sent(String),
+    Refused(String),
+}
+
+/// 유스케이스(보드): 한마디 보내기 — 끝나지 않은(출발한) 실행에만, 빈 글·상한보다 긴 글은 보내지 않는다.
+/// 이름은 `stamp`(.md), 있으면 -2, -3 … 원본: `apInboxSend`
+pub fn send(n: &InboxNote, run_state: &str, stamp: &str, out: &dyn InboxOut) -> InboxSend {
+    if run_state.is_empty() || crate::rules::control::run_ended(run_state) {
+        return InboxSend::Refused("끝난 실행에는 보내지 않습니다".to_string());
+    }
+    let text = trim_all(&n.text);
+    if text.is_empty() {
+        return InboxSend::Refused("보낼 말을 써 주세요".to_string());
+    }
+    let count = text.chars().count();
+    if count > INBOX_MAX_CHARS {
+        return InboxSend::Refused(format!("{INBOX_MAX_CHARS}자까지 보낼 수 있습니다(지금 {count}자)"));
+    }
+    let mut name = format!("{stamp}.md");
+    let mut k = 1;
+    while out.exists(&name) {
+        k += 1;
+        name = format!("{stamp}-{k}.md");
+    }
+    if !name_ok(&name) {
+        return InboxSend::Refused(format!("파일 이름 꼴이 아닙니다({name})"));
+    }
+    let mut m = n.clone();
+    m.text = text.to_string();
+    if out.write(&name, compose(&m).as_bytes()) {
+        InboxSend::Sent(name)
+    } else {
+        InboxSend::Refused("inbox 에 쓰지 못했습니다".to_string())
+    }
+}
+
+/// 보드에 보일 말의 한 줄 — (상태 이름, 자세한 말). 원본: `apInboxLabel`
+pub fn label(e: &InboxEntry) -> (String, String) {
+    let to = if e.to == "next" { "다음 단위부터" } else { "지금 단위에" };
+    let q = |v: Option<i64>| v.map(|x| x.to_string()).unwrap_or_else(|| "?".to_string());
+    let joined = e.units.iter().map(|u| u.to_string()).collect::<Vec<_>>().join("·");
+    let (s, d) = match e.status.as_str() {
+        "waiting" => {
+            if e.to == "next" {
+                ("기다림".to_string(), format!("단위 {} 부터 첫 입력에 붙입니다", q(e.from)))
+            } else {
+                ("기다림".to_string(), format!("단위 {} 의 다음 차례에 넘깁니다", q(e.unit)))
+            }
+        }
+        "delivered" => ("넘김".to_string(), format!("단위 {joined} 의 세션에 넘겼습니다")),
+        "applied" => {
+            let tail = if e.to == "next" { "(뒤 단위에도 붙습니다)" } else { "" };
+            ("붙임".to_string(), format!("단위 {joined} 의 첫 입력에 붙였습니다{tail}"))
+        }
+        "late" => ("넘기지 않음".to_string(), e.why.clone().unwrap_or_else(|| format!("{to} 넘길 곳이 없었습니다"))),
+        "dropped" => ("넘기지 못함".to_string(), e.why.clone().unwrap_or_default()),
+        "unused" => ("쓰이지 않음".to_string(), e.why.clone().unwrap_or_default()),
+        "bad" => ("읽지 못함".to_string(), e.why.clone().unwrap_or_default()),
+        other => (other.to_string(), e.why.clone().unwrap_or_default()),
+    };
+    (s, d)
+}
+
+/// 엔진이 받았을 때 진행 기록(who board) 한 줄. `unit_running` 은 now 를 붙일 단위가 지금 도는 단위인가
+/// (아니면 그 단위가 시작할 때 첫 입력에 붙는다). 원본: `apInboxReceivedText`
+pub fn received_text(e: &InboxEntry, unit_running: bool) -> String {
+    let t = e.text.replace('\n', " ");
+    let q = if t.chars().count() > 80 { format!("«{}…»", prefix_chars(&t, 80)) } else { format!("«{t}»") };
+    let why = e.why.clone().unwrap_or_default();
+    match e.status.as_str() {
+        "waiting" if e.to == "now" => format!(
+            "사람이 보낸 말을 받았습니다(지금 단위에 · 단위 {}): {q}. {}",
+            e.unit.unwrap_or(0),
+            if unit_running { "이 세션의 다음 차례에 넘깁니다." } else { "그 단위가 시작할 때 첫 입력에 붙입니다." }
+        ),
+        "waiting" => format!(
+            "사람이 보낸 방향을 받았습니다(다음 단위부터 · 단위 {} 부터): {q}. 대기열(범위)은 그대로이고 뒤 단위의 첫 입력에 붙입니다.",
+            e.from.unwrap_or(0)
+        ),
+        "bad" => format!("inbox 의 {} 을 읽지 못해 넘겼습니다: {why}", e.file),
+        _ => format!("사람이 보낸 말을 받았지만 넘기지 않습니다({}): {q}. {why}", if e.to == "next" { "다음 단위부터" } else { "지금 단위에" }),
+    }
 }

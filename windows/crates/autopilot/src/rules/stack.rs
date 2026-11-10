@@ -1,11 +1,11 @@
-//! (청크 Stack 1/2 전반만 이식됨 — 이 첫 줄은 `tests/ported.rs` 가 「구현됐는데 PORTED.json 에 없는 규칙」으로 잡지 않게 하는 표시다. R-Stack-b 가 후반을 옮긴 뒤 이 줄을 지우고 PORTED.json 항목을 넣는다)
-//! 주제로 시작의 기술 스택 칸 셋(프론트·백엔드·DB)과 기존 저장소 감지 규칙. 원본: `Sources/AutopilotRules/Stack.swift`(1~152 줄).
-//! 순수 함수만 있다(파일·시각·환경 없음). 읽은 파일(상대 경로 → 글)에서 칸 셋을 정한다.
+//! 주제로 시작의 기술 스택 칸 셋(프론트·백엔드·DB)·기존 저장소 감지·주제 글 낱말 대조 규칙. 원본: `Sources/AutopilotRules/Stack.swift`(전체).
+//! 순수 함수만 있다(파일·시각·환경 없음). 읽은 파일(상대 경로 → 글)과 주제 글에서 칸 셋을 정한다. 읽는 경로는 뿌리 기준 상대 경로이고 구분자는 `/` 다
+//! (Windows 호출자는 `/` 로 바꾼 경로를 넘긴다. `StackFiles::read` 가 뿌리에 이어 붙이는 일은 어댑터 몫이다).
 //!
 //! 이식된 선언(원본 순서): `StackSlot`(APStackSlot) · `StackSet`(APStackSet, `is_empty`) · `STACK_DIRS`(apStackDirs) · `STACK_FILE_NAMES`(apStackFileNames) ·
-//! `stack_candidates`(apStackCandidates) · 비공개 `first`·`clean`·`npm_deps` · `detect_stack`(apDetectStack(_ files:)).
-//! 남은 선언(R-Stack-b, 원본 154 줄 「// 유스케이스: 기존 저장소의 기술 스택 감지」 주석부터 끝까지): `apDetectStack(root:files:)`(+ `StackFiles` 포트,
-//! 원본 `APStackFiles` 는 `Ports.swift`) · `APTopicHit` · 비공개 `apTopicWords`·`isLatin` · `apTopicHits` · `apTopicStack` · `apStackConflicts`.
+//! `stack_candidates`(apStackCandidates) · 비공개 `first`·`clean`·`npm_deps` · `detect_stack`(apDetectStack(_ files:)) ·
+//! `StackFiles`(원본 `APStackFiles`, `Ports.swift`) · `detect_stack_in_root`(apDetectStack(root:files:)) · `TopicHit`(APTopicHit) · 비공개 `TOPIC_WORDS`(apTopicWords)·
+//! `is_latin`(isLatin) · `topic_hits`(apTopicHits) · `topic_stack`(apTopicStack) · `stack_conflicts`(apStackConflicts).
 //!
 //! Foundation 과 다른 점:
 //! - 원본은 `NSRegularExpression`(ICU) 이다. 이 크레이트에는 정규식 크레이트가 없어(Cargo.toml 은 통합자 소유) 모든 패턴을 바이트 스캐너로 손으로 옮겼다.
@@ -19,6 +19,13 @@
 //!   의존성 판이 글이 아닌 값이면 원본은 `"\(v)"` 로 글로 바꾼다. 수는 같은 꼴(정수 값 실수는 정수로), 참/거짓은 `1`/`0`, null 은 `<null>`,
 //!   배열·객체는 JSON 글이다(원본은 Swift 설명 글). 어느 쪽이든 `clean` 을 지나면 숫자로 시작하지 않아 빈 글이다.
 //! - `clean` 의 앞 글자 깎기는 원본이 자소 묶음(`Character`) 단위, 여기는 `char` 단위다. 깎은 뒤 바로 숫자가 와야 하는 규칙이라 결과는 같다.
+//! - 낱말 대조(`topic_hits`): 원본 `range(of:options:.caseInsensitive)` 는 정준 동치·ICU 접기 기준이고 여기는 ASCII 만 접는 바이트 대조다.
+//!   낱말 표는 영문 ASCII 와 한글 완성형뿐이라 갈리는 곳은 결합 글자로 풀어 쓴 입력(`Java` + U+0301 처럼 낱말 끝이 글자 묶음 중간)뿐이다.
+//! - 앞뒤 글자 검사의 `Character`(자소 묶음)는 `char` 로 센다. 뒤 글자가 ASCII 글자여도 그 뒤에 결합 글자가 붙으면 묶음이 ASCII 가 아니어서
+//!   영문 글자로 보지 않는다(U+0300~036F·1AB0~1AFF·1DC0~1DFF·20D0~20FF·FE00~FE0F·FE20~FE2F·ZWNJ·ZWJ·피부색 U+1F3FB~1F3FF·U+E0100~E01EF). 그 밖 확장 글자는 모른다.
+//! - 버전 꼴을 읽는 앞쪽 16 `Character` 는 `char` 16 개로 센다(읽는 글이 ASCII 뿐이고 결합 글자에서 끝나 같은 결과). 정규식 `^\s?v?([0-9]+(\.[0-9]+){0,2})(?![0-9])` 는
+//!   바이트 스캐너로 옮겼다(탐욕 끝에서 뒤이은 글자는 숫자일 수 없어 `(?![0-9])` 는 항상 참이다).
+//! - 글에 나온 차례 정렬은 원본 `sorted` 가 안정 정렬이라 여기도 안정 정렬이다(같은 낱말이 두 번이면 찾은 차례 그대로).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -643,4 +650,287 @@ fn detect_db(dir: &Dir) -> Option<StackSlot> {
         }
     }
     hit.map(|h| db_slot(h.0, &h.1, format!("{d}{}", h.2)))
+}
+
+/// 저장소의 빌드·설정 파일 포트 — 규칙이 고른 상대 경로(`/` 구분자)만 그 뿌리에서 읽는다. 없거나 글이 아니면 `None`.
+/// 앞부분만 읽는 크기 상한과 링크를 따라가지 않는 일은 어댑터 몫이다. 원본: `APStackFiles`(`Ports.swift`)
+pub trait StackFiles: Send + Sync {
+    fn read(&self, root: &str, relative: &str) -> Option<String>;
+}
+
+/// 유스케이스: 기존 저장소의 기술 스택 감지 — 고른 파일(`stack_candidates`)만 읽어(`StackFiles`) 칸 셋을 정한다.
+/// 원본: `apDetectStack(root:files:)`
+pub fn detect_stack_in_root(root: &str, files: &dyn StackFiles) -> StackSet {
+    let got: HashMap<String, String> = stack_candidates().into_iter().filter_map(|rel| files.read(root, &rel).map(|t| (rel, t))).collect();
+    detect_stack(&got)
+}
+
+// MARK: - 주제 글 낱말 대조
+
+/// 찾은 낱말 하나 — 적힌 그대로(강조용), 어느 칸·무엇인지, 바로 뒤의 버전 꼴. 원본: `APTopicHit`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TopicHit {
+    pub word: String,
+    /// front·back·db·lang
+    pub slot: String,
+    /// 목록 항목 키 또는 언어(java·kotlin·typescript·python)
+    pub target: String,
+    pub version: String,
+}
+
+// 알려진 이름(설계 2장 표: Java·자바·Spring Boot·스프링·Kotlin·NestJS·네스트·FastAPI·React·리액트·Next.js·Vue·PostgreSQL·포스트그레스·MySQL 등).
+// 긴 이름부터 본다(Spring Boot 를 Spring 보다 먼저). 한글 낱말은 뒤에 조사가 붙어도 찾고, 영문 낱말은 앞뒤가 영문 글자가 아닐 때만(JavaScript 의 Java 를 찾지 않게). 원본: `apTopicWords`
+const TOPIC_WORDS: &[(&str, &str, &str)] = &[
+    ("Spring Boot", "back", "spring"),
+    ("SpringBoot", "back", "spring"),
+    ("스프링 부트", "back", "spring"),
+    ("스프링부트", "back", "spring"),
+    ("스프링", "back", "spring"),
+    ("Spring", "back", "spring"),
+    ("NestJS", "back", "nest"),
+    ("Nest.js", "back", "nest"),
+    ("네스트JS", "back", "nest"),
+    ("네스트", "back", "nest"),
+    ("FastAPI", "back", "fastapi"),
+    ("패스트API", "back", "fastapi"),
+    ("Next.js", "front", "next"),
+    ("NextJS", "front", "next"),
+    ("넥스트JS", "front", "next"),
+    ("넥스트", "front", "next"),
+    ("React", "front", "react"),
+    ("리액트", "front", "react"),
+    ("Vue.js", "front", "vue"),
+    ("Vue", "front", "vue"),
+    ("PostgreSQL", "db", "postgresql"),
+    ("Postgres", "db", "postgresql"),
+    ("포스트그레스", "db", "postgresql"),
+    ("포스트그레SQL", "db", "postgresql"),
+    ("MySQL", "db", "mysql"),
+    ("마이에스큐엘", "db", "mysql"),
+    ("Kotlin", "lang", "kotlin"),
+    ("코틀린", "lang", "kotlin"),
+    ("Java", "lang", "java"),
+    ("자바", "lang", "java"),
+    ("TypeScript", "lang", "typescript"),
+    ("타입스크립트", "lang", "typescript"),
+    ("Python", "lang", "python"),
+    ("파이썬", "lang", "python"),
+];
+
+// 자소 묶음을 앞 글자에 붙이는 확장 글자(머리 주석의 근사 목록)
+fn is_extend(c: char) -> bool {
+    matches!(
+        c,
+        '\u{300}'..='\u{36f}'
+            | '\u{1ab0}'..='\u{1aff}'
+            | '\u{1dc0}'..='\u{1dff}'
+            | '\u{20d0}'..='\u{20ff}'
+            | '\u{fe00}'..='\u{fe0f}'
+            | '\u{fe20}'..='\u{fe2f}'
+            | '\u{200c}'
+            | '\u{200d}'
+            | '\u{1f3fb}'..='\u{1f3ff}'
+            | '\u{e0100}'..='\u{e01ef}'
+    )
+}
+
+// `c.map { $0.isASCII && $0.isLetter }` 중 글자 하나가 ASCII 영문인가
+fn is_latin(c: Option<char>) -> bool {
+    c.is_some_and(|c| c.is_ascii_alphabetic())
+}
+
+// pos 에서 시작하는 `Character` 가 ASCII 영문 글자 하나인가(뒤에 결합 글자가 붙은 묶음은 ASCII 가 아니다)
+fn latin_cluster_at(s: &str, pos: usize) -> bool {
+    let mut it = s[pos..].chars();
+    let first = it.next();
+    is_latin(first) && !it.next().is_some_and(is_extend)
+}
+
+// 앞 16 글자까지 — `String(text[r.upperBound...].prefix(16))`. 원본은 `Character` 16 개지만 읽는 글(빈칸·v·숫자·점)은 모두 ASCII 이고
+// 결합 글자가 붙으면 거기서 읽기가 끝나므로, 글자 묶음으로 세든 `char` 로 세든 잘리는 자리가 같다
+fn prefix_16(s: &str) -> &str {
+    s.char_indices().nth(16).map_or(s, |(i, _)| &s[..i])
+}
+
+// `^\s?v?([0-9]+(\.[0-9]+){0,2})(?![0-9])` 의 첫째 괄호. 없으면 ""
+fn topic_version(tail: &str) -> String {
+    let mut p = 0;
+    if let Some(c) = tail.chars().next().filter(|&c| is_icu_space(c)) {
+        p += c.len_utf8();
+    }
+    if matches!(byte_at(tail, p), Some(b'v' | b'V')) {
+        p += 1;
+    }
+    let d = run_while(tail, p, |b| b.is_ascii_digit());
+    if d == 0 {
+        return String::new();
+    }
+    let mut e = p + d;
+    for _ in 0..2 {
+        if byte_at(tail, e) != Some(b'.') {
+            break;
+        }
+        let d = run_while(tail, e + 1, |b| b.is_ascii_digit());
+        if d == 0 {
+            break;
+        }
+        e += 1 + d;
+    }
+    tail[p..e].to_string()
+}
+
+/// 주제 글에서 알려진 낱말을 찾는다(표 순서로 훑고, 겹친 자리는 먼저 잡은 쪽이 갖고, 글에 나온 차례로 돌려준다). 원본: `apTopicHits`
+pub fn topic_hits(text: &str) -> Vec<TopicHit> {
+    let mut hits: Vec<TopicHit> = Vec::new();
+    let mut taken: Vec<(usize, usize)> = Vec::new();
+    for &(w, slot, target) in TOPIC_WORDS {
+        let latin = w.as_bytes()[0].is_ascii(); // 낱말의 첫 글자가 ASCII
+        let mut from = 0;
+        while let Some(lo) = (from..text.len()).find(|&i| lit_at(text, i, w, true)) {
+            let hi = lo + w.len();
+            from = hi;
+            if taken.iter().any(|&(a, b)| a < hi && lo < b) {
+                continue;
+            }
+            if latin && (is_latin(text[..lo].chars().next_back()) || latin_cluster_at(text, hi)) {
+                continue;
+            }
+            taken.push((lo, hi));
+            // 바로 뒤(빈칸 하나까지)의 버전 꼴: 21, 4.1, 4.1.1, v18
+            let version = topic_version(prefix_16(&text[hi..]));
+            hits.push(TopicHit { word: text[lo..hi].to_string(), slot: slot.to_string(), target: target.to_string(), version });
+        }
+    }
+    // 글에 나온 차례로(원본은 낱말 글의 처음 나온 자리로 정렬한다)
+    hits.sort_by_key(|h| text.find(h.word.as_str()).unwrap_or(text.len()));
+    hits
+}
+
+/// 주제 글에서 칸 셋을 미리 채운다(origin "topic"). 판은 글에 있으면 그것, 없으면 빈 칸(보드가 추천 판을 넣는다).
+/// 백엔드: Spring 이면 언어 낱말이 Kotlin 일 때 Kotlin · Spring Boot, 아니면 Java · Spring Boot(언어 판은 Java·Kotlin 낱말 뒤의 판). 원본: `apTopicStack`
+pub fn topic_stack(text: &str) -> StackSet {
+    let hits = topic_hits(text);
+    let mut set = StackSet::default();
+    let lang = hits.iter().find(|h| h.slot == "lang" && (h.target == "java" || h.target == "kotlin"));
+    if let Some(b) = hits.iter().find(|h| h.slot == "back") {
+        set.back = Some(match b.target.as_str() {
+            "spring" => {
+                let kotlin = lang.is_some_and(|l| l.target == "kotlin");
+                StackSlot {
+                    key: if kotlin { "spring-kotlin" } else { "spring-java" }.to_string(),
+                    name: if kotlin { "Kotlin · Spring Boot" } else { "Java · Spring Boot" }.to_string(),
+                    lang: if kotlin { "Kotlin" } else { "Java" }.to_string(),
+                    lang_version: lang.map_or_else(String::new, |l| l.version.clone()),
+                    framework: "Spring Boot".to_string(),
+                    framework_version: b.version.clone(),
+                    build: "Gradle Groovy".to_string(),
+                    origin: "topic".to_string(),
+                    ..Default::default()
+                }
+            }
+            "nest" => StackSlot {
+                key: "nest".to_string(),
+                name: "TypeScript · NestJS".to_string(),
+                lang: "Node.js".to_string(),
+                framework: "NestJS".to_string(),
+                framework_version: b.version.clone(),
+                build: "npm".to_string(),
+                origin: "topic".to_string(),
+                ..Default::default()
+            },
+            _ => {
+                let py = hits.iter().find(|h| h.target == "python");
+                StackSlot {
+                    key: "fastapi".to_string(),
+                    name: "Python · FastAPI".to_string(),
+                    lang: "Python".to_string(),
+                    lang_version: py.map_or_else(String::new, |p| p.version.clone()),
+                    framework: "FastAPI".to_string(),
+                    framework_version: b.version.clone(),
+                    build: "pip".to_string(),
+                    origin: "topic".to_string(),
+                    ..Default::default()
+                }
+            }
+        });
+    }
+    if let Some(f) = hits.iter().find(|h| h.slot == "front") {
+        let pick = |react: &str, next: &str, vue: &str| match f.target.as_str() {
+            "react" => react.to_string(),
+            "next" => next.to_string(),
+            "vue" => vue.to_string(),
+            other => other.to_string(),
+        };
+        set.front = Some(StackSlot {
+            key: f.target.clone(),
+            name: pick("React (Vite)", "Next.js", "Vue"),
+            framework: pick("React", "Next.js", "Vue"),
+            framework_version: f.version.clone(),
+            build: if f.target == "next" { "npm" } else { "Vite" }.to_string(),
+            origin: "topic".to_string(),
+            ..Default::default()
+        });
+    }
+    if let Some(d) = hits.iter().find(|h| h.slot == "db") {
+        let label = if d.target == "postgresql" { "PostgreSQL" } else { "MySQL" };
+        set.db = Some(StackSlot {
+            key: d.target.clone(),
+            name: label.to_string(),
+            framework: label.to_string(),
+            framework_version: d.version.clone(),
+            origin: "topic".to_string(),
+            ..Default::default()
+        });
+    }
+    set
+}
+
+/// 기존 저장소인데 주제 글이 다른 스택을 말할 때의 경고(설계 2장: 바꿀 수 없다, 스택 바꾸기는 그것을 주제로 한 따로 출발).
+/// 감지한 칸과 같은 칸의 다른 것만 알린다(감지하지 못한 칸은 알리지 않는다 — 그 칸을 더하는 일이 주제일 수 있다). 원본: `apStackConflicts`
+pub fn stack_conflicts(detected: &StackSet, topic: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for h in topic_hits(topic) {
+        let slot = match h.slot.as_str() {
+            "front" => detected.front.as_ref(),
+            "back" => detected.back.as_ref(),
+            "db" => detected.db.as_ref(),
+            _ => {
+                // 언어 낱말: 감지한 백엔드의 언어와 다르면(Java ↔ Kotlin 처럼)
+                if let Some(b) = &detected.back {
+                    let differs = !b.lang.is_empty()
+                        && b.lang.to_lowercase() != h.target
+                        && ["java", "kotlin", "python", "typescript"].contains(&h.target.as_str())
+                        && !(h.target == "typescript" && b.lang == "Node.js");
+                    if differs {
+                        push_conflict(&mut out, &h.word, &b.lang);
+                    }
+                }
+                continue;
+            }
+        };
+        let Some(s) = slot else { continue };
+        let same = match h.target.as_str() {
+            "spring" => s.framework == "Spring Boot",
+            "nest" => s.framework == "NestJS",
+            "fastapi" => s.framework == "FastAPI",
+            "react" => s.framework == "React",
+            "next" => s.framework == "Next.js",
+            "vue" => s.framework == "Vue",
+            "postgresql" => s.framework == "PostgreSQL",
+            "mysql" => s.framework == "MySQL",
+            _ => true,
+        };
+        if !same {
+            push_conflict(&mut out, &h.word, if s.framework.is_empty() { &s.name } else { &s.framework });
+        }
+    }
+    out
+}
+
+// 같은 경고는 한 번만
+fn push_conflict(out: &mut Vec<String>, word: &str, spec: &str) {
+    let m = format!("주제에 적힌 '{word}': 이 프로젝트 규격({spec})과 달라 쓰지 않습니다. 스택을 바꾸려면 그 일을 주제로 따로 출발합니다.");
+    if !out.contains(&m) {
+        out.push(m);
+    }
 }

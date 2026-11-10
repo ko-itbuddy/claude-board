@@ -1,13 +1,12 @@
-//! (청크 Formats 1/2 — 앞쪽 절반만 이식됨. 이 첫 줄은 `tests/ported.rs` 가 「구현됐는데 PORTED.json 에 없는 규칙」으로 잡지 않게 하는 표시다. R-Formats-b 가 뒤쪽을 옮긴 뒤 이 줄을 지우고 PORTED.json 항목을 넣는다)
 //! 바깥에 올릴 글의 형식 변환. 원본: `Sources/AutopilotRules/Formats.swift`(248줄).
 //! 올릴 글은 받는 곳과 상관없는 작은 문서 꼴 `Doc`(제목·문단·목록·코드·가로줄, 글 조각은 굵게·https 링크)로 만들고,
 //! 올릴 때 Jira 문서 형식(ADF)·Confluence 저장 형식(XHTML)·Notion 블록으로 바꾼다. 글은 모델이 쓴 기록에서 오므로 믿지 않는다:
 //! 만들 때 다듬고(`doc_text`) 저장 형식은 모든 글을 이스케이프하며 링크는 https 만(`safe_link`) 건다.
 //!
-//! 이식된 선언(원본 순서, 원본 1~136줄): `Span`(APSpan) · `Block`(APBlock) · `Doc`(APDoc) · 상수 여섯(`DOC_MARKER` …
-//! `NOTION_BATCH_MAX`) · `doc_text`(apDocText) · `doc_code`(apDocCode) · `doc_clamp`(apDocClamp) · `adf`(apADF) · `storage`(apStorage).
-//! 남은 선언(R-Formats-b, 원본 「// MARK: - Notion 블록」 138줄부터): `apNotionRich` · 비공개 `notionSpans`·`notionBlock` ·
-//! `apNotionBlocks` · `apBatches` · `apDocJSON` · `apDocParse` · `apDocPlainLines`. 상수 `NOTION_*` 은 그쪽이 쓴다.
+//! 이식된 선언(원본 순서): `Span`(APSpan) · `Block`(APBlock) · `Doc`(APDoc) · 상수 여섯(`DOC_MARKER` …
+//! `NOTION_BATCH_MAX`) · `doc_text`(apDocText) · `doc_code`(apDocCode) · `doc_clamp`(apDocClamp) · `adf`(apADF) · `storage`(apStorage) ·
+//! `notion_rich`(apNotionRich) · 비공개 `notion_spans`·`notion_block` · `notion_blocks`(apNotionBlocks) · `batches`(apBatches) ·
+//! `doc_json`(apDocJSON) · `doc_parse`(apDocParse) · `doc_plain_lines`(apDocPlainLines).
 //!
 //! Swift ↔ Rust 로 달라진 점:
 //! - 글자 수·자르기는 Swift 의 `Character`(확장 자소 덩어리) 기준이다. 이 크레이트에는 `unicode-segmentation` 이 없어(Cargo 는 통합자 몫)
@@ -15,7 +14,12 @@
 //! - 가장자리 빈칸(`.whitespaces`)은 Zs 범주와 탭이다(`ws`). `char::is_whitespace` 가 아니다.
 //! - ADF 는 `serde_json::Value`(Swift `[String: Any]`)다. 이 크레이트는 `preserve_order` 라 키 순서가 만든 순서다 — Swift 사전은 순서가 없어 시험이 키를 정렬해 견준다.
 //! - 제목 수준은 `i64` 다(Swift `Int`). 기본 인자는 Rust 에 없어 `doc_text`·`doc_code` 는 기본 상한, `doc_text_n`·`doc_code_n` 은 상한을 받는다.
-//! - `doc_code` 는 `\n` 으로만 줄을 가른다. Swift `components(separatedBy:)` 가 `\r\n` 을 한 글자로 보고 안 가를 수 있는지는 이 머신(Windows)에서 못 쟀다.
+//! - `doc_code` 는 `\n` 으로만 줄을 가른다. Swift `components(separatedBy: "\n")` 는 Foundation 의 글 찾기라 `\r\n` 안의 `\n` 에서도 가르고(`\r` 은 앞 줄 끝에 남아
+//!   `doc_text` 가 빈칸으로 바꿔 지운다), Rust 는 같은 결과를 낸다. Swift 시험은 CRLF 를 못박지 않았고 이 머신에서 Swift 를 못 돌려 Foundation 쪽은 확인하지 못했다(`extra_코드_칸_crlf`).
+//! - `doc_parse` 는 Swift `Any?`(JSONSerialization 결과) 대신 `Option<&serde_json::Value>` 를 받는다. 모양이 틀린 칸은 Swift 와 같이 빈 값으로 본다:
+//!   배열 원소 하나라도 사전이 아니면 `as? [[String: Any]]` 가 통째로 실패해 빈 배열이다. 불리언은 JSON `true`·`false` 만 받는다
+//!   (Swift `as? Bool` 은 NSNumber 0·1 도 받을 수 있으나 이 머신에서 확인하지 못했다). 수준 `n` 은 NSNumber `intValue` 처럼 소수는 버리고 불리언은 1·0 이다.
+//! - `batches` 는 `T: Clone` 이다(Swift 는 값 복사).
 
 use crate::rules::prose::{escape_html, plain, safe_link};
 use serde_json::{json, Map, Value};
@@ -367,4 +371,169 @@ pub fn storage(d0: &Doc) -> String {
         }
     }
     o
+}
+
+// ---- Notion 블록 ----
+
+/// 글 하나를 rich_text 칸들로 — 칸마다 2,000자 이하(Notion 상한). 유니코드 글자(확장 자소) 경계에서 자른다. 원본: `apNotionRich`
+pub fn notion_rich(s: &str, bold: bool, link: Option<&str>) -> Vec<Value> {
+    let mut out = Vec::new();
+    let mut rest = s;
+    while !rest.is_empty() {
+        let at = cut_after(rest, NOTION_TEXT_MAX).unwrap_or(rest.len());
+        let (piece, tail) = rest.split_at(at);
+        rest = tail;
+        let mut text = obj(vec![("content", json!(piece))]);
+        if let Some(url) = link {
+            text["link"] = json!({"url": url});
+        }
+        let mut item = obj(vec![("type", json!("text")), ("text", text)]);
+        if bold {
+            item["annotations"] = json!({"bold": true});
+        }
+        out.push(item);
+    }
+    out
+}
+
+// 블록 하나의 rich_text 는 100칸까지(Notion 상한)
+fn notion_spans(a: &[Span]) -> Vec<Value> {
+    a.iter()
+        .flat_map(|s| match s {
+            Span::Text(t, b) => notion_rich(t, *b, None),
+            Span::Link(t, u) => notion_rich(t, false, Some(u)),
+        })
+        .take(100)
+        .collect()
+}
+
+fn notion_block(kind: &str, rich: Vec<Value>, extra: Vec<(&str, Value)>) -> Value {
+    let mut inner = obj(vec![("rich_text", Value::Array(rich))]);
+    for (k, v) in extra {
+        inner[k] = v;
+    }
+    obj(vec![("object", json!("block")), ("type", json!(kind)), (kind, inner)])
+}
+
+/// Notion 블록 목록으로. 먼저 `doc_clamp` 를 지난다. 목록 줄은 블록 하나씩이다. 원본: `apNotionBlocks`
+pub fn notion_blocks(d0: &Doc) -> Vec<Value> {
+    let d = doc_clamp(d0);
+    let mut out = Vec::new();
+    for b in &d.blocks {
+        match b {
+            Block::Heading(l, t) => out.push(notion_block(&format!("heading_{l}"), notion_rich(t, false, None), vec![])),
+            Block::Paragraph(a) => out.push(notion_block("paragraph", notion_spans(a), vec![])),
+            Block::Bullets(rows) => out.extend(rows.iter().map(|r| notion_block("bulleted_list_item", notion_spans(r), vec![]))),
+            Block::Code(t) => out.push(notion_block("code", notion_rich(t, false, None), vec![("language", json!("plain text"))])),
+            Block::Rule => out.push(json!({"object": "block", "type": "divider", "divider": {}})),
+        }
+    }
+    out
+}
+
+/// 한 번에 보낼 묶음(기본 100개씩). 원본: `apBatches`
+pub fn batches<T: Clone>(a: &[T]) -> Vec<Vec<T>> {
+    batches_n(a, NOTION_BATCH_MAX)
+}
+
+/// 한 번에 보낼 묶음 — `n` 개씩(Notion: 처음 묶음은 페이지 만들기와 함께, 나머지는 블록 덧붙이기로). `n` 이 0 이면 통째로 한 묶음. 원본: `apBatches`
+pub fn batches_n<T: Clone>(a: &[T], n: usize) -> Vec<Vec<T>> {
+    if n == 0 {
+        return vec![a.to_vec()];
+    }
+    a.chunks(n).map(<[T]>::to_vec).collect()
+}
+
+// ---- 문서 ↔ 파일 칸(outbox 글 파일의 doc) ----
+
+fn span_json(a: &[Span]) -> Value {
+    Value::Array(
+        a.iter()
+            .map(|s| match s {
+                Span::Text(t, true) => json!({"x": t, "b": true}),
+                Span::Text(t, false) => json!({"x": t}),
+                Span::Link(t, u) => json!({"x": t, "l": u}),
+            })
+            .collect(),
+    )
+}
+
+/// 문서 → 파일 칸(블록마다 사전 하나). 원본: `apDocJSON`
+pub fn doc_json(d: &Doc) -> Vec<Value> {
+    d.blocks
+        .iter()
+        .map(|b| match b {
+            Block::Heading(l, t) => json!({"t": "h", "n": l, "x": t}),
+            Block::Paragraph(a) => json!({"t": "p", "s": span_json(a)}),
+            Block::Bullets(r) => json!({"t": "ul", "i": r.iter().map(|x| span_json(x)).collect::<Vec<_>>()}),
+            Block::Code(t) => json!({"t": "code", "x": t}),
+            Block::Rule => json!({"t": "hr"}),
+        })
+        .collect()
+}
+
+// Swift `as? [[String: Any]]` — 배열이고 원소가 모두 사전일 때만. 아니면 None(호출 쪽이 빈 배열로 본다)
+fn dict_array(v: Option<&Value>) -> Option<Vec<&Map<String, Value>>> {
+    v?.as_array()?.iter().map(Value::as_object).collect()
+}
+
+fn parse_spans(v: Option<&Value>) -> Vec<Span> {
+    dict_array(v)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| {
+            let x = e.get("x").and_then(Value::as_str).unwrap_or("").to_string();
+            match e.get("l").and_then(Value::as_str) {
+                Some(u) => Span::Link(x, u.to_string()),
+                None => Span::Text(x, e.get("b").and_then(Value::as_bool).unwrap_or(false)),
+            }
+        })
+        .collect()
+}
+
+// NSNumber.intValue — 수는 소수를 버리고 불리언은 1·0, 그 밖은 None
+fn int_value(v: Option<&Value>) -> Option<i64> {
+    match v? {
+        Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)),
+        Value::Bool(b) => Some(i64::from(*b)),
+        _ => None,
+    }
+}
+
+/// 파일 칸 → 문서(모르는 블록은 버리고 다듬기를 다시 한다). 원본: `apDocParse`
+pub fn doc_parse(v: Option<&Value>) -> Doc {
+    let blocks: Vec<Block> = dict_array(v)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|e| match e.get("t").and_then(Value::as_str) {
+            Some("h") => Some(Block::Heading(int_value(e.get("n")).unwrap_or(2), e.get("x").and_then(Value::as_str).unwrap_or("").to_string())),
+            Some("p") => Some(Block::Paragraph(parse_spans(e.get("s")))),
+            Some("ul") => Some(Block::Bullets(e.get("i").and_then(Value::as_array).map(|rows| rows.iter().map(|r| parse_spans(Some(r))).collect()).unwrap_or_default())),
+            Some("code") => Some(Block::Code(e.get("x").and_then(Value::as_str).unwrap_or("").to_string())),
+            Some("hr") => Some(Block::Rule),
+            _ => None,
+        })
+        .collect();
+    doc_clamp(&Doc::new(blocks))
+}
+
+fn span_plain(a: &[Span]) -> String {
+    a.iter()
+        .map(|s| match s {
+            Span::Text(t, _) | Span::Link(t, _) => t.as_str(),
+        })
+        .collect()
+}
+
+/// 문서를 쉬운 글로(검수 화면의 한 줄 요약, 시험) — 블록마다 한 줄. 원본: `apDocPlainLines`
+pub fn doc_plain_lines(d: &Doc) -> Vec<String> {
+    d.blocks
+        .iter()
+        .flat_map(|b| match b {
+            Block::Heading(_, t) | Block::Code(t) => vec![t.clone()],
+            Block::Paragraph(a) => vec![span_plain(a)],
+            Block::Bullets(r) => r.iter().map(|x| format!("· {}", span_plain(x))).collect(),
+            Block::Rule => vec!["(가로줄)".to_string()],
+        })
+        .collect()
 }

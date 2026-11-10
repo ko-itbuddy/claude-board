@@ -20,11 +20,13 @@ pub mod rules {
     pub mod leftovers;
     pub mod links;
     pub mod multirun;
+    pub mod path_key;
     pub mod gitlinks;
     pub mod history;
     pub mod inbox;
     pub mod instruction;
     pub mod prep_git;
+    pub mod promotion;
     pub mod prose;
     pub mod purge;
     pub mod records;

@@ -1,13 +1,15 @@
-//! (청크 Stack 1/2 — 전반 시험만) 기술 스택 칸 규칙(`rules::stack`) 시험. 원본: `Tests/AutopilotRulesTests/TopicTests.swift`
+//! 기술 스택 칸 규칙(`rules::stack`) 시험. 원본: `Tests/AutopilotRulesTests/TopicTests.swift` 의 Stack 몫 시험 전부
 //! (Stack.swift 를 쓰는 시험 파일은 이것뿐이다. `CritiqueTests`·`DraftTests` 는 `APStackSet()` 을 입력으로 만들 뿐이다).
-//! TopicTests 의 시험 중 이 파일이 옮긴 것은 `DetectTests.표`(표 10 줄 → `detect_표`)다.
-//! 남은 것(R-Stack-b): `TopicWordTests.표`·`낱말`(`apTopicStack`·`apTopicHits`), `DetectTests.읽는자리`(`apDetectStack(root:files:)`·가짜 `APStackFiles`),
-//! `ConflictTests.표`(`apStackConflicts`). 같은 스위트의 NewRepo·Link 시험은 다른 원본(NewRepo.swift·Links.swift)의 몫이다.
+//! 옮긴 시험: `DetectTests.표`(`detect_표`) · `DetectTests.읽는자리`(`detect_읽는자리`) · `TopicWordTests.표`(`topic_표`) · `TopicWordTests.낱말`(`topic_낱말`) ·
+//! `ConflictTests.표`(`conflict_표`). 같은 스위트의 NewRepo·Link 시험은 다른 원본(NewRepo.swift·Links.swift)의 몫이다.
 //! 표와 조각 글(gradleSpring·ktsSpring·pomSpring)은 Swift 에서 변환 스크립트로 옮겼다(손으로 다시 치지 않았다):
-//! `#"…"#` → `r#"…"#`, 여러 줄 `"""` → `r#"…"#`. 끝의 `extra_` 시험은 Swift 시험에 없는 것(정규식을 손으로 옮긴 자리의 경계)이다.
+//! `#"…"#` → `r#"…"#`, 여러 줄 `"""` → `r#"…"#`. 끝의 `extra_` 시험은 Swift 시험에 없는 것(정규식·낱말 대조를 손으로 옮긴 자리의 경계)이다.
 
-use claude_board_autopilot::rules::stack::{detect_stack, stack_candidates, StackSet, StackSlot, STACK_DIRS, STACK_FILE_NAMES};
+use claude_board_autopilot::rules::stack::{
+    detect_stack, detect_stack_in_root, stack_conflicts, stack_candidates, topic_hits, topic_stack, StackFiles, StackSet, StackSlot, STACK_DIRS, STACK_FILE_NAMES,
+};
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 struct DetectRow {
     note: &'static str,
@@ -81,6 +83,99 @@ fn detect_표() {
         for slot in [&s.front, &s.back, &s.db].into_iter().flatten() {
             assert_eq!(slot.origin, "detected", "{}", r.note);
         }
+    }
+}
+
+// ---------- 주제 글 낱말 대조 (TopicWordTests) ----------
+
+struct TopicRow {
+    note: &'static str,
+    text: &'static str,
+    want: &'static str,
+}
+
+// 아래 표는 `Tests/AutopilotRulesTests/TopicTests.swift` 의 `topicRows` 를 변환 스크립트로 옮긴 것이다.
+const TOPIC_ROWS: [TopicRow; 10] = [
+    TopicRow { note: r"와이어프레임 예시: Spring Boot · PostgreSQL, 버전 없음", text: r"회의실 예약 API 를 Spring Boot 로 만든다. 예약·취소·겹침 막기, 관리자 승인. DB 는 PostgreSQL .", want: r"-|spring-java|postgresql" },
+    TopicRow { note: r"스택이 없는 주제", text: r"회의실 예약 API 를 만든다. 예약·취소·겹침 막기, 관리자 승인.", want: r"-|-|-" },
+    TopicRow { note: r"한글 이름과 조사·버전", text: r"스프링부트 4.1 과 자바21로, 포스트그레스 17 에 붙인다", want: r"-|spring-java 4.1/Java 21|postgresql 17" },
+    TopicRow { note: r"Kotlin 이 있으면 Kotlin · Spring Boot", text: r"코틀린 2.4 와 Spring 으로 만든다", want: r"-|spring-kotlin/Kotlin 2.4|-" },
+    TopicRow { note: r"NestJS 와 React(앞은 Vite 꼴)", text: r"NestJS 12 백엔드와 리액트 19.3 화면, MySQL 8.4", want: r"react 19.3|nest 12|mysql 8.4" },
+    TopicRow { note: r"Next.js 는 React 보다 먼저 본다", text: r"Next.js 16 으로 React 화면", want: r"next 16|-|-" },
+    TopicRow { note: r"FastAPI 는 Python 판과 함께", text: r"Python 3.14 와 FastAPI 0.162 로 만든다", want: r"-|fastapi 0.162/Python 3.14|-" },
+    TopicRow { note: r"JavaScript 의 Java 는 찾지 않는다(영문 낱말은 앞뒤가 영문이 아닐 때만)", text: r"JavaScript 로 만든 Reactive 화면", want: r"-|-|-" },
+    TopicRow { note: r"Vue.js 와 v 붙은 판", text: r"Vue.js v3.5 화면과 Postgres", want: r"vue 3.5|-|postgresql" },
+    TopicRow { note: r"대소문자를 가리지 않는다", text: r"spring boot 와 postgresql", want: r"-|spring-java|postgresql" },
+];
+
+#[test]
+fn topic_표() {
+    for r in TOPIC_ROWS.iter() {
+        assert_eq!(show(&topic_stack(r.text)), r.want, "{}", r.note);
+    }
+}
+
+#[test]
+fn topic_낱말() {
+    let h = topic_hits("DB 는 포스트그레스 17, 백엔드는 스프링 부트로");
+    assert_eq!(h.iter().map(|x| x.word.as_str()).collect::<Vec<_>>(), vec!["포스트그레스", "스프링 부트"]);
+    assert_eq!(h.first().map(|x| x.version.as_str()), Some("17"));
+}
+
+// ---------- 기존 저장소 감지: 유스케이스 (DetectTests.읽는자리) ----------
+
+// 가짜 파일 어댑터 — 규칙이 고른 자리만 읽는지 센다
+struct FakeFiles {
+    asked: Mutex<Vec<String>>,
+    files: HashMap<String, String>,
+}
+
+impl FakeFiles {
+    fn new(f: &[(&str, &str)]) -> Self {
+        FakeFiles { asked: Mutex::new(Vec::new()), files: map(f) }
+    }
+}
+
+impl StackFiles for FakeFiles {
+    fn read(&self, root: &str, relative: &str) -> Option<String> {
+        self.asked.lock().unwrap().push(format!("{root}|{relative}"));
+        self.files.get(relative).cloned()
+    }
+}
+
+#[test]
+fn detect_읽는자리() {
+    let f = FakeFiles::new(&[("build.gradle", GRADLE_SPRING), ("secret.env", "X=1")]);
+    let s = detect_stack_in_root("/w/todo", &f);
+    assert_eq!(s.back.as_ref().map(|b| b.key.as_str()), Some("spring-java"));
+    let asked = f.asked.lock().unwrap();
+    assert_eq!(asked.len(), stack_candidates().len());
+    assert!(asked.iter().all(|a| a.starts_with("/w/todo|") && !a.contains("secret") && !a.contains("..")));
+}
+
+// ---------- 기존 저장소인데 주제가 다른 스택 (ConflictTests) ----------
+
+struct ConflictRow {
+    note: &'static str,
+    detected: &'static [(&'static str, &'static str)],
+    topic: &'static str,
+    want: &'static [&'static str],
+}
+
+// 아래 표는 같은 파일의 `conflictRows` 를 변환 스크립트로 옮긴 것이다(`gradleSpring` → `GRADLE_SPRING`).
+const CONFLICT_ROWS: [ConflictRow; 6] = [
+    ConflictRow { note: r"와이어프레임 예시: Spring Boot 저장소에 NestJS 주제", detected: &[(r"build.gradle", GRADLE_SPRING)], topic: r"회의실 예약 기능을 NestJS 로 더한다.", want: &[r"주제에 적힌 'NestJS': 이 프로젝트 규격(Spring Boot)과 달라 쓰지 않습니다. 스택을 바꾸려면 그 일을 주제로 따로 출발합니다."] },
+    ConflictRow { note: r"같은 스택이면 경고 없음", detected: &[(r"build.gradle", GRADLE_SPRING)], topic: r"스프링 부트로 예약 API 를 더한다", want: &[] },
+    ConflictRow { note: r"감지하지 못한 칸(프론트)은 알리지 않는다", detected: &[(r"build.gradle", GRADLE_SPRING)], topic: r"React 화면을 더한다", want: &[] },
+    ConflictRow { note: r"언어가 다르면(Java 저장소에 Kotlin)", detected: &[(r"build.gradle", GRADLE_SPRING)], topic: r"Kotlin 으로 다시 쓴다", want: &[r"주제에 적힌 'Kotlin': 이 프로젝트 규격(Java)과 달라 쓰지 않습니다. 스택을 바꾸려면 그 일을 주제로 따로 출발합니다."] },
+    ConflictRow { note: r"DB 가 다르면", detected: &[(r"build.gradle", GRADLE_SPRING), (r"src/main/resources/application.yml", r"url: jdbc:postgresql://x")], topic: r"MySQL 에 붙인다", want: &[r"주제에 적힌 'MySQL': 이 프로젝트 규격(PostgreSQL)과 달라 쓰지 않습니다. 스택을 바꾸려면 그 일을 주제로 따로 출발합니다."] },
+    ConflictRow { note: r"같은 낱말이 두 번이면 한 번만", detected: &[(r"build.gradle", GRADLE_SPRING)], topic: r"NestJS 로, 다시 말해 NestJS 로", want: &[r"주제에 적힌 'NestJS': 이 프로젝트 규격(Spring Boot)과 달라 쓰지 않습니다. 스택을 바꾸려면 그 일을 주제로 따로 출발합니다."] },
+];
+
+#[test]
+fn conflict_표() {
+    for r in CONFLICT_ROWS.iter() {
+        assert_eq!(stack_conflicts(&detect_stack(&map(r.detected)), r.topic), r.want, "{}", r.note);
     }
 }
 
@@ -299,4 +394,145 @@ fn extra_clean_strips_range_marks_and_keeps_at_most_three_parts() {
     assert_eq!(ver("*"), "");
     assert_eq!(ver("x.1"), "");
     assert_eq!(ver("12abc"), "12");
+}
+
+fn words(text: &str) -> Vec<(String, String, String)> {
+    topic_hits(text).into_iter().map(|h| (h.word, h.target, h.version)).collect()
+}
+
+fn one(text: &str) -> (String, String) {
+    let h = topic_hits(text);
+    assert_eq!(h.len(), 1, "{text:?}");
+    (h[0].word.clone(), h[0].version.clone())
+}
+
+#[test]
+fn extra_topic_version_forms() {
+    let v = |t: &str| one(t).1;
+    assert_eq!(v("Java 21"), "21");
+    assert_eq!(v("Java21"), "21");
+    assert_eq!(v("Java v18"), "18");
+    assert_eq!(v("Java V18.2.1.9"), "18.2.1");
+    assert_eq!(v("Java 8. 다음"), "8");
+    assert_eq!(v("Java  21"), "");
+    assert_eq!(v("Java\t21"), "21");
+    assert_eq!(v("Java\u{3000}21"), "21");
+    assert_eq!(v("Java v"), "");
+    assert_eq!(v("Java x21"), "");
+    assert_eq!(v("Java"), "");
+    // 앞 16 글자까지만 본다(빈칸 하나 + 숫자 15 개)
+    assert_eq!(v("Java 12345678901234567890"), "123456789012345");
+    assert_eq!(v("Java 1.2.3.4"), "1.2.3");
+}
+
+#[test]
+fn extra_topic_word_boundaries_overlap_and_order() {
+    assert!(topic_hits("xJava Javax").is_empty());
+    assert_eq!(one("Java5 ").1, "5");
+    assert_eq!(one("자바21로").1, "21");
+    assert_eq!(one("JAVA 17").0, "JAVA");
+    // 영문 낱말은 한글이 붙어도 찾는다
+    assert_eq!(one("Java한글").0, "Java");
+    assert_eq!(one("한글Java").0, "Java");
+    // JavaScript 의 Java 는 건너뛰고 뒤의 Java 를 찾는다
+    assert_eq!(one("JavaScript Java 17"), ("Java".to_string(), "17".to_string()));
+    // 긴 이름이 짧은 이름을 가린다: Spring Boot / SpringBoot / 스프링 부트 한 번씩만
+    assert_eq!(words("Spring Boot 3.5"), vec![("Spring Boot".to_string(), "spring".to_string(), "3.5".to_string())]);
+    assert_eq!(words("SpringBoot").len(), 1);
+    assert_eq!(words("스프링 부트와 스프링").len(), 2);
+    // 한글 낱말은 앞뒤가 영문이어도 찾는다
+    assert_eq!(one("abc스프링def").0, "스프링");
+    // 같은 낱말 두 번은 찾은 차례 그대로 둘이다
+    let h = topic_hits("NestJS 11 그리고 NestJS 12");
+    assert_eq!(h.iter().map(|x| x.version.as_str()).collect::<Vec<_>>(), vec!["11", "12"]);
+    // 정렬은 글에 나온 차례(표 차례가 아니다)
+    let t: Vec<String> = topic_hits("MySQL, React, Kotlin, Spring").into_iter().map(|h| h.word).collect();
+    assert_eq!(t, vec!["MySQL", "React", "Kotlin", "Spring"]);
+    // 낱말 뒤에 결합 글자가 붙은 ASCII 글자는 영문 글자 하나가 아니다(묶음이 ASCII 가 아님)
+    assert_eq!(topic_hits("Javae\u{301}").len(), 1);
+    assert!(topic_hits("Javae").is_empty());
+    // 빈 글
+    assert!(topic_hits("").is_empty());
+    assert!(topic_stack("").is_empty());
+}
+
+#[test]
+fn extra_topic_stack_slots() {
+    let s = topic_stack("Kotlin 1.9 와 Spring Boot 3.5 로");
+    let b = s.back.expect("back");
+    assert_eq!((b.key.as_str(), b.name.as_str(), b.lang.as_str(), b.lang_version.as_str()), ("spring-kotlin", "Kotlin · Spring Boot", "Kotlin", "1.9"));
+    assert_eq!((b.framework.as_str(), b.framework_version.as_str(), b.build.as_str(), b.origin.as_str()), ("Spring Boot", "3.5", "Gradle Groovy", "topic"));
+    assert!(b.sources.is_empty());
+    // Java 낱말이 Kotlin 보다 앞이어도 첫 언어 낱말이 이긴다
+    let b = topic_stack("Java 17 Kotlin 1.9 Spring").back.expect("back");
+    assert_eq!((b.key.as_str(), b.lang_version.as_str()), ("spring-java", "17"));
+    // Python 은 언어 칸 검사에서 빠진다(Spring 이면 무시)
+    assert_eq!(topic_stack("Python 3.12 Spring").back.expect("back").lang_version, "");
+    let b = topic_stack("TypeScript 와 NestJS 11").back.expect("back");
+    assert_eq!((b.key.as_str(), b.lang.as_str(), b.lang_version.as_str(), b.framework_version.as_str(), b.build.as_str()), ("nest", "Node.js", "", "11", "npm"));
+    let b = topic_stack("FastAPI 0.162").back.expect("back");
+    assert_eq!((b.lang_version.as_str(), b.framework_version.as_str(), b.build.as_str()), ("", "0.162", "pip"));
+    let f = topic_stack("Next.js 16").front.expect("front");
+    assert_eq!((f.key.as_str(), f.name.as_str(), f.framework.as_str(), f.build.as_str(), f.origin.as_str()), ("next", "Next.js", "Next.js", "npm", "topic"));
+    let f = topic_stack("Vue 3").front.expect("front");
+    assert_eq!((f.name.as_str(), f.build.as_str()), ("Vue", "Vite"));
+    let f = topic_stack("리액트").front.expect("front");
+    assert_eq!((f.name.as_str(), f.framework.as_str(), f.build.as_str()), ("React (Vite)", "React", "Vite"));
+    let d = topic_stack("MySQL 8").db.expect("db");
+    assert_eq!((d.key.as_str(), d.name.as_str(), d.framework.as_str(), d.framework_version.as_str(), d.origin.as_str()), ("mysql", "MySQL", "MySQL", "8", "topic"));
+    let d = topic_stack("Postgres").db.expect("db");
+    assert_eq!((d.key.as_str(), d.name.as_str()), ("postgresql", "PostgreSQL"));
+    // 언어 낱말만 있으면 백엔드 칸은 없다
+    assert!(topic_stack("Kotlin 2.4").is_empty());
+}
+
+#[test]
+fn extra_conflicts_language_and_name_fallback() {
+    let nest = detect(&[("package.json", r#"{"dependencies":{"@nestjs/core":"^11"}}"#)]);
+    assert!(stack_conflicts(&nest, "TypeScript 로 더한다").is_empty());
+    assert_eq!(
+        stack_conflicts(&nest, "Python 으로 더한다"),
+        vec!["주제에 적힌 'Python': 이 프로젝트 규격(Node.js)과 달라 쓰지 않습니다. 스택을 바꾸려면 그 일을 주제로 따로 출발합니다.".to_string()]
+    );
+    let fastapi = detect(&[("requirements.txt", "fastapi==0.1")]);
+    assert!(stack_conflicts(&fastapi, "python 으로").is_empty());
+    assert_eq!(stack_conflicts(&fastapi, "Java 로").len(), 1);
+    // 감지한 백엔드가 없으면 언어 낱말은 알리지 않는다
+    assert!(stack_conflicts(&StackSet::default(), "Java 와 NestJS 와 MySQL").is_empty());
+    // 프레임워크가 없는 칸은 이름으로 알린다(Go)
+    let go = detect(&[("go.mod", "module x\ngo 1.22\n")]);
+    assert_eq!(
+        stack_conflicts(&go, "NestJS 로"),
+        vec!["주제에 적힌 'NestJS': 이 프로젝트 규격(Go)과 달라 쓰지 않습니다. 스택을 바꾸려면 그 일을 주제로 따로 출발합니다.".to_string()]
+    );
+    // 프론트: Vue 저장소에 React
+    let vue = detect(&[("package.json", r#"{"dependencies":{"vue":"3"}}"#)]);
+    assert_eq!(stack_conflicts(&vue, "React 로").len(), 1);
+    assert!(stack_conflicts(&vue, "Vue.js 로").is_empty());
+    // 경고 순서는 글에 나온 차례, 서로 다른 낱말은 따로
+    let spring = detect(&[("build.gradle", GRADLE_SPRING)]);
+    let w = stack_conflicts(&spring, "Kotlin 과 NestJS");
+    assert_eq!(w.len(), 2);
+    assert!(w[0].contains("'Kotlin'") && w[1].contains("'NestJS'"));
+}
+
+#[test]
+fn extra_topic_adjacent_words_do_not_overlap() {
+    // 맞닿은 낱말(스프링|자바)은 겹침이 아니다
+    assert_eq!(words("스프링자바21"), vec![("스프링".to_string(), "spring".to_string(), String::new()), ("자바".to_string(), "java".to_string(), "21".to_string())]);
+}
+
+#[test]
+fn extra_conflicts_same_stack_is_quiet_for_every_target() {
+    let same = |files: &[(&str, &str)], topic: &str| stack_conflicts(&detect(files), topic);
+    assert!(same(&[("package.json", r#"{"dependencies":{"@nestjs/core":"^11"}}"#)], "NestJS 로").is_empty());
+    assert!(same(&[("requirements.txt", "fastapi==0.1")], "FastAPI 로").is_empty());
+    assert!(same(&[("package.json", r#"{"dependencies":{"react":"19"}}"#)], "리액트 로").is_empty());
+    assert!(same(&[("package.json", r#"{"dependencies":{"next":"16"}}"#)], "Next.js 로").is_empty());
+    assert!(same(&[("package.json", r#"{"dependencies":{"pg":"8"}}"#)], "Postgres 로").is_empty());
+    assert!(same(&[("package.json", r#"{"dependencies":{"mysql2":"3"}}"#)], "MySQL 로").is_empty());
+    // 다른 칸의 다른 스택은 알린다
+    assert_eq!(same(&[("package.json", r#"{"dependencies":{"next":"16"}}"#)], "Vue 로").len(), 1);
+    assert_eq!(same(&[("package.json", r#"{"dependencies":{"pg":"8"}}"#)], "MySQL 로").len(), 1);
+    assert_eq!(same(&[("requirements.txt", "fastapi==0.1")], "Spring 으로").len(), 1);
 }
