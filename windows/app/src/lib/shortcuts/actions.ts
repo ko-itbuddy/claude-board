@@ -5,6 +5,7 @@
 // 거기에 Windows Terminal 의 탭 이동 키(Ctrl+Tab·Ctrl+Shift+Tab)를 보조로 더했다.
 // 3단계(P3.0)가 화면 나누기·글자 크기 행을 더한다(Windows Terminal 키: Alt+Shift+(+/-) 나누기, Alt+방향키 화면 고르기, Alt+Shift+방향키 경계 옮기기).
 import { MOD, keyOf, type KeyCombo } from "./keyCombo.ts";
+import { BOARD_VIEW_ACTIONS } from "./showBoard.ts";
 
 export type ShortcutActionId = string;
 
@@ -30,6 +31,7 @@ const CA = MOD.ctrl | MOD.alt;
 const TAB_DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
 
 export const SHORTCUT_ACTIONS: readonly ShortcutAction[] = [
+  ...BOARD_VIEW_ACTIONS,
   { id: "snap", group: "보드", title: "처음 크기로 붙이기 (어느 앱에서든)", initial: keyOf("KeyB", CA) },
   { id: "terminal", group: "보드", title: "터미널 펼치기·접기 (어느 앱에서든)", initial: keyOf("KeyT", CA) },
   { id: "pin", group: "보드", title: "항상 위에 고정", initial: null },

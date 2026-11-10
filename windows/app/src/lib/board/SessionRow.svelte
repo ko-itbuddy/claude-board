@@ -50,6 +50,8 @@
         : {
             label: entry.label,
             enabled: entry.enabled,
+            title: entry.detail,
+            destructive: entry.action === "stop",
             // 보드로 옮기기만 프론트가 흐름을 짠다(확인 → 키 → 끝나기 대기 → 이어 열기). 나머지는 백엔드 동작 이름 그대로
             action: () => (entry.action === "moveToBoard" ? void moveSessionToBoard(s) : sessionAction(entry.action, s.id, entry.carryOn)),
           },

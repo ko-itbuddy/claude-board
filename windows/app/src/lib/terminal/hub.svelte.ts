@@ -35,6 +35,7 @@ import { startSessionFlow } from "./sessionFlow.svelte";
 import { canTypeClaude } from "./shellRules";
 import { TermController } from "./term";
 import { typeCommand } from "./typeCommand";
+import { isTerminalHere, switchForHeaderClick } from "./workspaceSwitch";
 
 export interface LeafState {
   phase: LeafPhase;
@@ -327,9 +328,15 @@ function shownTab(ws: string): string | undefined {
 
 /** 경로 줄 항목을 눌렀을 때 — 그 경로의 마지막에 고른 탭으로 */
 export function showWorkspace(path: string) {
+  const act = switchForHeaderClick(shownTab(path), expanded());
+  if (act.kind === "none") return; // 탭이 없는 경로는 아무것도 하지 않는다 — 설정 화면도 닫지 않는다
   leaveSettings();
-  const id = shownTab(path);
-  if (id) select(id);
+  select(act.tabId, act.focus);
+}
+
+/** 펼친 터미널이 지금 이 경로(카드 id)를 보이는 중인가 — 카드 폴더 아이콘의 표지 */
+export function terminalHere(groupId: string): boolean {
+  return isTerminalHere(expanded(), TerminalHub.workspace, groupId, homeDir());
 }
 
 /** 지금 경로 안에서 왼쪽(-1)·오른쪽(+1) 탭으로(끝에서는 반대쪽 끝으로) */
