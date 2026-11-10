@@ -586,14 +586,14 @@ struct APTopicStep1: View {
         APBox(title: "주제", note: "자유 입력 한 칸 · 주제는 결정이 아니라 요청입니다", axid: "ap-topic-box") {
             ZStack(alignment: .topLeading) {
                 TextEditor(text: $t.text)
-                    .font(.system(size: 12))
+                    .boardFont(APType.body)
                     .scrollContentBackground(.hidden)
                     .frame(minHeight: 64, maxHeight: 140)
                     .padding(4)
                     .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.25)))
                     .accessibilityIdentifier("ap-topic-text")
                 if t.text.isEmpty {
-                    Text("예: 회의실 예약 API 를 Spring Boot 로 만든다. 예약·취소·겹침 막기, 관리자 승인.").boardFont(11.5).foregroundStyle(.secondary.opacity(0.7))
+                    Text("예: 회의실 예약 API 를 Spring Boot 로 만든다. 예약·취소·겹침 막기, 관리자 승인.").boardFont(APType.body).foregroundStyle(.secondary.opacity(0.7))
                         .padding(.horizontal, 9).padding(.vertical, 8).allowsHitTesting(false)
                 }
             }
@@ -619,7 +619,7 @@ struct APTopicStep1: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         APChip(text: l.kind, color: APColor.board)
-                        Text(l.url).boardFont(10.5, design: .monospaced).lineLimit(1).truncationMode(.middle)
+                        Text(l.url).boardFont(APType.monoSmall).lineLimit(1).truncationMode(.middle)
                         Spacer(minLength: 4)
                         switch l.state {
                         case "connected": APChip(text: "연결됨", color: APColor.ok, strong: true)
@@ -647,7 +647,7 @@ struct APTopicStep1: View {
             }
             HStack(spacing: 6) {
                 TextField("＋ 주소 붙여 넣기 (Figma · Confluence · Notion · Jira · 그 밖 웹 주소)", text: $t.linkInput)
-                    .textFieldStyle(.roundedBorder).boardFont(11.5).accessibilityIdentifier("ap-link-input")
+                    .textFieldStyle(.roundedBorder).boardFont(APType.body).accessibilityIdentifier("ap-link-input")
                     .onSubmit { t.addLink() }
                 APButton(title: "더하기", enabled: !t.linkInput.trimmingCharacters(in: .whitespaces).isEmpty, axid: "ap-link-add") { t.addLink() }
             }
@@ -669,7 +669,7 @@ struct APTopicStep1: View {
             Divider()
             Button("서버 목록 다시 읽기") { t.loadServers() }
         } label: {
-            Text(t.linkMCP[url].map { "MCP: \($0)" } ?? "MCP 서버 고르기").boardFont(11)
+            Text(t.linkMCP[url].map { "MCP: \($0)" } ?? "MCP 서버 고르기").boardFont(APType.body)
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
@@ -681,8 +681,8 @@ struct APTopicStep1: View {
     private var pathBox: some View {
         APBox(title: "작업 경로", note: "저장소 뿌리", axid: "ap-topic-path") {
             HStack(spacing: 6) {
-                APButton(title: "기존 저장소", tint: t.pathMode == "existing" ? Palette.accent : nil, axid: "ap-path-existing") { t.pathMode = "existing" }
-                APButton(title: "새 폴더 만들기", tint: t.pathMode == "new" ? Palette.accent : nil, axid: "ap-path-new") { t.pathMode = "new" }
+                APChoice(title: "기존 저장소", on: t.pathMode == "existing", axid: "ap-path-existing") { t.pathMode = "existing" }
+                APChoice(title: "새 폴더 만들기", on: t.pathMode == "new", axid: "ap-path-new") { t.pathMode = "new" }
                 Spacer(minLength: 0)
             }
             if t.pathMode == "existing" { existing } else { newFolder }
@@ -691,7 +691,7 @@ struct APTopicStep1: View {
     @ViewBuilder private var existing: some View {
         HStack(spacing: 6) {
             TextField("저장소 경로(예: ~/workspace/todo-api)", text: $t.existingPath)
-                .textFieldStyle(.roundedBorder).boardFont(11.5, design: .monospaced).accessibilityIdentifier("ap-path-input")
+                .textFieldStyle(.roundedBorder).boardFont(APType.mono).accessibilityIdentifier("ap-path-input")
             APButton(title: "고르기…", axid: "ap-path-browse") { t.browse(new: false) }
         }
         let rec = t.recent()
@@ -708,7 +708,7 @@ struct APTopicStep1: View {
             if let e = r.error { apNote(e, APColor.fail).accessibilityIdentifier("ap-topic-path-error") }
             else if let top = r.top {
                 HStack(spacing: 6) {
-                    Text(apHome(top)).boardFont(11, design: .monospaced).lineLimit(1).truncationMode(.head)
+                    Text(apHome(top)).boardFont(APType.mono).lineLimit(1).truncationMode(.head)
                     APChip(text: "git 저장소", color: APColor.ok)
                     if let b = r.branch { APChip(text: "가지 \(b)") }
                     if let p = r.project { APChip(text: p, color: APColor.board) }
@@ -722,17 +722,17 @@ struct APTopicStep1: View {
     }
     @ViewBuilder private var newFolder: some View {
         HStack(spacing: 6) {
-            Text("위치").boardFont(11, weight: .semibold).foregroundStyle(.secondary).frame(width: 34, alignment: .leading)
-            TextField("~/workspace", text: $t.newParent).textFieldStyle(.roundedBorder).boardFont(11.5, design: .monospaced).accessibilityIdentifier("ap-new-parent")
+            Text("위치").boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: 40, alignment: .leading)
+            TextField("~/workspace", text: $t.newParent).textFieldStyle(.roundedBorder).boardFont(APType.mono).accessibilityIdentifier("ap-new-parent")
             APButton(title: "고르기…", axid: "ap-new-browse") { t.browse(new: true) }
         }
         HStack(spacing: 6) {
-            Text("이름").boardFont(11, weight: .semibold).foregroundStyle(.secondary).frame(width: 34, alignment: .leading)
-            TextField("room-booking", text: $t.newName).textFieldStyle(.roundedBorder).boardFont(11.5, design: .monospaced).accessibilityIdentifier("ap-new-name")
+            Text("이름").boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: 40, alignment: .leading)
+            TextField("room-booking", text: $t.newName).textFieldStyle(.roundedBorder).boardFont(APType.mono).accessibilityIdentifier("ap-new-name")
         }
         ForEach(t.newProblems, id: \.self) { apNote($0, APColor.fail) }
         if let p = t.newPlan {
-            Text(apHome(p.path)).boardFont(11, design: .monospaced).foregroundStyle(.secondary)
+            Text(apHome(p.path)).boardFont(APType.mono).foregroundStyle(.secondary)
             apNote("보드가 폴더를 만들고 git init, 빈 첫 커밋, 그 커밋에 가지 \(p.branches.joined(separator: "·")) 를 만듭니다(처음 걸린 가지 \(p.head), 출발 가지 \(p.base)). 단일 저장소라 따로 작업 트리에서 돕니다.")
             if let c = t.created, c.ok { apNote("이 준비가 만든 폴더입니다(빈 첫 커밋 \(c.commit.map { String($0.prefix(7)) } ?? "?")). 준비를 버려도 지우지 않습니다.", APColor.ok) }
             else { apNote("폴더는 '다음: 보드가 준비'를 누를 때 만듭니다. 준비를 버려도 만든 폴더는 지우지 않습니다.") }
@@ -774,16 +774,16 @@ struct APTopicStep1: View {
     }
     private func detectedRow(_ slot: String, _ s: APStackSlot?) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(apSlotTitle(slot)).boardFont(11, weight: .semibold).foregroundStyle(.secondary).frame(width: 46, alignment: .leading)
+            Text(apSlotTitle(slot)).boardFont(APType.body, weight: .semibold).foregroundStyle(.secondary).frame(width: 54, alignment: .leading)
             if let s {
                 VStack(alignment: .leading, spacing: 1) {
                     Text([s.lang.isEmpty ? "" : s.lang + (s.langVersion.isEmpty ? "" : " " + s.langVersion),
                           s.framework.isEmpty ? s.name : s.framework + (s.frameworkVersion.isEmpty ? "" : " " + s.frameworkVersion), s.build]
-                            .filter { !$0.isEmpty }.joined(separator: " · ")).boardFont(11.5, weight: .semibold)
-                    Text(s.sources.joined(separator: " · ")).boardFont(10, design: .monospaced).foregroundStyle(.secondary)
+                            .filter { !$0.isEmpty }.joined(separator: " · ")).boardFont(APType.body, weight: .semibold)
+                    Text(s.sources.joined(separator: " · ")).boardFont(APType.monoSmall).foregroundStyle(.secondary)
                 }
             } else {
-                Text("없음 (감지된 것 없음)").boardFont(11.5).foregroundStyle(.secondary)
+                Text("없음 (감지된 것 없음)").boardFont(APType.body).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
@@ -800,12 +800,12 @@ struct APSlotEditor: View {
         let p = t.slots[slot] ?? APSlotPick()
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
-                Text(apSlotTitle(slot)).boardFont(11.5, weight: .bold).frame(width: 46, alignment: .leading)
-                APButton(title: "없음", tint: p.mode == "none" ? Palette.accent : nil, axid: "ap-slot-\(slot)-none") { t.choose(slot, mode: "none") }
-                APButton(title: "목록에서 고르기", tint: p.mode == "list" ? Palette.accent : nil, axid: "ap-slot-\(slot)-list") {
+                Text(apSlotTitle(slot)).boardFont(APType.body, weight: .bold).frame(width: 54, alignment: .leading)
+                APChoice(title: "없음", on: p.mode == "none", axid: "ap-slot-\(slot)-none") { t.choose(slot, mode: "none") }
+                APChoice(title: "목록에서 고르기", on: p.mode == "list", axid: "ap-slot-\(slot)-list") {
                     t.choose(slot, mode: "list", key: p.mode == "list" ? p.key : (apSlotChoices[slot]?.first?.key ?? ""))
                 }
-                APButton(title: "직접 입력", tint: p.mode == "custom" ? Palette.accent : nil, axid: "ap-slot-\(slot)-custom") { t.choose(slot, mode: "custom") }
+                APChoice(title: "직접 입력", on: p.mode == "custom", axid: "ap-slot-\(slot)-custom") { t.choose(slot, mode: "custom") }
                 if p.origin == "topic" { APChip(text: "주제에서 읽음", color: Palette.accent) }
                 Spacer(minLength: 0)
             }
@@ -813,9 +813,9 @@ struct APSlotEditor: View {
             if p.mode == "custom" {
                 HStack(spacing: 6) {
                     TextField("이름(예: Go · Gin)", text: Binding(get: { p.name }, set: { var q = p; q.name = $0; t.pick(slot, q) }))
-                        .textFieldStyle(.roundedBorder).boardFont(11.5).accessibilityIdentifier("ap-slot-\(slot)-name")
+                        .textFieldStyle(.roundedBorder).boardFont(APType.body).accessibilityIdentifier("ap-slot-\(slot)-name")
                     TextField("판", text: Binding(get: { p.version }, set: { var q = p; q.version = $0; t.pick(slot, q) }))
-                        .textFieldStyle(.roundedBorder).boardFont(11.5).frame(maxWidth: 90).accessibilityIdentifier("ap-slot-\(slot)-version")
+                        .textFieldStyle(.roundedBorder).boardFont(APType.body).frame(maxWidth: 90).accessibilityIdentifier("ap-slot-\(slot)-version")
                 }
                 apNote("보드가 생성기를 모르면 첫 단위 '프로젝트 구성'을 모델이 합니다.")
             }
@@ -829,16 +829,16 @@ struct APSlotEditor: View {
     @ViewBuilder private func list(_ p: APSlotPick) -> some View {
         WrapRow(spacing: 5) {
             ForEach(apSlotChoices[slot] ?? [], id: \.key) { c in
-                APButton(title: c.label, tint: p.key == c.key ? Palette.accent : nil, axid: "ap-slot-\(slot)-\(c.key)") { t.choose(slot, mode: "list", key: c.key) }
+                APChoice(title: c.label, on: p.key == c.key, axid: "ap-slot-\(slot)-\(c.key)") { t.choose(slot, mode: "list", key: c.key) }
             }
         }
         ForEach(apSlotFields[p.key] ?? [], id: \.field) { f in
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(f.label).boardFont(10.5, weight: .semibold).foregroundStyle(.secondary).frame(width: 70, alignment: .leading)
+                Text(f.label).boardFont(APType.note, weight: .semibold).foregroundStyle(.secondary).frame(width: 84, alignment: .leading)
                 WrapRow(spacing: 4) {
                     if f.field == "build" {
                         ForEach(apBuildTools, id: \.self) { b in
-                            APButton(title: b + (b == apBuildTools[0] ? " 추천" : ""), tint: p.vers["build"] == b ? Palette.accent : nil, axid: "ap-ver-\(slot)-build-\(b)") {
+                            APChoice(title: b + (b == apBuildTools[0] ? " 추천" : ""), on: p.vers["build"] == b, axid: "ap-ver-\(slot)-build-\(b)") {
                                 t.setVersion(slot, "build", b)
                             }
                         }
@@ -846,8 +846,8 @@ struct APSlotEditor: View {
                         let list = t.catalog?.catalog.list(f.field) ?? []
                         let cur = p.vers[f.field] ?? ""
                         ForEach(list, id: \.v) { v in
-                            APButton(title: v.v + (v.lts ? " LTS" : "") + (v.rec ? " 추천" : "") + (v.until.map { " · 지원 \($0)" } ?? ""),
-                                     tint: cur == v.v ? Palette.accent : nil, axid: "ap-ver-\(slot)-\(f.field)-\(v.v)") { t.setVersion(slot, f.field, v.v) }
+                            APChoice(title: v.v + (v.lts ? " LTS" : "") + (v.rec ? " 추천" : "") + (v.until.map { " · 지원 \($0)" } ?? ""),
+                                     on: cur == v.v, axid: "ap-ver-\(slot)-\(f.field)-\(v.v)") { t.setVersion(slot, f.field, v.v) }
                         }
                         if !cur.isEmpty, !list.contains(where: { $0.v == cur }) { APChip(text: cur + " · 목록에 없는 판(주제에 적힌 판)", color: APColor.limit, strong: true) }
                         if f.field == "nest" { apNote("TypeScript 는 NestJS 가 고른 판") }
