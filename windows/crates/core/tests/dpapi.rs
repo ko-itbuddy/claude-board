@@ -71,10 +71,51 @@ mod windows_only {
     }
 }
 
+#[cfg(windows)]
+mod entropy {
+    use claude_board_core::dpapi::{protect, protect_with_entropy, unprotect, unprotect_with_entropy};
+
+    #[test]
+    fn entropy_round_trip_and_changes_bytes() {
+        let plain = b"entropy secret 0123456789";
+        let sealed = protect_with_entropy(plain, b"ent-a").unwrap();
+        assert_ne!(sealed, plain);
+        assert_eq!(unprotect_with_entropy(&sealed, b"ent-a").unwrap(), plain);
+        let empty = protect_with_entropy(b"", b"ent-a").unwrap();
+        assert_eq!(unprotect_with_entropy(&empty, b"ent-a").unwrap(), b"");
+    }
+
+    #[test]
+    fn other_entropy_or_none_cannot_unprotect() {
+        let sealed = protect_with_entropy(b"payload", b"ent-a").unwrap();
+        assert!(unprotect_with_entropy(&sealed, b"ent-b").is_err(), "다른 엔트로피로 풀렸다");
+        assert!(unprotect_with_entropy(&sealed, b"ent-a2").is_err(), "엔트로피 접두가 같아도 풀렸다");
+        assert!(unprotect(&sealed).is_err(), "엔트로피 없이 풀렸다");
+        let plain_sealed = protect(b"payload").unwrap();
+        assert!(unprotect_with_entropy(&plain_sealed, b"ent-a").is_err(), "엔트로피 없는 봉인이 엔트로피로 풀렸다");
+        assert_eq!(unprotect(&plain_sealed).unwrap(), b"payload", "기존 함수 동작이 바뀌었다");
+    }
+
+    #[test]
+    fn empty_entropy_refused_and_damaged_rejected() {
+        assert_eq!(protect_with_entropy(b"x", b"").unwrap_err().kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(unprotect_with_entropy(b"x", b"").unwrap_err().kind(), std::io::ErrorKind::InvalidInput);
+        assert!(unprotect_with_entropy(b"", b"ent-a").is_err());
+        let sealed = protect_with_entropy(&b"abc".repeat(50), b"ent-a").unwrap();
+        let n = sealed.len();
+        let mut flipped = sealed.clone();
+        flipped[n / 2] ^= 0x5a;
+        assert!(unprotect_with_entropy(&flipped, b"ent-a").is_err());
+        assert!(unprotect_with_entropy(&sealed[..n - 1], b"ent-a").is_err());
+    }
+}
+
 #[cfg(not(windows))]
 #[test]
 fn non_windows_always_errs() {
-    use claude_board_core::dpapi::{protect, unprotect};
+    use claude_board_core::dpapi::{protect, protect_with_entropy, unprotect, unprotect_with_entropy};
     assert!(protect(b"x").is_err());
     assert!(unprotect(b"x").is_err());
+    assert!(protect_with_entropy(b"x", b"e").is_err());
+    assert!(unprotect_with_entropy(b"x", b"e").is_err());
 }
