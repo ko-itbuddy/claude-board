@@ -1,10 +1,11 @@
 // 계정 사용률 대체 어댑터 시험 — 가짜 Http 와 임시 파일로 한다.
+use std::ffi::OsString;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 
-use claude_board_autopilot::adapters::usage::FallbackUsage;
+use claude_board_autopilot::adapters::usage::{FallbackUsage, UsageOverride, USAGE_OFFLINE_ENV, USAGE_PATH_ENV};
 use claude_board_autopilot::ports::*;
 
 const NOW: f64 = 1_800_000_000.0;
@@ -285,4 +286,100 @@ fn token_never_appears_in_returned_values_or_errors() {
         };
         assert!(!shown.contains(TOKEN), "{shown}");
     }
+}
+
+// ---- 시험 게이트: CLAUDE_BOARD_USAGE_PATH · CLAUDE_BOARD_USAGE_OFFLINE (CLAUDE_BOARD_HOME 이 있을 때만) ----
+
+fn fake_env(pairs: &[(&str, String)]) -> impl Fn(&str) -> Option<OsString> {
+    let map: Vec<(String, String)> = pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
+    move |key| map.iter().find(|(k, _)| k == key).map(|(_, v)| OsString::from(v))
+}
+
+#[test]
+fn gate_ignores_both_variables_without_home() {
+    let toy = Env::new().dir.path().join("toy.json").to_string_lossy().into_owned();
+    let env = fake_env(&[(USAGE_PATH_ENV, toy), (USAGE_OFFLINE_ENV, "1".into())]);
+    assert_eq!(UsageOverride::from_env(&env), UsageOverride::default());
+    // 빈 홈도 없는 것과 같다
+    let env = fake_env(&[("CLAUDE_BOARD_HOME", String::new()), (USAGE_OFFLINE_ENV, "1".into())]);
+    assert_eq!(UsageOverride::from_env(&env), UsageOverride::default());
+}
+
+#[test]
+fn gate_reads_both_variables_with_home() {
+    let toy = Env::new().dir.path().join("toy.json");
+    let env = fake_env(&[
+        ("CLAUDE_BOARD_HOME", "x".into()),
+        (USAGE_PATH_ENV, toy.to_string_lossy().into_owned()),
+        (USAGE_OFFLINE_ENV, "1".into()),
+    ]);
+    assert_eq!(UsageOverride::from_env(&env), UsageOverride { toy_path: Some(toy), offline: true });
+}
+
+#[test]
+fn gate_rejects_relative_path_and_non_one_offline() {
+    let env = fake_env(&[
+        ("CLAUDE_BOARD_HOME", "x".into()),
+        (USAGE_PATH_ENV, "relative/toy.json".into()),
+        (USAGE_OFFLINE_ENV, "true".into()),
+    ]);
+    assert_eq!(UsageOverride::from_env(&env), UsageOverride::default());
+}
+
+#[test]
+fn toy_file_replaces_cache_and_api_and_ignores_age() {
+    let env = Env::new();
+    // 캐시는 신선하고 값이 다르다 — 장난감이 이겨야 한다
+    env.write_cache(r#"{"five_hour":{"utilization":1},"seven_day":{"utilization":2}}"#, 10.0);
+    env.write_creds(valid_expiry());
+    let toy = env.dir.path().join("toy.json");
+    fs::write(&toy, BODY).unwrap();
+    set_mtime(&toy, NOW - 100_000.0); // 하루 넘게 묵어도 읽는다
+    let http = FakeHttp::new(Reply::Ok(200, BODY.into()));
+    let u = env.usage(&http).with_override(UsageOverride { toy_path: Some(toy), offline: false });
+    let s = u.fallback(NOW).unwrap().unwrap();
+    assert_eq!(s.from, UsageFrom::Toy);
+    assert!((s.five_hour - 0.84).abs() < 1e-9 && (s.seven_day - 0.31).abs() < 1e-9);
+    assert!((s.at - (NOW - 100_000.0)).abs() < 1e-3, "at 은 장난감 파일 수정 시각");
+    assert_eq!(http.count(), 0);
+}
+
+#[test]
+fn missing_or_broken_toy_file_gives_none_without_cache_or_api() {
+    let env = Env::new();
+    env.write_cache(BODY, 10.0);
+    env.write_creds(valid_expiry());
+    let http = FakeHttp::new(Reply::Ok(200, BODY.into()));
+    let toy = env.dir.path().join("toy.json");
+    let over = || UsageOverride { toy_path: Some(toy.clone()), offline: false };
+    assert_eq!(env.usage(&http).with_override(over()).fallback(NOW).unwrap(), None);
+    fs::write(&toy, "not json").unwrap();
+    assert_eq!(env.usage(&http).with_override(over()).fallback(NOW).unwrap(), None);
+    assert_eq!(http.count(), 0);
+}
+
+#[test]
+fn offline_reads_fresh_cache_but_never_calls_api_or_reads_credentials() {
+    let env = Env::new();
+    env.write_creds(valid_expiry());
+    let http = FakeHttp::new(Reply::Ok(200, BODY.into()));
+    let off = || UsageOverride { toy_path: None, offline: true };
+    // 캐시 없음·낡음 → 모른다(API 로 떨어지지 않는다)
+    assert_eq!(env.usage(&http).with_override(off()).fallback(NOW).unwrap(), None);
+    env.write_cache(BODY, 901.0);
+    assert_eq!(env.usage(&http).with_override(off()).fallback(NOW).unwrap(), None);
+    assert_eq!(http.count(), 0);
+    // 신선한 캐시는 읽는다
+    env.write_cache(BODY, 60.0);
+    assert_eq!(env.usage(&http).with_override(off()).fallback(NOW).unwrap().unwrap().from, UsageFrom::Cache);
+    assert_eq!(http.count(), 0);
+}
+
+#[test]
+fn default_override_still_falls_to_api() {
+    let env = Env::new();
+    env.write_creds(valid_expiry());
+    let http = FakeHttp::new(Reply::Ok(200, BODY.into()));
+    let s = env.usage(&http).with_override(UsageOverride::default()).fallback(NOW).unwrap().unwrap();
+    assert_eq!((s.from, http.count()), (UsageFrom::Api, 1));
 }

@@ -4,6 +4,7 @@
 //! 토큰은 부를 때마다 파일에서 읽어 요청 헤더에만 싣고, 필드·반환값·오류 문구 어디에도 두지 않는다.
 //! 원본: `usageFromCache`·`usageFromAPI`(`Sources/ClaudeAutopilot/main.swift`), 파일 꼴은 보드 `usage.rs` 와 같다.
 
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
@@ -18,24 +19,67 @@ const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const CACHE_MAX_AGE_SECS: f64 = 900.0;
 const API_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// 시험용 사용량 파일 경로. 값은 절대 경로. macOS 의 시험 빌드 설정 `usage_path`(`autopilotUsagePath`)에 해당한다.
+pub const USAGE_PATH_ENV: &str = "CLAUDE_BOARD_USAGE_PATH";
+/// 시험용 오프라인 표지. 값 `1` 이면 사용량 API·로그인 파일을 쓰지 않는다. macOS 의 시험 빌드 설정 `usageOffline` 에 해당한다.
+pub const USAGE_OFFLINE_ENV: &str = "CLAUDE_BOARD_USAGE_OFFLINE";
+
+/// 시험 게이트의 판정 결과. 둘 다 기본값(꺼짐)이면 설치판과 같다.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct UsageOverride {
+    /// 장난감 사용량 파일. 있으면 캐시·API 대신 이것만 읽는다(수정 시각의 나이를 따지지 않는다)
+    pub toy_path: Option<PathBuf>,
+    /// 사용량 API·로그인 파일을 건드리지 않는다(캐시는 읽기만)
+    pub offline: bool,
+}
+
+impl UsageOverride {
+    /// `CLAUDE_BOARD_HOME` 이 있을 때만 두 변수를 듣는다 — 사용자 환경에 남은 변수 하나가 진짜 사용량 조회를 바꾸지 못하게(SPEC §5.13 과 같은 게이트).
+    /// 경로가 절대 경로가 아니면 무시한다(macOS 도 `/` 로 시작하는 경로만 받는다).
+    pub fn from_env(env: &dyn Fn(&str) -> Option<OsString>) -> Self {
+        let get = |key: &str| env(key).filter(|v| !v.is_empty());
+        if get(claude_board_core::paths::HOME_ENV).is_none() {
+            return Self::default();
+        }
+        let toy_path = get(USAGE_PATH_ENV).map(PathBuf::from).filter(|p| p.is_absolute());
+        let offline = get(USAGE_OFFLINE_ENV).is_some_and(|v| v == "1");
+        Self { toy_path, offline }
+    }
+}
+
 pub struct FallbackUsage<H: Http> {
     http: H,
     credentials_path: PathBuf,
     cache_path: PathBuf,
+    over: UsageOverride,
 }
 
 impl<H: Http> FallbackUsage<H> {
     pub fn new(http: H, credentials_path: PathBuf, cache_path: PathBuf) -> Self {
-        Self { http, credentials_path, cache_path }
+        Self { http, credentials_path, cache_path, over: UsageOverride::default() }
+    }
+
+    /// 시험 게이트(`UsageOverride`)를 건다.
+    pub fn with_override(mut self, over: UsageOverride) -> Self {
+        self.over = over;
+        self
     }
 
     /// 이 PC 의 실제 경로: `~/.claude/.credentials.json` 과 `%TEMP%\.claude-usage-cache.json`(보드와 같은 파일).
+    /// 시험 게이트 변수(`USAGE_PATH_ENV`·`USAGE_OFFLINE_ENV`)는 이 프로세스의 환경에서 읽는다.
     pub fn system(http: H) -> Self {
         Self::new(
             http,
             claude_board_core::paths::credentials_file(),
             std::env::temp_dir().join(".claude-usage-cache.json"),
         )
+        .with_override(UsageOverride::from_env(&|k| std::env::var_os(k)))
+    }
+
+    /// 장난감 파일: 나이를 따지지 않고 수정 시각을 `at` 으로 읽는다(macOS `.toy` 걸음). 없거나 꼴이 틀리면 None.
+    fn read_toy(path: &Path) -> Option<UsageSnapshot> {
+        let written = fs::metadata(path).ok()?.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_secs_f64();
+        snapshot_from_body(&fs::read(path).ok()?, UsageFrom::Toy, written)
     }
 
     fn read_cache(&self, now: f64) -> Option<UsageSnapshot> {
@@ -72,7 +116,15 @@ impl<H: Http> FallbackUsage<H> {
 
 impl<H: Http> Usage for FallbackUsage<H> {
     fn fallback(&self, now: f64) -> PortResult<Option<UsageSnapshot>> {
-        Ok(self.read_cache(now).or_else(|| self.fetch_api(now)))
+        // 장난감 파일이 정해졌으면 캐시도 API 도 보지 않는다(macOS `apUsageSteps` 의 [toy, stream])
+        if let Some(path) = &self.over.toy_path {
+            return Ok(Self::read_toy(path));
+        }
+        let cached = self.read_cache(now);
+        if self.over.offline {
+            return Ok(cached);
+        }
+        Ok(cached.or_else(|| self.fetch_api(now)))
     }
 }
 
