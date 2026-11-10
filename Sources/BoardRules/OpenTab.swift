@@ -17,19 +17,20 @@ public struct OpenTabOptions: Equatable, Sendable {
     public var launch: Bool        // 보드가 꺼져 있으면 켜고 연다(없으면 "보드 꺼짐" 으로 실패)
     public var timeout: Double     // 보드의 답을 기다리는 초
     public var argv: [String]
-    public init(cwd: String, title: String?, launch: Bool, timeout: Double, argv: [String]) {
-        self.cwd = cwd; self.title = title; self.launch = launch; self.timeout = timeout; self.argv = argv
+    public var noFocus: Bool       // --no-focus: 보드를 앞으로 가져오지 않고 탭 선택·키보드 포커스도 그대로 둔 채 뒤에서 연다
+    public init(cwd: String, title: String?, launch: Bool, timeout: Double, argv: [String], noFocus: Bool = false) {
+        self.cwd = cwd; self.title = title; self.launch = launch; self.timeout = timeout; self.argv = argv; self.noFocus = noFocus
     }
 }
 
-public let openTabUsage = "쓰는 법: ClaudeBoard --open-tab --cwd <폴더> [--title <탭 이름>] [--launch] [--timeout <초>] -- claude <인자…>"
+public let openTabUsage = "쓰는 법: ClaudeBoard --open-tab --cwd <폴더> [--title <탭 이름>] [--launch] [--no-focus] [--timeout <초>] -- claude <인자…>"
 
 /// 답을 기다리는 기본 초 — 보드가 꺼져 있어 켜고 열 때(--launch)는 되살리기(최대 5초 기다림)까지 더 기다린다
 public func openTabDefaultTimeout(launch: Bool) -> Double { launch ? 40 : 20 }
 
 /// --open-tab 뒤의 인자를 읽는다. 상대 경로 --cwd 는 here(명령을 부른 폴더) 기준으로 붙인다(.·.. 는 앱이 풀어 견준다)
 public func parseOpenTabArgs(_ args: [String], here: String) -> Result<OpenTabOptions, OpenTabFailure> {
-    var cwd: String?, title: String?, launch = false, timeout: Double?
+    var cwd: String?, title: String?, launch = false, noFocus = false, timeout: Double?
     var i = 0
     func value(_ flag: String) -> Result<String, OpenTabFailure> {
         guard i + 1 < args.count, args[i + 1] != "--" else { return .failure(.badArgs("\(flag) 뒤에 값이 없습니다. \(openTabUsage)")) }
@@ -56,6 +57,9 @@ public func parseOpenTabArgs(_ args: [String], here: String) -> Result<OpenTabOp
         case "--launch":
             guard inline == nil else { return .failure(.badArgs("--launch 는 값을 받지 않습니다")) }
             launch = true
+        case "--no-focus":
+            guard inline == nil else { return .failure(.badArgs("--no-focus 는 값을 받지 않습니다")) }
+            noFocus = true
         default:
             return .failure(.badArgs("모르는 옵션입니다: \(a). \(openTabUsage)"))
         }
@@ -65,7 +69,7 @@ public func parseOpenTabArgs(_ args: [String], here: String) -> Result<OpenTabOp
     guard let cwd, !cwd.isEmpty else { return .failure(.badArgs("--cwd 가 없습니다. \(openTabUsage)")) }
     let abs = cwd.hasPrefix("/") ? cwd : (here.hasSuffix("/") ? here : here + "/") + cwd
     return .success(OpenTabOptions(cwd: abs, title: title, launch: launch,
-                                   timeout: timeout ?? openTabDefaultTimeout(launch: launch), argv: Array(args[(i + 1)...])))
+                                   timeout: timeout ?? openTabDefaultTimeout(launch: launch), argv: Array(args[(i + 1)...]), noFocus: noFocus))
 }
 
 // MARK: - 요청·답
@@ -77,9 +81,15 @@ public struct OpenTabRequest: Codable, Equatable, Sendable {
     public var title: String?
     public var argv: [String]
     public var at: Double          // 만든 시각(1970 기준 초)
-    public init(id: String, cwd: String, title: String?, argv: [String], at: Double) {
-        self.id = id; self.cwd = cwd; self.title = title; self.argv = argv; self.at = at
+    /// --no-focus 로 뒤에서 열기 — 켤 때만 true, 끄면 nil 이라 인코딩한 JSON 에 키가 없다(3.3.3 까지의 요청과 같은 JSON).
+    /// 이 칸이 없는 옛 명령줄 도구의 요청은 nil(지금 동작), 옛 보드(3.3.2·3.3.3)는 모르는 키를 무시해 요청은 받고 선택지만 듣지 않는다
+    public var noFocus: Bool?
+    public init(id: String, cwd: String, title: String?, argv: [String], at: Double, noFocus: Bool? = nil) {
+        self.id = id; self.cwd = cwd; self.title = title; self.argv = argv; self.at = at; self.noFocus = noFocus
     }
+
+    /// 보드를 앞으로 가져오고 그 탭을 골라 키보드 포커스를 옮기는가(opened·exists·reopened 모두) — --no-focus 가 아니면
+    public var reveals: Bool { noFocus != true }
 }
 
 /// 답(<요청 id>.reply.json, 명령줄 도구가 한 줄 JSON 으로 그대로 찍는다). status 는 opened(새 탭)·exists(이미 도는 탭을 앞으로)·
@@ -189,11 +199,16 @@ public struct OpenTabPlanInput: Equatable, Sendable {
 }
 
 /// 글자가 셸에 붙여넣기 안전한가 — 제어 문자(줄바꿈·탭은 됨)는 붙여넣기를 끊고 키로 들어갈 수 있어 거절한다
-private func pasteSafe(_ s: String) -> Bool {
+func pasteSafe(_ s: String) -> Bool {
     !s.unicodeScalars.contains { v in
         (v.value < 0x20 && v != "\n" && v != "\t") || v.value == 0x7F || (0x80...0x9F).contains(v.value)
             || v.value == 0x2028 || v.value == 0x2029
     }
+}
+
+/// 탭 이름 꼴인가 — 비지 않은 한 줄, 100자까지, 제어 문자 없음(--open-tab·--close-tab 의 --title 이 함께 쓴다)
+public func tabTitleOK(_ title: String) -> Bool {
+    !title.isEmpty && pasteSafe(title) && !title.contains("\n") && !title.contains("\t") && title.count <= 100
 }
 
 /// 요청을 검사하고 띄울 꼴로 고친다. newID 는 새 세션에 붙일 id(앱이 UUID 로 만들어 넘긴다)
@@ -204,9 +219,7 @@ public func openTabPrepare(cwd: String, title: String?, argv: [String], newID: S
     }
     guard argv.allSatisfy(pasteSafe) else { return .failure(.badArgs("인자에 제어 문자가 있습니다(줄바꿈·탭만 됨)")) }
     if let title {
-        guard !title.isEmpty, pasteSafe(title), !title.contains("\n"), !title.contains("\t"), title.count <= 100 else {
-            return .failure(.badArgs("--title 은 한 줄, 100자까지입니다"))
-        }
+        guard tabTitleOK(title) else { return .failure(.badArgs("--title 은 한 줄, 100자까지입니다")) }
     }
     let size = argv.reduce(0) { $0 + $1.utf8.count + 1 } + cwd.utf8.count + (title?.utf8.count ?? 0)
     guard size <= openTabMaxBytes else { return .failure(.badArgs("요청이 너무 깁니다(\(size) 바이트, 상한 \(openTabMaxBytes))")) }
