@@ -32,6 +32,7 @@ pub mod rules {
     pub mod path_key;
     pub mod gitlinks;
     pub mod history;
+    pub mod import;
     pub mod inbox;
     pub mod instruction;
     pub mod judge_changes;
