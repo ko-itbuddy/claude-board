@@ -125,6 +125,33 @@ test("읽기: 셸 화면의 세션 id·꾸미기 끔은 버린다", () => {
   assert.deepEqual(entry.root, shellLeaf("c"));
 });
 
+// ── external(바깥에서 연 탭) ───────────────────────────────────
+
+test("바깥 연 탭: 저장할 때 external 은 바깥에서 연 탭에만 남긴다(평범한 탭은 빠진 꼴 — 옛 항목과 같다)", () => {
+  const a = surface();
+  const b = surface();
+  const [inner, outer] = savedTabs([leafTab(a), leafTab(b, { external: true })], view([a, b]));
+  assert.equal("external" in inner, false);
+  assert.equal(outer.external, true);
+});
+
+test("바깥 연 탭: 읽을 때 external 은 정확히 true 일 때만 남긴다", () => {
+  const entries = parseEntries([
+    { workspace: "w", selected: false, external: true, root: shellLeaf() },
+    { workspace: "w", selected: false, external: false, root: shellLeaf() },
+    { workspace: "w", selected: false, external: "yes", root: shellLeaf() },
+  ]);
+  assert.deepEqual(entries.map((e) => "external" in e), [true, false, false]);
+});
+
+test("바깥 연 탭: 되살려진 탭이 표시를 다시 쥐고 다시 저장에도 남는다(왕복)", () => {
+  const [entry] = parseEntries([{ workspace: "C:\\a", name: null, selected: true, external: true, root: shellLeaf() }]);
+  const plan = planOf([entry]);
+  assert.equal(plan.tabs[0].external, true);
+  const [again] = savedTabs(plan.tabs, view(plan.surfaces, {}, plan.selectedTab));
+  assert.equal(again.external, true);
+});
+
 // ── restorePlan ────────────────────────────────────────────────
 
 test("되살리기: 모든 화면은 셸로 돌아오고 claude 화면은 held 만 쥔다", () => {

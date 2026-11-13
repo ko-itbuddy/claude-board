@@ -274,6 +274,7 @@ export interface BoardTab {
   root: SplitNode;
   focused: string;            // 고른 화면의 id
   zoomed: boolean;            // 고른 화면 하나 크게 보기
+  external?: boolean;         // 바깥에서(--open-tab) 연 탭 — 옛 저장 항목에는 없다(mac BoardTab.external)
 }
 
 // 칸의 셸 상태 — idle(아직 안 띄움) · starting · running · exited · failed
@@ -319,6 +320,7 @@ export interface TabEntry {
   workspace: string;
   name: string | null;
   selected: boolean;
+  external?: boolean; // 바깥에서(--open-tab) 연 탭 — 옛 저장 항목에는 없다
   root: SavedNode;
 }
 

@@ -66,6 +66,7 @@ export function savedTabs(tabs: BoardTab[], view: RestoreView): TabEntry[] {
     workspace: tab.workspace,
     name: tab.customName,
     selected: tab.id === view.selected,
+    ...(tab.external === true ? { external: true } : {}), // 바깥에서 연 탭만 표시한다(빠진 꼴은 옛 항목과 같다)
     root: savedNode(tab.root, tab, view),
   }));
 }
@@ -108,7 +109,13 @@ export function parseEntries(raw: unknown): TabEntry[] {
     if (!isObject(x) || typeof x.workspace !== "string") continue;
     const root = parseNode(x.root);
     if (!root) continue;
-    entries.push({ workspace: x.workspace, name: typeof x.name === "string" ? x.name : null, selected: x.selected === true, root });
+    entries.push({
+      workspace: x.workspace,
+      name: typeof x.name === "string" ? x.name : null,
+      selected: x.selected === true,
+      ...(x.external === true ? { external: true } : {}), // 디스크의 값을 믿지 않는다 — 정확히 true 일 때만
+      root,
+    });
   }
   return entries;
 }
@@ -228,6 +235,7 @@ export function restorePlan(entries: TabEntry[], aliveOutside: ReadonlySet<strin
       root,
       focused: leaves(root)[0],
       zoomed: false,
+      ...(entry.external === true ? { external: true } : {}), // 바깥에서 연 탭임을 다시 열 때까지 기억한다
     };
     tabs.push(tab);
     if (entry.selected) selectedTab = tab.id;
