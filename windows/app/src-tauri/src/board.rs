@@ -1111,6 +1111,7 @@ pub fn run(argv: Vec<String>, context: tauri::Context<tauri::Wry>) {
             crate::terms::term_kill,
             crate::open_tab::inbox::open_tab_ready,
             crate::open_tab::inbox::open_tab_done,
+            crate::open_tab::inbox::close_tab_panes,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

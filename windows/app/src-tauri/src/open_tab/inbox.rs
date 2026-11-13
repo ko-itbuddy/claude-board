@@ -21,12 +21,17 @@ use claude_board_core::place::SessionProc;
 use claude_board_core::proc::{self, ProcessTable};
 
 use crate::board::Board;
+use crate::drive::{self, Purpose, Target};
 use crate::open_tab::args::open_tab_dir;
+use crate::open_tab::close::{CloseTabScreen, CLOSE_TAB_STOP_WAIT};
+use crate::open_tab::close_cli::close_tab_request_dir;
+use crate::open_tab::close_handle::{self, PaneView};
 use crate::open_tab::handle::{self, OpenTabAction};
 use crate::open_tab::plan::{claude_arg_info, is_session_id, open_tab_command, LiveClaude, OpenTabScreen};
 use crate::readers::ClaudeNames;
+use crate::session_action::SessionAction;
 use crate::store;
-use crate::terminal::screens::open_tab_screens;
+use crate::terminal::screens::{close_tab_screens, open_tab_screens, PaneApp};
 use crate::terms::{pairing, TermInfo, TermHub};
 use crate::util::{board_log, short_id};
 
@@ -52,6 +57,9 @@ pub struct Inbox {
     pub ready: bool,
     /// 곱을 기다리는 자리 `<요청 id, 흘려 보낼 곳>`
     waiters: Vec<(String, mpsc::Sender<DoneNotice>)>,
+    /// 프론트가 알려 온 탭 화면 값 — 닫기 판정에 쓴다(`close_tab_panes` 명령으로 갱신한다).
+    /// 프론트가 보내기 전엔 비어 있어 바깥 열기 표지가 없다 → 닫기 요청은 표지 거절로 답한다(닫을 근거가 없으므로)
+    panes: Vec<PaneApp>,
 }
 
 impl Inbox {
@@ -86,6 +94,14 @@ pub fn open_tab_ready(board: State<'_, Arc<Board>>) {
 #[tauri::command]
 pub fn open_tab_done(board: State<'_, Arc<Board>>, id: String, tab: Option<String>, session: Option<String>) {
     board.inbox.lock().unwrap().send_done(&id, tab, session);
+}
+
+/// 프론트가 닫기 판정에 쓸 탭 화면 값을 알려 온다 — 웹뷰에만 있는 값(탭 이름·바깥 열기 표지·이어받기·
+/// 나눔·막 뜸)을 백엔드 판정(`close_handle::drain_close`)에 더한다. 요청이 있을 때마다 갱신해 보낸다.
+#[tauri::command]
+pub fn close_tab_panes(board: State<'_, Arc<Board>>, panes: Vec<PaneView>) {
+    let panes = panes.into_iter().map(close_handle::pane_app).collect();
+    board.inbox.lock().unwrap().panes = panes;
 }
 
 /// 프론트에 보내는 바깥 열기 요청 — `openTab.ts` `OpenTabRequest` 꼴(camelCase 키로 보낸다).
@@ -258,6 +274,82 @@ fn screen_list(board: &Board) -> Vec<OpenTabScreen> {
     out.iter().map(|screen| OpenTabScreen { cwd: handle::real_dir(&screen.cwd), ..screen.clone() }).collect()
 }
 
+/// 닫기 판정에 넘길 화면 값 — 도는 보드 터미널만(끝난 터미널은 claude 징후가 빈 값이 되므로, `screen_list`의
+/// 주의와 같다), 프론트가 알려 온 탭 화면 값(`Inbox::panes`)을 더하고, 끝내는 중 표지는 판정 중이면 심는다.
+/// cwd 견주기가 없어(닫기 판정에 cwd 가 없다) 열기와 달리 real_dir 로 풀 필요가 없다.
+fn close_screen_list(board: &Board, stopping: &[String]) -> Vec<CloseTabScreen> {
+    let panes: Vec<PaneApp> = board.inbox.lock().unwrap().panes.clone();
+    let hub = board.app.state::<TermHub>();
+    let terms: Vec<TermInfo> = hub.list().into_iter().filter(|term| term.status == "running").collect();
+    let sessions = board.sessions();
+    let procs: Vec<SessionProc> = sessions
+        .iter()
+        .filter(|session| session.pid > 0 && session.state != "ended")
+        .map(|session| SessionProc { pid: session.pid, headless: session.headless, ended: false })
+        .collect();
+    let table = ProcessTable::capture();
+    let pairing = pairing::pair_all(&hub.hosts(), &procs, &table);
+    close_tab_screens(&terms, &sessions, &pairing, &panes, stopping)
+}
+
+/// 끝내기(/exit)만 쓰는 `drive` 실물 — 화면(터미널)에 단계를 친다. 콘솔·프로세스 끝내기는 닫기가 아니므로 안 쓴다.
+struct SurfaceIo<'a> {
+    hub: &'a TermHub,
+}
+
+impl drive::Io for SurfaceIo<'_> {
+    fn surface(&self, id: &str, bytes: &[u8]) -> bool {
+        self.hub.write(id, bytes).is_ok()
+    }
+    fn console(&self, _pid: u32, _inputs: &[claude_board_core::console::Input]) -> bool {
+        false
+    }
+    fn kill(&self, _pid: u32) -> bool {
+        false
+    }
+    fn sleep(&self, ms: u64) {
+        std::thread::sleep(Duration::from_millis(ms));
+    }
+}
+
+/// 닫기 동작의 몸통 — 화면 닫기는 터미널 허브의 끄기(`kill`), 끝내기는 drive 의 `/exit` 단계를 그 화면에 친다.
+/// 끝내기를 넣지 못했으면(화면이 이미 끝났거나 쓰기가 막혔다) false — 탭은 그대로 두고 busy 답을 쓴다.
+/// 콘솔·프로세스 경로는 닫기가 아니므로(`drive::Io` 약속의 남는 조각) false 로 막아 둔다.
+struct CloseActions<'a> {
+    hub: &'a TermHub,
+}
+
+impl close_handle::CloseIo for CloseActions<'_> {
+    fn close(&mut self, term: &str) -> Result<(), String> {
+        self.hub.kill(term)
+    }
+    fn send_exit(&mut self, term: &str) -> bool {
+        let io = SurfaceIo { hub: self.hub };
+        drive::run(&Target::Surface(term.to_string()), &drive::steps_for(SessionAction::Stop), Purpose::Stop, &io)
+    }
+}
+
+/// 닫기 요청 훑기 — 열기 요청과 폴더가 다르고(`close-tab` 폴더) 이 틱 스레드에서만 훑는다.
+/// 답을 기다리는 동안(--stop 의 끝나기 기다림) 막히므로 `drain_tick` 에서만 부른다.
+fn drain_close_tick(board: &Arc<Board>) {
+    let dir = close_tab_request_dir(&paths::local_app_data(), false);
+    let hub = board.app.state::<TermHub>();
+    let mut actions = CloseActions { hub: hub.inner() };
+    let screens = |stopping: &[String]| close_screen_list(board, stopping);
+    // 답의 요청 id 는 열기와 같이 기록하지 않는다 — 상태·탭·세션·이유만 남긴다
+    for (_id, reply) in
+        close_handle::drain_close(&dir, &screens, &mut actions, Duration::from_secs_f64(CLOSE_TAB_STOP_WAIT))
+    {
+        board_log(&format!(
+            "바깥 탭 닫기: {} {} {} {}",
+            reply.status,
+            reply.tab.as_deref().unwrap_or(""),
+            reply.session.as_deref().unwrap_or(""),
+            reply.why.as_deref().unwrap_or("")
+        ));
+    }
+}
+
 /// `~/.claude/sessions` 폴더의 `<pid>.json` 에서 (pid, 이름) — 이름 없거나 빈 것은 뺀다
 /// (mac `ClaudeNames.live` 의 이름 부분. 살아 도는지는 부르는 쪽에서 본다).
 fn named_live_claudes(claude_dir: &Path) -> Vec<(u32, String)> {
@@ -335,6 +427,8 @@ fn drain_tick(board: &Arc<Board>, wait_secs: f64) {
             reply.why.as_deref().unwrap_or("")
         ));
     }
+    // 닫기 요청 훑기 — 열기 요청과 폴더가 다르고(닫기는 `close-tab` 폴더) 같은 틱 스레드에서만 훑는다
+    drain_close_tick(board);
 }
 
 /// 바깥 탭 열기 틱 스레드 — 1초마다 요청 폴더를 본다(보드의 다른 틱들과 같은 간격).
