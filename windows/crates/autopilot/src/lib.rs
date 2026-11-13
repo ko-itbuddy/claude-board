@@ -38,6 +38,7 @@ pub mod rules {
     pub mod report_gate;
     pub mod scenarios;
     pub mod sequence;
+    pub mod skeleton;
     pub mod slot_table;
     pub mod stack;
     pub mod start_settings;
