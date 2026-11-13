@@ -1287,7 +1287,7 @@ fn outbox_id_key_ok(project: &str, number: &str, step: Option<&str>) -> bool {
         && cs.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
         && (1..=9).contains(&number.len())
         && number.chars().all(|c| c.is_ascii_digit())
-        && step.map(|s| (1..=2).contains(&s.len()) && s.chars().all(|c| c.is_ascii_digit())).unwrap_or_else(|| unreachable!("step 은 이미 1~2 자리 숫자로 걸렀다"))
+        && step.is_none_or(|s| (1..=2).contains(&s.len()) && s.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// 원본: `Outbox.swift` 의 `apOutboxJSON`

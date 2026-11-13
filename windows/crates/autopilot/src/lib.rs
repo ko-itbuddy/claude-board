@@ -29,6 +29,7 @@ pub mod rules {
     pub mod multirun;
     pub mod new_repo;
     pub mod notify_rules;
+    pub mod outbox;
     pub mod path_key;
     pub mod gitlinks;
     pub mod history;
