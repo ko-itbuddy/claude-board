@@ -1,4 +1,3 @@
-//! (청크 Tickets 끝 — PORTED.json 항목은 통합자가 더하고 이 줄을 지운다)
 //! 출발 때 한꺼번에 만드는 Jira 티켓 나무 — 계획(보드가 씀)·상태(엔진이 씀)·요청 꼴. 원본: `Sources/AutopilotRules/Tickets.swift` 전체
 //! (계획 12–103 · 상태 105–203 · 요청 꼴 205–293 · 만들기와 행·실행 중 새 티켓 295–528), 시험 make_all·retry_left·uncertain·blocked·waits_and_guards·types_and_keys·outbox·post_ticket.
 //! 4단계 ⑩-3(2026-10-30, 설계 2장 끝·5장 6절). 출발 확인의 "만들 티켓"(에픽 아래 새 스토리·새 작업, 옮긴 작업의 부모 바꾸기)은
