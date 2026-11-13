@@ -46,7 +46,7 @@ public func resumeBaseCommand(_ s: Session) -> String {
 
 /// 이어서 진행하라는 요청을 첫 요청으로 붙인다 — 작은따옴표로 감싸고 안의 ' 는 '\''
 public func carryOnCommand(_ command: String, prompt: String = carryOnPrompt) -> String {
-    command + " '" + prompt.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    command + " '" + prompt.replacingOccurrences(of: "'", with: "'\\''", options: .literal) + "'"
 }
 
 /// 보드로 옮기기 전에 물어야 하는가 — 작업 중·승인 대기면 진행 중인 응답이 끊긴다

@@ -66,7 +66,25 @@ EXCLUDED = [
     "경로 구분자가 든 session_id: Windows 판만 받지 않는다(sessions 밖에 쓰지 않게). 표에 넣지 않는다",
     "세션 파일의 키 순서: 표는 키를 정렬해 적는다(키 순서는 windows/crates/core/tests/state_sequence.rs 가 본다)",
     "hook 입력 앞의 UTF-8 BOM·notify 의 깨진 입력: Windows 는 hook 실행 파일(crates/hook main.rs)이 코어를 부르기 전에 다룬다. 표는 코어만 본다",
+    "리모트 컨트롤 이름 넘기기(carry_args 의 --remote-control·--rc, 값은 생략할 수 있음): macOS 3.3.3 에서 더했고 Windows 판은 아직이다. "
+    "표에 넣지 않고 gen.py 의 check_mac_only 가 macOS 쪽만 확인한다(Windows 가 따라오면 시나리오로 옮긴다)",
 ]
+
+
+def check_mac_only():
+    """표에 넣지 않은(EXCLUDED) macOS 만의 hook 규칙을 여기서 바로 확인한다 — 표를 만들 때마다(CI 포함) 돈다."""
+    c = state.carry_args
+    rows = [
+        (["claude", "--remote-control"], ["--remote-control"]),
+        (["claude", "--remote-control", "내 폰", "--model", "opus"], ["--remote-control", "내 폰", "--model", "opus"]),
+        (["claude", "--remote-control=내 폰"], ["--remote-control=내 폰"]),
+        (["claude", "--rc", "--verbose"], ["--rc", "--verbose"]),
+        (["claude", "--rc", "a", "--rc", "a", "--rc", "--rc=a", "--rc=a"], ["--rc", "a", "--rc", "--rc=a"]),
+        (["claude", "--remote-control-session-name-prefix", "p"], []),
+    ]
+    for argv, want in rows:
+        got = c(argv)
+        assert got == want, ("carry_args", argv, got, want)
 
 
 # ---- 표시 바꾸기 ---------------------------------------------------------------
@@ -784,6 +802,7 @@ def main():
     had_sessions = os.path.exists(repo_sessions)
     pids = {"@LIVE_PID": os.getpid(), "@PARENT_PID": os.getppid(), "@DEAD_PID": dead_pid()}
     assert len(set(pids.values()) | {CLAUDE_PID}) == 4, pids
+    check_mac_only()
     root = tempfile.mkdtemp(prefix="hook-table-")
     try:
         state_table = [run_state(sc, root, pids) for sc in STATE]

@@ -1352,7 +1352,7 @@ struct HubTabs: BoardTabs {
     // 답변 꾸미기는 기본으로 켠다(보드 밖에서 시작한 세션도) — 새 세션 창에서 끄고 띄운 세션만 끈 채로
     func claudeCommand(_ base: String, session: String) -> (command: String, mdRenderOff: Bool) {
         let off = isMdRenderOff(session)
-        return (mdRenderCommand(base, args: sessionRecord(session)?["args"] as? [String], off: off), off)
+        return (mdRenderCommand(base, off: off), off)
     }
 
     func mode(_ s: Session) -> String? { MainActor.assumeIsolated { TerminalHub.shared.mode(s) } }
@@ -1745,6 +1745,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                                                             queue: .main) { n in
             if let a = n.userInfo?["action"] as? String, let id = n.userInfo?["id"] as? String { MainActor.assumeIsolated { performAction(a, id) } }
         }
+        // 바깥에서 탭 열기(ClaudeBoard --open-tab) — 알림에는 내용이 없고 요청은 사용자만 쓰는 폴더에서 읽는다(OpenTabInbox)
+        DistributedNotificationCenter.default().addObserver(forName: .init("\(instanceName).open-tab"), object: nil,
+                                                            queue: .main) { _ in MainActor.assumeIsolated { OpenTabInbox.shared.drain() } }
+        // 바깥에서 탭 닫기(ClaudeBoard --close-tab) — 열기와 같은 꼴, 요청 폴더만 따로(CloseTabInbox)
+        DistributedNotificationCenter.default().addObserver(forName: .init("\(instanceName).close-tab"), object: nil,
+                                                            queue: .main) { _ in MainActor.assumeIsolated { CloseTabInbox.shared.drain() } }
         // Ghostty 가 실행되면 보드 창도 함께 띄운다 — 포커스는 Ghostty 에 그대로 둔다
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didLaunchApplicationNotification,
                                                           object: nil, queue: .main) { note in

@@ -64,6 +64,7 @@ Rust 시험은 같은 가짜를 `state::Env` 로 넣고 `state::run`·`notify::p
 - 경로 구분자(`/`·`\`·`..`)가 든 `session_id`: Windows 판만 받지 않는다(sessions 밖에 쓰지 않게). 표에 넣지 않는다
 - 세션 파일의 키 순서: 표는 키를 정렬해 적는다. 키 순서는 `windows/crates/core/tests/state_sequence.rs` 가 본다
 - hook 입력 앞의 UTF-8 BOM·notify 의 깨진 입력: Windows 는 hook 실행 파일(`crates/hook` 의 `main.rs`)이 코어를 부르기 전에 다룬다(SPEC §3.2, §3.6). 표는 코어만 본다
+- 리모트 컨트롤 이름 넘기기(`carry_args` 의 `--remote-control`·`--rc`, `--remote-control=<이름>` 이거나 다음 인자가 `-` 로 시작하지 않으면 그 값, 값 없이도 됨): macOS 3.3.3 에서 더했고 Windows 판은 아직이다. 표에 넣지 않고 `gen.py` 의 `check_mac_only` 가 macOS 쪽만 확인한다. Windows 가 따라오면 시나리오로 옮기고 이 줄을 지운다
 
 ## 표가 덮지 못하는 것
 

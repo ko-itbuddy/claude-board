@@ -73,10 +73,12 @@ def proc_args(pid):
         return []
 
 
-# 세션을 다시 열 때 그대로 넘길 실행 인자 — 값을 받는 것, 값을 여러 개 받는 것, 값이 없는 것
+# 세션을 다시 열 때 그대로 넘길 실행 인자 — 값을 받는 것, 값을 여러 개 받는 것, 값이 없는 것,
+# 값을 받을 수도 있는 것(리모트 컨트롤 이름: --remote-control=<이름>, 또는 다음 인자가 - 로 시작하지 않으면 그 인자 — Claude Code 와 같은 읽기)
 CARRY_ONE = {"--model", "--permission-mode", "--agent", "--settings", "--plugin-dir"}
 CARRY_MANY = {"--add-dir", "--mcp-config"}
 CARRY_FLAG = {"--dangerously-skip-permissions", "--allow-dangerously-skip-permissions", "--chrome", "--ide", "--verbose"}
+CARRY_OPT = {"--remote-control", "--rc"}
 
 
 def carry_args(argv):
@@ -86,7 +88,7 @@ def carry_args(argv):
     while i < len(argv):
         a = argv[i]
         name = a.split("=", 1)[0]
-        if "=" in a and name in CARRY_ONE | CARRY_MANY:
+        if "=" in a and name in CARRY_ONE | CARRY_MANY | CARRY_OPT:
             if a not in seen:
                 seen.add(a)
                 out.append(a)
@@ -94,6 +96,15 @@ def carry_args(argv):
             if a not in seen:
                 seen.add(a)
                 out.append(a)
+        elif a in CARRY_OPT:
+            if i + 1 < len(argv) and not argv[i + 1].startswith("-"):
+                key, toks = (a, argv[i + 1]), [a, argv[i + 1]]
+                i += 1
+            else:
+                key, toks = a, [a]
+            if key not in seen:
+                seen.add(key)
+                out += toks
         elif a in CARRY_ONE and i + 1 < len(argv):
             if (a, argv[i + 1]) not in seen:
                 seen.add((a, argv[i + 1]))

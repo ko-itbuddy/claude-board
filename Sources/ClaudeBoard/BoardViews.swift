@@ -1319,6 +1319,7 @@ struct GroupCard: View {
     // 이 경로를 쓰는 자율주행 실행 — 실행 줄(기본 보기에서는 숨김)과 원래 작업 트리 표지(늘)
     @ObservedObject private var autopilot = AutopilotStore.shared
     @AppStorage("autopilotView") private var autopilotView = "all"
+    @Environment(\.apUsageInHead) private var usageInHead   // 보드 머리 사용량 줄이 계정 사용률을 그리면 실행 줄은 그리지 않는다
     @State private var hover = false
     @State private var endedHover = false
     // 접어 둔 구역 "<작업경로>|term" / "<작업경로>|bg" (줄바꿈으로 이음) — 앱을 다시 켜도 유지한다
@@ -1426,7 +1427,7 @@ struct GroupCard: View {
             // 단위 시계(분)는 1초 시계(EverySecond)로 셈한다 — 카드는 매초 다시 그리지 않고 이 줄만 분이 바뀔 때 다시 그린다
             if autopilotView != "basic" {
                 ForEach(apRuns) { r in
-                    EverySecond { now in APRunLine(run: r, minutes: r.unitMinutes(now), compact: collapsed).equatable() }
+                    EverySecond { now in APRunLine(run: r, minutes: r.unitMinutes(now), meters: !usageInHead, compact: collapsed).equatable() }
                         .transition(.opacity)
                 }
             }

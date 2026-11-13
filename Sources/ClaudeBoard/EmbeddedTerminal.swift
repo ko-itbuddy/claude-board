@@ -374,6 +374,12 @@ final class BoardSurface: NSObject, ObservableObject, Identifiable, TerminalSurf
         pending != nil || Date().timeIntervalSince(typedAt) < 3 || view.foregroundPid.map(isLiveClaude) == true
     }
 
+    // 셸이 아직 첫 프롬프트를 띄우지 않았다(뜨는 중 — 앞 프로세스가 login·셸 설정이라 atPrompt 가 아니다)
+    var shellStarting: Bool { !shellReady }
+
+    // 보드가 넣을 claude 명령이 셸이 뜨기를 기다리거나 막 넣었다(3초 — runsClaude 의 앞 두 갈래). 바깥 닫기는 이때 닫지 않는다
+    var justTyped: Bool { pending != nil || Date().timeIntervalSince(typedAt) < 3 }
+
     // 셸이 프롬프트에 있다(셸 위에 도는 프로그램이 없다) — 앞 프로세스 그룹이 셸 자신(엔진이 띄운 login 의 자식)이면
     var atPrompt: Bool {
         guard let fg = view.foregroundPid, fg > 0 else { return false }
@@ -519,6 +525,10 @@ final class SplitNode {
     @Published var zoomed = false          // 고른 화면 하나 크게 보기(⇧⌘↩) — 나머지 화면은 숨긴다
     @Published var customName: String? // 사용자가 붙인 탭 이름(⇧⌘R) — 없으면 폴더 이름. 쥔 탭 목록에 남아 다시 떠도 그대로
     @Published var renaming = false    // 탭 이름 칸을 고치는 중
+    // 바깥 열기(--open-tab, openExternal)로 새로 연 탭 — 바깥 닫기(--close-tab)는 이 표지가 있는 탭만 닫는다(사람이 연 같은 이름의 탭을 닫지 않게).
+    // 화면이 아니라 탭에 둔다(셸만 남은 화면의 값은 경로만 남아 claude 를 끝내면 사라지므로). 쥔 탭 목록에 "external": "1" 로 남아 다시 떠도 그대로.
+    // 같은 이름으로 다시 연 reopened 는 바꾸지 않는다(사람이 연 탭을 다시 써도 표지가 생기지 않는다)
+    var external = false
     private var watching: [ObjectIdentifier: AnyCancellable] = [:]
 
     init(_ root: SplitNode, focused: BoardSurface? = nil, workspace: String) {
@@ -655,11 +665,12 @@ final class SplitNode {
 
     // 셸 탭 — 엔진이 사용자의 로그인 셸(passwd 의 셸)을 login 으로 띄운다. login 이 환경을 스스로 꾸리므로 환경 변수를 넘기지 않는다.
     // 셸이 끝나면(exit) 엔진이 닫기를 청해 그 화면을 닫는다(terminalDidClose — 탭의 마지막 화면이면 탭째)
+    // select false 면 탭을 고르지 않고 뒤에 더한다(바깥 열기 --no-focus) — 고른 탭·지금 경로·경로마다 마지막 탭·첫 응답자가 그대로다
     @discardableResult
-    func openShell(in dir: String) -> BoardTab? {
+    func openShell(in dir: String, select pick: Bool = true) -> BoardTab? {
         guard area != nil else { return nil }
         let tab = BoardTab(SplitNode(makeSurface(in: dir)), workspace: dir)
-        add(tab)
+        add(tab, select: pick)
         return tab
     }
 
@@ -668,8 +679,9 @@ final class SplitNode {
         BoardSurface(TerminalSurfaceOptions(backend: .exec, workingDirectory: dir), frame: .zero, controller: controller)
     }
 
-    // 탭을 탭 목록에 넣고 화면들을 창에 붙인 뒤 고른다 — 자리를 먼저 정하고 붙인다(크기가 0 인 뷰는 셸을 띄우지 않는다)
-    private func add(_ tab: BoardTab) {
+    // 탭을 탭 목록에 넣고 화면들을 창에 붙인 뒤 고른다 — 자리를 먼저 정하고 붙인다(크기가 0 인 뷰는 셸을 띄우지 않는다).
+    // pick false 면 고르지 않는다(숨긴 채 실제 크기로 붙여 셸은 뜬다 — 다른 탭을 보는 중·접힘·미니·최소화에도, 4-2 손 시험)
+    private func add(_ tab: BoardTab, select pick: Bool = true) {
         guard let area else { return }
         area.workspaceBarShown = true             // 첫 탭이면 경로 줄이 생겨 터미널 칸이 줄어든다 — 탭을 만들기 전에 맞춘다
         area.superview?.layoutSubtreeIfNeeded()
@@ -677,7 +689,7 @@ final class SplitNode {
         if let last = tabs.lastIndex(where: { $0.workspace == tab.workspace }) { tabs.insert(tab, at: last + 1) } else { tabs.append(tab) }
         layoutSurfaces()
         tab.surfaces.forEach(attach)
-        select(tab.id)
+        if pick { select(tab.id) } else { applyVisibility() }
         saveTabs()
     }
 
@@ -761,6 +773,59 @@ final class SplitNode {
     }
     func hasTakeoverTab(session: String) -> Bool { surfaces.contains { $0.sessionId == session && $0.autopilotRun != nil } }
 
+    // 바깥에서 연 탭(ClaudeBoard --open-tab, OpenTabInbox) — 보드가 연 탭과 같은 길(launch)이고 탭 이름만 먼저 붙인다(세션 이름 --name 도 이 이름).
+    // 원래 작업 트리 경로의 자율주행 경고(startSession)는 띄우지 않는다(부른 쪽이 기다리는 동안 창이 막히지 않게).
+    // 바깥 닫기(--close-tab)가 닫을 수 있게 표지(external)를 붙인다. focus false(--no-focus)면 고르지 않고 뒤에 열고 reveal 도 부르지 않는다
+    @discardableResult
+    func openExternal(_ command: String, in dir: String, title: String?, sessionId: String?, mdRenderOff: Bool, focus: Bool = true) -> BoardTab? {
+        guard let tab = openShell(in: dir, select: focus) else { return nil }
+        tab.customName = title
+        tab.external = true
+        run(command, in: tab.focused, sessionId: sessionId, mdRenderOff: mdRenderOff)
+        if focus { reveal(tab.id) }
+        return tab
+    }
+
+    // 바깥 열기·닫기가 화면을 이름으로 찾을 때의 이름들 — 지금 Claude Code 이름·바꿀 이름·방금 붙인 이름·넣은 명령의 --name·
+    // 화면 하나인 탭의 탭 이름(그 탭 claude 의 세션 이름이 된다, 다시 뜬 뒤 들어가지 않은 화면도, claude 가 끝나 셸만 남은 화면도)
+    private func screenNames(_ s: BoardSurface, in t: BoardTab) -> [String] {
+        var names = [s.session?.name, s.renameTo].compactMap { $0 }
+        if let r = reservedNames[s.id], Date().timeIntervalSince(r.at) < 15 { names.append(r.name) }
+        if let c = s.command ?? s.held?["command"], let words = shellWords(c), words.first.map({ ($0 as NSString).lastPathComponent }) == "claude",
+           let n = claudeArgInfo(words).name { names.append(n) }
+        if t.surfaces.count == 1, let n = t.customName { names.append(n) }
+        return names
+    }
+
+    // 바깥 열기의 같은 세션·이름 찾기(BoardRules planOpenTab)에 넘길 화면 값
+    var openTabScreens: [OpenTabScreen] {
+        tabs.flatMap { t in
+            t.surfaces.map { s in
+                OpenTabScreen(id: s.id, sessionId: s.session?.id ?? s.sessionId, cwd: realDir(s.cwd), pid: s.session?.pid, names: screenNames(s, in: t),
+                              busy: s.runsClaude || (!s.shellStarting && s.view.foregroundPid != nil && !s.atPrompt),
+                              takeover: s.autopilotRun != nil)
+            }
+        }
+    }
+
+    // 바깥 닫기(BoardRules planCloseTab)에 넘길 화면 값 — stopping 은 --stop 으로 claude 를 끝내는 중인 화면들(CloseTabInbox)
+    func closeTabScreens(stopping: Set<UUID>) -> [CloseTabScreen] {
+        tabs.flatMap { t in t.surfaces.map { closeTabScreen($0, in: t, stopping: stopping.contains($0.id)) } }
+    }
+    func closeTabScreen(_ id: UUID, stopping: Bool) -> CloseTabScreen? {
+        guard let s = surface(id), let t = s.tab, tabs.contains(where: { $0 === t }) else { return nil }
+        return closeTabScreen(s, in: t, stopping: stopping)
+    }
+    private func closeTabScreen(_ s: BoardSurface, in t: BoardTab, stopping: Bool) -> CloseTabScreen {
+        // 앞 프로그램 — 셸이 뜨는 중·막 넣음 → 셸 프롬프트 → 살아 있는 claude → 그 밖(앞 프로그램을 읽지 못한 때도)
+        let fg: CloseTabForeground = s.shellStarting || s.justTyped ? .starting
+            : s.atPrompt ? .prompt
+            : s.view.foregroundPid.map(isLiveClaude) == true ? .claude : .other
+        return CloseTabScreen(id: s.id, tab: t.name, sessionId: s.session?.id ?? s.sessionId, names: screenNames(s, in: t), external: t.external,
+                              takeover: s.autopilotRun != nil, split: t.surfaces.count > 1, stopping: stopping, foreground: fg)
+    }
+    var isRestored: Bool { restored }
+
     // 화면의 셸에 claude 명령을 넣고 그 화면을 claude 화면으로 삼는다(새 탭, 셸 프롬프트로 남은 화면에서 이어 열기, 다시 뜰 때 되살리기).
     // 세션 이름(--name)은 셸에 칠 때 붙인다 — 되살릴 때는 그때야 탭과 탭 이름이 생긴다. 쥔 탭 목록의 명령에는 남기지 않는다(되살릴 때 다시 고른다)
     func run(_ command: String, in s: BoardSurface, sessionId: String?, mdRenderOff: Bool) {
@@ -796,14 +861,15 @@ final class SplitNode {
         return name
     }
 
-    // 셸에 칠 claude 명령에 --name <이름> 을 claude 바로 뒤에 붙인다(셸에 치므로 shlexQuote — 한글·공백 이름). claude 가 아니거나
-    // 사용자가 -n·--name 을 적었으면 그대로. --resume 과 함께 주면 --name 이 이긴다(실측 — 없으면 예전 대화 이름을 되살린다)
+    // 셸에 칠 claude 명령에 --name <이름> 을 claude 바로 뒤에 붙인다(셸에 치므로 따옴표로 묶음 — 한글·공백 이름). claude 가 아니거나
+    // 사용자가 -n·--name 을 적었으면 그대로. --resume 과 함께 주면 --name 이 이긴다(실측 — 없으면 예전 대화 이름을 되살린다).
+    // 낱말 단위로 끼운다(BoardRules withSessionName — 첫 요청 글 안의 -n 글자를 이름 옵션으로 보지 않는다)
     private func named(_ command: String, in s: BoardSurface) -> String {
-        guard let r = command.range(of: #"^\s*(\S*/)?claude(?=\s|$)"#, options: .regularExpression),
-              command.range(of: #"(^|\s)(-n|--name)(=|\s|$)"#, options: .regularExpression) == nil else { return command }
-        let name = pickName(s.tab?.name ?? s.folderName, for: s)
-        reservedNames[s.id] = (name, Date())
-        return command.replacingCharacters(in: r.upperBound..<r.upperBound, with: " --name " + shlexQuote(name))
+        withSessionName(command) {
+            let name = pickName(s.tab?.name ?? s.folderName, for: s)
+            reservedNames[s.id] = (name, Date())
+            return name
+        }
     }
 
     // ⇧⌘R 로 바꾼 탭 이름을 그 탭의 claude 세션들에 — 화면마다 /rename <이름>(나눈 탭은 번호로 나뉜다, 사용자 결정). 셸만 남은 화면·
@@ -872,7 +938,7 @@ final class SplitNode {
         return sessionRecord(s.id)?["state"] as? String != "waiting"
     }
 
-    // 쥔 탭 목록 — 보드 설정 terminalTabs 에 탭마다 [workspace, name, selected, last] 와 화면 값 [cwd, command, mdoff, session, resume] 을 남긴다
+    // 쥔 탭 목록 — 보드 설정 terminalTabs 에 탭마다 [workspace, name, external, selected, last] 와 화면 값 [cwd, command, mdoff, session, resume] 을 남긴다
     // (셸 화면은 경로만). 화면이 하나인 탭은 화면 값을 탭 항목에 바로 넣어 3.0.x 목록과 같은 꼴이고, 나눈 탭은 root 에 화면 트리
     // (가지 {split: right|down, ratio, a, b}, 잎은 화면 값 — 고른 화면에 focused)를 넣는다. 크게 보기는 남기지 않는다.
     // workspace 는 탭의 작업 경로, selected 는 고른 탭(곧 지금 경로), last 는 경로마다 마지막에 고른 탭.
@@ -886,6 +952,7 @@ final class SplitNode {
         let list = tabs.map { t -> [String: Any] in
             var e: [String: Any] = ["workspace": t.workspace]
             if let n = t.customName { e["name"] = n }
+            if t.external { e["external"] = "1" }   // 바깥 열기로 연 탭 — 다시 떠도 바깥 닫기가 닫을 수 있게
             if t.id == selected { e["selected"] = "1" }
             if lastTab[t.workspace] == t.id { e["last"] = "1" }
             if let s = t.root.surface { for (k, v) in entry(s) { e[k] = v } } else { e["root"] = savedNode(t.root, focused: t.focused) }
@@ -945,6 +1012,7 @@ final class SplitNode {
             guard let (root, dir) = restoreNode(e["root"] as? [String: Any] ?? e, focused: &focused) else { continue }
             let tab = BoardTab(root, focused: focused, workspace: e["workspace"] as? String ?? dir)
             tab.customName = e["name"] as? String
+            tab.external = e["external"] != nil   // 화면 하나인 탭은 화면 값과 한 항목이지만 화면 값(restoreNode·held)은 정한 키만 읽는다
             add(tab)
             if e["selected"] != nil { pick = tab.id }
             if e["last"] != nil { lasts.append(tab) }
@@ -955,6 +1023,8 @@ final class SplitNode {
         for t in lasts { lastTab[t.workspace] = t.id }
         if let id = pick ?? selected { select(id) }
         saveTabs()
+        OpenTabInbox.shared.drain()   // 되살리는 동안 들어온 바깥 열기 요청(--open-tab --launch 로 보드를 켠 요청도)
+        CloseTabInbox.shared.drain()  // 되살리는 동안 들어온 바깥 닫기 요청
     }
 
     // 남겨 둔 화면 트리의 잎(화면 값)들
@@ -1043,7 +1113,7 @@ final class SplitNode {
         }
         if FileManager.default.fileExists(atPath: transcriptPath(rec?["transcript_path"] as? String, dir, id)) {
             let resume = (rec?["resume_cmd"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? e["resume"] ?? "claude --resume \(id)"
-            return (mdRenderCommand(resume, args: rec?["args"] as? [String], off: off), id, dir)
+            return (mdRenderCommand(resume, off: off), id, dir)
         }
         let (c, i) = freshSessionCommand(command)
         return (c, i, dir)
@@ -1569,14 +1639,10 @@ struct ShutdownList: View {
 }
 
 // 새로 띄우는 claude 에 세션 id 를 붙인다(--session-id) — 보드가 그 세션을 미리 안다. claude 가 아니거나 이어 열기·이어 하기면 그대로.
-// 이미 --session-id 가 있으면 새 id 로 바꾼다(되살리기가 대화 없이 끝난 세션을 다시 띄울 때)
+// 이미 --session-id 가 있으면 새 id 로 바꾼다(되살리기가 대화 없이 끝난 세션을 다시 띄울 때). 낱말 단위로 고친다(BoardRules withFreshSession —
+// 글자 위 정규식으로 지우면 첫 요청 글의 닫는 따옴표까지 지워 셸이 다르게 읽을 수 있었다, 3.3.3 보안 고침)
 func freshSessionCommand(_ command: String) -> (String, String?) {
-    let has = { (pattern: String) in command.range(of: pattern, options: .regularExpression) != nil }
-    guard has(#"^\s*(\S*/)?claude(\s|$)"#), !has(#"(^|\s)(--resume|-r|--continue|-c)(=|\s|$)"#) else { return (command, nil) }
-    // 따옴표 안 공백이 상하지 않게 문자열을 쪼개지 않고 고친다
-    let base = command.replacingOccurrences(of: #"\s--session-id(=|\s+)\S+"#, with: "", options: .regularExpression)
-    let id = UUID().uuidString.lowercased()
-    return (base + " --session-id " + id, id)
+    withFreshSession(command, newID: UUID().uuidString.lowercased())
 }
 
 // 답변 마크다운 꾸미기(md-render) — 보드 탭 claude 에 --plugin-dir 로 넘기는 경로. 앱 안 Contents/Resources/plugins/md-render 를
@@ -1602,40 +1668,15 @@ let mdRenderDir: String? = {
     return dest
 }()
 
-// state.py 가 resume_cmd 를 만들 때 쓰는 shlex.quote 와 같은 인용 — resume_cmd 안의 토큰을 그대로 찾고, 보드가 붙이는 경로를
-// 엔진이 명령을 넘기는 bash -c 에 안전하게 넘긴다
-func shlexQuote(_ s: String) -> String {
-    if !s.isEmpty, s.range(of: "[^A-Za-z0-9_@%+=:,./-]", options: .regularExpression) == nil { return s }
-    return "'" + s.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
-}
-
-// shlex.quote 꼴 토큰 가운데 md-render 의 --plugin-dir(값이 /plugins/md-render 로 끝남) — 따옴표 없는 꼴, '…' 꼴(안의 ' 는 '"'"'),
-// '--plugin-dir=…' 꼴. 앞의 공백까지 잡아 지운다
-private let mdRenderTokenPattern = #"\s+(?:--plugin-dir(?:\s+|=)[A-Za-z0-9_@%+=:,./-]*/plugins/md-render|--plugin-dir\s+'[^']*(?:'"'"'[^']*)*/plugins/md-render'|'--plugin-dir=[^']*(?:'"'"'[^']*)*/plugins/md-render')(?=\s|$)"#
+// shlexQuote(state.py 의 shlex.quote 와 같은 인용)와 낱말 단위 고치기는 BoardRules/ShellCommand.swift
 
 // 보드 탭에서 띄우거나 이어 여는 claude 의 답변 꾸미기(사용자 결정 2026-10-17) — 기본으로 켜고(Ghostty·claude -p 에서 시작해 보드로 옮기거나
-// 이어 연 세션 포함), 새 세션 창에서 끄고 띄운 세션(isMdRenderOff)만 끈다. 명령에 든 md-render 의 --plugin-dir(옛 경로·옛 설치본·사용자가 적은 것)은
-// 빼고, 켜져 있으면 지금 경로를 한 번 붙인다. 사용자의 다른 --plugin-dir 은 둔다. 뺄 토큰은 세션 파일의 args(state.py 가 shlex.join 해
-// resume_cmd 를 만든 재료)를 알면 그 shlex.quote 꼴 그대로 찾고, 남은 것·args 를 모를 때(저장해 둔 명령·resume_cmd)는 shlex.quote 꼴 정규식으로.
-// 그래도 md-render 경로가 남으면(큰따옴표 등 다른 꼴로 사용자가 적음) 더 붙이지 않는다. claude 가 아닌 명령은 그대로
-func mdRenderCommand(_ command: String, args: [String]? = nil, off: Bool) -> String {
-    guard command.range(of: #"^\s*(\S*/)?claude(\s|$)"#, options: .regularExpression) != nil else { return command }
-    var out = command, i = 0
-    let args = args ?? []
-    while i < args.count {
-        var token: String?
-        if args[i].hasPrefix("--plugin-dir="), args[i].hasSuffix("/plugins/md-render") {
-            token = shlexQuote(args[i])
-        } else if args[i] == "--plugin-dir", i + 1 < args.count, args[i + 1].hasSuffix("/plugins/md-render") {
-            token = "--plugin-dir " + shlexQuote(args[i + 1])
-            i += 1
-        }
-        if let token { out = out.replacingOccurrences(of: " \(token) ", with: " ") }   // resume_cmd 는 --resume <id> 로 끝나 인자 뒤에 늘 공백이 있다
-        i += 1
-    }
-    out = out.replacingOccurrences(of: mdRenderTokenPattern, with: "", options: .regularExpression)
-    guard !off, let dir = mdRenderDir, !out.contains("/plugins/md-render") else { return out }
-    return out + " --plugin-dir " + shlexQuote(dir)
+// 이어 연 세션 포함), 새 세션 창에서 끄고 띄운 세션(isMdRenderOff)만 끈다. 명령에 든 md-render 의 --plugin-dir(옛 경로·옛 설치본·사용자가 적은 것,
+// 값이 /plugins/md-render 로 끝나는 낱말)은 빼고, 켜져 있으면 지금 경로를 한 번 붙인다. 사용자의 다른 --plugin-dir 은 둔다. claude 가 아니거나
+// 읽지 못하는 명령(닫히지 않은 따옴표 등)은 그대로. 낱말 단위로 고친다(BoardRules withMdRender — 3.3.2 까지는 따옴표 꼴 정규식으로 지워
+// 첫 요청 글 안의 같은 글자까지 지웠다, 3.3.3 보안 고침)
+func mdRenderCommand(_ command: String, off: Bool) -> String {
+    withMdRender(command, dir: off ? nil : mdRenderDir)
 }
 
 // 새 세션 창에서 꾸미기를 끄고 띄운 세션 id — 보드 설정 mdRenderOff. 그 세션은 이어 열 때도 끈 채로 연다. 끈 탭의 세션 id 가 바뀌면
