@@ -29,8 +29,9 @@
 //!   전체 문자열 NFC 합치기 + 소문자(path_key 조각 접기와 다르게 전체에 한 번).
 //! - `apFNV64`(Import.swift, 미이식) 계산은 문자열 utf8 바이트마다 XOR 하는 것이 원본 `apFNV64Data` 와 같아
 //!   아래 `fnv64_data` 하나로 둔다. Import 이식 후에는 그쪽 함수로 바꾼다(돌려 쓰기).
-//! - `apForbiddenLines`(Draft.swift, 미이식)는 비공개 `forbidden_lines` 로 여기 둔다(notify_rules 가
-//!   redact 를 둔 방식과 같다). Draft 이식 후에는 그쪽으로 옮긴다.
+//! - `apForbiddenLines`(Draft.swift)는 비공개였던 `forbidden_lines` 로 여기 둔다(notify_rules 가
+//!   redact 를 둔 방식과 같다). Draft 이식이 끝났지만 이 월줄 판정(`instruction_clean`)도 같은 꼴을 쓰고
+//!   줄 꼴의 정규식 상자(`Pattern`)가 이 파일 안에 있어 그대로 두고 공개해 `rules::draft` 가 돌려 쓴다.
 //! - `APHarnessSource` 포트도 ports.rs 통합 전까지 이 파일에 둔다(notify_rules 의 NoticeClock 처럼).
 
 use crate::rules::formats::grapheme_len;
@@ -187,7 +188,7 @@ fn hangul_class(c: char) -> u8 {
 }
 
 // trim 을 한 뒤 n 묶음 글자까지 자른다(Swift `prefix(n)` 와 같은 묶음 기준).
-fn cut_chars(s: &str, n: usize) -> String {
+pub(crate) fn cut_chars(s: &str, n: usize) -> String {
     let (mut at, mut kept) = (0, 0);
     let mut out = String::new();
     while at < s.len() && kept < n {
@@ -236,8 +237,8 @@ pub fn harness_file_wanted(rel: &str) -> bool {
 // 위치지만 위치 견주기만 하므로 이번 규칙엔 영향이 없다).
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Pat {
-    /// 한 글자 고정(컴파일에 대소문자를 접었을 수 있다)
-    Ch(char),
+    /// 한 글자 고정(컴파일에 대소문자를 접었는지와 함께: 접었으면 견주기에도 접는다)
+    Ch(char, bool),
     /// 글자 집합(쪽 목록, 뒤집음, 대소문자 접기)
     Set(Vec<ClassItem>, bool, bool),
     /// 가지: 겹친 잇기들
@@ -410,10 +411,10 @@ impl<'a> PatParser<'a> {
                     's' => Pat::Set(vec![ClassItem::SpaceW], false, false),
                     'S' => Pat::Set(vec![ClassItem::SpaceW], true, false),
                     't' => Pat::Set(vec![ClassItem::One('\t')], false, false),
-                    _ => Pat::Ch(self.fold(e, ci)),
+                    _ => Pat::Ch(self.fold(e, ci), ci),
                 }
             }
-            _ => Pat::Ch(self.fold(c, ci)),
+            _ => Pat::Ch(self.fold(c, ci), ci),
         }
     }
 
@@ -553,8 +554,9 @@ fn m_seq(nodes: &[Pat], txt: &[char], at: usize, k: &mut dyn FnMut(usize) -> boo
 
 fn pat_matched(p: &Pat, txt: &[char], at: usize, k: &mut dyn FnMut(usize) -> bool) -> bool {
     match p {
-        Pat::Ch(c) => match txt.get(at) {
-            Some(&x) if x.to_ascii_lowercase() == *c => k(at + 1),
+        Pat::Ch(c, folded) => match txt.get(at) {
+            // 접었으면 낱글자도 접어 견주고(대소문자 무시), 아니면 그대로 견준다(대소문자 구별)
+            Some(&x) if if *folded { x.to_ascii_lowercase() == *c } else { x == *c } => k(at + 1),
             _ => false,
         },
         Pat::Set(items, neg, ci) => match txt.get(at) {
@@ -984,8 +986,9 @@ fn forbidden_negation() -> &'static Pattern {
 // 부정 창 — 맞은 자리 뒤 같은 마디 16자 안(원본 apNegationWindow)
 pub const AP_NEGATION_WINDOW: usize = 16;
 
-// 초안 지시의 금지 줄(맞는 줄 가운데 이중 부정 없는 줄, 앞뒤 공백을 뗀 160글자)
-fn forbidden_lines(text: &str) -> Vec<String> {
+// 초안 지시의 금지 줄(맞는 줄 가운데 이중 부정 없는 줄, 앞뒤 공백을 뗀 160글자) —
+// 하네스 지시 판정(instruction_clean)과 초안 검사(rules::draft)가 돌려 쓰게 공개한다.
+pub fn forbidden_lines(text: &str) -> Vec<String> {
     text.split('\n')
         .filter_map(|raw| {
             let line = raw.trim();
