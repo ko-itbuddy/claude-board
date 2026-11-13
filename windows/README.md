@@ -69,6 +69,7 @@ irm https://raw.githubusercontent.com/suhojang/claude-board/main/windows/packagi
 - ⚙️ **Ctrl+,**(보드가 앞에 있을 때)나 트레이 아이콘 오른쪽 클릭 > **설정…** 으로 설정 화면을 엽니다(아래 설정 화면 절).
 - 💻 터미널에서 `claude-board` 는 보드 창을, `claude-board-tui` 는 터미널판 보드를 엽니다.
 - ❎ 보드의 닫기 단추는 창만 숨깁니다. 완전히 끄려면 트레이 아이콘 오른쪽 클릭 > **종료**.
+- 🛫 터미널이나 스크립트에서 보드 탭을 열고 닫을 수 있습니다: `ClaudeBoard.exe --open-tab --cwd <폴더> -- claude <인자…>` 로 새 탭의 claude 를 띄우고(보드가 꺼져 있으면 `--launch` 를 주어 켜고, `--no-focus` 로 뒤에서 조용히), `--open-tab` 으로 연 탭은 `--close-tab --title <탭 이름>` 으로 닫습니다(돌고 있는 claude 는 `--stop` 을 주어 `/exit` 로 끝낸 뒤). 답은 한 줄 JSON 이고, 자세한 쓰는 법은 [설치 가이드 3장](docs/설치%20가이드.md) 에 있습니다.
 
 ### ⚡ 자주 쓰는 조작
 

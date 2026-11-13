@@ -5,6 +5,17 @@ Claude Board for Windows 의 버전별 변경입니다. macOS 판의 변경은 [
 새 버전을 올릴 때 맨 위에 `## <버전> — <날짜>` 항목을 먼저 쓰고 `windows/VERSION` 을 그 버전으로 바꿔 main 에 push 합니다.
 CI(`.github/workflows/windows.yml`)가 그 항목을 `windows-v<버전>` GitHub 릴리스 설명으로 그대로 씁니다. 항목이 없으면 릴리스가 실패합니다.
 
+## 3.4.0 — 2026-11-14
+
+### 추가
+- 바깥에서 탭 열기·닫기: 터미널이나 스크립트에서 `ClaudeBoard.exe --open-tab` 으로 보드 탭을 엽니다(`--cwd <폴더> -- claude <인자…>`, `--launch` 는 꺼진 보드를 켜고 열고, `--no-focus` 는 포커스를 빼앗지 않고 뒤에서 열고, `--title` 로 탭 이름을 붙입니다). 이 기능으로 연 탭은 `--close-tab --title <탭 이름>`(또는 `--session <세션 id>`)으로 닫습니다. 돌고 있는 claude 는 `--stop` 을 주어 `/exit` 로 끝낸 뒤 닫고(10초 안에 끝나지 않으면 닫지 않습니다), 사람이 연 탭과 화면을 나눈 탭은 닫지 않습니다.
+  답은 한 줄 JSON 입니다: 열기는 `opened`(새 탭) · `reopened`(claude 가 끝나 셸만 남은 탭에 다시 띄움) · `exists`(이미 도는 같은 세션 탭을 골라 둠), 닫기는 `closed`, 실패는 `bad-args` · `board-off` · `refused` · `not-found` · `busy` · `timeout` 입니다. 닫기는 보드가 꺼져 있으면 요청도 만들지 않고 곧 `board-off` 입니다.
+  요청·답은 `<요청 id>.req.json` · `<요청 id>.reply.json` 파일로 오가고, 열기는 `%LOCALAPPDATA%\claude-board\open-tab\`, 닫기는 `%LOCALAPPDATA%\claude-board\close-tab\` 폴더를 씁니다. 자세한 쓰는 법은 [설치 가이드 3장](docs/설치%20가이드.md) 에 있습니다.
+- 끝난 세션 이어 열기가 `--remote-control` · `--rc` 도 따라옵니다: 앞 claude 에 값 없이 붙어 있었으면 플래그 그대로, `--rc=<이름>` 처럼 붙어 있었으면 값까지 그대로 이어 열 명령에 붙습니다.
+
+### 바뀜
+- 알림 패널은 보드가 도는 중일 때만 뜹니다. 보드가 꺼져 있으면 세션 알림이 나도 패널을 띄우지 않습니다. 늘 띄우려면 환경변수 `CLAUDE_BOARD_NOTIFY_ALWAYS` 를 `1` 로 두고 부릅니다(보드 없는 자리의 시험용).
+
 ## 3.2.4 — 2026-11-07
 
 ### 추가

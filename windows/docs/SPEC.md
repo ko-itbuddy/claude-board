@@ -204,7 +204,7 @@ stdin JSON 하나를 읽는다. 앞의 UTF-8 BOM 은 `main.rs` 의 `read_input` 
 
 ### 3.3 `carry_args`·`resume_cmd` — `state.py:57-97`
 
-- 넘길 인자: 값 하나(`--model --permission-mode --agent --settings --plugin-dir`), 값 여럿(`--add-dir --mcp-config`, 다음 `-` 전까지), 값 없음(`--dangerously-skip-permissions --allow-dangerously-skip-permissions --chrome --ide --verbose`), `--x=값` 형태도 받는다. argv[0] 은 건너뛴다.
+- 넘길 인자: 값 하나(`--model --permission-mode --agent --settings --plugin-dir`), 값 여럿(`--add-dir --mcp-config`, 다음 `-` 전까지), 값 없음(`--dangerously-skip-permissions --allow-dangerously-skip-permissions --chrome --ide --verbose`), 값이 없어도 되는 것(`--remote-control --rc` = `CARRY_OPT`: `--x=값` 형은 문자열 그대로, 다음 인자가 `-` 로 시작하지 않으면 그 인자를 값으로, 값이 없으면 플래그 그대로. `(이름, 값)` 쌍·문자열 전체로 중복을 걸러 넘긴다), `--x=값` 형태도 받는다. argv[0] 은 건너뛴다.
 - 중복 제거(`state.py:carry_args`): 같은 인자는 한 번만 넘긴다. Claude Code 는 bypass 권한 모드로 이어 열 때 `--allow-dangerously-skip-permissions` 를 스스로 하나 더 붙여 띄우므로, 그대로 넘기면 이어 열 때마다 하나씩 늘어난다.
   - 값 없는 플래그는 같은 이름이 또 오면 건너뛴다.
   - 값 하나 인자는 (이름, 값) 쌍이 같을 때만 건너뛴다. `--model a --model b` 는 둘 다 남는다.
@@ -234,6 +234,7 @@ stdin JSON 하나를 읽는다. 앞의 UTF-8 BOM 은 `main.rs` 의 `read_input` 
 5. 위치: `notify-position` 내용(없거나 비면 `center`).
 6. `app-path` 의 ClaudeBoard.exe 를 `--notify --title <제목> --subtitle <project> --body <본문> --summary <요약> --sound <done|wait> --kind <done|wait> --duration 10 --position <위치>` 로 띄우고 **기다리지 않고** 끝낸다.
    `CREATE_BREAKAWAY_FROM_JOB | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`(breakaway 가 거부되면 그 플래그 없이 다시), 표준 입출력은 닫는다. app-path 가 없거나 파일이 없으면 끝.
+7. 6 의 띄우기는 보드가 도는 중일 때만 한다(`board_running.rs:panel_to_spawn`): 보드 실행 판정은 인자에 `--notify` 가 없는 `ClaudeBoard.exe` 프로세스(`BOARD_EXE`)가 프로세스 표에 있는지로 본다(실행 인자를 읽지 못한 프로세스는 보드로 센다). 꺼져 있으면 패널을 건너뛴다. 환경변수 `CLAUDE_BOARD_NOTIFY_ALWAYS` 값이 정확히 `1` 이면(`notify_always`) 건너뛰기를 하지 않고 늘 띄운다(보드 없는 자리의 시험용).
 
 ### 3.7 `setup --app <ClaudeBoard.exe>` / `uninstall` (macOS `user-setup.sh`·`Uninstall.command` 대응)
 
@@ -859,6 +860,22 @@ mac 3.2.0 의 설정 화면(`SettingsScreen`)을 옮긴 것이다. 이 절이 �
 - 지우기: **지우기**(칩 메뉴의 **저장한 계정 지우기 ▸** 도 같다)는 `delete_account(id)` 가 네이티브 대화상자(`board.confirm`, 제목 "<이메일> 계정을 지울까요?", 본문 "보드에 저장한 이 계정의 로그인 정보를 지웁니다. 다시 쓰려면 계정을 다시 추가해야 합니다.", 버튼 **지우기**·**취소**)에서 확인했을 때만 지운다. 지금 로그인 계정과 저장 목록에 없는 id 는 지우지 않는다. 확인을 건너뛰던 옛 `add_account`·`remove_account` 명령은 없다.
 - 시험 게이트(§5.13): 어느 프로그램을 띄울지는 `login_program` 이 정한다. 시험 claude(`CLAUDE_BOARD_CLAUDE`)가 켜짐이면 가짜, 어긋남이면 거절, 꺼짐이면 진짜 claude 를 찾는다. 단 홈이나 notifier 를 환경변수로 바꿔 띄운 실행에서 시험 claude 가 꺼져 있으면 진짜 claude 를 찾지도 띄우지도 않고 "…로 폴더를 바꾼 실행에서는 시험 claude(CLAUDE_BOARD_CLAUDE) 없이 계정 추가를 하지 않습니다" 로 거절한다. 가짜에는 보드 환경의 `FAKE_LOGIN_` 로 시작하는 변수만 넘긴다.
 - 확인한 것은 가짜 로그인으로 끝까지 돌린 흐름이다(§11.2.2).
+
+### 5.15 바깥에서 탭 열기·닫기 (명령줄 `--open-tab` · `--close-tab`, 폴더 `open_tab/`)
+
+macOS `Sources/BoardRules/OpenTab.swift` 를 옮긴 명령줄 약속이다(`app/src-tauri/src/open_tab/`). 보드가 도는 PC 의 어느 터미널에서든 요청 파일을 써 넣으면 보드가 요청 폴더를 훑어 탭을 열거나 닫고 답 파일에 한 줄 JSON 을 남긴다. 끝 코드는 ok 면 0, 아니면 1(원본 `finish`: OpenTab.swift:17-20). 요청과 답은 `<요청 id>.req.json` · `<요청 id>.reply.json` 으로 오간다. 열기는 `%LOCALAPPDATA%\claude-board\open-tab\`, 닫기는 `%LOCALAPPDATA%\claude-board\close-tab\` 폴더를 쓴다(명령줄·보드 모두 이 두 폴더만 본다. 열기 처리부는 폴더의 `*.req.json` 을 모두 열기 요청으로 읽으므로 폴더를 섞지 않는다).
+
+- 열기: `쓰는 법: ClaudeBoard --open-tab --cwd <폴더> [--title <탭 이름>] [--launch] [--no-focus] [--timeout <초>] -- claude <인자…>`(`args.rs:OPEN_TAB_USAGE`). `--timeout` 은 1~600초(기본 20초, `--launch` 면 40초), `--launch` 는 보드가 꺼져 있을 때 켜고 열고, `--no-focus` 는 보드를 앞으로 가져오지 않고 탭 선택·키보드 포커스를 그대로 둔 채 뒤에서 연다. 상대 `--cwd` 는 명령을 부른 폴더 기준으로 붙인다.
+- 열기 상태: `opened`(새 탭) · `reopened`(같은 세션 id 나 같은 이름의 탭이 같은 폴더에 있고 claude 가 끝나 셸만 남았거나 되살린 뒤 아직 들어가지 않았을 때 그 탭에 명령을 다시 끼워 넣음) · `exists`(같은 세션이 이미 보드 탭에서 도는 탭이다. 새 탭을 만들지 않고, `--no-focus` 가 없으면 그 탭을 앞으로 가져온다. 답에 `pid`·`session` 을 싣는다) / 실패 `bad-args` · `board-off` · `refused` · `timeout`. `opened`·`reopened` 답은 `session` 과 `tab`(탭 이름, 이름이 없으면 비어 있다)을 싣고, `exists` 답의 `tab` 은 비어 있다.
+- 열 규칙(`plan.rs`, mac 140-312): 띄울 명령은 `--` 뒤의 낱말 인자이고 첫 인자는 `claude` 여야 한다(mac 과 달리 셸 문자열 명령 칸이 없고, 보드가 명령을 탭 셸에 붙여 넣는다). 명령 인자·`--cwd`·탭 이름에 붙여넣기를 끊는 제어 문자(줄바꿈·탭 밖의 제어 문자, `U+007F`, `U+0080~009F`, `U+2028/2029`)가 있으면 bad-args 로 거절하고, 탭 이름은 줄바꿈·탭도 안 되고 100자까지. `--cwd` 는 절대 경로(드라이브·UNC)만 받고 폴더가 있어야 한다(없으면 bad-args, Windows 는 `/` 앞머리가 아니라 std `Path::is_absolute` 로 본다). 같은 폴더 탭 견주기는 바로 가기를 푼 꼴(`real_dir`)로 견준다. 기록된 세션이 보드 탭 밖에서 살아 있으면 refused(예: "이 세션이 보드 탭 밖(pid 20)에서 돌고 있습니다").
+- 닫기: `쓰는 법: ClaudeBoard --close-tab (--session <세션 id> | --title <탭 이름>) [--stop] [--timeout <초>]`(`close.rs:CLOSE_TAB_USAGE`), 둘 중 하나만 준다. `--timeout` 은 1~600초(기본 30초). 세션 id 는 화면의 지금 세션 id, 탭 이름은 화면의 이름들과 대소문자 무시로 같은 화면이다. 닫는 대상은 `--open-tab` 으로 연 탭뿐이다(사람이 연 탭은 "바깥 열기(--open-tab)로 연 탭이 아니라 닫지 않습니다…" 로 거절, 화면을 나눈 탭도 거절). 자율주행을 이어받은 화면도 거절하는 규칙이 있으나 웹뷰가 이어받기 표지를 아직 몰라 그 값은 항상 거짓이다(`closeTab.ts:paneViews`).
+- 닫기 상태: `closed`(ok, 맞은 탭의 이름·세션을 싣는다) / 실패 `busy` · `refused` · `not-found` · `bad-args` · `board-off` · `timeout`. 맞는 탭이 없으면 not-found, 둘 이상 맞으면 refused(아무것도 닫지 않고 `--session 으로 하나를 고르세요` 를 알린다). 탭의 claude 가 도는 중이면 busy 인데 `--stop` 을 함께 주면 `/exit` 를 넣고 셸 프롬프트로 돌아올 때까지 10초(`CLOSE_TAB_STOP_WAIT`)를 기다린 뒤 닫는다. 강제 종료는 하지 않는다(기다림을 넘거나 `/exit` 를 넣지 못했으면 탭을 그대로 두고 busy). 끝내는 사이 탭이 닫혔으면 not-found.
+- 꺼진 보드: 열기는 `--launch` 로 켜고 닫기는 켜지 않는다: 닫기 명령은 보드 뮤텍스(`com.claude.board-sim`, 보드 단일 실행이 갖는 이름, `tauri-plugin-single-instance` 가 식별자 뒤에 `-sim` 을 붙여 만든다)가 없으면 요청 폴더도 만들지 않고 곧 `{"ok":false,"status":"board-off","why":"보드가 꺼져 있습니다(닫으려고 보드를 켜지 않습니다)"}` 로 끝난다.
+- 답 기다림(`cli.rs` · `close_cli.rs`): 답 파일을 0.1초 간격으로 검사한다. Windows 의 명령줄은 보드를 깨우지 않는다(두 번째 실행으로 깨우면 보드가 앞으로 나와 포커스를 가져가므로 `--no-focus` 에 어긋난다). 보드가 요청 폴더를 스스로 훑어 읽는다. `--launch` 로 켠 보드는 `--no-focus` 요청이면 `--background` 를 얹어 띄운다. `--timeout` 이 지나면 보드가 아직 안 가져갔으면 요청을 거둬 두고 `보드가 <초>초 안에 요청을 가져가지 않았습니다(요청을 거뒀습니다)`, 가져갔는데 답이 늦으면 열기는 `보드가 요청을 가져갔지만 <초>초 안에 답하지 않았습니다(탭이 열렸을 수 있습니다)`, 닫기는 `…(탭이 닫혔을 수 있습니다)` 로 timeout 이다.
+- 요청·답 파일(`handle.rs` · `close_handle.rs`): 열기 요청 본문 상한은 256 KiB(`OPEN_TAB_MAX_BYTES`, 파일이 그 두 배보다 크면 읽지 않고 지운다. 256 KiB 를 넘고 두 배 이하면 `너무 깁니다` bad-args 답이 돌아간다), 닫기 요청 파일 상한은 16 KiB(`CLOSE_TAB_MAX_BYTES`, 넘으면 읽지 않고 지운다). 요청은 온 순서(`at` 오름차순)로 처리한다. 답은 임시 파일에 쓰고 바꿔 끼운 뒤(쓰다 끊겨도 반쪽 답이 남지 않게) 요청은 답을 적었든 아니든 지운다. 이름이 세션 id 꼴이 아니거나 못 읽거나 JSON 이 아니거나 파일 안 id 가 이름과 다르거나 오래된(만든 지 600초 넘음, 또는 시계가 60초 넘게 앞섬) 요청 파일은 지워 재처리되지 않게 하고, 폴더·링크는 지우지 않고 지나간다. `.req.json` 이 아닌 파일은 수정 시각이 600초를 넘으면 지운다. 명령줄 도구는 요청을 `<id>.tmp` 에 새로 쓴 뒤 `req.json` 으로 바꿔(있으면 실패, O_EXCL) 쓰다 만 요청을 읽지 않게 한다.
+- 프론트엔드(`terminal/openTab.ts` · `closeTab.ts`): 이벤트 JSON 은 snake_case·camelCase 키를 모두 읽는다. `command` 가 빈 요청은 탭을 열지 않고 화면을 골라 포커스를 옮기는 Focus 요청(`reuseTab` 만 있는 것)이다. 닫기 화면 값(`close_tab_panes` 명령)은 탭 이름들 · 바깥 열기 표지 · 이어받기 · 나눔 · 막 뜸(`starting`: 셸이 막 뜬 것, 또는 `claude` 명령을 `TYPED_WINDOW_MS` 안에 막 넣은 것)을 싣는다.
+
+근거: `app/src-tauri/src/open_tab/` 모듈의 단위 시험(`args.rs`·`plan.rs`·`cli.rs`·`close.rs`·`close_cli.rs`·`handle.rs`·`close_handle.rs` 표 시험).
 
 ## 6. 백엔드 ↔ 프론트엔드 계약
 
