@@ -17,7 +17,7 @@
 //! ⚠️ 임시 함께 둔 조각(이 파일이 잡는 시험을 돌리기 위해 1:1 로 옮긴 것) — 각 원본 청이 그 모듈로 옮겨 갈 자리다:
 //! - `Misses.swift` 일부: `ApMiss`·`ApMissSignal`·`ap_miss_side`·`MISS_WHY_MAX`·`clip_miss_why`
 //!   (`judge_misses` 기록 규칙 전체는 Misses.swift 청에서 가져온다, 그때 `revert_misses` 가 그쪽 형을 쓴다).
-//! - `Takeover.swift` 일부: `takeover_clean`(제어 글자 빼고 표시 괄호 바꾸고 자르기).
+//! - `Takeover.swift` 의 `takeover_clean` 은 `takeover.rs` 의 것을 쓴다.
 //! - `Report.swift` 꼬리(565~568줄): `report_ended_statuses`·`missing_unit_reports`(R-보고서 청이 report.rs 로 옮길 때 옮겨 간다).
 //! - `Tickets.swift`·`Outbox.swift` 조각: 티켓 표 줄 규칙(`ApTicket*`·`ticket_rows`·`ApOutboxItem` 축약형·`outbox_ticket_rows`)과
 //!   `ISSUE_KEY_PATTERN`·`TEMP_TICKET_PATTERN`(R-티켓 청이 이 모듈을 지우게).
@@ -30,6 +30,7 @@ use serde_json::{Map, Value};
 
 use crate::rules::formats::grapheme_len;
 use crate::rules::meta::defang_markers;
+use crate::rules::takeover::takeover_clean;
 
 /// JSON 객체 하나(`[String: Any]`).
 pub type Obj = Map<String, Value>;
@@ -767,25 +768,6 @@ pub fn clip_miss_why_at(s: &str, n: usize) -> String {
 fn clip_why(s: &str, n: usize) -> String {
     let t = s.replace('\n', " ");
     grapheme_clamp(t.trim_matches(swift_ws), n)
-}
-
-// ── ⚠️ 임시 조각 2: Takeover.swift 의 글 다듬기(원본 청이 takeover 규칙을 porting 할 때 이 자리를 지운다) ──
-
-/// 글 다듬기 — 줄바꿈·탭 말고 제어 글자는 빼고, 표시 괄호는 다른 괄호로(감싸기를 끊지 못하게), 글자 수 상한.
-/// 원본: Takeover.swift `apTakeoverClean` — 제어 글자는 `CharacterSet.controlCharacters`(Cc+Cf)와 일반 범주 Cf(형식 글자)를 지운 것
-pub fn takeover_clean(s: &str, max: usize) -> String {
-    let t: String = s.chars().filter(|c| *c == '\n' || *c == '\t' || !is_control_or_format(*c)).collect();
-    grapheme_clamp(&defang_markers(&t), max)
-}
-
-/// 제어(범주 Cc)·형식(범주 Cf) 글자. Foundation `CharacterSet.controlCharacters` 는 Cc+Cf 이다.
-fn is_control_or_format(c: char) -> bool {
-    let v = c as u32;
-    matches!(v, 0x00..=0x1F | 0x7F..=0x9F) // Cc
-        || matches!(v, // Cf(형식 글자)
-            0x00AD | 0x0600..=0x0605 | 0x061C | 0x06DD | 0x070F | 0x0890..=0x0891 | 0x08E2 | 0x180E
-                | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F | 0xFEFF | 0xFFF9..=0xFFFB
-                | 0x110BD | 0x110CD | 0x13430..=0x1343F | 0x1BCA0..=0x1BCA3 | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
 }
 
 /// CharacterSet.whitespaces — Zs 범주와 탭(formats.rs 의 것과 같다, 거긴 비공개라 여기도 둔다)
