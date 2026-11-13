@@ -19,6 +19,7 @@ pub mod rules {
     pub mod env_policy;
     pub mod evidence;
     pub mod formats;
+    pub mod harness;
     pub mod leftovers;
     pub mod links;
     pub mod meta;
