@@ -31,6 +31,7 @@ pub mod rules {
     pub mod history;
     pub mod inbox;
     pub mod instruction;
+    pub mod judge_changes;
     pub mod prep_git;
     pub mod promotion;
     pub mod prose;
