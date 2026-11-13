@@ -15,8 +15,6 @@
 //! 승격 뒤 되돌림 짝지은 결과는 `judge_misses`(signal `revert`) 로. git 은 `ApRevertWorld` 포트로만 — 진짜 어댑터는 엔진, 가짜는 시험에만.
 //!
 //! ⚠️ 임시 함께 둔 조각(이 파일이 잡는 시험을 돌리기 위해 1:1 로 옮긴 것) — 각 원본 청이 그 모듈로 옮겨 갈 자리다:
-//! - `Misses.swift` 일부: `ApMiss`·`ApMissSignal`·`ap_miss_side`·`MISS_WHY_MAX`·`clip_miss_why`
-//!   (`judge_misses` 기록 규칙 전체는 Misses.swift 청에서 가져온다, 그때 `revert_misses` 가 그쪽 형을 쓴다).
 //! - `Takeover.swift` 의 `takeover_clean` 은 `takeover.rs` 의 것을 쓴다.
 //! - `Report.swift` 꼬리(565~568줄): `report_ended_statuses`·`missing_unit_reports`(R-보고서 청이 report.rs 로 옮길 때 옮겨 간다).
 //! - `Tickets.swift`·`Outbox.swift` 조각: 티켓 표 줄 규칙(`ApTicket*`·`ticket_rows`·`ApOutboxItem` 축약형·`outbox_ticket_rows`)과
@@ -543,7 +541,7 @@ pub fn scan_reverts(ranges: &[ApRevertRange], recorded: &[ApUnitCommit], world: 
     scan
 }
 
-// ---- 판정 놓침 줄(Misses.swift 의 형은 아래 ⚠️ 임시 조각에 둔다) ----
+// ---- 판정 놓침 줄(Misses.swift 의 형은 아래에서 misses.rs 의 것을 옛 이름으로 다시 내놓는다) ----
 
 /// 판정 놓침 줄의 id — <실행 id>/<단위 번호>/revert/<되돌린 기록 커밋 앞 12자>. 원본: `apRevertMissId`
 pub fn revert_miss_id(run: &str, unit_n: i64, target: &str) -> String {
@@ -644,157 +642,14 @@ pub fn revert_misses(
     (put, drop)
 }
 
-// ── ⚠️ 임시 조각 1: Misses.swift 에서 옮겨 올 형(원본 청이 judge_misses 를 porting 할 때 이 자리를 지운다) ──
+// ── 판정 놓침 형: Misses.swift 청이 misses.rs 로 옮겨 갔다 — 시험이 쓰는 옛 이름으로 다시 내놓는다 ──
 
-/// 되다듬기 신호. 원본: Misses.swift `APMissSignal`
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ApMissSignal {
-    #[serde(rename = "discard")]
-    Discard,
-    #[serde(rename = "revert")]
-    Revert,
-    #[serde(rename = "next_start")]
-    NextStart,
-    #[serde(rename = "probe")]
-    Probe,
-    #[serde(rename = "critic")]
-    Critic,
-    #[serde(rename = "denial")]
-    Denial,
-    #[serde(rename = "asked")]
-    Asked,
-    #[serde(rename = "parked")]
-    Parked,
-    #[serde(rename = "decision_basis")]
-    DecisionBasis,
-    #[serde(rename = "takeover")]
-    Takeover,
-}
+pub use crate::rules::misses::{clip_miss_why, clip_miss_why_at, miss_side as ap_miss_side, Miss as ApMiss, MissSignal as ApMissSignal, MISS_WHY_MAX};
 
-impl ApMissSignal {
-    /// Swift `rawValue`
-    pub fn raw_value(self) -> &'static str {
-        match self {
-            ApMissSignal::Discard => "discard",
-            ApMissSignal::Revert => "revert",
-            ApMissSignal::NextStart => "next_start",
-            ApMissSignal::Probe => "probe",
-            ApMissSignal::Critic => "critic",
-            ApMissSignal::Denial => "denial",
-            ApMissSignal::Asked => "asked",
-            ApMissSignal::Parked => "parked",
-            ApMissSignal::DecisionBasis => "decision_basis",
-            ApMissSignal::Takeover => "takeover",
-        }
-    }
-}
-
-/// 신호의 쪽 — 판정(judge)·지시(instruction). 원본: Misses.swift `apMissSide`
-pub fn ap_miss_side(s: ApMissSignal) -> &'static str {
-    match s {
-        ApMissSignal::Discard | ApMissSignal::Revert | ApMissSignal::NextStart | ApMissSignal::Probe | ApMissSignal::Critic => "judge",
-        ApMissSignal::Denial | ApMissSignal::Asked | ApMissSignal::Parked | ApMissSignal::DecisionBasis | ApMissSignal::Takeover => "instruction",
-    }
-}
-
-/// 놓침 줄 하나. 원본: Misses.swift `APMiss`
-#[derive(Debug, Clone, PartialEq)]
-pub struct ApMiss {
-    pub id: String,
-    pub project: String,
-    pub run: String,
-    pub unit_n: Option<i64>,
-    pub unit_id: Option<String>,
-    pub source_key: Option<String>,
-    pub signal: ApMissSignal,
-    /// 판정 걸음(시나리오 경로 · 판정 명령 글)
-    pub judge: Option<String>,
-    /// 그 판정 글의 지문(엔진이 냄)
-    pub judge_digest: Option<String>,
-    pub why: String,
-    pub set_id: Option<String>,
-    /// open 열림 · used 세션에 넘겨 고친 판이 쓰임 · fixed 같은 준비에서 고침
-    pub state: String,
-    pub created: f64,
-    pub title: String,
-}
-
-impl ApMiss {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        id: &str, project: &str, run: &str, unit_n: Option<i64>, unit_id: Option<&str>, source_key: Option<&str>, signal: ApMissSignal, judge: Option<&str>,
-        judge_digest: Option<&str>, why: &str, set_id: Option<&str>, created: f64, title: &str,
-    ) -> Self {
-        ApMiss {
-            id: id.to_string(),
-            project: project.to_string(),
-            run: run.to_string(),
-            unit_n,
-            unit_id: unit_id.map(str::to_string),
-            source_key: source_key.map(str::to_string),
-            signal,
-            judge: judge.map(str::to_string),
-            judge_digest: judge_digest.map(str::to_string),
-            why: why.to_string(),
-            set_id: set_id.map(str::to_string),
-            state: "open".to_string(),
-            created,
-            title: title.to_string(),
-        }
-    }
-    /// 신호의 쪽 — Swift `side`
-    pub fn side(&self) -> &'static str {
-        ap_miss_side(self.signal)
-    }
-}
-
-/// 까닭 글자 상한. 원본: Misses.swift `apMissWhyMax`
-pub const MISS_WHY_MAX: usize = 300;
 /// 놓침 줄 제목 상한. 원본: Misses.swift `apUnitMisses` 의 `clip(title, 120)`
 const MISS_TITLE_MAX: usize = 120;
 /// 되돌림 커밋 첫 줄 상한. 원본: UnitCommits.swift `apRevertMisses` 의 `apTakeoverClean(..., max: 80)`
 const TAKEN_OVER_SUBJECT_MAX: usize = 80;
-
-/// 같은 자르기를 다른 신호 규칙(되돌림)도 쓴다. 원본: Misses.swift `apClipMissWhy`
-pub fn clip_miss_why(s: &str) -> String {
-    clip_why(s, MISS_WHY_MAX)
-}
-
-/// 크기 지정 자르기. 원본: Misses.swift `apClipMissWhy(_:_:)`
-pub fn clip_miss_why_at(s: &str, n: usize) -> String {
-    clip_why(s, n)
-}
-
-fn clip_why(s: &str, n: usize) -> String {
-    let t = s.replace('\n', " ");
-    grapheme_clamp(t.trim_matches(swift_ws), n)
-}
-
-/// CharacterSet.whitespaces — Zs 범주와 탭(formats.rs 의 것과 같다, 거긴 비공개라 여기도 둔다)
-fn swift_ws(c: char) -> bool {
-    matches!(c, '\t' | ' ' | '\u{A0}' | '\u{1680}' | '\u{2000}'..='\u{200A}' | '\u{202F}' | '\u{205F}' | '\u{3000}')
-}
-
-/// 글 `t` 가 `n` 글자(묶음)를 넘으면 앞 `max(n-1, 0)` 글자와 `…` 로 줄인다 — meta.rs `clamp_graphemes` 와 같은 뼈대
-/// (거긴 비공개라 여기도 둔다. 세 청째 — R-메타 청과 합칠 때 묶는다)
-fn grapheme_clamp(t: &str, n: usize) -> String {
-    if grapheme_len(t) <= n {
-        return t.to_string();
-    }
-    let keep = n.saturating_sub(1);
-    // 글자 경계 가운데 앞부분의 글자 수가 keep 이하인 가장 뒤쪽(글자 수는 경계가 뒤로 갈수록 줄지 않는다)
-    let bounds: Vec<usize> = t.char_indices().map(|(i, _)| i).chain(std::iter::once(t.len())).collect();
-    let (mut lo, mut hi) = (0, bounds.len() - 1);
-    while lo < hi {
-        let mid = (lo + hi).div_ceil(2);
-        if grapheme_len(&t[..bounds[mid]]) <= keep {
-            lo = mid;
-        } else {
-            hi = mid - 1;
-        }
-    }
-    format!("{}…", &t[..bounds[lo]])
-}
 
 // ── ⚠️ 임시 조각 3: Report.swift 꼬리(565~568줄) — 빠진 단위 보고서. 원본 청(R-보고서-d)이 report.rs 에서 옮겨 간다 ──
 
