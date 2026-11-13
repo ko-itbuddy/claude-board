@@ -1,6 +1,6 @@
-//! (청크 Reading a/2 — 원본 1~180줄. PORTED.json 항목은 마지막 청크가 더한다)
-//! 자율주행 읽기(4단계 ⑩-2): 링크 → 읽을 대상, 읽기 요청 꼴(GET 만), 그림 주소 허용. 원본: `Sources/AutopilotRules/Reading.swift` 1~180줄.
-//! 다음 청크(Reading b)는 181줄(MARK 응답 → 메타)부터 이어 쓴다.
+//! (청크 Reading b/3 — 원본 1~477줄. PORTED.json 항목은 마지막 청크가 더한다)
+//! 자율주행 읽기(4단계 ⑩-2): 링크 → 읽을 대상, 읽기 요청 꼴(GET 만), 그림 주소 허용, 응답 → 메타. 원본: `Sources/AutopilotRules/Reading.swift` 1~477줄.
+//! 다음 청크(Reading c)는 478줄(MARK 읽기 유스케이스)부터 이어 쓴다.
 //!
 //! Swift ↔ Rust 로 달라진 점:
 //! - `URLComponents(string:)` 는 `connections.rs` 의 `parse_url`(RFC 3986 손으로 옮긴 판)을 확장한 비공개 `parse_link_url` 로 읽는다. 차이:
@@ -14,15 +14,27 @@
 //! - 빈칸 깎기는 `.whitespacesAndNewlines` 대신 Rust `char::is_whitespace`(유니코드 White_Space — 같은 목록)를 썼다.
 //! - `addingPercentEncoding` 의 16진수는 원본처럼 대문자 두 자리다. `fields` 의 기본 인자는 부르는 쪽이 `JIRA_READ_FIELDS` 를 넣는다.
 //! - 비밀 가림은 이 청크에 비밀이 없어 그대로다(요청의 `auth` 는 꼴만 담는다).
+//! - `NSRegularExpression` 여섯(저장 형식 링·CDATA·태그 떼기와 닫는 꼬리 `</script\s*>` 따위)은 손으로 옮긴 찾기로 갔다. ICU 의 `.` 가 막는 줄은
+//!   LF·CR·U+0085(LNL·NEL)·U+2028(LS)·U+2029(PS) 다(Java 와 같이 0085 도 넣었다 — 실제 응답에 드물어 차이가 실리지 않는다). `\b` 는 왼쪽과 오른쪽의
+//!   낱말 글자 여부가 다른 자리로, 낱말 글자는 ASCII 영숫자·_ 에 유니코드 글자·숫자까지(ICU `\w`). `\s` 는 `char::is_whitespace` 로 본다(ICU `\s` 는
+//!   U+0085 를 빼고 나머지가 같다). `[^^]*` 탐욕 — 같은 이름의 속성이 태그 안에 둘 이상이면 마지막 것을 잡는다(정규식 되감기와 같다).
+//! - `sv`(Swift 에서 `"\(NSNumber)"` 꼴)는 정수는 그대로, 실수는 정수 값이면 정수 꼴로 넣는다. 그 밖의 실수는 Rust `f64` Display — 10²¹ 넘는 자리의
+//!   지수 표기가 Swift `e+21` 대신 `e21` 로 나오나 실제 응답 값에서 그런 자리를 못 만난다(차이 기록: `META_SWIFT_RUST.md`).
+//! - Meta.swift 363~470 의 도우미(`apStripMarkup`·`apMarkupChunks`·`apChunked`·`apSectionWanted`)는 이 청크가 대기자로 같이 옮겼다 — `strip_markup`·`markup_chunks`·
+//!   `chunked`·`section_wanted`. Meta.swift 를 이식할 청크가 meta.rs 에 같은 일의 공개 판을 더해도 충돌은 없다(모듈이 다르다).
+//! - Notion 머리 수준은 원본 `Int(t.suffix(1))` 대신 마지막 글자의 숫자로 본다(뒤 ① 이모지는 실제 블록 이름에 없다).
 
+use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::collections::HashSet;
+use std::sync::OnceLock;
 
 use crate::rules::connections::{
     ap_expiry, auth_for, same_site, service_base, url_host, Auth, Connection, Expiry, HttpRequest, Service, UrlParts, NOTION_VERSION,
 };
 use crate::rules::formats::grapheme_len;
 use crate::rules::links::{link_info, ApLink};
+use crate::rules::meta::{decode_entities, limit, meta_clamp, Frame, Meta, MetaField, MetaLink, Section, TextChunk, TocItem};
 use crate::rules::stopline::Tz;
 use crate::rules::tickets::issue_key_ok;
 
@@ -560,4 +572,1189 @@ pub fn is_png(d: &[u8]) -> bool {
     d.len() > 8 && d.get(0..8) == Some(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A][..])
 }
 
-// R-Reading-b 가 여기서 이어 쓴다
+// MARK - 응답 → 메타
+
+// 원본: `Sources/AutopilotRules/Reading.swift` 181~477줄(MARK 응답 → 메타)과
+// Meta.swift 363~470줄의 가림 담당 도우미(apStripMarkup·apMarkupChunks·apChunked·apSectionWanted).
+// 정규식 여섯은 아래 손으로 옮긴 찾기로 갔다. 앞 청크(a)의 `page_num_ok`·`notion_id`와 요청 꼴을 그대로 쓴다.
+
+/// JSON 문자열 꾸러미. Swift 에서 `"꾸러미"`(`\(v)`) — 수는 `NSNumber` 설명을 본뜬다.
+fn sv(v: Option<&Value>) -> String {
+    match v {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Number(n)) => number_string(n),
+        Some(value_bool @ Value::Bool(_)) => match value_bool {
+            Value::Bool(true) => "1".to_string(),
+            _ => "0".to_string(),
+        },
+        _ => String::new(),
+    }
+}
+
+/// `NSNumber description` 을 본뜬 숫자 꼴. 정수(i64·u64)는 그대로, 정수 값 실수(2⁵³ 안)는 정수 꼴,
+/// 그 밖의 실수는 Rust `f64` Display — Swift 지수 표기(`e+21`)와 다를 수 있어 헤더 기록에 남겼다.
+fn number_string(n: &serde_json::Number) -> String {
+    if let Some(i) = n.as_i64() {
+        return i.to_string();
+    }
+    if let Some(u) = n.as_u64() {
+        return u.to_string();
+    }
+    let f = n.as_f64().unwrap_or(0.0);
+    if f.is_finite() && f.fract() == 0.0 && f.abs() < 9_007_199_254_740_992.0 {
+        return format!("{f:.0}");
+    }
+    format!("{f}")
+}
+
+static EMPTY_OBJECT: OnceLock<Map<String, Value>> = OnceLock::new();
+
+fn empty_object() -> &'static Map<String, Value> {
+    EMPTY_OBJECT.get_or_init(Map::new)
+}
+
+/// 개체 꾸러미 — Swift `v as? [String: Any] ?? [:]`. 빈 개체를 늘 공유해 대여를 단순히 둔다.
+fn dict(v: Option<&Value>) -> &Map<String, Value> {
+    v.and_then(Value::as_object).unwrap_or_else(|| empty_object())
+}
+
+/// 배열 꾸러미의 개체들만 — Swift `(v as? [[String: Any]])?.compactMap { $0 as? [String: Any] } ?? []`
+fn arr(v: Option<&Value>) -> Vec<&Map<String, Value>> {
+    match v {
+        Some(Value::Array(items)) => items.iter().filter_map(Value::as_object).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// 숫자 꾸러미. Swift `(v as? NSNumber)?.intValue` — 참·거짓은 1·0, 실수는 잘라서.
+fn num_i64(v: Option<&Value>) -> i64 {
+    match v {
+        Some(Value::Number(n)) => {
+            if let Some(i) = n.as_i64() {
+                i
+            } else if let Some(u) = n.as_u64() {
+                if u <= i64::MAX as u64 {
+                    u as i64
+                } else {
+                    i64::MAX
+                }
+            } else {
+                n.as_f64().map(|f| f.trunc() as i64).unwrap_or(0)
+            }
+        }
+        Some(Value::Bool(b)) => i64::from(*b),
+        _ => 0,
+    }
+}
+
+/// 실수 꾸러미. Swift `(v as? NSNumber)?.doubleValue`
+fn num_f64(v: Option<&Value>) -> f64 {
+    match v {
+        Some(Value::Number(n)) => n.as_f64().unwrap_or(0.0),
+        _ => 0.0,
+    }
+}
+
+/// 사람 이름 — `displayName ?? name`
+fn name_of(o: &Map<String, Value>) -> String {
+    let shown = sv(o.get("displayName"));
+    if shown.is_empty() {
+        sv(o.get("name"))
+    } else {
+        shown
+    }
+}
+
+/// `^~?[A-Za-z0-9_-]{1,100}$` — Confluence 스페이스 키(Outbox.swift 의 apSpaceKeyPattern)
+fn space_key_ok(s: &str) -> bool {
+    let after = s.strip_prefix('~').unwrap_or(s);
+    let ok_len = !after.is_empty() && after.len() <= 100;
+    ok_len && after.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// Swift `Character.whitespaces`(유니코드 Zs 범주와 탭 — `char::is_whitespace` 가 아니다). formats::ws 가 대기자라 복사했다.
+fn swift_ws(c: char) -> bool {
+    matches!(
+        c,
+        '\t' | ' '
+            | '\u{A0}'
+            | '\u{1680}'
+            | '\u{2000}'..='\u{200A}'
+            | '\u{202F}'
+            | '\u{205F}'
+            | '\u{3000}'
+    )
+}
+
+/// ICU `\w` 의 낱말 글자 — ASCII 영숫자와 _ 에 유니코드 글자·숫자까지. `\b` 와 태그·속성 이름의 경계에 쓴다.
+fn re_word_c(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || (!c.is_ascii() && c.is_alphanumeric())
+}
+
+/// `\b` 와 같은 자리 판정 — 왼쪽·오른쪽 낱말 글자 여부가 다를 때만 참이다(한쪽이 없으면 참).
+/// 부르는 자리는 항상 속성·태그 이름의 첫 바이트라 글자 경계다(이름은 ASCII).
+fn word_boundary(s: &str, q: usize) -> bool {
+    let prev = s[..q].chars().next_back().map(re_word_c);
+    let next = s[q..].chars().next().map(re_word_c);
+    match (prev, next) {
+        (Some(p), Some(n)) => p != n,
+        _ => true,
+    }
+}
+
+/// 대·소문자 안 가리고 접두 검사 — 찾는 꼬리는 늘 ASCII 다.
+fn ci_starts(s: &str, prefix: &str) -> bool {
+    s.len() >= prefix.len() && s.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+}
+
+/// 대·소문자 안 가리고 나오는 자리를 전부. 맞은 자리의 첫 바이트가 ASCII 꼬리의 첫 글자라 글자 경계다.
+fn ci_positions(s: &str, tail: &str) -> Vec<usize> {
+    let bytes = s.as_bytes();
+    let t = tail.as_bytes();
+    let mut out: Vec<usize> = Vec::new();
+    let mut at = 0;
+    while at + t.len() <= bytes.len() {
+        if bytes[at..at + t.len()].eq_ignore_ascii_case(t) {
+            out.push(at);
+        }
+        at += 1;
+    }
+    out
+}
+
+/// ICU 의 `.` 가 막는 줄 끝 다섯 — LF·CR·U+0085(NEL)·U+2028(LS)·U+2029(PS). 점 꼬리(태그 안쪽 `.*?`)의 닫힘 검사에 쓴다.
+const LINE_TERM: [char; 5] = ['\u{0A}', '\u{0D}', '\u{0085}', '\u{2028}', '\u{2029}'];
+
+/// `s[at..]` 에서 처음 만나는 줄 끝 글자의 바이트 자리.
+fn line_term_from(s: &str, at_start: usize) -> Option<usize> {
+    s[at_start..].char_indices().find(|(_, c)| LINE_TERM.contains(c)).map(|(i, _)| at_start + i)
+}
+
+/// 태그 이름 뒤의 `\s*>` — 흰 글자를 넘고 '>' 여야 한다(흰 글자 안에 줄 끝도 들어간다). '>' 다음 칸을 돌려준다.
+fn ws_then_gt(s: &str, pos: usize) -> Option<usize> {
+    for (off, c) in s[pos..].char_indices() {
+        if c == '>' {
+            return Some(pos + off + 1);
+        }
+        if !c.is_whitespace() {
+            return None;
+        }
+    }
+    None
+}
+
+/// 오름차순·겹치지 않는 자리 조각을 한 번에 덮어쓴다 — `replacingOccurrences` 의 여러 결과를 합친 꼴.
+fn splice(s: &str, cuts: &[(usize, usize, String)]) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut at = 0;
+    for (start, end, rep) in cuts {
+        out.push_str(&s[at..*start]);
+        out.push_str(rep);
+        at = *end;
+    }
+    out.push_str(&s[at..]);
+    out
+}
+
+/// 속성 찾기의 맞은 자리 — 값의 처음·끝, 꼬리의 안쪽 범위(a 꼬리만 쓴다).
+struct AttrHit {
+    v0: usize,
+    vend: usize,
+    inner: (usize, usize),
+}
+
+/// `<h...>` 머리 찾기의 맞은 자리 — 시작, 수준(1~6), 안쪽 글 범위, 태그 끝.
+struct HeadingHit {
+    start: usize,
+    level: i64,
+    inner: (usize, usize),
+    end: usize,
+}
+
+/// 속성 값 — 이름 바로 뒤 `="[^"]*"` 의 값 범위(따옴표 안). `[^"]*` 은 '>' 도 담는다.
+fn attr_value(s: &str, after_name: usize) -> Option<(usize, usize)> {
+    if !s[after_name..].starts_with("=\"") {
+        return None;
+    }
+    let v0 = after_name + 2;
+    let vend = s[v0..].find('"')? + v0;
+    Some((v0, vend))
+}
+
+/// `<ri:url...ri:value="...` 꼬리 — 값의 닫는 따옴표로 태그가 끝난다.
+fn quote_tail(_s: &str, from: usize) -> Option<(usize, usize, usize)> {
+    Some((from, from, from))
+}
+
+/// `<a ...href="...">` 꼬리— `[^>]*>` 닫힌 다음 `.*?` 안쪽 글과 `</a\s*>`(어떤 줄 끝도 재워도 되고, 흰 글자를 넘고 '>').
+fn a_tail(s: &str, from: usize) -> Option<(usize, usize, usize)> {
+    let g = s[from..].find('>')?;
+    let oe = from + g + 1;
+    for (off, _) in s[oe..].char_indices() {
+        let p = oe + off;
+        if p + 3 < s.len() && ci_starts(&s[p..], "</a") {
+            if let Some(end) = ws_then_gt(s, p + 3) {
+                return Some((oe, p, end));
+            }
+        }
+    }
+    None
+}
+
+/// `<tag ... attr="...">` 꼴 찾기 — 원본의 `<a\b[^>]*\bhref="([^"]*)"...` 따위 넷의 손 옮김.
+/// '<' 자리에서 태그 이름(`\b` 로 경계 침)이 맞는지 보고, 이름 뒤 첫 '>' 의 앞쪽(속성 이름은 그 안에만 있다,
+/// 값은 '>' 를 넘을 수 있다)에서 속성 따옴표를 뒤에서부터(탐욕 — 같은 이름의 속성이 둘 이상이면 마지막이 이긴다,
+/// 정규식 `[^>]*` 의 되감기와 같음) 찾고, 찾기 꼬리가 맞으면 자리를 채운다. 맞은 자리는 cap 개까지다.
+fn attr_matches(
+    s: &str,
+    tag: &str,
+    attr: &str,
+    cap: usize,
+    tail: impl Fn(&str, usize) -> Option<(usize, usize, usize)>,
+) -> Vec<AttrHit> {
+    let mut hits: Vec<AttrHit> = Vec::new();
+    let mut at = 0;
+    let bytes = s.as_bytes();
+    while hits.len() < cap {
+        let Some(i) = s[at..].find('<').map(|k| at + k) else { break };
+        at = i + 1;
+        let te = i + 1;
+        if te >= s.len() || !ci_starts(&s[te..], tag) || !word_boundary(s, te + tag.len()) {
+            continue;
+        }
+        let Some(close) = s[te + tag.len()..].find('>').map(|k| te + tag.len() + k) else { break };
+        for j in (te + tag.len()..close).rev() {
+            if !bytes[j].eq_ignore_ascii_case(&attr.as_bytes()[0]) || !word_boundary(s, j) || !ci_starts(&s[j..], attr) {
+                continue;
+            }
+            let Some((v0, vend)) = attr_value(s, j + attr.len()) else { continue };
+            let Some((i0, i1, h_end)) = tail(s, vend + 1) else { continue };
+            hits.push(AttrHit { v0, vend, inner: (i0, i1) });
+            at = h_end;
+            break;
+        }
+    }
+    hits
+}
+
+/// `<h1>...` 머리 찾기 — 원본의 `<h([1-6])\b[^>]*>(.*?)</h\1\s*>`(대·소문자 안 가림, `.` 이 줄 끝도 재운다).
+/// `<h` + 숫자 하나 + `\b` + '>' 까지, 안쪽은 닫는 `</h{같은 숫자}>` 전까지, 닫히는 꼬리는 흰 글자를 넘고 '>'.
+fn heading_hits(s: &str) -> Vec<HeadingHit> {
+    let mut hits: Vec<HeadingHit> = Vec::new();
+    let mut at = 0;
+    while at < s.len() {
+        let Some(i) = s[at..].find('<').map(|k| at + k) else { break };
+        at = i + 1;
+        let te = i + 1;
+        if te + 2 > s.len() {
+            continue;
+        }
+        let bytes = s.as_bytes();
+        if bytes[te] != b'h' && bytes[te] != b'H' {
+            continue;
+        }
+        let digit = bytes[te + 1];
+        if !(b'1'..=b'6').contains(&digit) || !word_boundary(s, te + 2) {
+            continue;
+        }
+        let Some(g) = s[te + 2..].find('>').map(|k| te + 2 + k) else { break };
+        let open_end = g + 1;
+        // `(.*?)` 는 아주 적게 — 닫는 머리 중 흰 글자를 넘겨 '>' 에 닿는 첫 자리
+        let closes = ci_positions(s, "</h");
+        for p in closes.iter().skip_while(|q| **q < open_end) {
+            let p = *p;
+            if p + 3 < s.len() && bytes[p + 3] == digit {
+                if let Some(end) = ws_then_gt(s, p + 4) {
+                    hits.push(HeadingHit { start: i, level: i64::from(digit - b'0'), inner: (open_end, p), end });
+                    at = end;
+                    break;
+                }
+            }
+        }
+    }
+    hits
+}
+
+/// `<script...></script\s*>` 같은 통째 버림 — 점이 줄 끝을 못 넘는(점 꼬리에 줄 끝을 막지 않은) 닫힘을 손으로.
+/// 여는 태그의 '>' 뒤부터 닫는 태그 전까지 줄 끝 글자가 있으면 더 먼 닫는 태그도 못 만난다(점은 그 앞에서 멈춘다).
+fn strip_word_block(s: &str, word: &str, rep: &str) -> String {
+    let close = format!("</{word}");
+    let mut cuts: Vec<(usize, usize, String)> = Vec::new();
+    let mut at = 0;
+    while at < s.len() {
+        let Some(i) = s[at..].find('<').map(|k| at + k) else { break };
+        at = i + 1;
+        let te = i + 1;
+        if te >= s.len() || !ci_starts(&s[te..], word) || !word_boundary(s, te + word.len()) {
+            continue;
+        }
+        let Some(g) = s[te + word.len()..].find('>').map(|k| te + word.len() + k) else { break };
+        let open_end = g + 1;
+        let term = line_term_from(s, open_end);
+        let closes = ci_positions(s, &close);
+        for p in closes.iter().skip_while(|q| **q < open_end) {
+            let p = *p;
+            if term.is_some_and(|t| t < p) {
+                break;
+            }
+            if let Some(end) = ws_then_gt(s, p + close.len()) {
+                cuts.push((i, end, rep.to_string()));
+                at = end;
+                break;
+            }
+        }
+    }
+    splice(s, &cuts)
+}
+
+/// `<!--...-->` 주석 버림 — 닫힘 앞에 줄 끝이 있으면 여기서는 버리지 않고(점이 줄 끝을 못 넘는다) 넘어간다.
+/// 겹쳐 낀 여는 주석은 없어, 실패한 자리에서 4자를 건너뛰는 것이 한 글자씩 앞으로 다시 시도하는 것과 같다.
+fn strip_comment(s: &str) -> String {
+    let mut cuts: Vec<(usize, usize, String)> = Vec::new();
+    let mut at = 0;
+    while at < s.len() {
+        let Some(i) = s[at..].find("<!--").map(|k| at + k) else { break };
+        at = i + 4;
+        let close = s[i + 4..].find("-->").map(|k| i + 4 + k);
+        let term = line_term_from(s, i + 4);
+        if let (Some(c), Some(t)) = (close, term) {
+            if t < c {
+                continue;
+            }
+        }
+        if let Some(c) = close {
+            cuts.push((i, c + 3, " ".to_string()));
+            at = c + 3;
+        }
+    }
+    splice(s, &cuts)
+}
+
+/// `<![CDATA[...]]>` — 안쪽 글만 남긴다(점이 줄 끝을 못 넘는다). 찾기는 대·소문자를 안 가린다.
+/// 실패한 자리는 한 글자 앞으로 넘어가, 그 안쪽에 다시 여는 CDATA 가 있으면 그것부터 맞는다.
+fn strip_cdata(s: &str) -> String {
+    let mut cuts: Vec<(usize, usize, String)> = Vec::new();
+    let mut at = 0;
+    while at < s.len() {
+        let Some(i) = s[at..].find('<').map(|k| at + k) else { break };
+        at = i + 1;
+        if !ci_starts(&s[i..], "<![cdata[") {
+            continue;
+        }
+        let from = i + 9;
+        let close = s[from..].find("]]>").map(|k| from + k);
+        let term = line_term_from(s, from);
+        if let (Some(c), Some(t)) = (close, term) {
+            if t < c {
+                continue;
+            }
+        }
+        if let Some(c) = close {
+            cuts.push((i, c + 3, s[from..c].to_string()));
+            at = c + 3;
+        }
+    }
+    splice(s, &cuts)
+}
+
+/// `<(br|hr)\b[^>]*/?>` — 이름 순서는 원본 교대 그대로다(먼저 온 이름이 이긴다).
+const TAG_BR_HR: [&str; 2] = ["br", "hr"];
+
+/// `</?(p|li|tr|div|pre|h[1-6]|ul|ol|table|blockquote|ac:task)\b[^>]*>`
+const TAG_BLOCK: [&str; 16] = ["p", "li", "tr", "div", "pre", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "table", "blockquote", "ac:task"];
+
+/// `<(td|th)\b[^>]*>`
+const TAG_TD_TH: [&str; 2] = ["td", "th"];
+
+/// `<br...>`, `<p...>`, `</p...>` 따위 — 이름이 경계를 친 태그를 통째로 rep 로 바꾼다(속성 글은 '>' 앞까지, 줄 끝도 담는다).
+/// `allow_close` 는 이름 앞의 `/` 를 옵션으로 두는 것(`</?(p|li...)`)이다. 이름 여러 개는 원본 교대 순서대로 앞선 것이 이긴다.
+fn strip_tag_spans(s: &str, names: &[&str], rep: &str, allow_close: bool) -> String {
+    let mut cuts: Vec<(usize, usize, String)> = Vec::new();
+    let mut at = 0;
+    while at < s.len() {
+        let Some(i) = s[at..].find('<').map(|k| at + k) else { break };
+        at = i + 1;
+        let tb = if allow_close && s[i + 1..].starts_with('/') { i + 2 } else { i + 1 };
+        if tb >= s.len() {
+            continue;
+        }
+        let name_len = match names.iter().find(|n| ci_starts(&s[tb..], n) && word_boundary(s, tb + n.len())) {
+            Some(n) => n.len(),
+            None => continue,
+        };
+        let Some(g) = s[tb + name_len..].find('>').map(|k| tb + name_len + k) else { break };
+        cuts.push((i, g + 1, rep.to_string()));
+        at = g + 1;
+    }
+    splice(s, &cuts)
+}
+
+/// 마지막 태그 버림 — `<[^<>]*>`: 남은 모든 태그를 지운다. '>' 전에 다른 '<' 가 오면 그 여는 태그는 맞지 않다.
+fn strip_tags(s: &str) -> String {
+    let mut cuts: Vec<(usize, usize, String)> = Vec::new();
+    let mut at = 0;
+    while at < s.len() {
+        let Some(i) = s[at..].find('<').map(|k| at + k) else { break };
+        let rest = &s[i + 1..];
+        let Some(g) = rest.find('>') else { break };
+        if let Some(l) = rest.find('<') {
+            if l < g {
+                at = i + 1;
+                continue;
+            }
+        }
+        cuts.push((i, i + g + 2, String::new()));
+        at = i + g + 2;
+    }
+    splice(s, &cuts)
+}
+
+/// `[ \t\u{00A0}]+` → " " 의 한 줄 손 옮김 — 줄은 바꾸지 않는다.
+fn collapse_ws(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut pending_space = false;
+    for c in line.chars() {
+        if c == ' ' || c == '\t' || c == '\u{A0}' {
+            pending_space = true;
+        } else {
+            if pending_space {
+                out.push(' ');
+                pending_space = false;
+            }
+            out.push(c);
+        }
+    }
+    if pending_space {
+        out.push(' ');
+    }
+    out
+}
+
+/// XHTML(Confluence 저장 형식 등) → 마크업을 뺀 글. Meta.swift 의 apStripMarkup 을 손으로 옮긴 것.
+/// script·style·매크로 매개변수는 통째로 버리고, CDATA 는 안의 글을 남긴다. 덩이 꼴 태그는 줄바꿈으로, 나머지 태그는 지운다.
+/// 정규식 여덟을 차례로 돌린 것과 같다(각 단계는 앞 단계의 결과를 다듬어, 정규식 사이에 새 태그가 생기지 않는다.
+/// script·style 교대는 두 번의 버림으로 갈라도 지우는 범위가 겹치지 않아 같다). 문자 꾸러미는 태그를 다 뗀 다음에 푼다.
+fn strip_markup(raw: &str) -> String {
+    let mut s = raw.to_string();
+    s = strip_word_block(&s, "script", " ");
+    s = strip_word_block(&s, "style", " ");
+    s = strip_word_block(&s, "ac:parameter", " ");
+    s = strip_comment(&s);
+    s = strip_cdata(&s);
+    s = strip_tag_spans(&s, &TAG_BR_HR, "\n", false);
+    s = strip_tag_spans(&s, &TAG_BLOCK, "\n", true);
+    s = strip_tag_spans(&s, &TAG_TD_TH, " ", false);
+    s = strip_tags(&s);
+    s = decode_entities(&s);
+    s.split('\n')
+        .map(collapse_ws)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Confluence 저장 형식에서 링크·첨부 이름. 원본: `storageLinks`(`Reading.swift` 266-282).
+/// 찾기 넷은 원본 정규식 그대로다(맞은 자리는 300 개까지). `/` 로 시작하는 주소에는 사이트를 붙인다.
+fn storage_links(s: &str, base: &str) -> Vec<MetaLink> {
+    let mut out: Vec<MetaLink> = Vec::new();
+    for h in attr_matches(s, "a", "href", 300, a_tail) {
+        out.push(MetaLink::new(&strip_markup(&s[h.inner.0..h.inner.1]), &decode_entities(&s[h.v0..h.vend]), "link"));
+    }
+    for h in attr_matches(s, "ri:url", "ri:value", 300, quote_tail) {
+        let u = decode_entities(&s[h.v0..h.vend]);
+        out.push(MetaLink::new(&u, &u, "link"));
+    }
+    for h in attr_matches(s, "ri:page", "ri:content-title", 300, quote_tail) {
+        out.push(MetaLink::new(&decode_entities(&s[h.v0..h.vend]), "", "page"));
+    }
+    for h in attr_matches(s, "ri:attachment", "ri:filename", 300, quote_tail) {
+        out.push(MetaLink::new(&decode_entities(&s[h.v0..h.vend]), "", "attachment"));
+    }
+    for l in out.iter_mut() {
+        if l.url.starts_with('/') {
+            l.url = format!("{base}{}", l.url);
+        }
+    }
+    out
+}
+
+/// XHTML 을 머리(h1~h6)로 나눈 덩어리들. 원본: `apMarkupChunks`(`Meta.swift` 419-441).
+/// 머리 전의 글은 그 앞 머리(수준 0 이면 맨 앞 덩어리)의 글이 되고, 머리 제목의 줄바꿈은 빈칸으로 바꾼다.
+fn markup_chunks(s: &str) -> Vec<TextChunk> {
+    let mut out: Vec<TextChunk> = Vec::new();
+    let mut pos = 0;
+    let mut cur = TextChunk::new(0, "", "");
+    for h in heading_hits(s) {
+        cur.text = strip_markup(&s[pos..h.start]);
+        if cur.level > 0 || !cur.text.is_empty() {
+            out.push(cur);
+        }
+        cur = TextChunk::new(h.level, &strip_markup(&s[h.inner.0..h.inner.1]).replace('\n', " "), "");
+        pos = h.end;
+    }
+    cur.text = strip_markup(&s[pos..]);
+    if cur.level > 0 || !cur.text.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// 덩어리 목록의 요약 — 목차·글 길이·요약(첫 글 몇 줄)·가리킨 절. 원본: `APChunked` + `apChunked`(`Meta.swift` 443-472)
+struct Chunked {
+    toc: Vec<TocItem>,
+    length: i64,
+    summary: Vec<String>,
+    sections: Vec<Section>,
+}
+
+/// 절 이름 대조 — 사람이 넘긴 이름(want)과 같거나, 단위 글(prompt)에 그 머리 글이 그대로 들어 있으면
+/// 가리킨 절로 본다(두 글자 이상, 빈칸·대소문자 무시). 원본: `apSectionWanted`(`Meta.swift` 447-452)
+fn section_wanted(title: &str, want: &[String], prompt: &str) -> bool {
+    let t = norm_space(title);
+    if grapheme_len(&t) < 2 {
+        return false;
+    }
+    if want.iter().any(|w| norm_space(w) == t) {
+        return true;
+    }
+    !prompt.is_empty() && norm_space(prompt).contains(t.as_str())
+}
+
+/// 대·소문자·빈칸 무시 꼴 — 소문자로 바꾼 다음 흰 글자 묶음을 빈칸 하나로, 양 끝 빈칸을 뗀다(원본의 `\s+` → " " 와 같다).
+fn norm_space(x: &str) -> String {
+    let mut out = String::with_capacity(x.len());
+    let mut pending_space = false;
+    for c in x.to_lowercase().chars() {
+        if c.is_whitespace() {
+            pending_space = true;
+        } else {
+            if pending_space {
+                out.push(' ');
+                pending_space = false;
+            }
+            out.push(c);
+        }
+    }
+    if pending_space {
+        out.push(' ');
+    }
+    out.trim_matches(swift_ws).to_string()
+}
+
+/// 앞 n 개 글자 묶음이 끝나는 바이트 자리(덩이가 n 개보다 적으면 글 전체 길이). meta.rs 의 clamp_graphemes 와 같은 규칙.
+fn first_gr(s: &str, n: usize) -> usize {
+    if grapheme_len(s) <= n {
+        return s.len();
+    }
+    let bounds: Vec<usize> = s.char_indices().map(|(i, _)| i).chain(std::iter::once(s.len())).collect();
+    let (mut lo, mut hi) = (0, bounds.len() - 1);
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if grapheme_len(&s[..bounds[mid]]) <= n {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    bounds[lo]
+}
+
+fn chunked(chunks: &[TextChunk], want: &[String], prompt: &str) -> Chunked {
+    let mut r = Chunked { toc: Vec::new(), length: 0, summary: Vec::new(), sections: Vec::new() };
+    r.toc = chunks.iter().filter(|c| c.level > 0 && !c.title.is_empty()).map(|c| TocItem::new(c.level, &c.title)).collect();
+    r.length = chunks.iter()
+        .map(|c| (grapheme_len(&c.text) + if c.level > 0 { grapheme_len(&c.title) } else { 0 }) as i64)
+        .sum::<i64>();
+    for line_value in chunks.iter().flat_map(|c| c.text.split('\n')) {
+        if r.summary.len() >= 3 {
+            break;
+        }
+        if grapheme_len(line_value) >= 2 {
+            if grapheme_len(line_value) > 200 {
+                r.summary.push(format!("{}…", &line_value[..first_gr(line_value, 199)]));
+            } else {
+                r.summary.push(line_value.to_string());
+            }
+        }
+    }
+    for (i, c) in chunks.iter().enumerate() {
+        if c.level <= 0 || !section_wanted(&c.title, want, prompt) {
+            continue;
+        }
+        // 그 머리부터 같거나 높은 수준의 다음 머리 전까지(아래 수준 머리는 글 안의 줄로)
+        let mut parts = vec![c.text.clone()];
+        for d in chunks.iter().skip(i + 1) {
+            if d.level > 0 && d.level <= c.level {
+                break;
+            }
+            parts.push(if d.level > 0 { format!("{}\n{}", d.title, d.text) } else { d.text.clone() });
+        }
+        r.sections.push(Section::new(
+            &c.title,
+            &parts.iter().filter(|p| !p.is_empty()).cloned().collect::<Vec<_>>().join("\n"),
+        ));
+        if r.sections.len() >= limit::SECTIONS {
+            break;
+        }
+    }
+    r
+}
+
+/// ADF 문서 훑기 상태 — 지금 덩어리(수준·제목·글), 아직 매끈하지 않은 줄들, 링크, 남은 마디 자리(~20000).
+struct AdfChunking {
+    chunks: Vec<TextChunk>,
+    links: Vec<MetaLink>,
+    cur: TextChunk,
+    lines: Vec<String>,
+    budget: i64,
+}
+
+impl AdfChunking {
+    /// 인라인 글 담기(AADF) — 글 마디·멘션·이모지·카드 주소·날짜·상태. 링크 매무새와 카드 주소는 링크에도 넣는다.
+    fn adf_inline(&mut self, n: &Map<String, Value>) -> String {
+        self.budget -= 1;
+        if self.budget <= 0 {
+            return String::new();
+        }
+        match sv(n.get("type")).as_str() {
+            "text" => {
+                let t = sv(n.get("text"));
+                for m in arr(n.get("marks")) {
+                    if sv(m.get("type")) == "link" {
+                        self.links.push(MetaLink::new(&t, &sv(dict(m.get("attrs")).get("href")), "link"));
+                    }
+                }
+                t
+            }
+            "hardBreak" => "\n".to_string(),
+            "mention" => sv(dict(n.get("attrs")).get("text")),
+            "emoji" => {
+                let shown = sv(dict(n.get("attrs")).get("text"));
+                if shown.is_empty() {
+                    sv(dict(n.get("attrs")).get("shortName"))
+                } else {
+                    shown
+                }
+            }
+            "inlineCard" | "blockCard" | "embedCard" => {
+                let u = sv(dict(n.get("attrs")).get("url"));
+                if !u.is_empty() {
+                    self.links.push(MetaLink::new(&u, &u, "link"));
+                }
+                u
+            }
+            "date" => sv(dict(n.get("attrs")).get("timestamp")),
+            "status" => sv(dict(n.get("attrs")).get("text")),
+            _ => arr(n.get("content")).iter().map(|c| self.adf_inline(c)).collect::<Vec<_>>().concat(),
+        }
+    }
+
+    /// 덩이 담기(AADF) — heading 은 지금 덩어리를 매끈하게 마치고 새 덩어리를, 문단·코드는 문단 줄을 쌓는다.
+    /// 목록·표·인용·패널·확장 칸은 안의 덩이를 차례로, 그림 칸·구분선는 흘리고, 블록 카드는 링크만 남긴다.
+    fn adf_block(&mut self, n: &Map<String, Value>) {
+        self.budget -= 1;
+        if self.budget <= 0 {
+            return;
+        }
+        match sv(n.get("type")).as_str() {
+            "heading" => {
+                self.cur.text = self.lines.join("\n");
+                self.lines = Vec::new();
+                if self.cur.level > 0 || !self.cur.text.is_empty() {
+                    self.chunks.push(self.cur.clone());
+                }
+                let title = arr(n.get("content")).iter().map(|c| self.adf_inline(c)).collect::<Vec<_>>().concat().replace('\n', " ");
+                let attrs = dict(n.get("attrs"));
+                // 수준 — `(attrs["level"] as? NSNumber)?.intValue ?? 1`(글이나 참·거짓도 수로 본다, 그 밖은 1)
+                let level = match attrs.get("level") {
+                    Some(Value::Number(_)) => num_i64(attrs.get("level")),
+                    Some(Value::Bool(b)) => i64::from(*b),
+                    _ => 1,
+                };
+                self.cur = TextChunk::new(level, &title, "");
+            }
+            "paragraph" | "codeBlock" => {
+                let t = arr(n.get("content")).iter().map(|c| self.adf_inline(c)).collect::<Vec<_>>().concat();
+                for piece in t.split('\n') {
+                    let piece = piece.trim_matches(swift_ws);
+                    if !piece.is_empty() {
+                        self.lines.push(piece.to_string());
+                    }
+                }
+            }
+            "mediaSingle" | "mediaGroup" | "media" | "rule" => {}
+            "blockCard" | "embedCard" => {
+                self.adf_inline(n);
+            }
+            _ => {
+                for c in arr(n.get("content")) {
+                    self.adf_block(c);
+                }
+            }
+        }
+    }
+}
+
+/// Jira 문서 형식(ADF) → 글 덩어리와 링크. 원본: `apADFChunks`(`Reading.swift` 186-231)
+fn adf_links(doc: &Map<String, Value>) -> (Vec<TextChunk>, Vec<MetaLink>) {
+    let mut a = AdfChunking { chunks: Vec::new(), links: Vec::new(), cur: TextChunk::new(0, "", ""), lines: Vec::new(), budget: 20000 };
+    for c in arr(doc.get("content")) {
+        a.adf_block(c);
+    }
+    a.cur.text = a.lines.join("\n");
+    if a.cur.level > 0 || !a.cur.text.is_empty() {
+        a.chunks.push(std::mem::take(&mut a.cur));
+    }
+    (a.chunks, a.links)
+}
+
+/// Notion 글 칸(rich_text 배열) → 글과 링크 — 빈 plain_text 는 안의 text.content 로, 주소 있으면 링크에도 넣는다.
+/// 원본: `notionRich`(`Reading.swift` 322-330)
+fn notion_rich(v: Option<&Value>, links: &mut Vec<MetaLink>) -> String {
+    arr(v).iter().map(|r| {
+        let plain = sv(r.get("plain_text"));
+        let t = if plain.is_empty() { sv(dict(r.get("text")).get("content")) } else { plain };
+        let h = sv(r.get("href"));
+        if !h.is_empty() {
+            links.push(MetaLink::new(&t, &h, "link"));
+        }
+        t
+    }).collect::<Vec<_>>().concat()
+}
+
+/// Notion 속성 하나 → 보일 글(제목 칸은 따로). 원본: `notionProp`(`Reading.swift` 332-348). rich_text 의 링크는 버린다.
+fn notion_prop(p: &Map<String, Value>) -> String {
+    let mut scratch: Vec<MetaLink> = Vec::new();
+    let kind = sv(p.get("type"));
+    match kind.as_str() {
+        "select" | "status" => sv(dict(p.get(kind.as_str())).get("name")),
+        "multi_select" => arr(p.get("multi_select")).iter().map(|o| sv(o.get("name"))).collect::<Vec<_>>().join(", "),
+        "people" => arr(p.get("people")).iter()
+            .map(|o| sv(o.get("name"))).filter(|x| !x.is_empty()).collect::<Vec<_>>().join(", "),
+        "date" => {
+            let d = dict(p.get("date"));
+            [sv(d.get("start")), sv(d.get("end"))].iter()
+                .filter(|x| !x.is_empty()).cloned().collect::<Vec<_>>().join(" ~ ")
+        }
+        "checkbox" => {
+            if matches!(p.get("checkbox"), Some(Value::Bool(true))) {
+                "예".to_string()
+            } else {
+                "아니요".to_string()
+            }
+        }
+        "number" => sv(p.get("number")),
+        "url" | "email" | "phone_number" => sv(p.get(kind.as_str())),
+        "rich_text" => notion_rich(p.get("rich_text"), &mut scratch),
+        "created_time" | "last_edited_time" => sv(p.get(kind.as_str())),
+        _ => String::new(),
+    }
+}
+
+/// Jira 응답 → 메타. 원본: `apMetaFromJira`(`Reading.swift` 233-283)
+pub fn meta_from_jira(
+    o: &Map<String, Value>, key: &str, base: &str, want: &[String], prompt: &str, dev: bool,
+) -> Meta {
+    let f = dict(o.get("fields"));
+    let mut m = Meta::default();
+    m.source = "jira".to_string();
+    m.id = if issue_key_ok(&sv(o.get("key"))) { sv(o.get("key")) } else { key.to_string() };
+    m.url = format!("{}/browse/{}", base, m.id);
+    m.title = sv(f.get("summary"));
+    m.kind = name_of(dict(f.get("issuetype")));
+    m.modified = sv(f.get("updated"));
+    m.author = name_of(dict(f.get("reporter")));
+    let (chunks, links) = adf_links(dict(f.get("description")));
+    let c = chunked(&chunks, want, prompt);
+    m.toc = c.toc;
+    m.length = c.length;
+    m.summary = c.summary;
+    m.sections = c.sections;
+    let mut fields = vec![
+        MetaField::new("상태", &name_of(dict(f.get("status")))),
+        MetaField::new("담당", &name_of(dict(f.get("assignee")))),
+        MetaField::new("우선순위", &name_of(dict(f.get("priority")))),
+    ];
+    if let Some(p) = f.get("parent").and_then(Value::as_object) {
+        fields.push(MetaField::new("상위", &format!("{} {}", sv(p.get("key")), sv(dict(p.get("fields")).get("summary")))));
+    }
+    let labels: Vec<&str> = f.get("labels").and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>()).unwrap_or_default();
+    if !labels.is_empty() {
+        fields.push(MetaField::new("레이블", &labels.join(", ")));
+    }
+    let comps: Vec<String> = arr(f.get("components")).iter()
+        .map(|x| sv(x.get("name"))).filter(|x| !x.is_empty()).collect();
+    if !comps.is_empty() {
+        fields.push(MetaField::new("구성 요소", &comps.join(", ")));
+    }
+    let fix: Vec<String> = arr(f.get("fixVersions")).iter()
+        .map(|x| sv(x.get("name"))).filter(|x| !x.is_empty()).collect();
+    if !fix.is_empty() {
+        fields.push(MetaField::new("수정 버전", &fix.join(", ")));
+    }
+    if !sv(f.get("created")).is_empty() {
+        fields.push(MetaField::new("만든 때", &sv(f.get("created"))));
+    }
+    fields.retain(|x| !x.value.trim_matches(swift_ws).is_empty());
+    m.fields = fields;
+
+    let mut ls: Vec<MetaLink> = arr(f.get("attachment")).iter()
+        .map(|x| MetaLink::new(&sv(x.get("filename")), &sv(x.get("content")), "attachment")).collect();
+    for l in arr(f.get("issuelinks")) {
+        let t = dict(l.get("type"));
+        if let Some(x) = l.get("outwardIssue").and_then(Value::as_object) {
+            let title = format!("{} {} {}", sv(t.get("outward")), sv(x.get("key")), sv(dict(x.get("fields")).get("summary")));
+            ls.push(MetaLink::new(&title, &format!("{}/browse/{}", base, sv(x.get("key"))), "issue"));
+        }
+        if let Some(x) = l.get("inwardIssue").and_then(Value::as_object) {
+            let title = format!("{} {} {}", sv(t.get("inward")), sv(x.get("key")), sv(dict(x.get("fields")).get("summary")));
+            ls.push(MetaLink::new(&title, &format!("{}/browse/{}", base, sv(x.get("key"))), "issue"));
+        }
+    }
+    m.links = [ls, links].concat();
+    meta_clamp(&m, dev)
+}
+
+/// Confluence 저장 형식 응답 → 메타. 원본: `apMetaFromConfluence`(`Reading.swift` 287-324)
+pub fn meta_from_confluence(
+    o: &Map<String, Value>, page: &str, base: &str, want: &[String], prompt: &str, dev: bool,
+) -> Meta {
+    // 주소는 응답의 주소 칸을 믿지 않고 사이트와 번호로 만든다(⑩-1 과 같은 꼴)
+    let id = if page_num_ok(&sv(o.get("id"))) { sv(o.get("id")) } else { page.to_string() };
+    let space = dict(o.get("space"));
+    let sk = sv(space.get("key"));
+    let url = if space_key_ok(&sk) {
+        format!("{}/wiki/spaces/{}/pages/{}", base, sk, id)
+    } else {
+        format!("{}/wiki/pages/viewpage.action?pageId={}", base, id)
+    };
+    let ver = dict(o.get("version"));
+    let mut m = Meta {
+        source: "confluence".to_string(),
+        id,
+        url,
+        title: sv(o.get("title")),
+        kind: if sv(o.get("type")) == "blogpost" {
+            "Confluence 블로그 글".to_string()
+        } else {
+            "Confluence 페이지".to_string()
+        },
+        modified: sv(ver.get("when")),
+        author: name_of(dict(dict(o.get("history")).get("createdBy"))),
+        ..Default::default()
+    };
+    let storage = sv(dict(dict(o.get("body")).get("storage")).get("value"));
+    let c = chunked(&markup_chunks(&storage), want, prompt);
+    m.toc = c.toc;
+    m.length = c.length;
+    m.summary = c.summary;
+    m.sections = c.sections;
+    let spacing = [sv(space.get("key")), sv(space.get("name"))].iter()
+        .filter(|x| !x.is_empty()).cloned().collect::<Vec<_>>().join(" · ");
+    let mut fields = vec![
+        MetaField::new("스페이스", &spacing),
+        MetaField::new("상태", &sv(o.get("status"))),
+        MetaField::new("판", &sv(ver.get("number"))),
+        MetaField::new("마지막 고친 사람", &name_of(dict(ver.get("by")))),
+    ];
+    let labels: Vec<String> = arr(dict(dict(o.get("metadata")).get("labels")).get("results")).iter()
+        .map(|x| sv(x.get("name"))).filter(|x| !x.is_empty()).collect();
+    if !labels.is_empty() {
+        fields.push(MetaField::new("레이블", &labels.join(", ")));
+    }
+    fields.retain(|x| !x.value.is_empty());
+    m.fields = fields;
+    let atts: Vec<MetaLink> = arr(dict(dict(o.get("children")).get("attachment")).get("results")).iter()
+        .map(|a| {
+            let download = sv(dict(a.get("_links")).get("download"));
+            let url = if download.starts_with('/') { format!("{}/wiki{}", base, download) } else { download };
+            MetaLink::new(&sv(a.get("title")), &url, "attachment")
+        })
+        .collect();
+    m.links = [atts, storage_links(&storage, base)].concat();
+    meta_clamp(&m, dev)
+}
+
+/// Notion 페이지 응답 → 메타(칸들(blocks)은 응답의 자식 칸들). 원본: `apMetaFromNotion`(`Reading.swift` 343-391)
+pub fn meta_from_notion(
+    o: &Map<String, Value>, blocks: &[&Map<String, Value>], id: &str, link: &str,
+    want: &[String], prompt: &str, dev: bool,
+) -> Meta {
+    // 주소는 www.notion.so·notion.so·*.notion.site 의 링크면 그대로 쓰고, 아니면 사람이 볼 링크로
+    let pu = sv(o.get("url"));
+    let host = url_host(&pu);
+    let notion_url = if host == "www.notion.so" || host == "notion.so" || host.ends_with(".notion.site") {
+        pu
+    } else {
+        link.to_string()
+    };
+    let mut m = Meta {
+        source: "notion".to_string(),
+        id: notion_id(&sv(o.get("id"))).unwrap_or_else(|| id.to_string()),
+        url: notion_url,
+        kind: if sv(o.get("object")) == "page" {
+            "Notion 페이지".to_string()
+        } else {
+            format!("Notion {}", sv(o.get("object")))
+        },
+        modified: sv(o.get("last_edited_time")),
+        author: sv(dict(o.get("created_by")).get("name")),
+        ..Default::default()
+    };
+    let mut links: Vec<MetaLink> = Vec::new();
+    let mut fields: Vec<MetaField> = Vec::new();
+    // 속성은 이름 순(원본의 sorted — 바뀌지 않는 보임 순서). 제목 칸은 m.title 로, 나머지는 비어 있지 않을 때만 칸으로
+    let mut props: Vec<(&String, &Value)> = dict(o.get("properties")).iter().collect();
+    props.sort_by(|a, b| a.0.cmp(b.0));
+    for (k, v) in &props {
+        let p = dict(Some(*v));
+        if sv(p.get("type")) == "title" {
+            m.title = notion_rich(p.get("title"), &mut links);
+            continue;
+        }
+        let x = notion_prop(p);
+        if !x.is_empty() {
+            fields.push(MetaField::new(k, &x));
+        }
+    }
+    m.fields = fields;
+    let mut chunks: Vec<TextChunk> = Vec::new();
+    let mut cur = TextChunk::new(0, "", "");
+    let mut lines: Vec<String> = Vec::new();
+    for b in blocks {
+        let t = sv(b.get("type"));
+        let body = dict(b.get(t.as_str()));
+        match t.as_str() {
+            "heading_1" | "heading_2" | "heading_3" => {
+                cur.text = lines.join("\n");
+                lines = Vec::new();
+                if cur.level > 0 || !cur.text.is_empty() {
+                    chunks.push(cur.clone());
+                }
+                // 수준 — 헤딩 종류의 끝 글자(heading_1~3)가 곧 수준, 모르면 1
+                let level = match t.chars().next_back().and_then(|c| c.to_digit(10)) {
+                    Some(d) => i64::from(d),
+                    None => 1,
+                };
+                cur = TextChunk::new(level, &notion_rich(body.get("rich_text"), &mut links), "");
+            }
+            "child_page" | "child_database" => links.push(MetaLink::new(&sv(body.get("title")), "", "page")),
+            "bookmark" | "link_preview" | "embed" => {
+                let u = sv(body.get("url"));
+                let cap = notion_rich(body.get("caption"), &mut links);
+                let shown = if cap.is_empty() { u.clone() } else { cap };
+                links.push(MetaLink::new(&shown, &u, "link"));
+            }
+            "image" | "file" | "pdf" | "video" => {
+                let external = sv(dict(body.get("external")).get("url"));
+                let u = if external.is_empty() { sv(dict(body.get("file")).get("url")) } else { external };
+                let cap = notion_rich(body.get("caption"), &mut links);
+                let name_ = sv(body.get("name"));
+                let shown = if cap.is_empty() {
+                    if name_.is_empty() { t.clone() } else { name_ }
+                } else {
+                    cap
+                };
+                let kind = if t == "image" { "image" } else { "attachment" };
+                links.push(MetaLink::new(&shown, &u, kind));
+            }
+            _ => {
+                let x = notion_rich(body.get("rich_text"), &mut links);
+                if !x.is_empty() {
+                    for piece in x.split('\n') {
+                        if !piece.trim_matches(swift_ws).is_empty() {
+                            lines.push(piece.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    cur.text = lines.join("\n");
+    if cur.level > 0 || !cur.text.is_empty() {
+        chunks.push(std::mem::take(&mut cur));
+    }
+    let c = chunked(&chunks, want, prompt);
+    m.toc = c.toc;
+    m.length = c.length;
+    m.summary = c.summary;
+    m.sections = c.sections;
+    m.links = links;
+    meta_clamp(&m, dev)
+}
+
+/// Figma 색 → #RRGGBB(스칼라 1 이 아니면 AA 를 덧대어 붙인다). r·g·b 는 수여야 한다. 원본: `hex`(`Reading.swift` 393-400)
+fn figma_hex(c: &Map<String, Value>, opacity: f64) -> Option<String> {
+    let need = |v: Option<&Value>| match v {
+        Some(Value::Number(_)) => Some(num_f64(v)),
+        Some(Value::Bool(true)) => Some(1.0),
+        Some(Value::Bool(false)) => Some(0.0),
+        _ => None,
+    };
+    let r = need(c.get("r"))?;
+    let g = need(c.get("g"))?;
+    let b = need(c.get("b"))?;
+    let a0 = match c.get("a") {
+        Some(Value::Number(_)) => num_f64(c.get("a")),
+        Some(Value::Bool(true)) => 1.0,
+        Some(Value::Bool(false)) => 0.0,
+        _ => 1.0,
+    };
+    let a = a0 * opacity;
+    let h = |x: f64| format!("{:02X}", (x.clamp(0.0, 1.0) * 255.0).round() as i64);
+    Some(format!("#{}{}{}{}", h(r), h(g), h(b), if a < 0.999 { h(a) } else { String::new() }))
+}
+
+/// 프레임 겸 자리 종류들 — 원본 `frameTypes`(`Reading.swift` 402-404)
+const FRAME_TYPES: [&str; 4] = ["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE"];
+
+/// 프레임 훑기 상태 — 마디 센 수(5,000 까지), 색·글꼴·부품(겹치지 않게).
+struct FrameWalk {
+    seen: i64,
+    colors: Vec<String>,
+    fonts: Vec<String>,
+    comps: Vec<String>,
+}
+
+impl FrameWalk {
+    /// 프레임 훑기 — TEXT 의 글과 글꼴, INSTANCE 의 부품 이름(맨 겉은 빼고), 견고한 칠 색, 아래 칸을 차례로. 원본: `frameOf`의 `walk`
+    fn frame_walk(&mut self, x: &Map<String, Value>, components: &Map<String, Value>, top: bool, f: &mut Frame) {
+        self.seen += 1;
+        if self.seen > 5000 || matches!(x.get("visible"), Some(Value::Bool(false))) {
+            return;
+        }
+        let t = sv(x.get("type"));
+        if t == "TEXT" {
+            let characters = sv(x.get("characters"));
+            if !characters.is_empty() {
+                f.texts.push(characters);
+            }
+            let style = dict(x.get("style"));
+            let font = [sv(style.get("fontFamily")), sv(style.get("fontWeight"))].iter()
+                .filter(|piece| !piece.is_empty()).cloned().collect::<Vec<_>>().join(" ");
+            if !font.is_empty() && !self.fonts.contains(&font) {
+                self.fonts.push(font);
+            }
+        }
+        if t == "INSTANCE" && !top {
+            let component_name = sv(dict(components.get(sv(x.get("componentId")).as_str())).get("name"));
+            let label = if component_name.is_empty() { sv(x.get("name")) } else { component_name };
+            if !label.is_empty() && !self.comps.contains(&label) {
+                self.comps.push(label);
+            }
+        }
+        for fill in arr(x.get("fills")) {
+            if sv(fill.get("type")) != "SOLID" || matches!(fill.get("visible"), Some(Value::Bool(false))) {
+                continue;
+            }
+            let opacity = match fill.get("opacity") {
+                Some(Value::Bool(true)) => 1.0,
+                Some(Value::Bool(false)) => 0.0,
+                Some(_) => num_f64(fill.get("opacity")),
+                None => 1.0,
+            };
+            if let Some(h) = figma_hex(dict(fill.get("color")), opacity) {
+                if !self.colors.contains(&h) {
+                    self.colors.push(h);
+                }
+            }
+        }
+        for c in arr(x.get("children")) {
+            self.frame_walk(c, components, false, f);
+        }
+    }
+}
+
+/// 프레임 하나의 표 — 크기, 안의 글(TEXT), 부품(INSTANCE 의 이름), 칠한 색(SOLID), 글꼴. 마디는 5,000개까지만 본다.
+/// 원본: `frameOf`(`Reading.swift` 406-433)
+fn frame_of(n: &Map<String, Value>, components: &Map<String, Value>) -> Frame {
+    let bb = dict(n.get("absoluteBoundingBox"));
+    let mut f = Frame {
+        id: sv(n.get("id")),
+        name: sv(n.get("name")),
+        width: num_f64(bb.get("width")),
+        height: num_f64(bb.get("height")),
+        ..Default::default()
+    };
+    let mut walk = FrameWalk { seen: 0, colors: Vec::new(), fonts: Vec::new(), comps: Vec::new() };
+    walk.frame_walk(n, components, true, &mut f);
+    f.colors = walk.colors;
+    f.fonts = walk.fonts;
+    f.components = walk.comps;
+    f
+}
+
+/// Figma 응답(nodes 또는 파일 depth=2) → 메타와 그림을 받을 프레임 id. 원본: `apMetaFromFigma`(`Reading.swift` 436-472)
+pub fn meta_from_figma(
+    o: &Map<String, Value>, file: &str, node: Option<&str>, link: &str, dev: bool,
+) -> (Meta, Option<String>) {
+    let mut m = Meta {
+        source: "figma".to_string(),
+        url: link.to_string(),
+        modified: sv(o.get("lastModified")),
+        kind: "Figma 프레임".to_string(),
+        ..Default::default()
+    };
+    let mut frames: Vec<Frame> = Vec::new();
+    let mut page = String::new();
+    if let Some(node) = node {
+        m.id = format!("{file}/{node}");
+        let entry = dict(dict(o.get("nodes")).get(node));
+        let doc = dict(entry.get("document"));
+        let comps = dict(entry.get("components"));
+        m.title = [sv(o.get("name")), sv(doc.get("name"))].iter()
+            .filter(|piece| !piece.is_empty()).cloned().collect::<Vec<_>>().join(" › ");
+        if FRAME_TYPES.contains(&sv(doc.get("type")).as_str()) {
+            frames.push(frame_of(doc, comps));
+        } else {
+            page = sv(doc.get("name"));
+            frames = arr(doc.get("children")).iter()
+                .filter(|c| FRAME_TYPES.contains(&sv(c.get("type")).as_str()))
+                .take(limit::FRAMES)
+                .map(|c| frame_of(c, comps))
+                .collect();
+        }
+    } else {
+        m.id = file.to_string();
+        m.title = sv(o.get("name"));
+        m.kind = "Figma 파일".to_string();
+        let pages = arr(dict(o.get("document")).get("children"));
+        page = pages.iter().map(|p| sv(p.get("name"))).collect::<Vec<_>>().join(", ");
+        for p in &pages {
+            for c in arr(p.get("children")) {
+                // 프레임 겸 자리들만, 표 수(50)까지만
+                if FRAME_TYPES.contains(&sv(c.get("type")).as_str()) && frames.len() < limit::FRAMES {
+                    frames.push(frame_of(c, empty_object()));
+                }
+            }
+        }
+    }
+    m.frames = frames;
+    m.toc = m.frames.iter().map(|f| TocItem::new(1, &f.name)).collect();
+    m.length = m.frames.iter().map(|f| f.texts.iter().map(|t| grapheme_len(t) as i64).sum::<i64>()).sum::<i64>();
+    let mut fields = vec![MetaField::new("프레임", &format!("{}개", m.frames.len()))];
+    if !page.is_empty() {
+        fields.insert(0, MetaField::new(if node.is_none() { "페이지" } else { "자리" }, &page));
+    }
+    if !sv(o.get("version")).is_empty() {
+        fields.push(MetaField::new("판", &sv(o.get("version"))));
+    }
+    m.fields = fields;
+    let texts_total = m.frames.iter().map(|f| f.texts.len()).sum::<usize>();
+    let frames_text = if m.frames.is_empty() {
+        String::new()
+    } else {
+        m.frames.iter().take(5).map(|f| f.name.as_str()).collect::<Vec<_>>().join(", ")
+    };
+    m.summary = vec![format!(
+        "프레임 {}개 · 글 {}개{}",
+        m.frames.len(),
+        texts_total,
+        if frames_text.is_empty() { String::new() } else { format!(" · {}", frames_text) }
+    )];
+    let image_node = m.frames.first().map(|f| f.id.clone()).filter(|id| !id.is_empty());
+    (meta_clamp(&m, dev), image_node)
+}
+
+// R-Reading-c 가 여기서 이어 쓴다
