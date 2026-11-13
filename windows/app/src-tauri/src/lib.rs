@@ -2,6 +2,8 @@
 //!
 //! 인자 없음 = 보드(트레이·단일 실행·전역 단축키). `--notify …` = 알림 패널 하나만 띄우고 끝나는 별도 프로세스.
 //! `--open-tab …` = 탭 열기 명령줄 — 답 한 줄 JSON 과 끝 코드로 끝난다(`open_tab_command_line`).
+//! `--close-tab …` = 탭 닫기 명령줄 — 같은 답 한 줄 JSON 과 끝 코드로 끝난다(`close_tab_command_line`,
+//! 닫으려고 보드를 켜지는 않는다 — 꺼져 있으면 곧바로 실패다).
 //! 경로는 모두 `claude_board_core::paths` 를 거친다 — `CLAUDE_BOARD_HOME`·`CLAUDE_BOARD_NOTIFIER_DIR` 로 가짜 홈을 쓸 수 있다.
 
 mod account_login;
@@ -65,6 +67,19 @@ pub fn open_tab_command_line(args: &[String]) -> i32 {
     let wake = |_: &str| {};
     let (line, exit) =
         open_tab::cli::run_open_tab(args, &dir, &board_running, &launch_board, &wake, &claude_board_core::clock::now);
+    print_open_tab_reply(&line);
+    exit
+}
+
+/// `ClaudeBoard --close-tab …` 명령줄 길 — 답 한 줄 JSON 을 표준 출력에 찍고 ok 면 0 아니면 1 로 끝난다.
+/// 이 길도 `main.rs` 가 단일 실행 플러그인 앞에서 가로챈다. 닫으려고 보드를 켜지지는 않는다 —
+/// 꺼져 있으면 곧바로 board-off 다.
+pub fn close_tab_command_line(args: &[String]) -> i32 {
+    // 요청 폴더는 언제나 설치판 자리를 본다 — 시험·개발 실행이라도 열리는 보드는 하나다(dev=false)
+    let dir = open_tab::close_cli::close_tab_request_dir(&claude_board_core::paths::local_app_data(), false);
+    // 떠 있는 보드는 단일 실행 플러그인의 이름 있는 뮤텍스로 안다 — 꺼져 있으면 곧바로 실패다(켜지 않는다)
+    let board_running = || open_tab::cli::board_instance_mutex_exists();
+    let (line, exit) = open_tab::close_cli::run_close_tab(args, &dir, &board_running, &claude_board_core::clock::now);
     print_open_tab_reply(&line);
     exit
 }

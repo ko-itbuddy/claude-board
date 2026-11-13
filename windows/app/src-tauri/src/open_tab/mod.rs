@@ -8,6 +8,7 @@
 pub mod args;
 pub mod cli;
 pub mod close;
+pub mod close_cli;
 pub mod handle;
 pub mod inbox;
 pub mod plan;
