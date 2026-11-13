@@ -27,7 +27,7 @@ import {
   wrapStep,
 } from "./tabLogic";
 import { pairSessions, placeOf, type SessionPlace, type SurfaceChange } from "./place";
-import { startLifecycle } from "./lifecycle.svelte";
+import { startLifecycle, whenRestored } from "./lifecycle.svelte";
 import { loadPluginDir } from "./mdRenderLoad";
 import { isMdRenderOff } from "./mdRender";
 import { loadTestClaudePrefix } from "./testClaude";
@@ -38,7 +38,7 @@ import { reveal, startSessionFlow, toast } from "./sessionFlow.svelte";
 import { canTypeClaude } from "./shellRules";
 import { TermController } from "./term";
 import { typeAtPrompt, typeCommand } from "./typeCommand";
-import { openTabLine, openTabSession, parseOpenTabEvent, type OpenTabRequest } from "./openTab";
+import { findReuseSurface, openTabLine, openTabSession, parseOpenTabEvent, type OpenTabRequest } from "./openTab";
 import { isTerminalHere, switchForHeaderClick } from "./workspaceSwitch";
 
 export interface LeafState {
@@ -401,6 +401,20 @@ export function openShell(dir: string | null = null, opts: { command?: string; s
 /** 듣기를 켠 적이 있는지 — startOpenTabFlow 를 여러 번 불러도 한 번만 켠다 */
 let openTabStarted = false;
 
+/** 바깥 열기 준비를 알린 적 있는지 — 페이지를 띄운 뒤 딱 한 번 알린다(실패해도 다시 보내지 않는다) */
+let openTabReadySent = false;
+
+/** 바깥 열기를 받을 준비가 끝났음을 백엔드에 알린다 — 듣기가 켜지고 탭 되살리기가 끝난 뒤 딱 한 번(실패는 기록만 남긴다) */
+async function notifyOpenTabReady(): Promise<void> {
+  if (openTabReadySent) return;
+  openTabReadySent = true;
+  try {
+    await invoke("open_tab_ready");
+  } catch (e) {
+    console.error("바깥 열기 준비를 알리지 못했습니다", e);
+  }
+}
+
 /** 바깥 열기의 곱을 알린다 — 요청 하나당 딱 한 번. 탭·세션을 알아내지 못했으면 null 이다(backend 가 그대로 남긴다) */
 function reportOpenTabDone(id: string, tab: string | null, session: string | null) {
   void invoke("open_tab_done", { id, tab, session }).catch((e) => console.error("바깥 열기 곱을 알리지 못했습니다", e));
@@ -451,8 +465,9 @@ async function reuseSurface(request: OpenTabRequest, surface: BoardSurface, tab:
 /** 바깥 열기 요청 하나를 반영한다(답은 마친 뒤 딱 한 번 알린다) — plan.rs OpenTabAction 의 Open·Reuse·Exists 차례다 */
 async function handleOpenTab(request: OpenTabRequest): Promise<void> {
   if (request.reuseTab === null) return openExternalTab(request);
-  const surface = surfaceOf(request.reuseTab);
-  const tab = tabOfLeaf(request.reuseTab);
+  // backend 는 백엔드 터미널 id("t1")로 이어 열 화면을 가르킨다 — 화면 id(옛 꼴)로 먼저 보고 없으면 터미널 id 로 본다
+  const surface = findReuseSurface(TerminalHub.surfaces, request.reuseTab);
+  const tab = surface !== undefined ? tabOfLeaf(surface.id) : undefined;
   if (!surface || !tab) {
     // 이어 열 화면을 골랐는데 그 사이 닫혔다 — 대신 새 탭을 열지 않고 기록만 남긴다(mac 도 조용히 건너뛴다)
     console.error("바깥 열기 화면이 사라졌습니다", request.reuseTab);
@@ -488,7 +503,10 @@ function openExternalTab(request: OpenTabRequest): void {
   reportOpenTabDone(request.id, shownName(tab), session);
 }
 
-/** 바깥 열기 요청을 듣는다 — startHub 가 시작 때 한 번 부른다. 브라우저 개발 화면에서는 듣지 않는다 */
+/** 바깥 열기 요청을 듣는다 — startHub 가 시작 때 한 번 부른다. 브라우저 개발 화면에서는 듣지 않는다.
+ * 듣기가 켜지고 탭 되살리기가 끝나면 바깥 열기 준비를 한 번 알린다(실패해도 다시 보내지 않는다) —
+ * 이 답을 받기 전의 요청은 되살린 탭이 아직 없어 닫힌 화면으로 답한다
+ */
 export function startOpenTabFlow(): void {
   if (openTabStarted || !inTauri) return;
   openTabStarted = true;
@@ -500,7 +518,10 @@ export function startOpenTabFlow(): void {
       toast("바깥 열기 요청을 처리하지 못했습니다");
       reportOpenTabDone(request.id, null, null);
     });
-  }).catch((e) => console.error("바깥 열기 듣기를 켜지 못했습니다", e));
+  })
+    .then(() => whenRestored())
+    .then(() => notifyOpenTabReady())
+    .catch((e) => console.error("바깥 열기 듣기를 켜지 못했습니다", e));
 }
 
 /** 새 세션 창 — 터미널이 접혀 있으면 펼치고 연다. 이미 떠 있으면 겹쳐 띄우지 않는다(Ctrl+T 를 또 누름) */

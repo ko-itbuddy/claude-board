@@ -1,9 +1,9 @@
 // @ts-nocheck
-// openTab 의 시험 — 요청 읽기·세션 id 읽기(plan.rs open_tab_prepare 과 같은 차례)·셸 한 줄 묶기(큰따옴표 규칙)를 본다
+// openTab 의 시험 — 요청 읽기·세션 id 읽기(plan.rs open_tab_prepare 과 같은 차례)·셸 한 줄 묶기(큰따옴표 규칙)·이어 열 화면 찾기를 본다
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { openTabLine, openTabSession, parseOpenTabEvent } from "./openTab.ts";
+import { findReuseSurface, openTabLine, openTabSession, parseOpenTabEvent } from "./openTab.ts";
 
 const SID = "0f0e1d2c-3b4a-5968-7766-554433221100";
 const NEW = "1234abcd-9876-5432-1100-ffeeddccbbaa";
@@ -49,6 +49,44 @@ test("요청 읽기 — 꼴이 맞지 않으면 없다", () => {
   assert.equal(parseOpenTabEvent({ id: "req", cwd: "D:\\x", command: "claude" }), null); // command 가 배열이 아니다
   assert.equal(parseOpenTabEvent({ id: "req", cwd: "D:\\x", command: [42] }), null); // 인자가 문자열이 아니다
   assert.equal(parseOpenTabEvent({ id: "req", cwd: "D:\\x", command: [""] }), null); // 빈 인자
+});
+
+// ── 이어 열 화면 찾기(reuseTab — 이제 백엔드 터미널 id "t1" 꼴이고 화면 id 옛 꼴도 읽는다) ──
+
+/** 이어 열 후보 화면 두 필드만 — findReuseSurface 가 보는 꼴(실제 꼴은 이보다 넓다) */
+const screen = (id: string, termId: string | null) => ({ id, termId });
+
+test("이어 열 화면 — 화면 id 로 찾는다(옛 꼴)", () => {
+  const first = screen("f-1", "t1");
+  const second = screen("f-2", "t2");
+  assert.equal(findReuseSurface([first, second], "f-2"), second);
+});
+
+test("이어 열 화면 — 백엔드 터미널 id 로도 찾는다(이제 backend 가 보내는 꼴)", () => {
+  const first = screen("f-1", "t1");
+  const second = screen("f-2", "t2");
+  assert.equal(findReuseSurface([first, second], "t2"), second);
+});
+
+test("이어 열 화면 — 화면 id 가 이긴다(다른 화면의 termId 와 겹쳐도, 차례와 상관없이)", () => {
+  const byId = screen("t1", "t2"); // 화면 id 가 다른 화면의 터미널 id 와 우연히 같다
+  const byTerm = screen("f-2", "t1");
+  assert.equal(findReuseSurface([byTerm, byId], "t1"), byId); // termId 를 먼저 보면 byTerm 이 나온다
+  const alone = findReuseSurface([byId, byTerm], "t1");
+  assert.equal(alone, byId); // 화면 id 가 앞서도 같다
+});
+
+test("이어 열 화면 — 없는 id 면 없다(그 사이 닫힌 화면)", () => {
+  const only = screen("f-1", "t1");
+  assert.equal(findReuseSurface([only], "f-9"), undefined); // 화면 id 로 없다
+  assert.equal(findReuseSurface([only], "t9"), undefined); // 터미널 id 로도 없다
+  assert.equal(findReuseSurface([], "t1"), undefined); // 화면이 아예 없다
+});
+
+test("이어 열 화면 — 셸이 아직 안 뜬 화면(termId null)은 화면 id 로만 찾는다", () => {
+  const idle = screen("f-1", null);
+  assert.equal(findReuseSurface([idle], "f-1"), idle); // 화면 id 로는 찾는다
+  assert.equal(findReuseSurface([idle], "null"), undefined); // 터미널 id 는 없어서 눌리지 않는다
 });
 
 // ── 세션 id 읽기(plan.rs open_tab_prepare 과 같은 차례) ──────

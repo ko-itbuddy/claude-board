@@ -45,6 +45,19 @@ export function parseOpenTabEvent(raw: unknown): OpenTabRequest | null {
   };
 }
 
+// 화면의 좁은 꼴 — 이어 열 찾기에 필요한 것만 본다(외부 import 없이 순수하게 시험하려고)
+interface ReuseCandidate {
+  id: string;
+  termId: string | null;
+}
+
+/** 이어 열 화면(reuseTab) 찾기 — id 는 화면 id(옛 꼴)거나 백엔드 터미널 id("t1" 꼴)다.
+ * 화면 id 가 이기고(id 로 찾은 것이 화면 id 와 termId 가 겹친 두 후보 가운데 이긴다),
+ * 화면 id 로 없으면 termId 로 본다. 둘 다 없으면 없다 — 부른 쪽은 그 사이 닫힌 화면을 골랐다 */
+export function findReuseSurface<S extends ReuseCandidate>(surfaces: readonly S[], id: string): S | undefined {
+  return surfaces.find((s) => s.id === id) ?? surfaces.find((s) => s.termId === id);
+}
+
 // 세션 id 꼴 — plan.rs is_session_id 와 같다(8-4-4-4-12 자리의 16진수)
 const SESSION_ID_SHAPE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
