@@ -2,11 +2,11 @@
 //! 원본(macOS): `Sources/ClaudeBoard/OpenTab.swift` 16-116 줄(`openTabCommandLine` · `prepareRequestDir` ·
 //! `writeRequest` · `awaitReply`). `main.rs` 가 첫 인자 `--open-tab` 으로 이 길을 부른다.
 //! 답 한 줄 JSON 을 표준 출력에 찍고 ok 면 0, 아니면 1 로 끝난다 — 부른 쪽(셸·자율주행 모델 세션)이 본다.
-//! 답을 기다리는 동안 떠 있는 보드를 다시 깨운다 — Windows 의 분산 알림 자리는 `argv [--open-tab-wake, <id>]` 로
-//! 보드를 띄운 두 번째 실행이다(`board.rs` `second_instance`, 단방향). 알림에는 내용을 싣지 않는다 —
-//! 보드는 요청 폴더의 파일을 읽어 깨어난다.
-//! `main.rs` 길이 통합되기 전까지는 비공개 모듈 안에서 안 쓰여 경고가 난다 — 걸면 지운다.
-#![allow(dead_code)]
+//! 켜기·깨우기 같은 바깥 이는 어댑터(`lib.rs` `open_tab_command_line`)가 넣는다 — `board_running` 은
+//! 단일 실행 플러그인이 만드는 이름 있는 뮤텍스([`BOARD_INSTANCE_MUTEX`]), `launch_board` 는 지금 실행
+//! 파일(`--no-focus` 요청이면 `--background` 를 얹어) 분리로 다시 띄우는 것, `wake` 는 침묵이다:
+//! 떠 있는 보드를 두 번째 실행으로 깨우면 보드 창이 앞으로 나와 포커스를 뺏고(`--no-focus` 요청에 어긋난다),
+//! 보드는 1초 틱에 요청 폴더를 스쳐 가면서 알아서 읽으므로 깨울 필요가 없다.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -20,6 +20,38 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// 답을 기다리는 동안 보드를 다시 깨우는 곈(초) — 보드가 막 뜨는 중이면 앞 깨움을 놓칠 수 있다(원본 OpenTab.swift:93)
 const RE_WAKE_EVERY_SECS: f64 = 1.0;
+
+/// 보드가 떠 있는지 보는 이름 있는 뮤텍스 — Windows 의 단일 실행 플러그인(`tauri-plugin-single-instance`
+/// 2.5.4)은 식별자 뒤에 `-sim` 을 붙인 이름으로 뮤텍스를 만들고 보드가 끝나면 닫는다.
+/// 시험·개발 실행에서 홈을 환경변수로 바꿔도 이 이름은 언제나 설치판과 같다.
+pub const BOARD_INSTANCE_MUTEX: &str = "com.claude.board-sim";
+
+/// 보드가 떠 있는지 — [`BOARD_INSTANCE_MUTEX`] 이름의 뮤텍스가 열리는지(`OpenMutexW`)로 안다.
+pub fn board_instance_mutex_exists() -> bool {
+    open_named_mutex_exists(BOARD_INSTANCE_MUTEX)
+}
+
+#[cfg(windows)]
+fn open_named_mutex_exists(name: &str) -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenMutexW, SYNCHRONIZATION_SYNCHRONIZE};
+
+    // 이름은 널 글자로 끝나는 UTF-16 이어야 한다(Windows API)
+    let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
+    let handle = unsafe { OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, 0, wide.as_ptr()) };
+    if handle.is_null() {
+        false
+    } else {
+        unsafe { CloseHandle(handle) };
+        true
+    }
+}
+
+/// Windows 밖(macOS 개발 기기의 `cargo check`)에서는 보드 뮤텍스가 없다고 본다 — 이 길은 Windows 전용이다.
+#[cfg(not(windows))]
+fn open_named_mutex_exists(_name: &str) -> bool {
+    false
+}
 
 /// `--open-tab` 뒤의 인자로 탭을 연다. `args` 는 `--open-tab` 뒤의 인자, `dir` 은 요청 폴더
 /// (`args::open_tab_dir`), 보드를 이는 부분은 진짜 어댑터가 넣는다: `board_running` · `launch_board` ·
@@ -461,6 +493,37 @@ mod tests {
         let broken_body = std::fs::read_to_string(dir.join(format!("{id}.reply.json"))).expect("깨진 답 파일");
         assert_eq!(broken_body, "아직 답이 아니다", "깨진 답 파일은 그대로 둔다");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn board_mutex_name_matches_the_single_instance_plugin() {
+        // 단일 실행 플러그인은 Windows 에서 `{식별자}-sim` 이름으로 뮤텍스를 만든다 — 이름이 어긋나면
+        // 떠 있는 보드를 못 알아보고 --launch 일 때도 이중으로 띄우려 든다
+        let config: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tauri.conf.json"
+        )))
+        .expect("tauri.conf.json");
+        let identifier = config["identifier"].as_str().expect("식별자");
+        assert_eq!(BOARD_INSTANCE_MUTEX, format!("{identifier}-sim"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn named_mutex_probe_sees_a_made_mutex_only() {
+        // 없는 이름은 거짓 — 보드가 꺼져 있을 때의 상태
+        let gone = format!("com.claude.board-test-{}-gone", std::process::id());
+        assert!(!open_named_mutex_exists(&gone), "없는 뮤텍스는 없다고 본다");
+        // 만들어 둔 이름은 참 — 보드가 켜져 있을 때 단일 실행 플러그인이 만든 뮤텍스와 같은 상태.
+        // 다른 시험·실행과 부딪히지 않게 pid 로 이름을 담보한다
+        let made = format!("com.claude.board-test-{}-made", std::process::id());
+        use windows_sys::Win32::System::Threading::CreateMutexW;
+        let wide: Vec<u16> = made.encode_utf16().chain([0]).collect();
+        let handle = unsafe { CreateMutexW(std::ptr::null(), 1, wide.as_ptr()) };
+        assert!(!handle.is_null(), "시험용 뮤텍스를 만든다");
+        assert!(open_named_mutex_exists(&made), "만든 뮤텍스는 있다고 본다");
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
+        // 핸들을 닫으면(마지막 핸들이므로) 뮤텍스 사라짐 — 정리는 여기서 끝난다
     }
 }
 
