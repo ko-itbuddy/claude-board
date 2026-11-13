@@ -39,6 +39,7 @@ pub mod rules {
     pub mod promotion;
     pub mod prose;
     pub mod purge;
+    pub mod reading;
     pub mod records;
     pub mod report;
     pub mod report_gate;
