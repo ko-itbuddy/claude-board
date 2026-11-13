@@ -43,6 +43,7 @@ pub mod rules {
     pub mod stack;
     pub mod start_settings;
     pub mod stopline;
+    pub mod unit_commits;
     pub mod versions;
 }
 
