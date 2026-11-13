@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::args::{parse_open_tab_args, OpenTabFailure, OpenTabReply, OpenTabRequest};
-use crate::util::short_id;
 
 /// 답 파일을 검사하는 곈 — 보드가 요청 폴더를 훑는 주기와 맞추듯 자주 본다(원본 `usleep(100_000)`)
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -72,7 +71,8 @@ pub fn run_open_tab(
         let why = format!("요청 폴더를 만들지 못했습니다: {} {error}", dir.display());
         return reply_exit(&OpenTabFailure::Refused(why).reply());
     }
-    let id = short_id();
+    // 보드가 요청 파일 이름을 is_session_id 로 걸러 읽으므로 id 는 UUID 꼴이어야 한다
+    let id = super::close_cli::new_request_id();
     // --no-focus 는 켤 때만 칸을 싣는다(끄면 None — 3.3.3 까지의 요청 JSON 과 같다)
     let request = OpenTabRequest {
         id: id.clone(),
@@ -198,6 +198,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::open_tab::plan::is_session_id;
+    use crate::util::short_id;
 
     /// 시험용 요청 폴더 — 부를 때마다 이름이 담보된다(short_id 는 시각·pid·순번을 섞는다)
     fn temp_dir(tag: &str) -> PathBuf {
@@ -262,6 +264,7 @@ mod tests {
             assert_eq!(line, answer, "{status}: 답 한 줄은 그대로");
             assert_eq!(wakes.get(), 1, "{status}: 깨움은 처음 한 번");
             let id = seen_id.take();
+            assert!(is_session_id(&id), "{status}: 요청 id 는 세션 id 꼴이다 — 보드가 파일 이름을 걸러 읽는다");
             assert!(
                 !dir.join(format!("{id}.reply.json")).exists(),
                 "{status}: 답 파일은 읽은 뒤 지운다"

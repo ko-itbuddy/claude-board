@@ -75,7 +75,7 @@ fn reply_exit(ok: bool, line: String) -> (String, i32) {
 /// 새 요청 id(UUID 꼴) — uuid 의존성을 더하지 않고 시각·프로세스·차례를 섞어 해시로 만든다(handle.rs 의
 /// new_session_id 와 같다). mac 은 `UUID().uuidString.lowercased()` 로 만든다(OpenTab.swift). 열기(`cli.rs`)의
 /// `short_id` 8글자를 쓰지 않는다 — 보드 쪽이 요청 파일 이름을 `is_session_id` 로 걸러 읽기 때문이다
-fn new_request_id() -> String {
+pub(super) fn new_request_id() -> String {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let mut hasher = Sha256::new();
