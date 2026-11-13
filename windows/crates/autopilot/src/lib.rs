@@ -15,6 +15,7 @@ pub mod rules {
     pub mod checks;
     pub mod connections;
     pub mod control;
+    pub mod critique;
     pub mod draft;
     /// Windows 전용(실행 환경 → 동의·판정 호출 꼴). PORTED.json 의 windows_only 에 둔다
     pub mod env_policy;
