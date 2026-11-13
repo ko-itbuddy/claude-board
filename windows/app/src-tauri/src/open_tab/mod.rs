@@ -6,5 +6,6 @@
 //! 요청 파일은 그 사용자만 쓸 수 있는 폴더에 있어야 읽는다.
 
 pub mod args;
+pub mod cli;
 pub mod close;
 pub mod plan;
