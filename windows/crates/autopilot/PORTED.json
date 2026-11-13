@@ -34,7 +34,8 @@
     {"swift": "Sources/AutopilotRules/Connections.swift", "sha256": "1811678a4cb3ba88b6465fc9a4454434f7b2d1a0d8d4166395e17d3b251f78d8", "rust": "src/rules/connections.rs", "chunk": "W08", "tests": [{"swift": "Tests/AutopilotRulesTests/PublishTests.swift", "sha256": "f69d387740c1c8cb3c851f21883bbed7cf5db1fbabae4699b29b25a41a96c88c"}]},
     {"swift": "Sources/AutopilotRules/BuiltinVersions.swift", "sha256": "0ff763d2dff9003eb963d8708997d89b86eb619815a5d28932953a3430f09471", "rust": "src/rules/builtin_versions.rs", "chunk": "W09", "tests": []},
     {"swift": "Sources/AutopilotRules/Skeleton.swift", "sha256": "7032a87036800b7f4fa1ee31278187ed8233ceb00317f6558d87be4eef08df24", "rust": "src/rules/skeleton.rs", "chunk": "W06", "tests": [{"swift": "Tests/AutopilotRulesTests/DraftTests.swift", "sha256": "cf1f8dc9dea7253c81d6594f4b493e64395235c7f65694d7262f1e6794b30175"}]},
-    {"swift": "Sources/AutopilotRules/UnitCommits.swift", "sha256": "498c9ef260aa25184c1d22a9de82ba0e7227067124eacd4267b6be5610613955", "rust": "src/rules/unit_commits.rs", "chunk": "다듬기 ⑬-2", "tests": [{"swift": "Tests/AutopilotRulesTests/UnitCommitsTests.swift", "sha256": "c0c8907faf76a8ad01270a1e608bf3fc7cbc7effe262f6476a4c74259d39486d"}]}
+    {"swift": "Sources/AutopilotRules/UnitCommits.swift", "sha256": "498c9ef260aa25184c1d22a9de82ba0e7227067124eacd4267b6be5610613955", "rust": "src/rules/unit_commits.rs", "chunk": "다듬기 ⑬-2", "tests": [{"swift": "Tests/AutopilotRulesTests/UnitCommitsTests.swift", "sha256": "c0c8907faf76a8ad01270a1e608bf3fc7cbc7effe262f6476a4c74259d39486d"}]},
+    {"swift": "Sources/AutopilotRules/Notify.swift", "sha256": "4f564e90ba24970453dd3ea2bf85c07f683083c8b07f4622986d7d45b11587ea", "rust": "src/rules/notify_rules.rs", "chunk": "W10", "tests": [{"swift": "Tests/AutopilotRulesTests/NotifyTests.swift", "sha256": "b3a3838bc7a0d1273e8395cc6ec91f3bbc4152abf1f5d310d34557b4fdf6ec08"}]}
   ],
   "windows_only": ["src/rules/env_policy.rs"]
 }

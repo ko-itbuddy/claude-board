@@ -24,6 +24,7 @@ pub mod rules {
     pub mod meta;
     pub mod multirun;
     pub mod new_repo;
+    pub mod notify_rules;
     pub mod path_key;
     pub mod gitlinks;
     pub mod history;
