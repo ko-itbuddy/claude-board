@@ -18,6 +18,7 @@ mod mdrender;
 mod model;
 mod notify;
 mod open_session;
+mod open_tab;
 mod proc_wait;
 mod pty;
 mod readers;
