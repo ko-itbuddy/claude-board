@@ -68,6 +68,8 @@ pub struct Board {
     tray_shown: Mutex<Option<tray::TrayState>>,
     /// 창 위치·크기가 바뀐 시각 — 움직임이 멎으면 저장한다
     frame_dirty: Mutex<Option<f64>>,
+    /// 바깥 탭 열기 수함(`open_tab::inbox`) — 프론트 준비 표지와 곱 기다림
+    pub inbox: Mutex<crate::open_tab::inbox::Inbox>,
 }
 
 impl Board {
@@ -103,6 +105,7 @@ impl Board {
             tray: Mutex::new(None),
             tray_shown: Mutex::new(None),
             frame_dirty: Mutex::new(None),
+            inbox: Mutex::default(),
         })
     }
 
@@ -1106,6 +1109,8 @@ pub fn run(argv: Vec<String>, context: tauri::Context<tauri::Wry>) {
             crate::terms::term_write_bin,
             crate::terms::term_resize,
             crate::terms::term_kill,
+            crate::open_tab::inbox::open_tab_ready,
+            crate::open_tab::inbox::open_tab_done,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -1125,6 +1130,8 @@ pub fn run(argv: Vec<String>, context: tauri::Context<tauri::Wry>) {
                 *board.pending_action.lock().unwrap() = Some((action, id));
             }
             updater::check(&board, false);
+            // 바깥 탭 열기 훑기 — 1초 틱으로 요청 폴더를 본다(`open_tab::inbox`)
+            crate::open_tab::inbox::start(board.clone());
             start_ticker(board);
             Ok(())
         })

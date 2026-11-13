@@ -10,9 +10,6 @@
 //!
 //! 파일·시각·프로세스는 그 밖(app)의 어댑터가 읽어 값으로 넘긴다 — 이 모듈은 순수 규칙이다.
 
-// 부르는 쪽(runner 조각)이 아직 없어 비공개 모듈 안에서 안 쓰여 경고가 난다 — 연결하면 지운다
-#![allow(dead_code)]
-
 use std::collections::HashSet;
 
 use super::args::OpenTabFailure;

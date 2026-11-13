@@ -491,7 +491,7 @@ pub fn read_claude_version(home: &Path) -> Option<String> {
 
 // 부르는 쪽(open_tab drain 을 잇는 조각)이 아직 없어 안 쓰여 경고가 난다 — 연결하면 지운다.
 #[allow(dead_code)]
-mod screens {
+pub(crate) mod screens {
     //! 열린 화면(보드 터미널 판)의 지금 값을 열기·닫기 판정(`open_tab::plan`·`open_tab::close`)에 넘길 꼴로
     //! 바꾼다. mac `EmbeddedTerminal.swift` 의 `openTabScreens`·`closeTabScreen(stopping:)` 의 Windows 판이다.
     //! 짝지어 온 세션은 짝짓기 표(`terms/pairing.rs`)에서 고르고, 앱(웹뷰) 상태에만 있는 값(탭 이름·바깥 열기

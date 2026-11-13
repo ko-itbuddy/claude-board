@@ -19,9 +19,6 @@
 //! - exists 답의 `tab` 칸을 None 으로 두었다(mac 은 탭의 보이는 이름을 실지만, `OpenTabScreen` 에는 지금 이름·
 //!   바꿀 이름 등이 섞여 있어 어느 것이 탭에 보이는지 모른다. 실제 탭·세션은 `open_tab_done` 이 알아 낸다).
 
-// 부르는 쪽(wiring 조각)이 아직 없어 비공개 모듈 안에서 안 쓰여 경고가 난다 — 연결하면 지운다
-#![allow(dead_code)]
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
