@@ -33,6 +33,7 @@ import { isMdRenderOff } from "./mdRender";
 import { loadTestClaudePrefix } from "./testClaude";
 import { closeSettings } from "$lib/settings/screen.svelte";
 import { hasLeaf, leaves } from "./split";
+import { panesKey, paneViews } from "./closeTab";
 import { startTabRenames } from "./renameFlow.svelte";
 import { reveal, startSessionFlow, toast } from "./sessionFlow.svelte";
 import { canTypeClaude } from "./shellRules";
@@ -269,12 +270,21 @@ function applyChange(change: SurfaceChange) {
   }
 }
 
+/** 마지막으로 백엔드에 알린 탭 화면 값 지문 — 지문이 바뀔 때만 close_tab_panes 를 다시 보낸다 */
+let lastCloseTabPanesKey: string | null = null;
+
 /** 상태 묶음 세션들로 짝짓기를 다시 쥔다 — 화면을 먼저 고치고 짝·소유 표를 갈아낸다(mac TerminalHub.pair) */
 export function pair(sessions: Session[], runsClaude: TermId[] | null) {
   const plan = pairSessions({ sessions, surfaces: TerminalHub.surfaces, runsClaude });
   for (const change of plan.changes) applyChange(change);
   TerminalHub.paired = { ...plan.paired };
   TerminalHub.tabOwnedHeadless = { ...plan.owned };
+  // 바깥 닫기(--close-tab)의 탭 화면 값 — 짝짓기가 화면을 고친 뒤의 값이다. 값이 바뀔 때만 백엔드에 알린다(C4.1b)
+  const panes = paneViews(TerminalHub.tabs, surfaceOf, (id) => TerminalHub.leaves[id]?.phase, shownName, Date.now());
+  const key = panesKey(panes);
+  if (key === lastCloseTabPanesKey) return;
+  lastCloseTabPanesKey = key;
+  void invoke("close_tab_panes", { panes }).catch((e) => console.error("닫기 탭 화면 값을 알리지 못했습니다", e));
 }
 
 /** 세션이 어디서 도는지 화면 고침 뒤의 상태로 가른다(mac TerminalHub.place) — 세션 줄의 위치 칩이 부른다 */
