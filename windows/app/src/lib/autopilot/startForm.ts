@@ -72,6 +72,15 @@ export const MODEL_PATTERN = /^[a-z0-9][a-z0-9._[\]-]*$/;
 export const MODEL_SUGGESTIONS = ["claude-sonnet-5-5", "sonnet", "opus", "haiku"];
 export const DEFAULT_MODEL = "claude-sonnet-5-5";
 
+/** 시작 시트가 두 칸(본문 + 출발 카드)으로 벌어지는 최소 폭(px). macOS 3.4.0 시작 시트의 좌우 배치를 따른 것 */
+export const START_SHEET_WIDE_MIN = 760;
+
+/** 시트 폭이 넓은 배치 기준 이상인가. 재지 않았거나 잘못된 폭(NaN 포함)은 좁은 배치로 둔다 */
+export function startSheetWide(sheetWidth: number): boolean {
+  if (!Number.isFinite(sheetWidth)) return false;
+  return sheetWidth >= START_SHEET_WIDE_MIN;
+}
+
 export function emptyUnit(): UnitDraft {
   return { title: "", goal: "", cwd: "", check: "", minutes: "", usd: "" };
 }

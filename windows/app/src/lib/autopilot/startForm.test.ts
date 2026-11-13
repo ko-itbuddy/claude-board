@@ -6,6 +6,7 @@ import { test } from "node:test";
 
 import {
   MAX_UNITS,
+  START_SHEET_WIDE_MIN,
   buildExecEnv,
   buildStart,
   buildUnit,
@@ -17,6 +18,7 @@ import {
   parseCap,
   problemFor,
   slug,
+  startSheetWide,
   syntaxHint,
   validateDraft,
 } from "./startForm.ts";
@@ -198,4 +200,17 @@ test("WSL 작업 폴더 안내는 두 가지 폴더 형태를 모두 말한다",
   assert.ok(hint.includes("Windows 폴더"));
   assert.ok(hint.includes("/mnt/c/"));
   assert.ok(!hint.includes("—"));
+});
+
+test("시작 시트의 넓은 배치 기준은 760 이고 기준에서 경계를 가른다", () => {
+  // 기준 값은 화면 배치를 가르는 값이라 값 자리를 고정한다(MAX_UNITS 값 시험과 같은 이유)
+  assert.equal(START_SHEET_WIDE_MIN, 760);
+  // 기준값은 넓은 쪽(>= 경계), 기준 바로 아래와 소수는 좁은 쪽
+  assert.equal(startSheetWide(760), true);
+  assert.equal(startSheetWide(759), false);
+  assert.equal(startSheetWide(759.5), false);
+  assert.equal(startSheetWide(1200), true);
+  // 재지 못한 폭(0)과 NaN 은 좁은 배치로 둔다
+  assert.equal(startSheetWide(0), false);
+  assert.equal(startSheetWide(Number.NaN), false);
 });
