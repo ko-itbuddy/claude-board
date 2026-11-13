@@ -22,6 +22,7 @@ pub mod rules {
     pub mod leftovers;
     pub mod links;
     pub mod meta;
+    pub mod misses;
     pub mod multirun;
     pub mod new_repo;
     pub mod notify_rules;
