@@ -487,6 +487,139 @@ pub fn read_claude_version(home: &Path) -> Option<String> {
         .max_by(|a, b| cmp_version(a, b))
 }
 
+// ── 탭 화면 값 (§5.13 탭 열기·닫기 — mac EmbeddedTerminal 이 넘기는 화면 값) ──
+
+// 부르는 쪽(open_tab drain 을 잇는 조각)이 아직 없어 안 쓰여 경고가 난다 — 연결하면 지운다.
+#[allow(dead_code)]
+mod screens {
+    //! 열린 화면(보드 터미널 판)의 지금 값을 열기·닫기 판정(`open_tab::plan`·`open_tab::close`)에 넘길 꼴로
+    //! 바꾼다. mac `EmbeddedTerminal.swift` 의 `openTabScreens`·`closeTabScreen(stopping:)` 의 Windows 판이다.
+    //! 짝지어 온 세션은 짝짓기 표(`terms/pairing.rs`)에서 고르고, 앱(웹뷰) 상태에만 있는 값(탭 이름·바깥 열기
+    //! 표지·이어받기·막 넣음 따위)은 부르는 쪽이 `PaneApp` 으로 화면 id 에 맞춰 모아 준다.
+
+    use crate::model::Session;
+    use crate::open_tab::close::{CloseTabForeground, CloseTabScreen};
+    use crate::open_tab::plan::OpenTabScreen;
+    use crate::terms::pairing::Pairing;
+    use crate::terms::TermInfo;
+
+    /// 앱(웹뷰) 쪽 화면 값 — 백엔드 모델(터미널·세션·짝짓기)이 모르는 것. 화면(term) id 로 맞춘다.
+    #[derive(Debug, Clone, PartialEq, Eq, Default)]
+    pub(crate) struct PaneApp {
+        /// 화면 id — 백엔드 터미널 번호("t1", "t2", …)
+        pub id: String,
+        /// 주 세션 이름 밖의 이름들 — 바꿀 이름·방금 붙인 이름(--name, 15초)·명령의 `--name`·한 화면 탭의 탭 이름
+        pub names: Vec<String>,
+        /// 화면이 기억하는 세션 id — 짝지어 온 세션이 없을 때(세션 파일이 사라졌거나 끝났을 때) 답에 쓴다
+        pub session_id: Option<String>,
+        /// 탭의 보이는 이름 — 닫기 답의 `tab` 칸(화면이 여럿인 탭도 같은 이름)
+        pub tab: String,
+        /// 바깥 열기(--open-tab)로 연 탭
+        pub external: bool,
+        /// 자율주행을 이어받은 화면 — 열기는 가리기만 하고 닫기는 거절한다
+        pub takeover: bool,
+        /// 탭의 화면이 둘 이상(사람이 나눈 탭)
+        pub split: bool,
+        /// 셸이 막 뜨는 중이거나 보드가 claude 명령을 막 넣음(3초 안)
+        pub starting: bool,
+    }
+
+    /// 화면의 주 세션 — 같은 tty 로 짝지어 온 세션 가운데 (updated, since, id) 사전식 큰 것.
+    /// 프론트 `place.ts` 의 ttyWinner 와 같은 규칙이다. 끝난 세션·pid 없는 세션은 짝짓기 표에 없으므로 짝지어 오지 않는다.
+    fn main_session<'a>(term_id: &str, sessions: &'a [Session], pairing: &Pairing) -> Option<&'a Session> {
+        sessions
+            .iter()
+            .filter(|s| pairing.places.get(&s.pid).and_then(|p| p.tty.as_deref()) == Some(term_id))
+            .max_by_key(|s| (s.updated, s.since, s.id.clone()))
+    }
+
+    /// 화면의 이름들 — 주 세션의 이름 먼저, 그 뒤에 앱 쪽 이름들(mac screenNames 의 순서).
+    fn screen_names(session: Option<&Session>, app: &PaneApp) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        if let Some(n) = session.and_then(|s| s.name.as_deref()) {
+            names.push(n.to_string());
+        }
+        names.extend(app.names.iter().cloned());
+        names
+    }
+
+    /// 짝짓기 결과의 화면(term) id 목록에 이 화면이 든가.
+    fn in_ids(ids: &[String], term_id: &str) -> bool {
+        ids.iter().any(|t| t == term_id)
+    }
+
+    /// 열기 판정에 넘길 화면 값들 — 들어온 터미널 목록 순서다. 짝짓기는 도는 터미널만 뜯으므로
+    /// 부르는 쪽이 끝난 터미널(`list()` 에 남은 것)을 넣으면 claude 징후가 빈 값으로 나온다.
+    pub(crate) fn open_tab_screens(
+        terms: &[TermInfo],
+        sessions: &[Session],
+        pairing: &Pairing,
+        app: &[PaneApp],
+    ) -> Vec<OpenTabScreen> {
+        let mut out = Vec::new();
+        for term in terms {
+            let empty = PaneApp::default();
+            let app = app.iter().find(|a| a.id == term.id).unwrap_or(&empty);
+            let session = main_session(&term.id, sessions, pairing);
+            out.push(OpenTabScreen {
+                id: term.id.clone(),
+                session_id: session.map_or(app.session_id.clone(), |s| Some(s.id.clone())),
+                cwd: term.cwd.clone(),
+                pid: session.and_then(|s| i32::try_from(s.pid).ok()),
+                names: screen_names(session, app),
+                busy: in_ids(&pairing.runs_claude, &term.id) && !in_ids(&pairing.at_prompt, &term.id),
+                takeover: app.takeover,
+            });
+        }
+        out
+    }
+
+    /// 앞 프로그램 — 막 뜨는 중·막 넣음 → 셸 프롬프트 → 살아 있는 claude → 그 밖(앞 프로그램을 읽지 못한 때도).
+    /// mac closeTabScreen 의 순서 그대로다.
+    fn foreground(term_id: &str, pairing: &Pairing, app: &PaneApp) -> CloseTabForeground {
+        if app.starting {
+            CloseTabForeground::Starting
+        } else if in_ids(&pairing.at_prompt, term_id) {
+            CloseTabForeground::Prompt
+        } else if in_ids(&pairing.runs_claude, term_id) {
+            CloseTabForeground::Claude
+        } else {
+            CloseTabForeground::Other
+        }
+    }
+
+    /// 닫기 판정에 넘길 화면 값들 — `stopping` 은 --stop 으로 claude 를 끝내는 중인 화면(term) id 목록.
+    pub(crate) fn close_tab_screens(
+        terms: &[TermInfo],
+        sessions: &[Session],
+        pairing: &Pairing,
+        app: &[PaneApp],
+        stopping: &[String],
+    ) -> Vec<CloseTabScreen> {
+        let mut out = Vec::new();
+        for term in terms {
+            let empty = PaneApp::default();
+            let app = app.iter().find(|a| a.id == term.id).unwrap_or(&empty);
+            let session = main_session(&term.id, sessions, pairing);
+            out.push(CloseTabScreen {
+                id: term.id.clone(),
+                tab: app.tab.clone(),
+                session_id: session.map_or(app.session_id.clone(), |s| Some(s.id.clone())),
+                names: screen_names(session, app),
+                external: app.external,
+                takeover: app.takeover,
+                split: app.split,
+                stopping: stopping.iter().any(|t| t.as_str() == term.id),
+                foreground: foreground(&term.id, pairing, app),
+            });
+        }
+        out
+    }
+}
+
+#[cfg(test)]
+mod screens_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
