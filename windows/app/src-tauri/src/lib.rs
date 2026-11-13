@@ -6,6 +6,8 @@
 mod account_login;
 mod accounts;
 mod autopilot;
+mod autopilot_git;
+mod autopilot_connections;
 mod autoswitch;
 mod board;
 mod drive;
