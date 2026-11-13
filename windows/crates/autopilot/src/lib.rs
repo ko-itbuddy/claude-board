@@ -23,6 +23,7 @@ pub mod rules {
     pub mod leftovers;
     pub mod links;
     pub mod meta;
+    pub mod miss_digest;
     pub mod misses;
     pub mod multirun;
     pub mod new_repo;
