@@ -52,6 +52,7 @@ pub mod engine {
     pub mod leftovers;
     pub mod prep_git;
     pub mod run;
+    pub mod session_runner;
 }
 
 pub mod adapters {
@@ -64,5 +65,6 @@ pub mod adapters {
     pub mod supervisor;
     pub mod usage;
     pub mod winproc;
+    pub mod worktree;
     pub mod wsl_env;
 }
