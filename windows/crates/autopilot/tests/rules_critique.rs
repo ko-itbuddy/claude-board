@@ -1,15 +1,16 @@
-//! 판정 비판 일반판 앞쪽(`rules::critique`, 원본 Critique.swift 1~393줄) 시험. 원본: `Tests/AutopilotRulesTests/CritiqueTests.swift`.
-//! 이 파일이 옮긴 Swift 시험 12개: `JudgePlaceTests`(`경로`·`스크립트`·`보호`·`대상`·`글자`) · `ProbeTests`(`계획`·`돌리기`·`이미통과`·`까닭`·`카드`→`탐침_카드`) ·
-//! `CaseAllowTests`(`허용`·`겹침`). 표 시험의 줄은 원본과 같은 줄이다.
-//! 뒤 청크(R-Critique-b)에 남긴 것: `CriticTests`(`모델`·`모델고르기`·`글`·`읽기`·`확인`·`카드`) · `FixLoopTests`(`차례`·`글`·`약해짐`) ·
-//! `CaseAllowTests.설정반례`(`apCriticParse`) — 그리고 Misses·Records 쪽 시험은 다른 규칙 파일 몫이다. 이 파일 이름 `탐침_카드` 는 뒤 청크의 `카드` 와 겹치지 않게 붙였다.
-//! 가짜 어댑터(버리는 작업 트리)는 이 파일에만 둔다. 값은 장난감(zz-toy·example.com).
+//! 판정 비판(`rules::critique`, 원본 Critique.swift 전체) 시험. 원본: `Tests/AutopilotRulesTests/CritiqueTests.swift`.
+//! 이 파일이 옮긴 Swift 시험 22개: `JudgePlaceTests`(`경로`·`스크립트`·`보호`·`대상`·`글자`) · `ProbeTests`(`계획`·`돌리기`·`이미통과`·`까닭`·`카드`→`탐침_카드`) ·
+//! `CaseAllowTests`(`허용`·`겹침`·`설정반례`) · `CriticTests`(`모델`·`모델고르기`·`글`→`비판_글`·`읽기`·`확인`·`카드`) · `FixLoopTests`(`차례`·`글`→`고치기_글`·`약해짐`).
+//! 표 시험의 줄은 원본과 같은 줄이다. Swift 시험 33개 가운데 Misses(7)·Records 마이그레이션(2)·Records 판 4(1)·DraftMisses(1) 쪽 11개는 다른 규칙 파일 몫이다.
+//! 이름 `탐침_카드` 는 비판 세션의 `카드` 와, `비판_글`·`고치기_글` 은 서로 겹치지 않게 붙였다.
+//! 가짜 어댑터(버리는 작업 트리·비판 결과 폴더)는 이 파일에만 둔다. 값은 장난감(zz-toy·example.com).
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use claude_board_autopilot::rules::critique::*;
-use claude_board_autopilot::rules::scenarios::{JudgeOutcome, JudgeStep, StepResult};
+use claude_board_autopilot::rules::draft::{DRAFT_HEAD_LINE, DraftFiles, DraftInput, DraftOption, DraftScenario, DraftedUnit};
+use claude_board_autopilot::rules::scenarios::{Criterion, JudgeOutcome, JudgeStep, ScenarioKind, StepResult};
 
 // MARK: 가짜 어댑터
 
@@ -483,4 +484,268 @@ fn 추가_설정_파일_꼴() {
     assert!(!judge_config_path("app/todos.py") && !judge_config_path("docs/config.md") && !judge_config_path(""));
     // 이름만 있는 경로·끝이 빈 경로도 안전하다
     assert!(!judge_config_path("/"));
+}
+
+// MARK: 비판 세션
+
+// 비판 결과 폴더 가짜 — 지도에 든 파일만 읽는다(APDraftFiles 가 결과 폴더에서 쓰는 쪽)
+struct FakeOut {
+    files: HashMap<String, String>,
+}
+
+impl DraftFiles for FakeOut {
+    fn read(&self, name: &str) -> Option<Vec<u8>> {
+        self.files.get(name).map(|s| s.as_bytes().to_vec())
+    }
+
+    fn list(&self, _folder: &str) -> Vec<String> {
+        vec![]
+    }
+}
+
+fn critic_units() -> Vec<CriticUnit> {
+    vec![
+        CriticUnit::new(
+            "u1",
+            "할 일 만들기·목록 API",
+            "할 일 경로를 만든다",
+            vec![Criterion::new("AC-1", "POST"), Criterion::new("AC-2", "GET")],
+            "",
+            vec![
+                CriticScenario::new(
+                    ".autopilot/scenarios/u1/routes.py",
+                    ScenarioKind::Shell,
+                    Some("AC-1"),
+                    "/J/u1/1-routes.py",
+                ),
+                CriticScenario::new(
+                    ".autopilot/scenarios/u1/list.sh",
+                    ScenarioKind::Shell,
+                    Some("AC-2"),
+                    "/J/u1/2-list.sh",
+                ),
+            ],
+        ),
+        CriticUnit::new(
+            "u2",
+            "README 안내",
+            "안내를 쓴다",
+            vec![Criterion::new("AC-3", "읽힌다")],
+            "grep -q '할 일' NOTES.md",
+            vec![],
+        ),
+    ]
+}
+
+fn critic_targets() -> HashMap<String, Vec<String>> {
+    let mut m: HashMap<String, Vec<String>> = HashMap::new();
+    m.insert("u1".to_string(), vec!["app/todos.py".to_string()]);
+    m.insert("u2".to_string(), vec!["NOTES.md".to_string()]);
+    m
+}
+
+const FINDINGS_JSON: &str = r#"[{"id":"f1","unit":"u1","criterion":"AC-2","judge":".autopilot/scenarios/u1/list.sh","kind":"counterexample","why":"GET 글자만 있고 경로가 없는 파일도 통과합니다","files":["app/todos.py"]},
+ {"id":"f2","unit":"u2","criterion":"AC-3","kind":"unverifiable","why":"읽기 쉬운지는 반례 파일로 가리지 못합니다"},
+ {"id":"f3","unit":"u1","criterion":"AC-1","kind":"interpretation","why":"경로만 있으면 되는지 만들기가 되는지 갈립니다","readings":[{"key":"route","label":"경로만 있으면 됨"},{"key":"works","label":"만들기가 실제로 됨"}],"recommended":"works"},
+ {"id":"f4","unit":"u1","judge":".autopilot/scenarios/u1/list.sh","kind":"counterexample","why":"시나리오를 바꾸면 통과합니다","files":[".autopilot/scenarios/u1/list.sh"]},
+ {"id":"f5","unit":"u1","kind":"counterexample","why":"반례 파일이 없습니다","files":["app/none.py"]},
+ {"id":"f6","unit":"u9","kind":"unverifiable","why":"없는 단위"},
+ {"id":"x7","unit":"u1","kind":"unverifiable","why":"id 꼴"},
+ {"id":"f8","unit":"u1","judge":"check","kind":"unverifiable","why":"판정 명령 없는 단위"},
+ {"id":"f9","unit":"u1","kind":"interpretation","why":"읽기 하나","readings":[{"key":"a","label":"하나"}]}]"#;
+
+fn case_files() -> HashMap<String, String> {
+    let mut m: HashMap<String, String> = HashMap::new();
+    m.insert("findings.json".to_string(), FINDINGS_JSON.to_string());
+    m.insert("cases/f1/app/todos.py".to_string(), "# GET /todos 는 아직 만들지 않음\nROUTES = []\n".to_string());
+    m.insert("cases/f4/.autopilot/scenarios/u1/list.sh".to_string(), "exit 0\n".to_string());
+    m
+}
+
+fn drafted_unit(id: &str, title: &str, prompt: &str, check: &str) -> DraftedUnit {
+    DraftedUnit {
+        id: id.to_string(),
+        title: title.to_string(),
+        kind: "dev".to_string(),
+        folder: String::new(),
+        prompt: prompt.to_string(),
+        check: check.to_string(),
+        est_min: 30.0,
+        depends: vec![],
+        criteria: vec![],
+        scenarios: vec![],
+        check_ports: vec![],
+    }
+}
+
+// MARK: 비판 세션 시험(원본 CriticTests)
+
+#[test]
+fn 모델() {
+    for (author, critic) in [("opus", "sonnet"), ("sonnet", "opus"), ("haiku", "sonnet"), ("claude-opus-4-1", "sonnet"), ("claude-sonnet-4-5", "opus"), ("zz-model", "sonnet")] {
+        assert_eq!(critic_model(author), critic, "{author}");
+        assert_ne!(model_family(&critic_model(author)), model_family(author), "{author}");
+    }
+}
+
+#[test]
+fn 모델고르기() {
+    assert_eq!(critic_model_pick("opus", None), ("sonnet".to_string(), None));
+    assert_eq!(critic_model_pick("opus", Some("haiku")), ("haiku".to_string(), None));
+    let same = critic_model_pick("opus", Some("claude-opus-4-1"));
+    assert!(same.0 == "sonnet" && same.1.as_deref().is_some_and(|n| n.contains("같은 계열")));
+    assert!(critic_model_pick("sonnet", Some("a b")).1.as_deref().is_some_and(|n| n.contains("꼴이 틀려")));
+}
+
+#[test]
+fn 비판_글() {
+    let x = CriticInput::new(
+        critic_units(),
+        Some("할 일 API 를 만든다".to_string()),
+        "/J",
+        Some("/J/tree.txt".to_string()),
+        Some("/B".to_string()),
+        vec!["link-1.json".to_string()],
+        "/O",
+        None,
+    );
+    let p = critic_prompt(&x);
+    assert!(p.starts_with(CRITIC_HEAD_LINE));
+    assert!(p.contains(CRITIC_RUBRIC));
+    assert!(p.contains("/J/u1/2-list.sh") && p.contains("grep -q '할 일' NOTES.md") && p.contains("할 일 API 를 만든다"));
+    assert!(p.contains("믿지 않는 자료") && p.contains("결과 폴더 /O 하나뿐"));
+    assert!(!p.contains(DRAFT_HEAD_LINE) && !p.contains("—"));
+}
+
+#[test]
+fn 읽기() {
+    let out = FakeOut { files: case_files() };
+    let (fs, problems) = critic_parse(&out, &critic_units(), &critic_targets());
+    assert_eq!(fs.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(), vec!["f1", "f2", "f3", "f4", "f5"]);
+    assert_eq!(
+        fs.iter().map(|f| f.kind).collect::<Vec<_>>(),
+        vec![FindingKind::Counterexample, FindingKind::Unverifiable, FindingKind::Interpretation, FindingKind::Unverifiable, FindingKind::Unverifiable]
+    );
+    assert!(fs[3].refusal.as_deref().is_some_and(|r| r.contains("판정·하네스 자리라")) && fs[3].why == "시나리오를 바꾸면 통과합니다");
+    assert!(fs[4].refusal.as_deref().is_some_and(|r| r.contains("판정이 보는 자리(app/todos.py)가 아닌 파일")));
+    assert_eq!(fs[2].recommended.as_deref(), Some("works"));
+    assert_eq!(problems.len(), 4);
+    let none = FakeOut { files: HashMap::new() };
+    assert_eq!(critic_parse(&none, &critic_units(), &critic_targets()).1, vec!["결과 파일 findings.json 이 없습니다"]);
+}
+
+#[test]
+fn 확인() {
+    let (fs, _) = critic_parse(&FakeOut { files: case_files() }, &critic_units(), &critic_targets());
+    let cf = case_files();
+    let read = |p: &str| cf.get(p).map(|s| s.as_bytes().to_vec());
+    let views: HashMap<String, JudgeView> = HashMap::from([("u1".to_string(), toy_view())]);
+    let base = HashMap::from([("u1".to_string(), failed_baseline(&toy_steps(), &[]))]);
+    let weak = FakeTree::new(toy_steps(), weak_verdict);
+    let r = verify_findings(&fs, &views, &base, &read, &weak);
+    assert_eq!(r.iter().map(|x| verdict_key(&x.verdict)).collect::<Vec<_>>(), vec!["confirmed", "unverified", "reading", "unverified", "unverified"]);
+    assert_eq!(r[3].verdict, Verdict::Unverified(fs[3].refusal.clone().unwrap_or_default()));
+    assert_eq!(r[1].verdict, Verdict::Unverified("비판 세션이 반례를 만들지 못했다고 적었습니다".to_string()));
+    assert_eq!(r[0].step.as_deref(), Some("scenario-2"));
+    assert!(weak.files.borrow().is_empty());
+    let strong = FakeTree::new(toy_steps(), strong_verdict);
+    let only = vec![fs[0].clone()];
+    assert_eq!(verdict_key(&verify_findings(&only, &views, &base, &read, &strong)[0].verdict), "refuted");
+    let base2 = HashMap::from([("u1".to_string(), failed_baseline(&toy_steps(), &["scenario-2"]))]);
+    let pre = verify_findings(&only, &views, &base2, &read, &weak);
+    assert_eq!(pre[0].verdict, Verdict::Unverified("그 판정이 일하기 전부터 통과해 반례로 가리지 못합니다(판정 미리 돌리기 카드로)".to_string()));
+}
+
+#[test]
+fn 카드() {
+    let mut f = CriticFinding::new("f1", "u1", FindingKind::Counterexample, "글자만");
+    f.criterion = Some("AC-2".to_string());
+    f.judge = Some(".autopilot/scenarios/u1/list.sh".to_string());
+    f.files = vec!["app/todos.py".to_string()];
+    let c1 = critic_card(&CriticResult::new(f.clone(), Verdict::Confirmed), 1, "할 일").unwrap();
+    assert!(c1["kind"].as_str() == Some("critic") && c1["recommended"].as_str() == Some("fix_check") && c1["id"].as_str() == Some("critic-f1"));
+    let c2 = critic_card(&CriticResult::new(f.clone(), Verdict::Unverified("까닭".to_string())), 1, "할 일").unwrap();
+    assert!(c2["kind"].as_str() == Some("critic_unverified") && c2["recommended"].as_str() == Some("keep") && c2["title"].as_str().is_some_and(|t| t.starts_with("확인 안 됨")));
+    let mut g = f.clone();
+    g.kind = FindingKind::Interpretation;
+    g.readings = vec![
+        DraftOption { key: "a".to_string(), label: "가".to_string(), note: String::new() },
+        DraftOption { key: "b".to_string(), label: "나".to_string(), note: String::new() },
+    ];
+    g.recommended = Some("b".to_string());
+    let c3 = critic_card(&CriticResult::new(g, Verdict::Reading), 1, "할 일").unwrap();
+    assert!(c3["kind"].as_str() == Some("critic_reading") && c3["recommended"].as_str() == Some("b"));
+    assert!(critic_card(&CriticResult::new(f, Verdict::Refuted), 1, "할 일").is_none());
+}
+
+// MARK: 고치기 고리 시험(원본 FixLoopTests)
+
+#[test]
+fn 차례() {
+    for (done, confirmed, want) in [(0_i64, 0_i64, "stop"), (0, 2, "offer1"), (1, 1, "offer2"), (1, 0, "stop"), (2, 3, "stop")] {
+        match fix_next(done, confirmed) {
+            FixNext::Offer { round } => assert_eq!(want, format!("offer{round}"), "{done}·{confirmed}"),
+            FixNext::Stop(why) => {
+                assert_eq!(want, "stop", "{done}·{confirmed}");
+                if done == 1 {
+                    assert!(why.contains("새로 확인된 지적이 없어"), "{why}");
+                }
+                if done == 2 {
+                    assert!(why.contains("2번을 다 썼습니다"), "{why}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn 고치기_글() {
+    let base = DraftInput { topic: "할 일 API".to_string(), new_folder: true, repo: "/R".to_string(), out: "/O".to_string(), ..Default::default() };
+    let p = draft_fix_prompt(&base, 1, &[FixItem::new("critic", "u1", Some(".autopilot/scenarios/u1/list.sh".to_string()), "글자만", vec!["f1/app/todos.py".to_string()])], "/F");
+    assert!(p.starts_with(&format!("{DRAFT_HEAD_LINE} {DRAFT_FIX_MARKER}")));
+    assert!(p.contains("1. 단위 u1 · 시나리오 .autopilot/scenarios/u1/list.sh · 비판 세션 반례: 글자만"));
+    assert!(p.contains("/F") && p.contains("약하게 바꾸지 않습니다") && p.contains("units.json"));
+    assert!(!p.contains("—"));
+}
+
+#[test]
+fn 약해짐() {
+    let mut u1 = drafted_unit("u1", "a", "p", "test -f a");
+    u1.criteria = vec![Criterion::new("AC-1", "x"), Criterion::new("AC-2", "y")];
+    u1.scenarios = vec![
+        DraftScenario { file: "r.py".to_string(), kind: ScenarioKind::Shell, criterion: Some("AC-1".to_string()) },
+        DraftScenario { file: "l.sh".to_string(), kind: ScenarioKind::Shell, criterion: Some("AC-2".to_string()) },
+    ];
+    let old = vec![u1.clone(), drafted_unit("u2", "b", "p", "x")];
+    assert!(judge_weakening(&old, &old).is_empty());
+    let mut renamed = old.clone();
+    renamed[0].scenarios[1].file = "l2.sh".to_string();
+    assert!(judge_weakening(&old, &renamed).is_empty()); // 같은 기준을 보는 시나리오로 바꾼 것은 약해진 것이 아님
+    let mut weak = old.clone();
+    weak[0].check = String::new();
+    weak[0].scenarios.pop();
+    weak.pop();
+    assert_eq!(
+        judge_weakening(&old, &weak),
+        strs(&["단위 u1 의 수용 기준 AC-2 를 보던 시나리오가 없어졌습니다", "단위 u1 의 판정 명령이 빠졌습니다", "단위 u1 의 시나리오 l.sh 가 빠졌습니다", "단위 u2(b)가 빠졌습니다"])
+    );
+    let c = weak_card(1, &strs(&["x"]));
+    assert!(c["recommended"].as_str() == Some("reject") && c["id"].as_str() == Some("fix-weak-1"));
+}
+
+#[test]
+fn 설정반례() {
+    let u = vec![CriticUnit::new("u1", "t", "p", vec![], "python3 -m pytest -q", vec![])];
+    let files = FakeOut {
+        files: HashMap::from([
+            (
+                "findings.json".to_string(),
+                r#"[{"id":"f1","unit":"u1","judge":"check","kind":"counterexample","why":"시험을 건너뜀","files":["conftest.py"]}]"#.to_string(),
+            ),
+            ("cases/f1/conftest.py".to_string(), "collect_ignore_glob = ['*']\n".to_string()),
+        ]),
+    };
+    let (fs, _) = critic_parse(&files, &u, &HashMap::from([("u1".to_string(), Vec::<String>::new())]));
+    assert_eq!(fs.iter().map(|f| f.kind).collect::<Vec<_>>(), vec![FindingKind::Unverifiable]);
+    assert!(fs[0].refusal.as_deref().is_some_and(|r| r.contains("conftest.py") && r.contains("설정 파일")));
 }
