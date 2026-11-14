@@ -14,7 +14,7 @@
 //! - `EvidenceTests.표시검사`(`wrapped: true` 6행과 감싸지 않은 `notice` 한 줄) → `표시검사`
 //!
 //!   일부만 옮긴 것(남은 단언은 해당 선언이 옮겨질 때 따라간다):
-//! - `EvidenceTests.표시` — `apAddEvidence`(`rules::evidence`)와 `apMetaRedact`(뒤 구간)를 거치는 앞부분을 빼고, `meta_wrap_untrusted` → `meta_json` → `meta_check(wrapped)` 로 되읽은 값의 단언만 → `표시_part2`
+//! - `EvidenceTests.표시` — `apAddEvidence`(`rules::evidence`)와 `apMetaRedact`(`rules::meta` 의 `meta_redact`)를 거치는 앞부분을 빼고, `meta_wrap_untrusted` → `meta_json` → `meta_check(wrapped)` 로 되읽은 값의 단언만 → `표시_part2`
 //! - `EvidenceTests.거부` — `apAddEvidence` 를 거치는 단언을 빼고 `<b>x</b>` 제목이 `HTML 태그` 까닭으로 걸리는 것만 → `거부_part2`
 //!
 //!   셋째 구간(원본 276~391줄)에서 옮긴 것: `MetaCheckTests.자르기` 통째로 → `자르기`. `ReadingTests` 383·402줄의 `apHasTag(...apMetaData(r.meta!))` 단언은 읽기 파이프라인(`read`)이 만든 메타 대신 같은 메타인 골든 파일로 → `읽기_메타에_태그_없음_part2`.
@@ -25,8 +25,8 @@
 //! 끝의 `extra_` 시험은 Swift 시험에 없는 것(상한 값·칸 빠짐·이스케이프·비유한 크기·주소 꼴 표·`NSNumber` 흉내·줄 끝·상한 바이트·글 다듬기 표·`meta_url` 표·`meta_clamp` 칸별·글자 참조 표·`*_windows`)이다.
 
 use claude_board_autopilot::rules::meta::{
-    decode_entities, defang_markers, has_tag, limit, meta_block_text, meta_check, meta_clamp, meta_data, meta_json, meta_link_shape, meta_text, meta_url,
-    meta_wrap_untrusted, Frame, Meta, MetaField, MetaLink, Section, TextChunk, TocItem, EVIDENCE_NOTICE, META_FORMAT, UNTRUSTED_CLOSE, UNTRUSTED_OPEN,
+    decode_entities, defang_markers, has_tag, limit, meta_block_text, meta_check, meta_clamp, meta_data, meta_json, meta_link_shape, meta_redact, meta_text, meta_url,
+    meta_wrap_untrusted, redact, Frame, Meta, MetaField, MetaLink, Section, TextChunk, TocItem, EVIDENCE_NOTICE, META_FORMAT, UNTRUSTED_CLOSE, UNTRUSTED_OPEN,
 };
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -1007,4 +1007,88 @@ fn extra_text_chunk() {
     assert_eq!(c, TextChunk { level: 1, title: "하나".to_string(), text: "가".to_string() });
     assert_ne!(c, TextChunk::new(2, "하나", "가"));
     assert_eq!(TextChunk::default(), TextChunk::new(0, "", ""));
+}
+
+// ── 원본 `RedactTests`(ReadingTests.swift 273~292줄, 비밀 가림의 검사)에서 옮긴 시험 ──
+
+/// 토큰 꼴 견본(가짜) — 글자 그대로 저장소에 남기지 않는다. 원본 `FakeSecret` 의 이어 붙임을 그대로; `tests/rules_reading.rs` 의 FAKE_SECRET_* 와 같은 부분은 같은 꼴이다.
+const FAKE_SECRET_ATLASSIAN: &str = concat!("ATA", "TT3x", "Ff9Ff9Ff9Ff9Ff9Ff9Ff9Ff9Ff9Ff9", "fakeZZ");
+const FAKE_SECRET_JWT: &str = concat!("ey", "JhbGciOiJIUzI1NiJ9", ".", "eyJzdWIiOiJmYWtlLXVzZXIifQ", ".", "fakeSignatureZZ9");
+const FAKE_SECRET_GITHUB: &str = concat!("gh", "p_", "Zz9Zz9Zz9Zz9Zz9Zz9Zz9Zz9Zz9Zz9Zz9Zz9");
+const FAKE_SECRET_SLACK: &str = concat!("xo", "xb-", "1234567890-fake-ZZ");
+const FAKE_SECRET_AWS: &str = concat!("AK", "IA", "FAKEFAKEFAKEFAK9");
+const FAKE_SECRET_API_KEY: &str = concat!("sk", "-ant-", "fakefakefakefakefakefake");
+const FAKE_SECRET_GOOGLE: &str = concat!("AI", "za", "FFFFF", "FFFFFFFFFF", "FFFFFFFFFF", "FFFFFFFFFF");
+const FAKE_SECRET_NOTION: &str = concat!("nt", "n_", "Fake9Fake9Fake9Fake9Fake9Fake9");
+const FAKE_SECRET_FIGMA: &str = concat!("fi", "gd_", "fake9fake9fake9fake9fake9");
+const FAKE_SECRET_GITLAB: &str = concat!("gl", "pat-", "Fake9Fake9Fake9Fake9Fake9");
+const FAKE_SECRET_PEM: &str =
+    concat!("-----BEGIN ", "RSA PRIVATE KEY-----\nMIIfake\nfakefake\n-----END ", "RSA PRIVATE KEY-----");
+const FAKE_SECRET_HOOK: &str =
+    concat!("https://hooks.", "slack.com/services/", "T000FAKE/B000FAKE/", "xxxxxxxxxxxxxxxxxxxxxxxx");
+const FAKE_SECRET_HOOK_HOST: &str =
+    concat!("https://hook.", "messenger.example/services/", "1234/5678/", "FkFkFkFkFkFkFkFkFkFkFkFk");
+
+#[test]
+fn 가리기() {
+    // (note, input, count, has) — 원본 `redactRows` 24행 그대로
+    let rows: Vec<(&str, String, usize, &str)> = vec![
+        ("Atlassian 토큰", format!("토큰은 {FAKE_SECRET_ATLASSIAN} 입니다"), 1, "[가림:Atlassian 토큰]"),
+        ("JWT", format!("x {FAKE_SECRET_JWT} y"), 1, "[가림:JWT]"),
+        ("Bearer 뒤 JWT 는 한 번만 셈", format!("Authorization: Bearer {FAKE_SECRET_JWT}"), 1, "Bearer [가림:JWT]"),
+        ("Bearer 아무 값", "Bearer abcdefghijklmnopqrstuvwx".to_string(), 1, "Bearer [가림:인증 값]"),
+        ("GitHub", FAKE_SECRET_GITHUB.to_string(), 1, "[가림:GitHub 토큰]"),
+        ("GitLab", FAKE_SECRET_GITLAB.to_string(), 1, "[가림:GitLab 토큰]"),
+        ("Slack", FAKE_SECRET_SLACK.to_string(), 1, "[가림:Slack 토큰]"),
+        ("AWS", format!("key {FAKE_SECRET_AWS} end"), 1, "[가림:AWS 키]"),
+        ("API 키", FAKE_SECRET_API_KEY.to_string(), 1, "[가림:API 키]"),
+        ("Google", FAKE_SECRET_GOOGLE.to_string(), 1, "[가림:Google API 키]"),
+        ("Notion", FAKE_SECRET_NOTION.to_string(), 1, "[가림:Notion 토큰]"),
+        ("Figma", FAKE_SECRET_FIGMA.to_string(), 1, "[가림:Figma 토큰]"),
+        ("개인 키 덩어리", format!("앞\n{FAKE_SECRET_PEM}\n뒤"), 1, "[가림:개인 키]"),
+        ("Slack webhook 주소", format!("보낼 곳 {FAKE_SECRET_HOOK} 끝"), 1, "[가림:webhook 주소]"),
+        ("hook 으로 시작하는 호스트의 메신저 webhook 주소", FAKE_SECRET_HOOK_HOST.to_string(), 1, "[가림:webhook 주소]"),
+        ("hook 호스트라도 경로가 짧으면 그대로", "https://hooks.example.com/a".to_string(), 0, "https://hooks.example.com/a"),
+        ("주소 안 암호", "https://kim:pa55word@example.com/x".to_string(), 1, "https://[가림:주소 암호]@example.com/x"),
+        ("암호 줄", "password=hunter2-fake".to_string(), 1, "password=[가림:비밀 값]"),
+        ("한국어 암호 줄", "비밀번호: hunter2".to_string(), 1, "비밀번호: [가림:비밀 값]"),
+        ("둘", format!("{FAKE_SECRET_GITHUB} 그리고 {FAKE_SECRET_SLACK}"), 2, "[가림:Slack 토큰]"),
+        ("보통 글은 그대로", "SHOP-10 에픽의 password 정책은 8자 이상, token 수는 3".to_string(), 0, "SHOP-10 에픽의 password 정책은 8자 이상"),
+        ("보통 주소는 그대로", "https://example.atlassian.net/wiki/spaces/OPS/pages/48213".to_string(), 0, "pages/48213"),
+        ("짧은 값은 비밀로 보지 않음", "token: abc".to_string(), 0, "token: abc"),
+        ("이미 가린 자리는 다시 세지 않음", "token: [가림:JWT]".to_string(), 0, "token: [가림:JWT]"),
+    ];
+    assert_eq!(rows.len(), 24, "원본 redactRows 와 같은 행 수");
+    for (note, input, count, has) in rows {
+        let (text, n) = redact(&input);
+        assert_eq!(n, count, "{note}: {text}");
+        assert!(text.contains(has), "{note}: {text}");
+        for s in [FAKE_SECRET_ATLASSIAN, FAKE_SECRET_JWT, FAKE_SECRET_GITHUB, FAKE_SECRET_SLACK, FAKE_SECRET_NOTION, "hunter2", "pa55word"] {
+            assert!(!text.contains(s), "{note} 에 {s} 가 남았다: {text}");
+        }
+    }
+}
+
+#[test]
+fn 메타() {
+    let m = Meta {
+        title: format!("x {FAKE_SECRET_GITHUB}"),
+        summary: vec![FAKE_SECRET_SLACK.to_string()],
+        sections: vec![Section::new("절", "비밀번호: hunter2")],
+        fields: vec![MetaField::new("값", FAKE_SECRET_AWS)],
+        links: vec![MetaLink::new("webhook", FAKE_SECRET_HOOK, "link")],
+        frames: vec![Frame { name: "f".to_string(), texts: vec![FAKE_SECRET_FIGMA.to_string()], ..Frame::default() }],
+        ..Meta::default()
+    };
+    let (r, n) = meta_redact(&m);
+    assert_eq!(n, 6);
+    assert!(r.links[0].url.is_empty() && r.links[0].title == "webhook", "{:?}", r.links[0]);
+    assert!(!String::from_utf8(meta_data(&r)).unwrap().contains("hunter2"));
+}
+
+// 규칙 13 `\bAIza[0-9A-Za-z_-]{35}` — Swift 는 뒤 경계 조건이 없다. 이식 판이 뒤 경계(`word_boundary`)를 붙였다가 고쳤다.
+#[test]
+fn extra_google_키가_35를_넘으면_앞_35글자까지_가린다() {
+    let (text, n) = redact(&format!("AIza{}", "F".repeat(40)));
+    assert_eq!((text, n), (format!("[가림:Google API 키]{}", "F".repeat(5)), 1));
 }

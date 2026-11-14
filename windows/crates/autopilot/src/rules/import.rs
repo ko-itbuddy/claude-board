@@ -40,11 +40,11 @@ use crate::rules::draft::{
 use crate::rules::formats::grapheme_len;
 use crate::rules::harness::{cut_chars, fnv64_data, harness_missing, HarnessPoint, HARNESS_POINT_MAX};
 use crate::rules::meta::{
-    defang_markers, has_tag, limit, meta_clamp, meta_url, Meta, MetaField, MetaLink, Section, TextChunk, UNTRUSTED_CLOSE,
+    defang_markers, has_tag, limit, meta_clamp, meta_url, redact, Meta, MetaField, MetaLink, Section, TextChunk, UNTRUSTED_CLOSE,
     UNTRUSTED_OPEN,
 };
 use crate::rules::notify_rules::{NoticeClock, NoticeWaiter};
-use crate::rules::reading::{adf_chunks, notion_id, read_blocker, read_fail_note, redact_text};
+use crate::rules::reading::{adf_chunks, notion_id, read_blocker, read_fail_note};
 use crate::rules::scenarios::{scenario_json, scenario_path_ok, BrowserDriver, Scenario, ScenarioKind};
 use crate::rules::stopline::Tz;
 use crate::rules::tickets::{issue_key_ok, retry_wait};
@@ -2030,7 +2030,7 @@ pub fn import_check(
             if has_tag(why) {
                 r.problems.push(format!("단위 {n} 근거 에 HTML 태그가 있습니다"));
             }
-            if redact_text(why).1 > 0 {
+            if redact(why).1 > 0 {
                 r.problems.push(format!("단위 {n} 근거 에 비밀 꼴(토큰·키 등)이 있습니다"));
             }
             if trim_ws(&u.check).is_empty() && u.scenarios.is_empty() {
@@ -2104,7 +2104,7 @@ pub fn import_check(
                     r.problems.push(format!("건너뜀 {} 의 item({})은 넘긴 항목 id 가 아닙니다", i + 1, cut_chars(it, 20)));
                     continue;
                 }
-                if why.is_empty() || grapheme_len(why) > 300 || has_tag(why) || redact_text(why).1 > 0 {
+                if why.is_empty() || grapheme_len(why) > 300 || has_tag(why) || redact(why).1 > 0 {
                     r.problems.push(format!("건너뜀 {} 의 까닭(why)은 300자 안의 쉬운 글입니다", i + 1));
                     continue;
                 }
