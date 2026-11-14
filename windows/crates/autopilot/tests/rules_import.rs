@@ -1,8 +1,7 @@
-//! 가져오기 시험 — 원본 `Tests/AutopilotRulesTests/ImportTests.swift`.
-//! 이 파일은 20검사 중 18검사를 옮긴다: 절·전체·키·경로(suite `ImportTodoTests`, R-Import-a),
+//! 가져오기 시험 — 원본 `Tests/AutopilotRulesTests/ImportTests.swift` 의 20검사를 전부 옮긴다(20/20): 절·전체·키·경로(suite `ImportTodoTests`, R-Import-a),
 //! 질의·지라항목·노션항목·요청·읽기(suite `ImportListTests`)와 고르기·항목·묶음(suite `ImportLegacyTests`)은 R-Import-b,
-//! 가리기 3(가리기·바뀐본문·상태합치기)와 세션 글(`ImportCheckTests` 의 글)은 R-Import-c, 기계 검사 표(검사·값)는 R-Import-d.
-//! 나머지 원본 순서대로: 대기열·줄파일(unit: `apImportQueueUnit`·`apCarryQueueUnit`, 원본 876줄부터)는 R-Import-e 가 각자의 파일에서 더한다.
+//! 가리기 3(가리기·바뀐본문·상태합치기)와 세션 글(`ImportCheckTests` 의 글)은 R-Import-c, 기계 검사 표(검사·값)는 R-Import-d,
+//! 대기열·줄파일(unit: `apImportQueueUnit`·`apCarryQueueUnit`, 원본 876줄부터)은 R-Import-e.
 //! 묶음 시험은 근거 묶음 저장(apAddEvidence·MemEvidence·MANIFEST)이 근거 묶음 엔진 자리(Evidence.swift — evidence.rs 머리의 "옮기지 않은 것")에 있어 원본의 앞 세 단언(source·id·절 하나)만 둔다.
 //! 실제 Atlassian·Notion 으로는 요청하지 않는다: HTTP·키체인·시각은 가짜 어댑터(PubHTTP·PubSecrets·PubClock·PubWaiter)다.
 //! 시각은 원본의 서일(impT0 = 1793340000)을 그대로 쓰지만 시간대는 `Tz::Utc` 로 둔다(reading.rs 연결 시험과 같은 이유).
@@ -10,13 +9,14 @@
 use claude_board_autopilot::rules::connections::{
     Auth, AuthHeader, ConnHttp, ConnSecrets, Connection, HttpRequest, HttpResponse, Service,
 };
-use claude_board_autopilot::rules::draft::DraftFiles;
+use claude_board_autopilot::rules::draft::{DraftFiles, DraftedUnit};
 use claude_board_autopilot::rules::harness::HarnessPoint;
 use claude_board_autopilot::rules::import::{
-    fnv, import_check, import_decide, import_prompt, imported_state, jira_list_item, jira_search_request, legacy_items,
-    legacy_meta, legacy_skip_reason, line_diff, list_query, notion_db_items, notion_query_request, read_list, read_post_allowed,
-    slug, todo_headings, todo_items, todo_likely, todo_path_ok, HideKind, IMPORT_HEAD_LINE, ImportInput, ImportItem,
-    ImportPromptItem, ImportSource, ItemState, LINE_DIFF_MAX, ListQuery, QueueRow, UnitRow,
+    carry_queue_unit, fnv, import_check, import_decide, import_prompt, import_queue_json, import_queue_parse, import_queue_unit,
+    imported_state, jira_list_item, jira_search_request, legacy_items, legacy_meta, legacy_skip_reason, line_diff, list_query,
+    notion_db_items, notion_query_request, read_list, read_post_allowed, slug, todo_headings, todo_items, todo_likely, todo_path_ok,
+    HideKind, IMPORT_HEAD_LINE, ImportInput, ImportedUnit, ImportItem, ImportPromptItem, ImportQueueLine, ImportSource, ItemState,
+    LINE_DIFF_MAX, ListQuery, QueueRow, UnitRow,
 };
 use claude_board_autopilot::rules::meta::{UNTRUSTED_CLOSE, UNTRUSTED_OPEN};
 use claude_board_autopilot::rules::notify_rules::{NoticeClock, NoticeWaiter};
@@ -812,5 +812,96 @@ fn 값() {
     let missing: Vec<String> = c.harness_missing.iter().map(|p| p.place()).collect();
     assert_eq!(missing, vec!["AGENTS.md:1"], "{:?}", c);
     assert!(c.ok(), "{:?}", c);
+}
+
+// MARK: - 결과 → 대기열 단위(suite `ImportCheckTests` 의 대기열·줄파일) — R-Import-e
+
+/// 대기열 단위: 원천 항목 키(조각)·지문·티켓·스토리·근거 묶음, 작업 폴더는 할 일 첫 줄 — 원본 `대기열`(test대기열)
+#[test]
+fn 대기열() {
+    let mut it = todo_item("나", ItemState::Open, "");
+    it.tickets = vec!["TOY-2".to_string()];
+    it.story = Some("TOY-9".to_string());
+    it.place = "Jira TOY-2".to_string();
+    let u = DraftedUnit {
+        id: "u2".to_string(),
+        title: "나 앞 조각".to_string(),
+        kind: "dev".to_string(),
+        folder: "web".to_string(),
+        prompt: "나의 앞".to_string(),
+        check: "test -s b1.txt".to_string(),
+        est_min: 30.0,
+        depends: vec![],
+        criteria: vec![],
+        scenarios: vec![],
+        check_ports: vec![18431],
+    };
+    let d = import_queue_unit(
+        &ImportedUnit { unit: u, item: "i2".to_string(), why: "근거".to_string(), piece: Some(1) },
+        &it,
+        "/w/zz-toy",
+        Some("/w/ctx"),
+        "",
+    );
+    assert_eq!(d["source_key"].as_str(), Some(format!("{}#1", it.key).as_str()));
+    assert_eq!(d["source_digest"].as_str(), Some(it.digest().as_str()));
+    assert_eq!(d["tickets"], json!(["TOY-2"]));
+    assert_eq!(d["story"], json!("TOY-9"));
+    assert_eq!(d["context"], json!("/w/ctx"));
+    assert_eq!(d["cwd"], json!("/w/zz-toy"));
+    let prompt = d["prompt"].as_str().unwrap_or_default();
+    assert!(prompt.starts_with("작업 폴더: web/"), "{prompt}");
+    assert!(prompt.ends_with("원천: Jira TOY-2 · 근거: 근거"), "{prompt}");
+    let carried = carry_queue_unit(
+        &object_map(json!({
+            "id": "u7", "title": "가", "prompt": "p", "cwd": "/w/zz-toy", "check": "true",
+            "source_key": format!("{}#1", it.key), "precheck": "x", "depends": ["u6"], "context": "/old"
+        })),
+        "c1",
+        &it,
+        Some("/w/ctx"),
+    )
+    .expect("이어 갈 줄의 정의");
+    assert_eq!(carried["id"].as_str(), Some("c1"));
+    assert!(carried.get("precheck").is_none(), "{carried}");
+    assert!(carried.get("depends").is_none(), "{carried}");
+    assert_eq!(carried["context"].as_str(), Some("/w/ctx"));
+    assert!(
+        carry_queue_unit(
+            &object_map(json!({"title": "가", "prompt": "p", "cwd": "/w", "check": "true", "source_key": "todo:other#x"})),
+            "c1",
+            &it,
+            None
+        )
+        .is_none(),
+        "원천 항목 키가 다르면 이어 가지 않는다"
+    );
+}
+
+/// 가져오기 줄 파일: 쓰고 읽기, 꼴이 틀리면 없음 — 원본 `줄파일`(test줄파일)
+#[test]
+fn 줄파일() {
+    let j = import_queue_json(
+        "zz-toy",
+        ImportSource::Todo,
+        &[ImportQueueLine {
+            key: "todo:a#b".to_string(),
+            title: "가".to_string(),
+            kind: "dev".to_string(),
+            est_min: Some(20.0),
+            digest: "d".to_string(),
+            summary: "s".to_string(),
+            source: "todo".to_string(),
+            def: "{}".to_string(),
+        }],
+    );
+    let bytes = serde_json::to_vec(&j).expect("직렬화");
+    let p = import_queue_parse(Some(bytes.as_slice())).expect("읽기");
+    assert_eq!(p.project, "zz-toy");
+    assert_eq!(p.lines.first().map(|l| l.key.as_str()), Some("todo:a#b"));
+    assert_eq!(p.lines.first().and_then(|l| l.est_min), Some(20.0));
+    assert!(import_queue_parse(Some(b"{\"format\":\"x\"}".as_slice())).is_none(), "꼴이 틀리면 읽기가 없다");
+    // 원본에 없는 부재 검사를 더 본다: 데이터가 없으면(nil)도 읽기가 없다
+    assert!(import_queue_parse(None).is_none(), "데이터가 없으면 읽기가 없다");
 }
 

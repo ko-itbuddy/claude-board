@@ -1,4 +1,3 @@
-//! (청크 Import a~d/5 — 원본 1~875줄. PORTED.json 항목은 마지막 청크가 더한다)
 //! 자율주행 가져오기(7단계 ⑫-7a, 2026-10-30, 설계 2장 "목록으로 이어 가기: 원천과 차례"). 원본: `Sources/AutopilotRules/Import.swift`.
 //! 원천 셋(저장소 할 일 문서·바깥 목록·옛 자동화 옮기기)을 같은 꼴의 항목(원천 항목 키·제목·본문·상태·원천 자리)으로 모으고,
 //! 원천 항목 키로 이미 끝난 것·진행 중인 것을 기록 저장소와 바깥 상태로 가린 뒤(apImportDecide), 남은 항목을 가져오기 세션(⑪-2 초안 세션 꼴)이
@@ -6,13 +5,14 @@
 //! 바깥(파일 읽기·HTTP·기록 저장소·시각)은 어댑터 몫이고, 여기는 값만 받는다. 청크(b)는 바깥 목록(MARK `바깥 목록` — 질의 꼴·요청 꼴·Jira·Notion
 //! 항목·읽기 유스케이스)과 옛 자동화 옮기기(MARK 세 절), 청크(c)는 가리기와 이어 가기(MARK `이미 끝난 것·진행 중인 것 가리기와 이어 가기` — 기록
 //! 저장소 대기열·단위 줄로 가리고 본문이 바뀌면 줄 차이를 보이며 이어 감)과 가져오기 세션(MARK `가져오기 세션`)을 더했다. 청크(d)는 단위 칸 허용
-//! 목록(apImportUnitKeys)과 가져오기 세션 검사(APImportedUnit·APImportCheck·apImportCheck)를 더했다.
-//! 이어 쓰기: 결과 → 대기열 단위는 876줄부터 R-Import-e 가 이어 쓴다.
+//! 목록(apImportUnitKeys)과 가져오기 세션 검사(APImportedUnit·APImportCheck·apImportCheck)를 더했다. 청크(e)는 결과 → 대기열 단위(MARK
+//! `결과 → 대기열 단위` — 시나리오 자리·대기열 정의·이어 갈 줄의 정의·가져오기 줄 파일)를 더해 전 원본(1~947줄)을 옮겼다.
 //!
 //! Swift ↔ Rust 로 달라진 점:
 //! - `[String: Any]` 는 `serde_json::Map<String, Value>`, 값은 `Value`. `s_`·`d_`·`a_`(숫자·개체·배열 꾸러미)와 NSNumber 꼴은
 //!   reading.rs 의 `sv`·`number_string`(정수는 그대로, 정수 값 실수는 정수 꼴 — 10²¹ 지수 표기가 Swift `e+21` 대신 `e21` 로 나오는 차이 기록)을 같은 판으로 둔다.
-//! - 정규식 넷(에픽 키(Outbox 의 apIssueKeyPattern — `tickets::issue_key_ok` 을 쓴다)·필터 번호 `/[0-9]{1,12}/`·`/filters/` 경로·Notion 질의 주소의 UUID)은
+//! - 정규식 다섯(에픽 키(Outbox 의 apIssueKeyPattern — `tickets::issue_key_ok` 을 쓴다)·필터 번호 `/[0-9]{1,12}/`·`/filters/` 경로·Notion 질의
+//!   주소의 UUID·가져오기 줄 파일의 프로젝트 꼴 `^[A-Za-z0-9._-]+$`)은
 //!   손으로 옮긴 판별자다. ICU 의 `$` 는 끝의 줄바꿈 하나 앞에서도 맞지만 여기는 받지 않는다(reading.rs 도 같다 — 더 엄격).
 //! - `URLComponents(string:)` 는 `connections.rs` 의 `parse_url` 을 먼저 쓰고, parse_url 이 받지 않는 극단(비 ASCII 경로 등)만 손으로 뜯는
 //!   비공개 `link_parts` 로 읽는다. Foundation 은 여유로워 그런 주소도 받는다. 포트 범위 밖 같은 극단도 여기는 주소로 보나, 견범 입력은 전부 parse_url 로
@@ -24,7 +24,7 @@
 //! - 줄 견주기(`line_diff`)의 견주기 모임은 Swift `Set<String>`(글자열 같음 — NFC/NFD 로도 같으면 같다)를 `HashSet<&str>`(코드 단위 같음)으로
 //!   옮겼다. 견주는 두 글(대기열 요약·항목 본문)은 같은 원천에서 NFC 로 저장된 것이라 둘의 판정이 갈라지는 입력은 원본에도 없다.
 
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::OnceLock;
 
@@ -34,7 +34,8 @@ use crate::rules::connections::{
 };
 use crate::rules::control::run_ended;
 use crate::rules::draft::{
-    draft_card_parse, draft_unit_parse_n, instruction_check, instruction_guide, DraftCard, DraftFiles, DraftedUnit, DRAFT_UNIT_KEYS,
+    draft_card_parse, draft_unit_parse_n, instruction_check, instruction_guide, DraftCard, DraftFiles, DraftedUnit, SCENARIO_ROOT,
+    DRAFT_UNIT_KEYS,
 };
 use crate::rules::formats::grapheme_len;
 use crate::rules::harness::{cut_chars, fnv64_data, harness_missing, HarnessPoint, HARNESS_POINT_MAX};
@@ -44,7 +45,7 @@ use crate::rules::meta::{
 };
 use crate::rules::notify_rules::{NoticeClock, NoticeWaiter};
 use crate::rules::reading::{adf_chunks, notion_id, read_blocker, read_fail_note, redact_text};
-use crate::rules::scenarios::scenario_path_ok;
+use crate::rules::scenarios::{scenario_json, scenario_path_ok, BrowserDriver, Scenario, ScenarioKind};
 use crate::rules::stopline::Tz;
 use crate::rules::tickets::{issue_key_ok, retry_wait};
 
@@ -2155,5 +2156,237 @@ pub fn import_check(
     r
 }
 
-// R-Import-e 가 여기서 이어 쓴다
+// MARK: - 결과 → 대기열 단위(queue.json 꼴)
+
+/// 시나리오를 커밋할 저장소 자리 — 앞 실행의 같은 단위 id 폴더와 겹치지 않게 준비 id 아래에 둔다. 원본: `apImportScenarioPath`
+pub fn import_scenario_path(prep: &str, unit: &str, file: &str) -> String {
+    format!("{SCENARIO_ROOT}/{prep}/{unit}/{file}")
+}
+
+/// 가져온 단위 하나 → 대기열 정의. 작업 폴더는 저장소 뿌리(하위 폴더는 할 일 글 첫 줄로), 원천 항목 키는 그 항목 키(쪼갰으면 #조각),
+/// Jira 항목은 tickets 그대로(하위 작업이면 story), 근거 묶음은 context, 원천 지문(source_digest)은 기록 저장소가 다음 가져오기에서 바뀐 본문을 보려고,
+/// 판정 시나리오(⑫-7b)는 저장소 자리 .autopilot/scenarios/<준비 id>/<단위 id>/<파일>. 원본: `apImportQueueUnit`
+pub fn import_queue_unit(u: &ImportedUnit, it: &ImportItem, repo: &str, context: Option<&str>, prep: &str) -> Value {
+    let mut prompt = u.unit.prompt.clone();
+    if !u.unit.folder.is_empty() {
+        prompt = format!("작업 폴더: {}/ (저장소 뿌리 기준)\n\n", u.unit.folder) + &prompt;
+    }
+    prompt += &format!("\n\n원천: {}", it.place);
+    if !u.why.is_empty() {
+        prompt += &format!(" · 근거: {}", u.why);
+    }
+    let source_key = match u.piece {
+        Some(piece) => format!("{}#{}", it.key, piece),
+        None => it.key.clone(),
+    };
+    let mut d = Map::new();
+    d.insert("id".into(), json!(u.unit.id));
+    d.insert("title".into(), json!(u.unit.title));
+    d.insert("kind".into(), json!(u.unit.kind));
+    d.insert("prompt".into(), json!(prompt));
+    d.insert("cwd".into(), json!(repo));
+    d.insert("est_min".into(), json!(u.unit.est_min));
+    d.insert("check".into(), json!(u.unit.check));
+    d.insert("source_key".into(), json!(source_key));
+    d.insert("source_digest".into(), json!(it.digest()));
+    if u.unit.check.is_empty() {
+        d.remove("check");
+    }
+    if !u.unit.scenarios.is_empty() && !prep.is_empty() {
+        d.insert(
+            "scenarios".into(),
+            Value::Array(
+                u.unit
+                    .scenarios
+                    .iter()
+                    .map(|s| {
+                        // 원본은 apScenarioJSON 을 얻어 driver 칸을 빼고 browser 이면 chrome 으로 되돌려 넣는다(그대로)
+                        let mut o = scenario_json(&Scenario::new(&import_scenario_path(prep, &u.unit.id, &s.file), s.kind, None, None));
+                        if let Value::Object(m) = &mut o {
+                            m.remove("driver");
+                            if s.kind == ScenarioKind::Browser {
+                                m.insert("driver".into(), json!(BrowserDriver::Chrome.as_str()));
+                            }
+                        }
+                        o
+                    })
+                    .collect(),
+            ),
+        );
+    }
+    if !u.unit.depends.is_empty() {
+        d.insert("depends".into(), json!(u.unit.depends.clone()));
+    }
+    if !u.unit.check_ports.is_empty() {
+        d.insert("check_ports".into(), json!(u.unit.check_ports.clone()));
+    }
+    if !it.tickets.is_empty() {
+        d.insert("tickets".into(), json!(it.tickets.clone()));
+    }
+    if let Some(story) = &it.story {
+        d.insert("story".into(), json!(story));
+    }
+    if let Some(context) = context {
+        d.insert("context".into(), json!(context));
+    }
+    Value::Object(d)
+}
+
+/// 이어 갈 줄의 정의(기록 저장소 queue_items.def)에서 받는 칸 — 대기열 단위 칸 가운데 판정·범위를 넓히지 않는 것만. 원본: `apCarryDefKeys`
+pub const CARRY_DEF_KEYS: [&str; 13] =
+    ["title", "kind", "prompt", "check", "cwd", "est_min", "source_key", "tickets", "story", "check_ports", "caps", "check_timeout_min", "scenarios"];
+
+/// 이어 갈 줄의 정의(기록 저장소 queue_items.def) → 이번 대기열 정의. id 는 새로(c1·c2…), 앞뒤는 지우고(앞 실행의 id), 근거 묶음은 이번 것,
+/// 지문은 이번 항목 것으로(출발하면 줄의 지문이 새것이 되어 같은 차이를 다시 보이지 않는다). 원본: `apCarryQueueUnit`
+pub fn carry_queue_unit(def: &Map<String, Value>, id: &str, it: &ImportItem, context: Option<&str>) -> Option<Value> {
+    let mut d: Map<String, Value> = Map::new();
+    for (k, v) in def {
+        if CARRY_DEF_KEYS.contains(&k.as_str()) {
+            d.insert(k.clone(), v.clone());
+        }
+    }
+    let key_ok = d.get("source_key").and_then(Value::as_str).is_some_and(|key| key_family(&it.key, key));
+    let strings_ok =
+        d.get("title").is_some_and(Value::is_string) && d.get("prompt").is_some_and(Value::is_string) && d.get("cwd").is_some_and(Value::is_string);
+    let check_or_scenarios_ok = d.get("check").and_then(Value::as_str).is_some_and(|s| !s.is_empty())
+        || d.get("scenarios").and_then(Value::as_array).is_some_and(|a| !a.is_empty());
+    if !key_ok || !strings_ok || !check_or_scenarios_ok {
+        return None;
+    }
+    d.insert("id".into(), json!(id));
+    d.insert("source_digest".into(), json!(it.digest()));
+    match context {
+        Some(context) => {
+            d.insert("context".into(), json!(context));
+        }
+        None => {
+            d.remove("context");
+        }
+    }
+    Some(Value::Object(d))
+}
+
+// MARK: - 가져오기 줄 파일(import-queue.json)
+
+/// 출발할 때 기록 저장소에 남길 가져오기 줄 파일의 꼴 값. 원본: `apImportQueueFormat`
+pub const IMPORT_QUEUE_FORMAT: &str = "claude-board-import-queue";
+
+/// 출발할 때 기록 저장소에 남길 가져오기 줄(import-queue.json, 보드가 쓰고 엔진 start 가 읽음) — 한 줄의 칸. 원본: `APImportQueueLine`
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportQueueLine {
+    pub key: String,
+    pub title: String,
+    pub kind: String,
+    pub est_min: Option<f64>,
+    pub digest: String,
+    pub summary: String,
+    pub source: String,
+    pub def: String,
+}
+
+/// 출발할 때 기록 저장소에 남길 가져오기 줄(import-queue.json, 보드가 쓰고 엔진 start 가 읽음). 원본: `apImportQueueJSON`
+pub fn import_queue_json(project: &str, source: ImportSource, lines: &[ImportQueueLine]) -> Value {
+    let mut o = Map::new();
+    o.insert("format".into(), json!(IMPORT_QUEUE_FORMAT));
+    o.insert("version".into(), json!(1));
+    o.insert("project".into(), json!(project));
+    o.insert("source".into(), json!(source.raw()));
+    o.insert(
+        "items".into(),
+        Value::Array(
+            lines
+                .iter()
+                .map(|l| {
+                    let mut m = Map::new();
+                    m.insert("source_key".into(), json!(l.key));
+                    m.insert("title".into(), json!(l.title));
+                    m.insert("kind".into(), json!(l.kind));
+                    m.insert("digest".into(), json!(l.digest));
+                    m.insert("summary".into(), json!(l.summary));
+                    m.insert("source".into(), json!(l.source));
+                    m.insert("def".into(), json!(l.def));
+                    if let Some(e) = l.est_min {
+                        m.insert("est_min".into(), json!(e));
+                    }
+                    Value::Object(m)
+                })
+                .collect(),
+        ),
+    );
+    Value::Object(o)
+}
+
+/// 읽은 가져오기 줄 파일(원본은 (project, source, lines) 짝을 돌려준다). 원본: `apImportQueueParse` 의 돌려줌
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportQueueFile {
+    pub project: String,
+    pub source: String,
+    pub lines: Vec<ImportQueueLine>,
+}
+
+/// `(it["est_min"] as? NSNumber)?.doubleValue` — JSONSerialization 은 참거짓과 숫자를 모두 NSNumber 로 주므로 참·거짓도 1·0 으로 읽는다
+fn ns_number(v: Option<&Value>) -> Option<f64> {
+    match v {
+        Some(Value::Number(n)) => n.as_f64(),
+        Some(Value::Bool(b)) => Some(if *b { 1.0 } else { 0.0 }),
+        None | Some(_) => None,
+    }
+}
+
+/// 프로젝트 꼴 — 원본 `p.range(of: "^[A-Za-z0-9._-]+$", options: .regularExpression)` 을 손으로 훑는다(전 글자가 허용 집합·길이 1 이상.
+/// ICU 의 `$` 는 끝의 줄바꿈 하나 앞에서도 맞지만 여기는 받지 않는다 — 머리의 정규식 방침과 같다)
+fn project_name_ok(p: &str) -> bool {
+    !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+}
+
+/// 읽기 — 꼴이 틀린 줄은 버리고, 정의는 64 KB·요약은 2,000자까지만. 원본: `apImportQueueParse`
+pub fn import_queue_parse(d: Option<&[u8]>) -> Option<ImportQueueFile> {
+    let d = d?;
+    if d.len() > 8 << 20 {
+        return None;
+    }
+    let o = serde_json::from_slice::<Value>(d).ok()?;
+    let o = o.as_object()?;
+    if o.get("format").and_then(Value::as_str) != Some(IMPORT_QUEUE_FORMAT) {
+        return None;
+    }
+    let project = o.get("project").and_then(Value::as_str)?;
+    if !project_name_ok(project) {
+        return None;
+    }
+    let src = o.get("source").and_then(Value::as_str)?;
+    ImportSource::from_raw(src)?;
+    let items = o.get("items").and_then(Value::as_array)?;
+    if items.iter().any(|it| !it.is_object()) {
+        return None;
+    }
+    let mut out: Vec<ImportQueueLine> = Vec::new();
+    let mut seen: HashSet<&str> = HashSet::new();
+    for it in items.iter().take(500) {
+        let Some(it) = it.as_object() else { continue };
+        let Some(k) = it.get("source_key").and_then(Value::as_str).filter(|k| !k.is_empty() && grapheme_len(k) <= 400) else {
+            continue;
+        };
+        if !seen.insert(k) {
+            continue;
+        }
+        let Some(title) = it.get("title").and_then(Value::as_str).filter(|t| !t.is_empty()) else {
+            continue;
+        };
+        let Some(def) = it.get("def").and_then(Value::as_str).filter(|def| def.len() <= 64 << 10) else {
+            continue;
+        };
+        out.push(ImportQueueLine {
+            key: k.to_string(),
+            title: cut_chars(title, 300),
+            kind: it.get("kind").and_then(Value::as_str).unwrap_or("").to_string(),
+            est_min: ns_number(it.get("est_min")),
+            digest: it.get("digest").and_then(Value::as_str).unwrap_or("").to_string(),
+            summary: cut_chars(it.get("summary").and_then(Value::as_str).unwrap_or(""), 2000),
+            source: src.to_string(),
+            def: def.to_string(),
+        });
+    }
+    Some(ImportQueueFile { project: project.to_string(), source: src.to_string(), lines: out })
+}
 
