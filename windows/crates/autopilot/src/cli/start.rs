@@ -1,7 +1,8 @@
 //! `start` — 출발. 차례(위에서 걸리면 멈추고 이미 바꾼 것만 되돌린다): 폴더·파일 → 단위·설정 검사 → 실행 환경 문턱 → 판정 명령 꼴 →
-//! 경로 확인(정규화·쓸 수 없는 자리) → 같은 이름의 실행이 이미 있는지 → 시험용 claude 판정과 준비 확인 → 가지 → 고정 설정 → run.json·queue.json → 작업 스케줄러 등록.
+//! 경로 확인(정규화·쓸 수 없는 자리) → 같은 이름의 실행이 이미 있는지 → 시험용 claude 판정과 준비 확인 → 같은 경로 자리 잡기 →
+//! 가지 → 고정 설정 → run.json·queue.json → 작업 스케줄러 등록.
 //! 같은 이름의 실행 폴더가 다른 곳에 있어도 엔진 전용 폴더(`private\<id>`)를 나눠 쓰지 못하게 막고, 작업 이름에는 폴더 경로 해시를 붙인다.
-//! 같은 저장소를 다루는 두 번째 출발은 막지 않는다(기록 저장소 `path_claims` 는 6단계 일).
+//! 같은 경로를 이미 쓰는 살아 있는 실행이 있으면 출발하지 않는다(기록 저장소 `path_claims`, 6단계 ⑫-6).
 
 use std::path::{Path, PathBuf};
 
@@ -13,10 +14,12 @@ use super::roots::{self, Forbidden};
 use super::{first_line, label_for_dir, native_env, read_required, refuse, run_id_of, valid_run_id, Deps, Fail, Reply, ENGINE_EXE};
 use crate::adapters::git::autopilot_branch_name;
 use crate::adapters::wsl_env::WslEnv;
+use crate::engine::claims::{claim_paths_of, EngineClaimProbe, SqliteClaimBook};
 use crate::engine::run::frozen_digest;
 use crate::model::{ExecEnv as ExecEnvRecord, Num, Ordered, QueueFile, RunFile, UnsandboxedOk};
 use crate::ports::{ExecEnv, Git, KeepAlive};
 use crate::rules::env_policy::{choose, confirm_ready, record_for, validate_check};
+use crate::rules::multirun::{claim_busy_text, claim_paths, release_claims, ClaimResult};
 
 struct Loaded {
     id: String,
@@ -378,9 +381,54 @@ pub(super) fn start(d: &Deps, dir: &Path, dev: bool, accept_unsandboxed: bool, n
     let cwds = checked.cwds.clone();
     let (test, sandbox) = confirm_env(d, &entry, &cwds[0])?;
 
-    let work = autopilot_branch_name(&id).map_err(|e| refuse(e.message))?;
-    let repos = create_branches(d.git, &cwds, &work).map_err(refuse)?;
+    // 6단계 ⑫-6(apClaimPaths) — 같은 경로 자리 잡기. 가지·작업 트리를 만들기 전에 기록 저장소의 경로 자리 표를 한 transaction 으로 잡아,
+    // 거의 같은 때 온 두 출발 가운데 하나만 지나간다. 단위 작업 폴더가 속한 저장소 각각과 저장소 밖 작업 폴더 그 자리(원본 cmdStart 의 claimPathsOf).
+    // 겹치는 자리의 실행이 살아 있으면 거부하고, 끝났거나 엔진·작업이 없는 남은 자리는 치우고 잡는다. 표를 못 쓰면 출발하지 않는다(닫힌 쪽). 잡은 뒤 실패하면 푼다.
+    let private_root = (d.autopilot_root)(dev).join("private");
+    d.files.make_private_dir(&private_root).map_err(|e| Fail::Internal(format!(
+        "엔진 전용 폴더({})를 만들지 못했습니다: {}", private_root.display(), e.message
+    )))?;
+    let book = SqliteClaimBook { path: private_root.join("records.sqlite") };
+    let home = claude_board_core::paths::home().to_string_lossy().into_owned();
+    let supervisor = (d.supervisor)(dev);
+    let probe = EngineClaimProbe { supervisor: &*supervisor };
+    let places = claim_paths_of(&json!({
+        "repos": repos_of(d.git, &cwds).iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>(),
+        "units": cwds.iter().map(|c| json!({ "cwd": c.to_string_lossy().into_owned() })).collect::<Vec<_>>(),
+    }));
+    let claimed = claim_paths(
+        &id, &dir.to_string_lossy(), &label, Some(std::process::id() as i32), &places, &home, &book, &probe, d.clock,
+    );
+    let cleared_note = match &claimed {
+        ClaimResult::Ok { cleared } => (!cleared.is_empty()).then(|| cleared.join(", ")),
+        ClaimResult::Busy { .. } => {
+            return Err(refuse(
+                claim_busy_text(&claimed, &home).unwrap_or_else(|| "같은 경로에서 자율주행이 돌고 있습니다".to_string()),
+            ));
+        }
+        ClaimResult::Failed(e) => {
+            return Err(refuse(format!(
+                "실행 기록 저장소에 같은 경로 자리를 잡지 못했습니다({e}). 같은 경로의 실행과 겹치는지 볼 수 없어 출발하지 않습니다"
+            )));
+        }
+    };
+
+    let work = match autopilot_branch_name(&id) {
+        Ok(work) => work,
+        Err(e) => {
+            let _ = release_claims(&id, &book);
+            return Err(refuse(e.message));
+        }
+    };
+    let repos = match create_branches(d.git, &cwds, &work) {
+        Ok(repos) => repos,
+        Err(why) => {
+            let _ = release_claims(&id, &book);
+            return Err(refuse(why));
+        }
+    };
     let undo_all = |why: &str| -> Fail {
+        let _ = release_claims(&id, &book);
         remove_frozen(dir, &private_dir);
         undo_branches(d.git, &repos, &work);
         Fail::Internal(why.to_string())
@@ -431,11 +479,15 @@ pub(super) fn start(d: &Deps, dir: &Path, dev: bool, accept_unsandboxed: bool, n
     }
 
     let scheduled = !no_schedule;
-    let text = format!(
+    let mut text = format!(
         "출발했습니다: {id}\n실행 환경: {}\n작업 스케줄러: {}",
         env_label(&entry.choice),
         if scheduled { "등록했습니다" } else { "등록하지 않았습니다(--no-schedule)" }
     );
+    if let Some(cleared) = &cleared_note {
+        // 원본 cmdStart 이 .ok(cleared) 에 표준 출력으로 내놓는 알림 줄
+        text.push_str(&format!("\n끝났거나 엔진이 없는 실행의 남은 경로 자리를 치웠습니다: {cleared}"));
+    }
     let json = json!({"ok": true, "run": id, "label": label, "hash": hash, "exec_env": record, "scheduled": scheduled});
     Ok(Reply { json, text })
 }

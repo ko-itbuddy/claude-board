@@ -21,6 +21,7 @@ use crate::adapters::records_sqlite::{open_store, to_port, transaction};
 use crate::adapters::worktree::canonical_loose;
 use crate::ports::{PortResult, Supervisor};
 use crate::rules::multirun::{Claim, ClaimBook, ClaimChange, ClaimProbe, ClaimRunView};
+use crate::rules::path_key::path_key_windows;
 use crate::rules::stopline::stop_num;
 
 /// 읽기 전용 연결이 잠김을 기다리는 시간(원본 `readOnlyClaimsBook` 의 `sqlite3_busy_timeout(db, 2000)`)
@@ -219,10 +220,14 @@ pub fn claim_paths_of(frozen: &Value) -> Vec<String> {
         .map_or_else(Vec::new, |list| {
             list.iter().filter_map(|u| u.get("cwd").and_then(Value::as_str)).map(canonical_loose).collect()
         });
-    // 저장소 안에 들어가는 작업 폴더는 그 저장소가 이미 잡은 자리다
+    // 저장소 안에 들어가는 작업 폴더는 그 저장소가 이미 잡은 자리다.
+    // 자리 표의 견주기는 접은 경로 키(대소문자·`\`/`/` 가리지 않음)로 하므로 여기서도 같은 접기로 견준다(원본은 POSIX 로 그냥 견준다)
+    let repo_keys: Vec<String> = repos.iter().map(|repo| path_key_windows(repo)).collect();
     let mut places = repos.clone();
-    places
-        .extend(cwds.into_iter().filter(|cwd| !repos.iter().any(|repo| *cwd == *repo || cwd.starts_with(&format!("{repo}/")))));
+    places.extend(cwds.into_iter().filter(|cwd| {
+        let cwd_key = path_key_windows(cwd);
+        !repo_keys.iter().any(|repo_key| cwd_key == *repo_key || cwd_key.starts_with(&format!("{repo_key}/")))
+    }));
     places
 }
 
