@@ -29,7 +29,7 @@ fn busy_retry_delay(attempt: u32) -> Option<Duration> {
     Some(Duration::from_secs_f64(secs))
 }
 
-fn to_port(e: rusqlite::Error) -> PortError {
+pub(crate) fn to_port(e: rusqlite::Error) -> PortError {
     let kind = match &e {
         rusqlite::Error::SqliteFailure(f, _) => match f.code {
             ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked => PortErrorKind::Busy,
@@ -43,8 +43,9 @@ fn to_port(e: rusqlite::Error) -> PortError {
     PortError::new(kind, e.to_string())
 }
 
-/// 잠겨 실패한 걸음을 규칙대로 다시 한다. 예산이 다하면 Busy 를 그대로 돌려준다
-fn again<T>(mut step: impl FnMut() -> PortResult<T>) -> PortResult<T> {
+/// 잠겨 실패한 걸음을 규칙대로 다시 한다. 예산이 다하면 Busy 를 그대로 돌려준다.
+/// 같은 저장소를 다루는 `engine::claims` 도 같이 쓴다
+pub(crate) fn again<T>(mut step: impl FnMut() -> PortResult<T>) -> PortResult<T> {
     let mut attempt = 0;
     loop {
         match step() {
@@ -60,8 +61,9 @@ fn again<T>(mut step: impl FnMut() -> PortResult<T>) -> PortResult<T> {
     }
 }
 
-/// 쓰기 잠금을 먼저 잡고(BEGIN IMMEDIATE) 한 번에 쓴다. 원본: `RecordsDB.transaction`
-fn transaction(conn: &Connection, body: impl Fn() -> PortResult<()>) -> PortResult<()> {
+/// 쓰기 잠금을 먼저 잡고(BEGIN IMMEDIATE) 한 번에 쓴다. 원본: `RecordsDB.transaction`.
+/// 같은 저장소를 다루는 `engine::claims` 도 같이 쓴다
+pub(crate) fn transaction(conn: &Connection, mut body: impl FnMut() -> PortResult<()>) -> PortResult<()> {
     again(|| {
         conn.execute_batch("BEGIN IMMEDIATE").map_err(to_port)?;
         let done = body().and_then(|()| conn.execute_batch("COMMIT").map_err(to_port));
@@ -88,38 +90,44 @@ pub struct SqliteRecords {
     tables: Mutex<HashMap<String, TableInfo>>,
 }
 
+/// 기록 저장소 연결을 열고(없으면 만들고) 남은 판을 올린다. 원본: `RecordsDB.init`.
+/// 같은 저장소를 다루는 경로 자리 표(`engine::claims` 의 `SqliteClaimBook`)도 이 열기 규칙을 같이 쓴다
+pub(crate) fn open_store(path: &Path) -> PortResult<Connection> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    let conn = Connection::open(path).map_err(to_port)?;
+    conn.busy_timeout(BUSY_TIMEOUT).map_err(to_port)?;
+    // 빈 저장소를 여럿이 함께 열면 WAL 로 바꾸는 걸음이 busy_timeout 을 거치지 않고 잠겨 실패할 수 있어 같은 규칙으로 다시 한다
+    again(|| conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get::<_, String>(0)).map(|_| ()).map_err(to_port))?;
+
+    let v = read_version(&conn)?;
+    if v > RECORDS_VERSION {
+        return Err(PortError::new(
+            PortErrorKind::Unavailable,
+            format!("저장소 판({v})이 이 엔진이 아는 판({RECORDS_VERSION})보다 새롭습니다. 보드를 업데이트하세요"),
+        ));
+    }
+    if v < RECORDS_VERSION {
+        transaction(&conn, || {
+            // 다른 엔진이 먼저 올렸을 수 있다 — 잠금을 잡은 뒤 판을 다시 보고 남은 판만 건다
+            let cur = conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0)).map_err(to_port)?;
+            for step in records_steps(cur) {
+                conn.execute_batch(step.sql).map_err(to_port)?;
+                conn.execute_batch(&format!("PRAGMA user_version={}", step.version)).map_err(to_port)?;
+            }
+            Ok(())
+        })?;
+    }
+    Ok(conn)
+}
+
 impl SqliteRecords {
     /// 저장소를 열고(없으면 만든다) 남은 판을 올린다.
     pub fn open(path: &Path) -> PortResult<Self> {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
-        }
-        let conn = Connection::open(path).map_err(to_port)?;
-        conn.busy_timeout(BUSY_TIMEOUT).map_err(to_port)?;
-        // 빈 저장소를 여럿이 함께 열면 WAL 로 바꾸는 걸음이 busy_timeout 을 거치지 않고 잠겨 실패할 수 있어 같은 규칙으로 다시 한다
-        again(|| conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get::<_, String>(0)).map(|_| ()).map_err(to_port))?;
-
-        let v = read_version(&conn)?;
-        if v > RECORDS_VERSION {
-            return Err(PortError::new(
-                PortErrorKind::Unavailable,
-                format!("저장소 판({v})이 이 엔진이 아는 판({RECORDS_VERSION})보다 새롭습니다. 보드를 업데이트하세요"),
-            ));
-        }
-        if v < RECORDS_VERSION {
-            transaction(&conn, || {
-                // 다른 엔진이 먼저 올렸을 수 있다 — 잠금을 잡은 뒤 판을 다시 보고 남은 판만 건다
-                let cur = conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0)).map_err(to_port)?;
-                for step in records_steps(cur) {
-                    conn.execute_batch(step.sql).map_err(to_port)?;
-                    conn.execute_batch(&format!("PRAGMA user_version={}", step.version)).map_err(to_port)?;
-                }
-                Ok(())
-            })?;
-        }
-        Ok(Self { conn: Mutex::new(conn), tables: Mutex::new(HashMap::new()) })
+        Ok(Self { conn: Mutex::new(open_store(path)?), tables: Mutex::new(HashMap::new()) })
     }
 
     fn lock_conn(&self) -> PortResult<std::sync::MutexGuard<'_, Connection>> {
