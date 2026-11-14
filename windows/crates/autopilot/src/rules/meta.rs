@@ -174,7 +174,7 @@ fn obj(pairs: Vec<(&str, Value)>) -> Value {
 }
 
 /// 프레임 크기. 정수 값이면 정수로(Foundation 이 `390.0` 을 `390` 으로 쓰는 것과 같다). 비유한 값은 `Null`(= `meta_data` 가 못 쓰는 값)
-fn dim(x: f64) -> Value {
+pub fn dim(x: f64) -> Value {
     if !x.is_finite() {
         Value::Null
     } else if x.fract() == 0.0 && x.abs() < 9.0e15 {
@@ -274,7 +274,8 @@ fn write_string(out: &mut String, s: &str) {
 }
 
 /// 값을 쓴다. 쓸 수 없는 값(`Null`)을 만나면 `false`(Foundation 이 던지는 자리).
-fn write_value(out: &mut String, v: &Value, depth: usize) -> bool {
+/// 근거 MANIFEST(`evidence.rs` 의 `manifest_data`)도 이 쓰기로 Swift 꼴(`"키" : 값`)을 맞춘다.
+pub fn write_value(out: &mut String, v: &Value, depth: usize) -> bool {
     let pad = "  ".repeat(depth);
     let inner = "  ".repeat(depth + 1);
     match v {

@@ -5,9 +5,11 @@
 //! 이 파일의 이름은 모두 묶음 폴더 안의 맨 파일 이름(`&str`)이다. 경로 구분자(`/`·`\`)나 `..` 는 이름 검사가 거른다.
 //! 폴더 경로 합치기·정규화는 부르는 쪽 몫이고, 여기서는 파일 시스템을 부르지 않는다.
 //!
-//! 옮기지 않은 것: `apAddEvidence`(메타 가리기·형식 검사·저장소·시계를 엮는 문). 그 재료(`apMeta*`, `APEvidenceStore`, `APClock`)가
-//! 이 crate 의 규칙 파일에 없어, 엔진이 이 파일의 번호·이름·MANIFEST 규칙을 써서 직접 엮는다.
+//! 파일 끝의 `add_evidence`(원본 `apAddEvidence`)는 그 재료를 엮는 문이다 — 메타 가리기(`meta_redact`)·형식 검사(`meta_check`)·
+//! 저장소(`EvidenceStore`)·시계(`ReadClock`)를 묶어 메타 파일과 `MANIFEST.json` 을 쓴다.
 
+use crate::rules::meta::{dim, meta_check, meta_data, meta_json, meta_redact, meta_wrap_untrusted, write_value, Meta};
+use crate::rules::reading::ReadClock;
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 
@@ -105,14 +107,14 @@ pub fn manifest_json(entries: &[EvidenceEntry], updated: f64) -> Value {
                 ("url", Value::from(e.url.as_str())),
                 ("id", Value::from(e.id.as_str())),
                 ("title", Value::from(e.title.as_str())),
-                ("read_at", Value::from(e.read_at)),
+                ("read_at", dim(e.read_at)),
                 ("sha256", Value::from(e.sha256.as_str())),
                 ("bytes", Value::from(e.bytes)),
                 ("redacted", Value::from(e.redacted)),
                 ("requests", Value::from(e.requests)),
             ];
             if let Some(c) = e.cost_usd {
-                d.push(("cost_usd", Value::from(c)));
+                d.push(("cost_usd", dim(c)));
             }
             if let Some(i) = &e.image {
                 d.push((
@@ -131,16 +133,22 @@ pub fn manifest_json(entries: &[EvidenceEntry], updated: f64) -> Value {
     sorted_object(vec![
         ("format", Value::from(EVIDENCE_FORMAT)),
         ("version", Value::from(1)),
-        ("updated", Value::from(updated)),
+        ("updated", dim(updated)),
         ("redacted", Value::from(entries.iter().map(|e| e.redacted).sum::<i64>())),
         ("entries", Value::Array(list)),
     ])
 }
 
-/// 원본: `apManifestData`. 들여쓰기 2칸·키 정렬·슬래시 이스케이프 없음.
-/// Swift 의 `"키" : 값` 과 달리 `"키": 값` 으로 쓴다(읽는 쪽은 JSON 이라 같다).
+/// 원본: `apManifestData`. 들여쓰기 2칸·키 정렬·`"키" : 값` 꼴·슬래시 이스케이프 없음 — 원본 JSONSerialization 쓰기를 그대로 쓴다(`meta_data` 가 쓰는 Swift JSON 쓰기).
+/// ReadingTests `묶음` 의 골든이 MANIFEST 바이트를 비교하므로 꼴이 원본과 달라도 시험이 붉다.
 pub fn manifest_data(entries: &[EvidenceEntry], updated: f64) -> Vec<u8> {
-    serde_json::to_vec_pretty(&manifest_json(entries, updated)).unwrap_or_default()
+    let v = manifest_json(entries, updated);
+    let mut out = String::new();
+    if write_value(&mut out, &v, 0) {
+        out.into_bytes()
+    } else {
+        Vec::new()
+    }
 }
 
 /// 묶음 안 파일 이름 꼴 `^[0-9]{1,4}-[A-Za-z0-9_-]{1,90}\.<ext>$`(맨 이름만, 경로 구분자는 안 받는다).
@@ -212,4 +220,109 @@ pub fn manifest_parse(data: Option<&[u8]>) -> Vec<EvidenceEntry> {
     }
     out.sort_by_key(|e| e.n);
     out
+}
+
+// 원본 Evidence.swift 87~126줄.
+
+/// 원본: `APEvidenceStore`. 근거 묶음 파일 저장소 — 어댑터가 읽기 전용(임시 파일 + rename)으로 구현한다.
+/// 파일 이름은 언제나 맨 이름(`MANIFEST.json`·`<n>-<출처>-<id>.json` 꼴)이고 폴더 경로 합치기는 어댑터 몫이다.
+pub trait EvidenceStore {
+    /// 파일 읽기 — 없으면 `None`
+    fn read(&self, name: &str) -> Option<Vec<u8>>;
+    /// 파일 쓰기 — 성공하면 파일 해시(`sha256`), 실패하면 `None`. 같은 이름이 이미 있으면 바꾼다
+    fn write(&self, name: &str, data: &[u8]) -> Option<String>;
+    /// 파일 지우기 — 파일이 없어도 조용히 지나간다(원본과 같다)
+    fn remove(&self, name: &str);
+}
+
+/// 원본: `apAddEvidence`. 읽은 것 하나를 근거 묶음에 넣는다 — 같은 주소면 같은 번호(옛 파일은 지움), 아니면 다음 번호. 그림 파일 이름을 메타 image 칸에 적는다.
+/// 모든 길(내장 REST·MCP 읽기 세션·단위 시작 전 티켓)이 이 문을 지나므로 비밀 가리기(`meta_redact`)를 여기서 늘 하고, 가린 뒤 형식 검사(`meta_check`)를
+/// 다시 지난 것만 쓴다(절 글은 믿지 않는 자료 표시로 감싸 쓴다, `meta_wrap_untrusted`). `redacted` 는 앞서 가린 수(내장 읽기가 먼저 가렸으면 그 수)이고
+/// 여기서 더 가린 수를 더해 MANIFEST 에 적는다(2026-10-30 자동 보안 검토 MEDIUM: 전에는 MCP 길의 가리기를 엔진이 따로 했다).
+/// 메타 파일 → 그림 → MANIFEST 차례로 써서 MANIFEST 가 가리키는 파일은 늘 있다.
+#[allow(clippy::too_many_arguments)]
+pub fn add_evidence(
+    meta: &Meta,
+    image: Option<&[u8]>,
+    image_host: &str,
+    url: &str,
+    via: &str,
+    requests: i64,
+    redacted: i64,
+    cost_usd: Option<f64>,
+    store: &dyn EvidenceStore,
+    clock: &dyn ReadClock,
+) -> EvidenceWrite {
+    let mut entries = manifest_parse(store.read(MANIFEST_NAME).as_deref());
+    let old: Option<EvidenceEntry> = entries.iter().find(|e| e.url == url).cloned();
+    let n = old.as_ref().map_or_else(|| entries.iter().map(|e| e.n).max().unwrap_or(0) + 1, |o| o.n);
+    let (red, more) = meta_redact(meta);
+    let file = evidence_name(n, &red.source, &red.id);
+    let mut wrapped = meta_wrap_untrusted(&red); // 믿지 않는 자료 표시(절 글 감싸기·표시 괄호 바꾸기·고정 안내)
+    let image_file = match image {
+        None => String::new(),
+        Some(_) => {
+            // 원본은 dropLast(5)(`.json` 떼기). 이름이 `.json` 꼴이어서 끝 문자 다섯을 떼는 것이 안전하다
+            let mut base = file.clone();
+            for _ in 0..".json".len() {
+                base.pop();
+            }
+            base.push_str(".png");
+            base
+        }
+    };
+    wrapped.image = image_file.clone();
+    let checked = meta_check(Some(&meta_json(&wrapped)), true);
+    let Some(ok) = checked.meta else {
+        let problems = checked.problems.iter().take(3).cloned().collect::<Vec<_>>().join(" · ");
+        return EvidenceWrite { entry: None, note: format!("형식 검사에 걸려 넣지 않았습니다: {problems}") };
+    };
+    let data = meta_data(&ok);
+    let Some(sha) = store.write(&file, &data) else {
+        return EvidenceWrite { entry: None, note: format!("근거 묶음에 {file} 을 쓰지 못했습니다") };
+    };
+    let read_at = clock.now();
+    let mut e = EvidenceEntry {
+        n,
+        file: file.clone(),
+        source: ok.source.clone(),
+        via: via.to_string(),
+        url: url.to_string(),
+        id: ok.id.clone(),
+        title: ok.title.clone(),
+        read_at,
+        sha256: sha,
+        bytes: data.len() as i64,
+        redacted: redacted + more as i64,
+        requests,
+        cost_usd,
+        image: None,
+    };
+    if let Some(img) = image {
+        match store.write(&image_file, img) {
+            Some(ish) => {
+                e.image = Some(EvidenceImage { file: image_file.clone(), host: image_host.to_string(), sha256: ish, bytes: img.len() as i64 })
+            }
+            None => {
+                store.remove(&file);
+                return EvidenceWrite { entry: None, note: format!("근거 묶음에 {image_file} 을 쓰지 못했습니다") };
+            }
+        }
+    }
+    if let Some(o) = &old {
+        if o.file != file {
+            store.remove(&o.file);
+        }
+        if let Some(oi) = &o.image {
+            if oi.file != image_file {
+                store.remove(&oi.file);
+            }
+        }
+    }
+    entries.retain(|x| x.n != n);
+    entries.push(e.clone());
+    if store.write(MANIFEST_NAME, &manifest_data(&entries, read_at)).is_none() {
+        return EvidenceWrite { entry: Some(e), note: "MANIFEST.json 을 쓰지 못했습니다".to_string() };
+    }
+    EvidenceWrite { entry: Some(e), note: "근거 묶음에 넣었습니다".to_string() }
 }

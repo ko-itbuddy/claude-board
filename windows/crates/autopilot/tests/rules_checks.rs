@@ -1,7 +1,7 @@
 //! 판정 실패 글(`rules::checks`)과 근거 묶음(`rules::evidence`) 시험.
 //! 원본: `Tests/AutopilotRulesTests/ChecksTests.swift`(사례 18), `JudgeMoveTests.swift`(출력 끝 53꼴 + 카드 3),
-//! `ReadingTests.swift` 「거부」의 MANIFEST 절반(1). `apAddEvidence` 를 지나는 사례(Reading 「묶음」·「표시」·「가리기」, Import 「묶음」)는
-//! 그 함수를 옮기지 않아 여기 없다(evidence.rs 머리 주석).
+//! `ReadingTests.swift` 「거부」의 MANIFEST 절반(1). `add_evidence` 를 지나는 사례(Reading 「묶음」·「표시」·「거부」, Import 「묶음」)는
+//! rules_reading.rs·rules_import.rs 에 있다.
 use claude_board_autopilot::rules::checks::*;
 use claude_board_autopilot::rules::evidence::*;
 use serde_json::json;
