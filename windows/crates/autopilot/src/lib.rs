@@ -70,6 +70,7 @@ pub mod engine {
     pub mod new_repo;
     pub mod prep_git;
     pub mod run;
+    pub mod session_limits;
     pub mod session_runner;
     pub mod worktree_run;
 }

@@ -127,11 +127,11 @@ pub fn redact(text: &str, env: &[(String, String)]) -> String {
     words.join(" ")
 }
 
-fn fail(reason: impl Into<String>) -> SessionOutcome {
+pub(crate) fn fail(reason: impl Into<String>) -> SessionOutcome {
     SessionOutcome::Failed { reason: reason.into() }
 }
 
-fn unique_session_id() -> String {
+pub(crate) fn unique_session_id() -> String {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let seed = format!("session-runner-{}-{}-{nanos}", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed));
@@ -152,70 +152,7 @@ impl<'a> SessionRunner<'a> {
             Ok(l) => l,
             Err(why) => return fail(why),
         };
-        let mut child = match self.env.spawn_claude(&launch) {
-            Ok(c) => c,
-            Err(e) => return fail(redact(&format!("claude 를 띄우지 못했다: {}", e.message), &req.env)),
-        };
-        let deadline = Instant::now() + req.timeout;
-        if let Err(e) = child.write_line(&prompt_line(&req.prompt)) {
-            let _ = child.kill_tree();
-            return fail(format!("지시 글을 보내지 못했다: {}", e.message));
-        }
-        child.close_stdin();
-
-        let mut result = None;
-        let early = loop {
-            if cancel.is_cancelled() {
-                break Some(SessionOutcome::Cancelled);
-            }
-            let now = Instant::now();
-            if now >= deadline {
-                break Some(SessionOutcome::TimedOut);
-            }
-            match child.read_line((deadline - now).min(POLL)) {
-                Ok(Some(line)) => {
-                    if line.len() > req.max_line_bytes {
-                        break Some(fail(format!("출력 줄이 상한({} 바이트)을 넘어 세션을 끝냈다", req.max_line_bytes)));
-                    }
-                    if let StreamEvent::Result(r) = parse_line(&line) {
-                        result = Some(r);
-                    }
-                }
-                Ok(None) => break None,
-                Err(e) if e.kind == PortErrorKind::Timeout => {}
-                Err(e) => break Some(fail(format!("출력을 읽지 못했다: {}", e.message))),
-            }
-        };
-        if let Some(outcome) = early {
-            let _ = child.kill_tree();
-            return outcome;
-        }
-        // 출력이 끝났다 — 종료 코드를 잠깐 기다리고, 남은 자손까지 끝낸다
-        let exit_deadline = Instant::now() + EXIT_WAIT;
-        let mut exit = None;
-        while Instant::now() < exit_deadline {
-            match child.try_wait() {
-                Ok(Some(code)) => {
-                    exit = Some(code);
-                    break;
-                }
-                Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-                Err(_) => break,
-            }
-        }
-        let _ = child.kill_tree();
-        if let Some(r) = result {
-            return judge(r, &req.env);
-        }
-        let tail = redact(read_tail(&launch.stderr_log, STDERR_TAIL_BYTES, OutputCodec::Utf8).trim(), &req.env);
-        let skip = tail.chars().count().saturating_sub(REASON_CHARS);
-        let tail: String = tail.chars().skip(skip).collect();
-        let why = match exit {
-            Some(0) => "claude 가 결과 없이 끝났다".to_string(),
-            Some(code) => format!("claude 가 종료 코드 {code} 로 끝났다"),
-            None => "claude 가 결과 없이 출력을 닫았다".to_string(),
-        };
-        fail(if tail.is_empty() { why } else { format!("{why}: {tail}") })
+        run_launch(self.env, &launch, req, cancel)
     }
 
     /// 설정 파일을 엔진 전용 폴더에 쓰고 띄울 꼴을 만든다
@@ -246,7 +183,7 @@ impl<'a> SessionRunner<'a> {
     }
 }
 
-fn stderr_path(dir: &Path) -> PathBuf {
+pub(crate) fn stderr_path(dir: &Path) -> PathBuf {
     dir.join("stderr.log")
 }
 
@@ -262,4 +199,73 @@ fn judge(r: ResultEvent, env: &[(String, String)]) -> SessionOutcome {
     let detail = r.api_error.filter(|s| !s.is_empty()).unwrap_or(r.text);
     let reason = if detail.is_empty() { format!("결과 {}", r.subtype) } else { format!("결과 {}: {detail}", r.subtype) };
     fail(redact(&reason, env))
+}
+
+/// 정해진 띄울 꼴로 claude 를 띄우고 끝까지 돌린다 — 읽기 세션(`SessionRunner::run`)과 결과 폴더 세션
+/// (`session_limits::run_out_session`)이 같은 루프·시간 상한·취소·kill_tree 를 쓴다. 띄우기부터 판정까지 여기서 한다
+pub(crate) fn run_launch(env: &dyn ExecEnv, launch: &ClaudeLaunch, req: &SessionRequest, cancel: &CancelToken) -> SessionOutcome {
+    let mut child = match env.spawn_claude(launch) {
+        Ok(c) => c,
+        Err(e) => return fail(redact(&format!("claude 를 띄우지 못했다: {}", e.message), &req.env)),
+    };
+    let deadline = Instant::now() + req.timeout;
+    if let Err(e) = child.write_line(&prompt_line(&req.prompt)) {
+        let _ = child.kill_tree();
+        return fail(format!("지시 글을 보내지 못했다: {}", e.message));
+    }
+    child.close_stdin();
+
+    let mut result = None;
+    let early = loop {
+        if cancel.is_cancelled() {
+            break Some(SessionOutcome::Cancelled);
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            break Some(SessionOutcome::TimedOut);
+        }
+        match child.read_line((deadline - now).min(POLL)) {
+            Ok(Some(line)) => {
+                if line.len() > req.max_line_bytes {
+                    break Some(fail(format!("출력 줄이 상한({} 바이트)을 넘어 세션을 끝냈다", req.max_line_bytes)));
+                }
+                if let StreamEvent::Result(r) = parse_line(&line) {
+                    result = Some(r);
+                }
+            }
+            Ok(None) => break None,
+            Err(e) if e.kind == PortErrorKind::Timeout => {}
+            Err(e) => break Some(fail(format!("출력을 읽지 못했다: {}", e.message))),
+        }
+    };
+    if let Some(outcome) = early {
+        let _ = child.kill_tree();
+        return outcome;
+    }
+    // 출력이 끝났다 — 종료 코드를 잠깐 기다리고, 남은 자손까지 끝낸다
+    let exit_deadline = Instant::now() + EXIT_WAIT;
+    let mut exit = None;
+    while Instant::now() < exit_deadline {
+        match child.try_wait() {
+            Ok(Some(code)) => {
+                exit = Some(code);
+                break;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(_) => break,
+        }
+    }
+    let _ = child.kill_tree();
+    if let Some(r) = result {
+        return judge(r, &req.env);
+    }
+    let tail = redact(read_tail(&launch.stderr_log, STDERR_TAIL_BYTES, OutputCodec::Utf8).trim(), &req.env);
+    let skip = tail.chars().count().saturating_sub(REASON_CHARS);
+    let tail: String = tail.chars().skip(skip).collect();
+    let why = match exit {
+        Some(0) => "claude 가 결과 없이 끝났다".to_string(),
+        Some(code) => format!("claude 가 종료 코드 {code} 로 끝났다"),
+        None => "claude 가 결과 없이 출력을 닫았다".to_string(),
+    };
+    fail(if tail.is_empty() { why } else { format!("{why}: {tail}") })
 }
