@@ -66,6 +66,7 @@ pub mod engine {
     pub mod decide;
     pub mod gitlinks_guard;
     pub mod leftovers;
+    pub mod new_repo;
     pub mod prep_git;
     pub mod run;
     pub mod session_runner;
