@@ -19,8 +19,7 @@
 //! 차이(원본 대비, 이 포트의 자리):
 //! - 시간대: Foundation `TimeZone` 대신 `rules::report::FixedZone`(Asia/Seoul·UTC 만, 서머타임 시간대는 못 쓴다). `clock` 은 `Writer::date` 로
 //!   "M월 d일 HH:mm" 을 그린다.
-//! - 가리기: 원본은 Meta.swift `apRedact`(열아홉 꼴)를 부른다. `meta.rs` 는 아직 이식 전이라 그 꼴표 가운데 webhook 꼴 둘(3·4번째 — 알림 글이
-//!   닿는 비밀은 webhook 주소뿐이다)만 정규식 없이 비공개 `redact` 로 옮겼다. Meta 이식 뒤에는 `use` 로 바꾼다.
+//! - 가리기: 원본과 같이 Meta.swift `apRedact`(열아홉 꼴) 전부를 쓴다 — 이식된 규칙 `meta::redact` 를 `use` 로 가져온다(R-Redact-b).
 //! - 재시도 기다림: 원본은 Outbox.swift `apRetryWait`를 부른다. outbox 포트도 이식 전이라 같은 비공개 `retry_wait`·`http_date` 를 둔다.
 //! - 게시 설정: 원본 `APPublish` 는 Outbox.swift 에 있으나 이 파일이 쓰는 칸(mode·notify)만 `Publish` 로 최소 이식했다(`publish_parse`·`publish_json`
 //!   은 mode·notify 만 본다). Outbox 이식 뒤에는 `use` 로 바꾼다.
@@ -34,6 +33,7 @@ use crate::rules::connections::{
 };
 use crate::rules::control::run_ended;
 use crate::rules::formats::{doc_text_n, grapheme_len, DOC_MARKER};
+use crate::rules::meta::redact;
 use crate::rules::report::{FixedZone, ReportRun, Writer};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashSet};
@@ -47,149 +47,6 @@ pub const NOTIFY_TEXT_MAX: usize = 1800;
 /// 줄 수 상한(머리 아래). 원본 `apNotifyLinesMax`
 pub const NOTIFY_LINES_MAX: usize = 12;
 
-// MARK: - 비밀 가리기(webhook 주소 둘 꼴)
-
-/// 바꾼 자리 표시. 원본 `apRedact` 꼴표의 webhook 바꿀 글
-const REDACT_MASK: &str = "[가림:webhook 주소]";
-/// 내용의 빠질 글자 — 원본 꼴의 `[^\s"'<>)\]]`
-const PAYLOAD_STOP: [char; 6] = ['"', '\'', '<', '>', ')', ']'];
-
-/// 대소문자 구별하지 않는 접두 검사(호스트 글자는 ASCII 이므로 바이트 검사로 충분하다)
-fn ci_at(s: &str, i: usize, lit: &str) -> bool {
-    let a = s.as_bytes();
-    let l = lit.as_bytes();
-    a.len() >= i + l.len() && a[i..i + l.len()].iter().zip(l).all(|(x, y)| x.eq_ignore_ascii_case(y))
-}
-
-/// 내용 꼴의 끝 바이트 — 흰칸·따옴표·꺾쇠·괄호 앞까지. 반환은 언제나 글자 경계다(빠질 글자가 모두 ASCII 이므로)
-fn payload_end(s: &str, i: usize) -> usize {
-    for (off, ch) in s[i..].char_indices() {
-        if ch.is_whitespace() || PAYLOAD_STOP.contains(&ch) {
-            return i + off;
-        }
-    }
-    s.len()
-}
-
-/// from 에 https?:// 가 있는가 — 있으면 (시작 바이트, :// 뒤 바이트)
-fn find_scheme(s: &str, from: usize) -> Option<(usize, usize)> {
-    let b = s.as_bytes();
-    let h = |i: usize, c: u8| b.get(i).is_some_and(|x| x.eq_ignore_ascii_case(&c));
-    if !(h(from, b'h') && h(from + 1, b't') && h(from + 2, b't') && h(from + 3, b'p')) {
-        return None;
-    }
-    let j = if h(from + 4, b's') { from + 5 } else { from + 4 };
-    (b.get(j) == Some(&b':') && b.get(j + 1) == Some(&b'/') && b.get(j + 2) == Some(&b'/')).then_some((from, j + 3))
-}
-
-/// 다음 https?:// 의 위치 — 바로 앞이 글자·숫자·밑줄이면 단어 가운데라 경로로 보지 않는다(원본 꼴의 `\b`)
-fn next_url(s: &str, from: usize) -> Option<(usize, usize)> {
-    for (i, c) in s[from..].char_indices() {
-        let at = from + i;
-        let boundary_ok = match s[..at].chars().last() {
-            Some(pc) => !(pc.is_alphanumeric() || pc == '_'),
-            None => true,
-        };
-        if !boundary_ok || !c.eq_ignore_ascii_case(&'h') {
-            continue;
-        }
-        if let Some(found) = find_scheme(s, at) {
-            return Some(found);
-        }
-    }
-    None
-}
-
-/// 3번째 꼴 — `https://`(hooks.slack.com/(services|workflows|triggers)|discord(app)?.com/api/webhooks|chat.googleapis.com/v1/spaces|
-/// [a-z0-9.-]*\.webhook\.office\.com|outlook.office.com/webhook)/내용 1 글자 이상. 맞으면 내용 끝 바이트
-fn rule3_end(s: &str, p: usize) -> Option<usize> {
-    // hooks.slack.com/(services|workflows|triggers)/
-    for w in ["services", "workflows", "triggers"] {
-        let after_slack = p + "hooks.slack.com/".len();
-        let after_word = after_slack + w.len();
-        if ci_at(s, p, "hooks.slack.com/") && ci_at(s, after_slack, w) && s.as_bytes().get(after_word) == Some(&b'/') {
-            let e = payload_end(s, after_word + 1);
-            return (e > after_word + 1).then_some(e);
-        }
-    }
-    // discord(app)?.com/api/webhooks/
-    for h in ["discord.com/api/webhooks/", "discordapp.com/api/webhooks/"] {
-        if ci_at(s, p, h) {
-            let q = p + h.len();
-            let e = payload_end(s, q);
-            return (e > q).then_some(e);
-        }
-    }
-    // chat.googleapis.com/v1/spaces/
-    if ci_at(s, p, "chat.googleapis.com/v1/spaces/") {
-        let q = p + "chat.googleapis.com/v1/spaces/".len();
-        let e = payload_end(s, q);
-        return (e > q).then_some(e);
-    }
-    // [a-z0-9.-]*\.webhook\.office\.com/
-    let b = s.as_bytes();
-    let mut q = p;
-    while q < b.len() && (b[q].is_ascii_alphanumeric() || b[q] == b'.' || b[q] == b'-') {
-        if ci_at(s, q, ".webhook.office.com/") {
-            let r = q + ".webhook.office.com/".len();
-            let e = payload_end(s, r);
-            return (e > r).then_some(e);
-        }
-        q += 1;
-    }
-    // outlook.office.com/webhook/
-    if ci_at(s, p, "outlook.office.com/webhook/") {
-        let q = p + "outlook.office.com/webhook/".len();
-        let e = payload_end(s, q);
-        return (e > q).then_some(e);
-    }
-    None
-}
-
-/// 4번째 꼴 — `https://`(hooks?|webhooks?)\.[a-z0-9.-]+/내용 8 글자 이상. 맞으면 내용 끝 바이트
-fn rule4_end(s: &str, p: usize) -> Option<usize> {
-    let b = s.as_bytes();
-    for h in ["hooks", "webhooks", "hook", "webhook"] {
-        if ci_at(s, p, h) && b.get(p + h.len()) == Some(&b'.') {
-            let mut q = p + h.len() + 1;
-            while q < b.len() && (b[q].is_ascii_alphanumeric() || b[q] == b'.' || b[q] == b'-') {
-                q += 1;
-            }
-            if q > p + h.len() + 1 && b.get(q) == Some(&b'/') {
-                let e = payload_end(s, q + 1);
-                if s[q + 1..e].chars().count() >= 8 {
-                    return Some(e);
-                }
-            }
-        }
-    }
-    None
-}
-
-/// 꼴 하나를 온 글에 적용한다(원본은 꼴표를 온 글에 차례대로 적용한다)
-fn redact_rule(s: &str, rule4: bool) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut at = 0usize;
-    let mut scan = 0usize;
-    while let Some((i, p)) = next_url(s, scan) {
-        scan = i + 1;
-        let found = if rule4 { rule4_end(s, p) } else { rule3_end(s, p) };
-        let Some(e) = found else { continue };
-        out.push_str(&s[at..i]);
-        out.push_str(REDACT_MASK);
-        at = e;
-        scan = e;
-    }
-    out.push_str(&s[at..]);
-    out
-}
-
-/// webhook 주소 둘 꼴을 가린다. Meta.swift `apRedact` 꼴표의 3·4번째를(3번째 먼저) 정규식 없이 옮긴 것
-fn redact(s: &str) -> String {
-    let once = redact_rule(s, false);
-    redact_rule(&once, true)
-}
-
 // MARK: - 다듬기와 이스케이프
 
 /// 바깥·모델 글 다듬기(기본 상한) — 가리기 → 다듬기 → 멘션 무력화. 꼴의 이스케이프는 글을 만들 때(`notify_escape`)다
@@ -199,7 +56,7 @@ pub fn notify_clean(s: &str) -> String {
 
 /// 바깥·모델 글 다듬기 — 가리기 → 다듬기 → 멘션 무력화. 꼴의 이스케이프는 글을 만들 때(`notify_escape`)다
 pub fn notify_clean_n(s: &str, n: usize) -> String {
-    let red = redact(s);
+    let red = redact(s).0;
     // 너비 없는 글자(멘션을 쪼개 숨기는 데 쓰임)도 지운다. @ 를 전각으로 바꾸면 @channel·@here·@everyone·@all 이 멘션으로 읽히지 않는다
     let z: String = red
         .chars()

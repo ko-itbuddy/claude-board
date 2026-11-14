@@ -497,3 +497,52 @@ fn 게시_설정의_notify() {
     let back = parse_connections(Some(&serde_json::to_vec(&raw).expect("연결 JSON")));
     assert_eq!(back[0].format, NotifyFormat::Json);
 }
+
+// ── R-Redact-b 보강: 가리기가 `meta::redact`(열아홉 꼴) 전부를 쓰는지 — 원본 NotifyTests 에 없는 시험이다 ──
+
+// @Test("가리기(꼴 8): GitHub 토큰을 [가림:GitHub 토큰] 으로 — 20자 문턱(19자는 그대로)")
+#[test]
+fn extra_가린다_깃허브_토큰() {
+    let token = format!("ghp_{}", "Qq7".repeat(12)); // 36자 — 20자 문턱을 넘는다
+    let shortest = format!("ghp_{}", "Q8".repeat(10)); // 남는 글자 20자 — 가린다
+    let short = format!("ghp_{}", "Q8".repeat(9) + "Q"); // 남는 글자 19자 — 가리지 않는다
+    let s = notify_clean(&format!("열쇠는 {token} 과 {shortest} 이다"));
+    assert!(s.contains("[가림:GitHub 토큰]"), "{s}");
+    assert!(!s.contains("ghp_"), "{s}");
+    assert!(s.contains("열쇠는") && s.contains("이다"), "{s}"); // 가린 뒤에도 앞뒤 문맥은 남는다
+    let s2 = notify_clean(&format!("열쇠는 {short} 이다"));
+    assert!(s2.contains("ghp_Q"), "{s2}");
+    assert!(!s2.contains("[가림"), "{s2}");
+}
+
+// @Test("가리기(꼴 3·4): 알린 webhook 서비스·hooks?.호스트 — 옛 코드가 가리던 꼴 둘을 그대로 가린다")
+#[test]
+fn extra_가린다_webhook_둘_꼴() {
+    let slack = "https://hooks.slack.com/services/T0AAA/B0BBB/cccccccccccccccccccccc";
+    let any = format!("https://webhooks.ci.example.org/{}", "A9b8C7d6E5f4G3h2J1k9L0");
+    let s = notify_clean(&format!("둘 다 {slack} 과 {any} 이다"));
+    assert_eq!(s.matches("[가림:webhook 주소]").count(), 2, "{s}");
+    assert!(!s.contains("services/T0AAA") && !s.contains("ci.example.org"), "{s}");
+    assert!(s.contains("과") && s.contains("이다"), "{s}");
+}
+
+// @Test("가리기(꼴 5): 흔하지 않은 사이트의 hooks/ 긴 경로 — 옛 코드는 못 가렸다. 16자 문턱")
+#[test]
+fn extra_가린다_일반_hooks_경로() {
+    let url = format!("https://ci.example.com/build/{}/{}", "hooks", "zZ9Y8X7W6V5U4T3S2R1Q0P9O8N7M6");
+    let s = notify_clean(&format!("빌드 로그 {url} 에서 봤다"));
+    assert!(s.contains("[가림:webhook 주소]"), "{s}");
+    assert!(!s.contains("hooks/"), "{s}");
+    let short = format!("https://ci.example.com/hooks/{}", "a".repeat(15)); // 문턱 아래 — 그대로
+    let at = format!("https://ci.example.com/hooks/{}", "a".repeat(16)); // 문턱 — 가린다
+    assert!(notify_clean(&format!("짧은 {short} 은 그대로")).contains("hooks/aaa"), "{short}");
+    assert!(!notify_clean(&format!("긴 {at} 은 가린다")).contains("hooks/aaa"), "{at}");
+}
+
+// @Test("가리기: 비밀 아닌 평범한 주소는 그대로 둔다")
+#[test]
+fn extra_평범한_주소는_그대로() {
+    let s = notify_clean("문서는 https://example.com/docs 이다");
+    assert!(!s.contains("[가림"), "{s}");
+    assert!(s.contains("https://example.com/docs"), "{s}");
+}
