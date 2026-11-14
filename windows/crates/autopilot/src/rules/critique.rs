@@ -29,7 +29,8 @@
 //! - `String.count`·`prefix`(Character 단위)는 `formats::grapheme_len` 과 그 근사로, `CharacterSet.alphanumerics` 는 `char::is_alphanumeric`(글자·숫자) 근사다.
 //! - `[String: Any]`(탐침 카드·실행 JSON)는 `serde_json::Value`(`preserve_order`)이다. 단위 번호(`Int`)는 `i64`.
 //! - `nameOk`·`findingIDOK` 의 `^[A-Za-z0-9._-]{1,40}$`·`^f[0-9]{1,3}$` 도 정규식 크레이트 없이 훑는다. ICU `$` 규칙은 `keysOf` 와 같아 끝의 줄 끝 글자 하나를 떼고 견준다.
-//! - `redact(why).count == 0`(비공개 `apRedact`, Draft.swift)은 `draft.rs` 의 비공개 함수를 그대로 떼어 온다(`use` 가 안 되는 private 이라 1:1 복제).
+//! - `redact(why).count == 0`(비공개 `apRedact`, Draft.swift)은 전체 규칙을 옮긴 `rules::meta::redact` 를 돌려 쓴다(R-Redact-a) —
+//!   옛 draft.rs 복제는 지웠고, 맞은 수는 반환 값의 `.1` 로 본다.
 //! - `trimmingCharacters(in: .whitespacesAndNewlines)` 은 `str::trim()` (같은 글자 묶음, draft.rs 전례), `.whitespaces` 는 이 파일의 `trim_ws` 다.
 
 use std::collections::{HashMap, HashSet};
@@ -38,7 +39,7 @@ use serde_json::{json, Map, Value};
 
 use crate::rules::draft::{draft_prompt, DRAFT_HEAD_LINE, DraftFiles, DraftInput, DraftOption, DraftedUnit};
 use crate::rules::formats::grapheme_len;
-use crate::rules::meta::has_tag;
+use crate::rules::meta::{has_tag, redact};
 pub use crate::rules::path_key::path_key;
 use crate::rules::scenarios::{scenario_path_ok, Criterion, JudgeOutcome, JudgeStep, ScenarioKind, StepResult};
 
@@ -1142,45 +1143,6 @@ fn option_list(o: &Map<String, Value>, key: &str) -> Vec<DraftOption> {
     }
 }
 
-// `apRedact` 의 최소판 — draft.rs 의 비공개 함수(`fn redact`, Draft.swift `apRedact`)를 그대로 떼어 온다(`use` 가 안 되는 private 이라 1:1 복제,
-// draft.rs:578–613). Meta 이식 후 그쪽을 돌려 쓴다. (가린 수만 필요 — 지시 검사는 맞은 수만 본다)
-fn redact(s: &str) -> usize {
-    let b = s.to_ascii_lowercase().into_bytes();
-    let is_word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
-    let mut count = 0;
-    let mut i = 0;
-    while i < b.len() {
-        let word = if b[i..].starts_with(b"bearer") {
-            6
-        } else if b[i..].starts_with(b"basic") {
-            5
-        } else {
-            i += 1;
-            continue;
-        };
-        // 단어 경계(\b): 토큰 앞 글자가 낱말 글자가 아니어야 한다
-        if i > 0 && is_word(b[i - 1]) {
-            i += word;
-            continue;
-        }
-        let mut value = i + word;
-        while value < b.len() && b[value].is_ascii_whitespace() {
-            value += 1;
-        }
-        let run = b[value..]
-            .iter()
-            .take_while(|&&c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'~' | b'+' | b'/' | b'=' | b'-'))
-            .count();
-        if value > i + word && run >= 16 {
-            count += 1;
-            i = value + run;
-        } else {
-            i += word;
-        }
-    }
-    count
-}
-
 /// findings.json 한 지적의 꼴 예시(세션 글 안 문장에 붙는 것). 원본은 `apCriticPrompt` 문장 내부에 둔다
 pub const CRITIC_FINDING_EXAMPLE: &str = r#"   {"id":"f1","unit":"u1","criterion":"AC-1","judge":"<시나리오 경로 그대로 또는 check>","kind":"counterexample|unverifiable|interpretation","why":"무엇이 틀렸는지 한 줄(300자까지)",
     "files":["반례 파일의 작업 폴더 기준 상대 경로"],"readings":[{"key":"a","label":"한 가지 읽기"},{"key":"b","label":"다른 읽기"}],"recommended":"a"}
@@ -1322,7 +1284,7 @@ pub fn critic_parse(files: &dyn DraftFiles, units: &[CriticUnit], targets: &Hash
             continue;
         };
         let why = opt_string(o, "why").unwrap_or_default().trim().to_string();
-        if why.is_empty() || grapheme_len(&why) > 300 || has_tag(&why) || redact(&why) != 0 {
+        if why.is_empty() || grapheme_len(&why) > 300 || has_tag(&why) || redact(&why).1 != 0 {
             problems.push(format!("지적 {id} 의 why 는 300자까지의 글(태그·비밀 꼴 없음)입니다"));
             continue;
         }

@@ -10,7 +10,7 @@
 //! 뒤 구간(154~544줄): `DraftLimit`(APDraftLimit) · `DRAFT_KINDS`(apDraftKinds) · `DRAFT_UNIT_KEYS`(apDraftUnitKeys) · `DRAFT_WIDENING_KEYS`(apDraftWideningKeys) ·
 //! `unit_id_ok`(apDraftUnitIdPattern) · `file_name_ok`(apDraftFileNamePattern) · `SCENARIO_ROOT`(apScenarioRoot) · `scenario_path`(apScenarioPath) ·
 //! `DraftScenario`(APDraftScenario) · `DraftedUnit`(APDraftedUnit) · `DraftOption`(APDraftOption) · `DraftCard`(APDraftCard) · `SpecCounts`(APSpecCounts) ·
-//! `DraftCheck`(APDraftCheck) · `json_array`(Swift 원본의 지역 함수 `jsonArray`) · `redact`(직접 쓴 최소판, 아래 달라진 점) ·
+//! `DraftCheck`(APDraftCheck) · `json_array`(Swift 원본의 지역 함수 `jsonArray`) ·
 //! `plain_text`·`secret_in`(원본은 검사마다 지역 함수 `plainText`·`secretIn` 으로 problems 를 캡처해 붙인다 — 인자 하나로 묶어 둔다) ·
 //! `req_id_of`·`ac_head_of`(명세 줄 꼴 손판 — 원본은 NSRegularExpression `^R-[0-9]{1,3}:`·`^AC-[0-9]{1,3}( \([^)]*\))?:`) · `parse_spec`(apParseSpec) ·
 //! `draft_unit_parse`(apDraftUnitParse) · `draft_card_parse`(apDraftCardParse) ·
@@ -29,8 +29,8 @@
 //! - 금지 줄(원본 `apForbiddenLines`)은 `rules::harness` 의 `forbidden_lines` 로 이미 이식돼 있다. 원본에선 Draft 에 있어 이식 계획이 그쪽이었으나,
 //!   하네스 자체의 지시 글 판정(`instruction_clean`)이 같은 것을 같이 쓰고, 줄 꼴의 정규식 상자(`Pattern`)가 harness.rs 안에만 있어 그 자리를 공개(pub)해 돌려 쓴다.
 //!   Swift `prefix(20)`·`prefix(40)`·`prefix(160)`·`prefix(500)` 처럼 끊는 길이는 모두 `rules::harness` 의 `cut_chars`(얼굴 글자 계산)로 옮겼다.
-//! - 비밀 꼴 가리기(원본은 `apRedact`(Meta.swift)의 17개 규칙 중 규칙 16「Bearer·basic 토큰」을 `apSecretIn` 에서 쓴다)은 그 최소판을 직접 짰다 —
-//!   Meta.swift 의 `apRedact` 전체는 아직 이식 안 된 이웃 자리라 17개 규칙 전체를 여기 복사하지 않고, 초안 검사가 실제로 쓰는 규칙 16만 옮겼다. Meta 이식 후 그쪽을 돌려 쓴다.
+//! - 비밀 꼴 가리기(원본은 `apRedact`(Meta.swift)의 규칙 16「Bearer·basic 토큰」을 `apSecretIn` 에서 쓴다)은 전체 규칙을 옮긴
+//!   `rules::meta::redact` 를 돌려 쓴다(R-Redact-a) — 옛 최소판(Bearer·basic 만)은 지웠고, 맞은 수는 반환 값의 `.1` 로 본다.
 //! - `o.keys.sorted()` 같은 사전 순회는 Rust 에서도 정렬해 모은다(preserve_order 라 삽입 순서라서). 집합 차감(`present.subtracting`)도 정렬해 모은다(Swift `Set` 는 순서 없어
 //!   원본은 `sorted()` 를 다시 붙였지만, Rust 에선 차감과 잣대를 같은 자리에서 정렬한다).
 //! - Swift `NSNumber` 로 받는 `est_min`·`check_ports` 는 `as_f64`·`as_i64` 로 옮겼다. Swift 는 숫자 꼴 문자열·bool 까지 NSNumber 로 풀리는 폭이 있지만
@@ -42,7 +42,7 @@ use crate::rules::formats::grapheme_len;
 use crate::rules::harness::{
     cut_chars, forbidden_lines, harness_missing, instruction_clean, HarnessPoint, HARNESS_POINT_MAX,
 };
-use crate::rules::meta::has_tag;
+use crate::rules::meta::{has_tag, redact};
 use crate::rules::scenarios::{
     criterion_json, parse_criteria, scenario_json, scenario_path_ok, Criterion, Scenario, ScenarioKind,
     CRITERION_DROP, CRITERION_MODEL_JUDGE,
@@ -572,50 +572,10 @@ fn object_array(v: Option<&Value>) -> Option<Vec<Map<String, Value>>> {
     arr.iter().map(|x| x.as_object().cloned()).collect::<Option<Vec<Map<String, Value>>>>()
 }
 
-// 비밀 꼴 가리기의 최소판 — Meta.swift `apRedact`(17개 규칙) 가운데 이 검사가 쓰는 규칙 16
-// (Bearer·basic 토큰 `(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{16,}` — 꼴 바로 뒤에 "[가림" 표가 있으면 이미 가려진 것)만 손으로 옮겼다.
-// Meta 이식 후 그쪽을 돌려 쓴다. 원본은 (가린 글, 맞은 수)를 돌려주지만 secretIn·지시 검사는 맞은 수만 본다.
-// 빈칸(\s)은 ASCII 여백만, 대소문자 접기도 ASCII 만이라 원본(ICU 유니코드)과 미묘하게 좁다 — 쓰인 꼴엔 영향이 없다.
-fn redact(s: &str) -> usize {
-    let b = s.to_ascii_lowercase().into_bytes();
-    let is_word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
-    let mut count = 0;
-    let mut i = 0;
-    while i < b.len() {
-        let word = if b[i..].starts_with(b"bearer") {
-            6
-        } else if b[i..].starts_with(b"basic") {
-            5
-        } else {
-            i += 1;
-            continue;
-        };
-        // 단어 경계(\b): 토큰 앞 글자가 낱말 글자가 아니어야 한다
-        if i > 0 && is_word(b[i - 1]) {
-            i += word;
-            continue;
-        }
-        let mut value = i + word;
-        while value < b.len() && b[value].is_ascii_whitespace() {
-            value += 1;
-        }
-        let run = b[value..]
-            .iter()
-            .take_while(|&&c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'~' | b'+' | b'/' | b'=' | b'-'))
-            .count();
-        if value > i + word && run >= 16 {
-            count += 1;
-            i = value + run;
-        } else {
-            i += word;
-        }
-    }
-    count
-}
-
 // 값에 비밀 꼴이 있으면 문제 더하기(원본 `secretIn`, 문구는 "\(where_) 에 비밀 꼴(토큰·키 등)이 있습니다")
+// 전체 규칙 가리기는 `rules::meta::redact`(`apRedact`)가 한다(R-Redact-a) — 문제 판정은 맞은 수(`.1`)만 본다.
 fn secret_in(s: &str, where_: &str, problems: &mut Vec<String>) {
-    if redact(s) > 0 {
+    if redact(s).1 > 0 {
         problems.push(format!("{where_} 에 비밀 꼴(토큰·키 등)이 있습니다"));
     }
 }
@@ -971,7 +931,7 @@ pub fn instruction_check(t: &str, harness: &[HarnessPoint]) -> (String, Vec<Stri
     if has_tag(t) {
         problems.push("자율주행 지시(autopilot.md)에 HTML 태그가 있습니다".to_string());
     }
-    if redact(t) > 0 {
+    if redact(t).1 > 0 {
         problems.push("자율주행 지시(autopilot.md)에 비밀 꼴(토큰·키 등)이 있습니다".to_string());
     }
     let first = t
