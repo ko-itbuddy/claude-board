@@ -1839,12 +1839,32 @@ fn confluence_id_key_ok(id: &str) -> bool {
     (1..=20).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_digit())
 }
 
-/// Notion id 꼴 — 32자리 16진수, 붙임표(-)는 있어도 없어도. 원본: `apMatch(id, apNotionIDPattern)`
+/// Notion id 꼴 — 8-4-4-4-12 자리 16진수, 붙임표(-)는 그 네 경계마다 있어도 없어도. 원본: `apNotionIDPattern`(Outbox.swift 41 줄:
+/// `^[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}$`)
 fn notion_id_key_ok(id: &str) -> bool {
+    /// 붙임표가 허용되는 자리(붙임표를 지운 꼴에서의 글자 수) — 여덟·열두·열여섯·스물
+    fn boundary_ok(seen: usize) -> bool {
+        matches!(seen, 8 | 12 | 16 | 20)
+    }
     let hex = id.replace('-', "");
-    id.len() == hex.len() + 4
-        && (id.len() == 36 || id.len() == 32)
-        && hex.bytes().all(|b| b.is_ascii_hexdigit())
+    if hex.len() != 32 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return false;
+    }
+    let mut seen = 0usize;
+    let mut prev_dash = false;
+    for c in id.bytes() {
+        if c == b'-' {
+            // 붙임표는 경계마다 하나까지 — `-?` 이므로 연달아 나오거나 경계 밖이면 틀린 꼴이다
+            if prev_dash || !boundary_ok(seen) {
+                return false;
+            }
+            prev_dash = true;
+        } else {
+            prev_dash = false;
+            seen += 1;
+        }
+    }
+    true
 }
 
 /// 받은 곳 주소 — 응답의 주소 칸은 믿지 않고 사이트와 id 로 만든다. Notion 은 정한 API 주소면 notion.so, 시험 빌드의 가짜 서버면 그 서버 아래. 원본: `apRemoteURL`

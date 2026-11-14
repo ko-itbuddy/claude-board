@@ -1,12 +1,11 @@
-//! (청크 Outbox a/2 — 원본 1~355줄. PORTED.json 항목은 마지막 청크가 더한다)
-//! 자율주행 규칙(AutopilotRules) — 올릴 글(outbox)과 게시 방식(4단계 ⑩-1, 2026-10-30, 설계 5장 2절 outbox/·5장 6절).
+//! 자율주행 올릴 글(outbox)과 게시 방식(4단계 ⑩-1, 2026-10-30, 설계 5장 2절 outbox/·5장 6절) — 원본 1~678줄 전체(청크 a + b).
 //! 엔진이 단위 판정 뒤(Jira 댓글)·끝 정리 때(보고서)에 실행 폴더 outbox/<글 id>.json 으로 글을 만들고, 게시 방식이 "자동으로 올림"이면 바로 올린다.
 //! "검수 뒤 올림"(기본)이면 글은 기다리고, 보드 검수 화면에서 사람이 누를 때만 올린다(보드는 앱 안 엔진의 outbox 명령을 부른다).
 //! 여기에는 순수한 것만 둔다: 게시 설정 읽기, 어떤 글을 만들지, 글 본문(APDoc), 파일 꼴, 올릴지 판정, 요청 꼴과 응답 해석, 429 다시 보내기,
 //! 그리고 포트(APOutboxStore·APHTTP·APSecrets·APClock·APWaiter)로만 바깥을 부르는 올리기 유스케이스 apPostItem.
 //! 다시 눌러도 하나만 생기게: 요청을 보내기 전에 글을 "올리는 중"(posting)으로 쓰고, 단계마다 받은 곳 id 를 바로 적고, 끝나면 "올림"(posted).
 //! 잠금 안에서 posting 을 보면 앞 올리기가 끝나지 못하고 죽은 것이라 "확인 필요"(uncertain)로 바꾸고, 그 글은 자동으로 다시 올리지 않는다
-//! (판정·올리기와 그 시험은 끝의 `decide_`·`post_` — R-Outbox-b 가 옮긴다).
+//! (판정·올리기와 그 시험도 파일 끝에 있다).
 //!
 //! 이식 선언(원본 순서): `PublishMode`(APPublishMode, notify_rules 최소 이식을 `use`) · `TargetService`(APTargetService, tickets `use`) ·
 //! `OutboxTarget`(APOutboxTarget, tickets) · `Publish`(APPublish)·`makes_any` · `space_key_ok`·`confluence_id_ok`·`notion_id_ok`
@@ -15,12 +14,20 @@
 //! 글: `OutboxState`(APOutboxState, notify_rules) · `Attempt`(APAttempt)·`Remote`(APRemote)·`OutboxItem`(APOutboxItem, tickets) ·
 //! `OUTBOX_FORMAT`·`OUTBOX_MAX_BYTES`·`outbox_id_ok`·`outbox_json`·`outbox_data`·`outbox_parse`(tickets, 원본 183–249줄) ·
 //! `unit_status_label`(apUnitStatusLabel) · 비공개 `status_label`·`usd_text`·`day` · `report_doc`(apReportDoc) ·
-//! `comment_doc`(apCommentDoc) · 비공개 `comment_states` · `unit_outbox`(apUnitOutbox) · `run_outbox`(apRunOutbox).
+//! `comment_doc`(apCommentDoc) · 비공개 `comment_states` · `unit_outbox`(apUnitOutbox) · `run_outbox`(apRunOutbox) ·
+//! 판정·다시 보내기(356–435 줄, tickets.rs 가 옮긴 것을 `pub use` 로 내놓는다): `PostTrigger`(APPostTrigger)·`PostDecision`(APPostDecision)·
+//! `post_decide`(apPostDecide) · `RETRY_MAX`·`RETRY_WAIT_MAX`(apRetryMax·apRetryWaitMax)·`retry_wait`(apRetryWait) ·
+//! `transient`(apTransient)·`fail_note`(apFailNote) · 요청 꼴(437–496 줄, tickets.rs): `jira_comment_request`(apJiraCommentRequest)·
+//! `confluence_page_request`(apConfluencePageRequest)·`confluence_attachment_request`(apConfluenceAttachmentRequest)·
+//! `notion_page_request`(apNotionPageRequest)·`notion_append_request`(apNotionAppendRequest)·`created_id`(apCreatedID)·`remote_url`(apRemoteURL) ·
+//! 응답 꼴 `PostResult`(APPostResult) · 포트 `OutboxStore`(APOutboxStore)·유스케이스 `post_item`(apPostItem) ·
+//! 새로 옮긴 것(634–678 줄): `mark_item`(apMarkItem)·`create_items`(apCreateItems)·`outbox_state_label`(apOutboxStateLabel)·`outbox_counts`(apOutboxCounts).
 //!
 //! 차이(원본 대비, 이 포트의 자리):
 //! - 임시 슬라이스 재사용: 원본 12–41·92–113·141–188줄의 값 꼴과 파일 꼴(`APTargetService`·`APOutboxTarget`·`APOutboxState`·`APAttempt`·
 //!   `APRemote`·`APOutboxItem`·`apOutboxFormat`·`apOutboxMaxBytes`·`apOutboxIDOK`·`apOutboxJSON`·`apOutboxData`·`apOutboxParse`·
-//!   `apTargetConnection`·`apItemLabel`·`apTargetLabel`)은 tickets.rs 가 이미 같은 원본에서 옮겼다 — 여기서 `use` 로 쓴다(전체 이식 뒤 하나로 모은다).
+//!   `apTargetConnection`·`apItemLabel`·`apTargetLabel`)은 tickets.rs 가 이미 같은 원본에서 옮겼다 — 판정·올리기 356–632 줄도 그렇다.
+//!   그 자리를 하나로 모은 것은 이 파일이다: tickets.rs 것을 `pub use` 로 내놓아 `rules::outbox` 가 이 원본의 공개 자리다(아래 슬라이스 참고).
 //!   `APPublishMode`·`APOutboxState` 는 notify_rules.rs 의 최소 이식을 `use` 로 쓴다. 정규식 `apIssueKeyPattern` 은 tickets.rs 의 `issue_key_ok`.
 //! - 정규식은 판별자로: `apSpaceKeyPattern`·`apConfluenceIDPattern`·`apNotionIDPattern` 세 꼴은 정규식 없이 비공개 `space_key_ok`·
 //!   `confluence_id_ok`·`notion_id_ok` 로 옮겼다(lookaround 없어도 본문이 길어 정규식 크레이트를 더하지 않는다).
@@ -29,6 +36,8 @@
 //! - 시간대: Foundation `TimeZone` 대신 `rules::stopline::Tz`(Utc·Local). `day` 는 원본 `day(ts, "M월 d일 HH:mm", tz)` 하나만 쓰므로
 //!   `stopline::when_text` 로 그린다(엔진 `apWhenText` 와 같은 꼴).
 //! - `APPublish` 의 `makesAny` 는 메서드 `makes_any` 로.
+//! - 포트 `APOutboxStore` 의 `ids()`(Ports.swift 121줄)는 tickets.rs 가 trait 에서 뺀 결정(이 규칙 크레이트의 쓰는 곳이 없다 — 부르는 곳은
+//!   엔진 명령 어댑터 main.swift 쪽)을 잇는다: 시험의 MemOutbox 같은 저장소가 각자 필요하면 보통 메서드로 둔다.
 
 use std::collections::HashSet;
 
@@ -41,12 +50,15 @@ use crate::rules::stopline::{when_text, Tz};
 
 // MARK: - 게시 설정(프로젝트 설정 publish 칸 → run.json publish → 고정 설정)
 
-/// 임시 슬라이스 — tickets.rs · notify_rules.rs 가 원본 Outbox.swift 12–41·92–113·141–249줄을 이미 옮겼다(위 파일 머리의 차이 참고).
-/// Outbox 전체 이식(R-Outbox-b) 뒤 하나로 모은다.
+/// 슬라이스 — tickets.rs · notify_rules.rs 가 원본 Outbox.swift 12–249·356–632 줄을 이미 옮겼다(위 파일 머리의 차이 참고).
+/// `pub use` 로 내놓아 이 원본의 공개 자리는 한 곳(rules::outbox)이다.
 pub use crate::rules::notify_rules::{OutboxState, PublishMode};
+use crate::rules::notify_rules::NoticeClock;
 pub use crate::rules::tickets::{
-    issue_key_ok, item_label, outbox_data, outbox_id_ok, outbox_json, outbox_parse, target_connection, target_label, Attempt,
-    OutboxItem, OutboxTarget, Remote, TargetService, OUTBOX_FORMAT, OUTBOX_MAX_BYTES,
+    confluence_attachment_request, confluence_page_request, created_id, fail_note, issue_key_ok, item_label, jira_comment_request,
+    notion_append_request, notion_page_request, outbox_data, outbox_id_ok, outbox_json, outbox_parse, post_decide, post_item,
+    remote_url, retry_wait, target_connection, target_label, transient, Attempt, OutboxItem, OutboxTarget, PostDecision, PostResult,
+    PostTrigger, Remote, TargetService, RETRY_MAX, RETRY_WAIT_MAX, OUTBOX_FORMAT, OUTBOX_MAX_BYTES, OutboxStore,
 };
 
 /// 게시 설정 — 프로젝트 설정 `publish` 칸 → run.json `publish` → 고정 설정. 원본: `Outbox.swift` 의 `APPublish`
@@ -474,4 +486,92 @@ pub fn run_outbox(r: &ReportRun, publish: &Publish, requester: &str, has_report:
     vec![it]
 }
 
-// R-Outbox-b 가 여기서 이어 쓴다
+// MARK: - 상태 바꾸기와 검수 화면
+
+/// 사람이 고른 상태 바꾸기(올리지 않기·나중에) — 잠금 안에서, 올린 글·올리는 중인 글은 바꾸지 않는다. 원본: `apMarkItem`
+pub fn mark_item(id: &str, what: &str, store: &dyn OutboxStore, clock: &dyn NoticeClock) -> PostResult {
+    let r = store.with_lock(id, &mut || {
+        let Some(mut it) = store.read(id) else {
+            return PostResult { note: "글을 찾지 못했습니다".to_string(), ..PostResult::default() };
+        };
+        if it.state == OutboxState::Posted || it.state == OutboxState::Posting {
+            let note = if it.state == OutboxState::Posted { "이미 올렸습니다" } else { "올리는 중입니다" };
+            return PostResult { item: Some(it), note: note.to_string(), ..PostResult::default() };
+        }
+        let t = clock.now();
+        let note = match what {
+            "skip" => {
+                it.state = OutboxState::Skipped;
+                it.later = None;
+                it.last = Some(Attempt { at: t, what: "skipped".to_string(), code: 0, note: "올리지 않기(로컬에만)".to_string() });
+                "올리지 않기(로컬에만)"
+            }
+            "later" => {
+                it.later = Some(t);
+                it.last = Some(Attempt { at: t, what: "later".to_string(), code: 0, note: "나중에(목록에 남김, 자동으로 올리지 않음)".to_string() });
+                "나중에(목록에 남김, 자동으로 올리지 않음)"
+            }
+            "unskip" => {
+                if it.state == OutboxState::Skipped {
+                    it.state = OutboxState::Waiting;
+                }
+                it.last = Some(Attempt { at: t, what: "waiting".to_string(), code: 0, note: "다시 기다림".to_string() });
+                "다시 기다림"
+            }
+            _ => return PostResult { item: Some(it), note: "모르는 바꾸기입니다".to_string(), ..PostResult::default() },
+        };
+        it.updated = t;
+        store.write(&it);
+        PostResult { item: Some(it), note: note.to_string(), ..PostResult::default() }
+    });
+    r.unwrap_or(PostResult {
+        item: store.read(id),
+        note: "다른 곳에서 이 글을 올리는 중입니다".to_string(),
+        busy: true,
+        ..PostResult::default()
+    })
+}
+
+/// 글 만들기 — 같은 id 가 있으면 두지 않는다(다시 떠서 끝 정리를 다시 해도 하나). 원본: `apCreateItems`
+pub fn create_items(items: Vec<OutboxItem>, store: &dyn OutboxStore) -> Vec<String> {
+    items.into_iter().filter(|it| store.create(it)).map(|it| it.id).collect()
+}
+
+/// 검수 화면 한 줄 상태. 원본: `apOutboxStateLabel`
+pub fn outbox_state_label(it: &OutboxItem) -> String {
+    match it.state {
+        OutboxState::Waiting => {
+            if it.later.is_some() {
+                "나중에".to_string()
+            } else if it.mode == PublishMode::Review {
+                "검수 기다림".to_string()
+            } else if it.last.as_ref().is_some_and(|l| l.what == "held") {
+                "올리지 못함(요청 0)".to_string()
+            } else {
+                "올리기 기다림".to_string()
+            }
+        }
+        OutboxState::Posting => "올리는 중".to_string(),
+        OutboxState::Posted => "올림".to_string(),
+        OutboxState::Skipped => "올리지 않음(로컬에만)".to_string(),
+        OutboxState::Failed => "올리지 못함".to_string(),
+        OutboxState::Uncertain => "확인 필요".to_string(),
+    }
+}
+
+/// "모두 올리기" 확인 글의 수 — 받을 곳 종류마다. 원본: `apOutboxCounts`
+pub fn outbox_counts(items: &[OutboxItem]) -> String {
+    let order = [(TargetService::Jira, "Jira 댓글"), (TargetService::Confluence, "Confluence"), (TargetService::Notion, "Notion")];
+    let tickets = items.iter().filter(|it| it.kind == "ticket").count();
+    let mut out: Vec<String> = Vec::new();
+    if tickets > 0 {
+        out.push(format!("Jira 티켓 {tickets}"));
+    }
+    for (service, name) in order {
+        let n = items.iter().filter(|it| it.target.service == service && it.kind != "ticket").count();
+        if n > 0 {
+            out.push(format!("{name} {n}"));
+        }
+    }
+    out.join(" · ")
+}
