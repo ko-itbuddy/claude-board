@@ -1,17 +1,41 @@
-//! (청크 Import a/3 — 원본 1~199줄. PORTED.json 항목은 마지막 청크가 더한다)
+//! (청크 Import a+b/3 — 원본 1~597줄. PORTED.json 항목은 마지막 청크가 더한다)
 //! 자율주행 가져오기(7단계 ⑫-7a, 2026-10-30, 설계 2장 "목록으로 이어 가기: 원천과 차례"). 원본: `Sources/AutopilotRules/Import.swift`.
 //! 원천 셋(저장소 할 일 문서·바깥 목록·옛 자동화 옮기기)을 같은 꼴의 항목(원천 항목 키·제목·본문·상태·원천 자리)으로 모으고,
 //! 원천 항목 키로 이미 끝난 것·진행 중인 것을 기록 저장소와 바깥 상태로 가린 뒤(apImportDecide), 남은 항목을 가져오기 세션(⑪-2 초안 세션 꼴)이
 //! 단위 초안으로 쓰고, 그 결과를 기계로 본다(apImportCheck). 같은 항목이 다시 오면 새 단위를 만들지 않고 대기열의 그 줄(정의)을 잇는다.
-//! 바깥(파일 읽기·HTTP·기록 저장소·시각)은 어댑터 몫이고, 여기는 값만 받는다. 이 청크는 원천과 항목·저장소 할 일 문서(MARK 두 절)다.
-//! 이어 쓰기: 바깥 목록은 200줄(MARK `바깥 목록`)부터 R-Import-b, 가리기와 세션은 598줄부터 R-Import-c.
+//! 바깥(파일 읽기·HTTP·기록 저장소·시각)은 어댑터 몫이고, 여기는 값만 받는다. 이 청크(b)는 바깥 목록(MARK `바깥 목록` — 질의 꼴·요청 꼴·Jira·Notion
+//! 항목·읽기 유스케이스)과 옛 자동화 옮기기(MARK 세 절)를 더했다.
+//! 이어 쓰기: 가리기와 세션은 598줄(MARK `이미 끝난 것·진행 중인 것 가리기와 이어 가기`)부터 R-Import-c 가 이어 쓴다.
+//!
+//! Swift ↔ Rust 로 달라진 점:
+//! - `[String: Any]` 는 `serde_json::Map<String, Value>`, 값은 `Value`. `s_`·`d_`·`a_`(숫자·개체·배열 꾸러미)와 NSNumber 꼴은
+//!   reading.rs 의 `sv`·`number_string`(정수는 그대로, 정수 값 실수는 정수 꼴 — 10²¹ 지수 표기가 Swift `e+21` 대신 `e21` 로 나오는 차이 기록)을 같은 판으로 둔다.
+//! - 정규식 넷(에픽 키(Outbox 의 apIssueKeyPattern — `tickets::issue_key_ok` 을 쓴다)·필터 번호 `/[0-9]{1,12}/`·`/filters/` 경로·Notion 질의 주소의 UUID)은
+//!   손으로 옮긴 판별자다. ICU 의 `$` 는 끝의 줄바꿈 하나 앞에서도 맞지만 여기는 받지 않는다(reading.rs 도 같다 — 더 엄격).
+//! - `URLComponents(string:)` 는 `connections.rs` 의 `parse_url` 을 먼저 쓰고, parse_url 이 받지 않는 극단(비 ASCII 경로 등)만 손으로 뜯는
+//!   비공개 `link_parts` 로 읽는다. Foundation 은 여유로워 그런 주소도 받는다. 포트 범위 밖 같은 극단도 여기는 주소로 보나, 견범 입력은 전부 parse_url 로
+//!   통과해 차이가 실리지 않는다. scheme 없는 참조(`notion.so/…?v=1`)는 Foundation 처럼 path 를 내므로 질의를 떼고 찾는다.
+//! - `now: Date`·`tz: TimeZone` 은 `now: f64`(유닛 초)·`tz: stopline::Tz` 로 바꿨다(reading.rs 와 같은 바꿈 — 시험은 `Tz::Utc`).
+//! - `JSONSerialization(.sortedKeys)` 는 `BTreeMap` 직렬화(이름 순)로 바꿨다.
+//! - `apADFChunks`·`apReadFailNote` 는 reading.rs 의 공개 `adf_chunks`·`read_fail_note` 를 쓴다(`apChunks` 는 여기 `adf_chunks_of`).
+//! - 근거 묶음에 넣는 문 `apAddEvidence` 는 아직 이식 전이라(evidence.rs) 이 청크 스코프 밖이다 — 묶음 시험도 그 절을 뺀다.
 
-use std::collections::HashMap;
+use serde_json::{Map, Value};
+use std::collections::{BTreeMap, HashMap};
+use std::sync::OnceLock;
 
+use crate::rules::connections::{
+    auth_for, auth_header, parse_url, same_site, service_base, Auth, AuthHeader, ConnHttp, ConnSecrets, Connection, HttpRequest,
+    HttpResponse, Service, NOTION_VERSION,
+};
 use crate::rules::formats::grapheme_len;
 use crate::rules::harness::fnv64_data;
-use crate::rules::meta::MetaField;
+use crate::rules::meta::{limit, meta_clamp, meta_url, Meta, MetaField, MetaLink, Section, TextChunk};
+use crate::rules::notify_rules::{NoticeClock, NoticeWaiter};
+use crate::rules::reading::{adf_chunks, notion_id, read_blocker, read_fail_note};
 use crate::rules::scenarios::scenario_path_ok;
+use crate::rules::stopline::Tz;
+use crate::rules::tickets::{issue_key_ok, retry_wait};
 
 // MARK: - 원천과 항목
 
@@ -491,6 +515,991 @@ pub fn todo_items(text: &str, path: &str, section: Option<&str>) -> Vec<ImportIt
     list_items(text, path, section, "todo:", "todo")
 }
 
-// R-Import-b 가 여기서 이어 쓴다
+// MARK: - 바깥 목록(Jira 필터·에픽·JQL, Notion 데이터베이스)
+
+/// 원본: `APListQuery`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListQuery {
+    JiraFilter(String),
+    JiraEpic(String),
+    JiraJql(String),
+    NotionDb(String),
+    Bad(String),
+}
+
+impl ListQuery {
+    /// 원본 `label`
+    pub fn label(&self) -> String {
+        match self {
+            ListQuery::JiraFilter(f) => format!("Jira 필터 {f}"),
+            ListQuery::JiraEpic(k) => format!("Jira 에픽 {k}"),
+            ListQuery::JiraJql(q) => {
+                if grapheme_len(q) > 60 {
+                    format!("Jira 검색 {}…", grapheme_prefix(q, 59))
+                } else {
+                    format!("Jira 검색 {q}")
+                }
+            }
+            ListQuery::NotionDb(id) => format!("Notion 데이터베이스 {}", grapheme_prefix(id, 8)),
+            ListQuery::Bad(why) => why.clone(),
+        }
+    }
+
+    /// 원본 `service`
+    pub fn service(&self) -> Option<Service> {
+        match self {
+            ListQuery::JiraFilter(_) | ListQuery::JiraEpic(_) | ListQuery::JiraJql(_) => Some(Service::Atlassian),
+            ListQuery::NotionDb(_) => Some(Service::Notion),
+            ListQuery::Bad(_) => None,
+        }
+    }
+
+    /// 원본 `jql`
+    pub fn jql(&self) -> Option<String> {
+        match self {
+            ListQuery::JiraFilter(f) => Some(format!("filter = {f}")),
+            ListQuery::JiraEpic(k) => Some(format!("parent = {k} ORDER BY created ASC")),
+            ListQuery::JiraJql(q) => Some(q.clone()),
+            _ => None,
+        }
+    }
+}
+
+/// `URLComponents(string:)` 의 좁은 범 — 스킴 유무·경로·물음표 뒤 글만 옮겨 둔다. 원본은 URLComponents 를 곧바로 쓰나,
+/// parse_url 이 못 받는 극단(비 ASCII 경로 등)까지 Foundation 처럼 보려 맨손 뜯기를 뒤에 붙였다(머리 기록 참조)
+#[derive(Debug, Clone)]
+struct Link {
+    scheme: bool,
+    path: String,
+    query: Option<String>,
+}
+
+/// parse_url 이 받지 못한 주소를 맨손으로 자른다 — Foundation 은 여유로워 공백 없는 주소를 대부분 받는다(원본: `URLComponents(string:)`)
+fn link_parts(s: &str) -> Option<Link> {
+    if let Some(u) = parse_url(s) {
+        return Some(Link { scheme: u.scheme.is_some(), path: u.path, query: u.query });
+    }
+    // 공백·탭·줄바꿈·아스키 제어 문자는 URLComponents 도 받지 않는 극단
+    if s.bytes().any(|b| b <= 0x20) {
+        return None;
+    }
+    let (has_scheme, hierarchy) = match s.split_once(':') {
+        Some((a, rest)) => {
+            if a.is_empty() || !a.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'-' | b'.')) {
+                return None;
+            }
+            (true, rest.strip_prefix("//").unwrap_or(rest))
+        }
+        None => (false, s),
+    };
+    let no_fragment = hierarchy.split('#').next().unwrap_or("");
+    let (path_part, query) = match no_fragment.split_once('?') {
+        Some((p, q)) => (p, Some(q.to_string())),
+        None => (no_fragment, None),
+    };
+    // 스킴이 있으면 권한 뒤의 경로는 맨 앞의 `/` 를 유지하고, 참조 주소는 전체가 경로다(Foundation 과 같다)
+    let path = if has_scheme {
+        path_part.find('/').map_or(String::new(), |i| pct_decode(&path_part[i..]))
+    } else {
+        pct_decode(path_part)
+    };
+    Some(Link { scheme: has_scheme, path, query })
+}
+
+/// `/[0-9]{1,12}/` 전체 맞음 — ICU 의 `$` 는 끝의 줄바꿈 하나 앞에서도 맞지만 받지 않는다(reading.rs 도 같다 — 더 엄격)
+fn filter_no_ok(s: &str) -> bool {
+    (1..=12).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// 경로의 가장 왼쪽 `/filters/<1~12자리 숫자>` — 숫자 부분만. 정규식 `range(of:)` 와 같이 왼쪽부터 찾고, 12자를 넘는 숫자는 12자까지
+fn filters_in_path(path: &str) -> Option<String> {
+    let needle = "/filters/";
+    let mut from = path;
+    loop {
+        let i = from.find(needle)?;
+        let after = &from[i + needle.len()..];
+        if after.as_bytes().first().is_some_and(|b| b.is_ascii_digit()) {
+            let n = after.bytes().take_while(|b| b.is_ascii_digit()).count().min(12);
+            return Some(after[..n].to_string());
+        }
+        from = &from[i + 1..];
+    }
+}
+
+/// 사람이 넣은 글 하나 → 무엇을 읽을지. Jira: 에픽 키(SHOP-10) · 필터 번호(10001) · 필터 주소(…filter=10001) · JQL(500자까지, 한 줄).
+/// Notion: 데이터베이스 주소나 32자리 id. 원본: `apListQuery`
+pub fn list_query(raw: &str, service: Service) -> ListQuery {
+    let s = raw.trim_matches(is_ws_or_nl);
+    if s.is_empty() {
+        return ListQuery::Bad("읽을 목록을 넣어 주세요".to_string());
+    }
+    if s.contains('\n') || grapheme_len(s) > 500 {
+        return ListQuery::Bad("한 줄, 500자까지 넣습니다".to_string());
+    }
+    match service {
+        Service::Notion => {
+            let cand = link_parts(s).map(|l| l.path).unwrap_or_else(|| s.to_string());
+            match notion_id(&cand).or_else(|| notion_id(s)) {
+                Some(id) => ListQuery::NotionDb(id),
+                None => ListQuery::Bad("Notion 데이터베이스 주소나 32자리 id 가 아닙니다".to_string()),
+            }
+        }
+        Service::Atlassian => {
+            if issue_key_ok(s) {
+                return ListQuery::JiraEpic(s.to_string());
+            }
+            if filter_no_ok(s) {
+                return ListQuery::JiraFilter(s.to_string());
+            }
+            if let Some(c) = link_parts(s) {
+                if c.scheme {
+                    if let Some(q) = &c.query {
+                        if let Some((_, Some(v))) = query_items(q).into_iter().find(|(n, _)| n == "filter") {
+                            if filter_no_ok(&v) {
+                                return ListQuery::JiraFilter(v.clone());
+                            }
+                        }
+                    }
+                    if let Some(f) = filters_in_path(&c.path) {
+                        return ListQuery::JiraFilter(f);
+                    }
+                    return ListQuery::Bad("Jira 필터 주소에서 필터 번호를 찾지 못했습니다".to_string());
+                }
+            }
+            ListQuery::JiraJql(s.to_string())
+        }
+        _ => ListQuery::Bad("바깥 목록은 Jira·Notion 만 읽습니다".to_string()),
+    }
+}
+
+/// 원본: `apJiraListFields`
+pub const JIRA_LIST_FIELDS: &str = "summary,status,issuetype,priority,labels,parent,description,updated";
+/// 원본: `apJiraListPage`
+pub const JIRA_LIST_PAGE: i32 = 50;
+/// 원본: `apJiraListPages`
+pub const JIRA_LIST_PAGES: usize = 4;
+
+/// 질의에 들어갈 글 → 퍼센트 부호(unreserved 글자만 남긴다). 원본: `qv`
+fn qv(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push('%');
+            out.push_str(&format!("{b:02X}"));
+        }
+    }
+    out
+}
+
+/// Jira 검색(GET 만) — 새 검색 주소 /rest/api/3/search/jql 와 다음 쪽 표지(nextPageToken). 원본: `apJiraSearchRequest`
+pub fn jira_search_request(jql: &str, base: &str, auth: &Auth, next: Option<&str>) -> HttpRequest {
+    HttpRequest {
+        url: format!(
+            "{base}/rest/api/3/search/jql?jql={}&fields={}&maxResults={}",
+            qv(jql),
+            qv(JIRA_LIST_FIELDS),
+            JIRA_LIST_PAGE
+        ) + &next.map(|n| format!("&nextPageToken={}", qv(n))).unwrap_or_default(),
+        headers: BTreeMap::from([("Accept".to_string(), "application/json".to_string())]),
+        auth: auth.clone(),
+        ..Default::default()
+    }
+}
+
+/// Notion 데이터베이스 — 꼴(상태 묶음 이름) GET 과 질의 POST. 질의는 Notion 에 읽기 길이 POST 뿐이라 이 꼴(정한 경로·규칙이 만든 본문)만
+/// 예외로 보낸다. 원본: `apNotionDBRequest`
+pub fn notion_db_request(id: &str, base: &str) -> HttpRequest {
+    HttpRequest {
+        url: format!("{base}/v1/databases/{}", qv(id)),
+        headers: BTreeMap::from([
+            ("Accept".to_string(), "application/json".to_string()),
+            ("Notion-Version".to_string(), NOTION_VERSION.to_string()),
+        ]),
+        auth: Auth::Bearer,
+        ..Default::default()
+    }
+}
+
+/// 원본: `apNotionQueryRequest` — 본문은 BTreeMap(이름 순)이 Swift `.sortedKeys` 와 같다
+pub fn notion_query_request(id: &str, base: &str, cursor: Option<&str>) -> HttpRequest {
+    let mut body: BTreeMap<String, Value> = BTreeMap::new();
+    body.insert("page_size".to_string(), Value::from(100));
+    if let Some(c) = cursor {
+        body.insert("start_cursor".to_string(), Value::String(c.to_string()));
+    }
+    HttpRequest {
+        method: "POST".to_string(),
+        url: format!("{base}/v1/databases/{}/query", qv(id)),
+        headers: BTreeMap::from([
+            ("Accept".to_string(), "application/json".to_string()),
+            ("Content-Type".to_string(), "application/json".to_string()),
+            ("Notion-Version".to_string(), NOTION_VERSION.to_string()),
+        ]),
+        body: Some(serde_json::to_vec(&body).unwrap_or_default()),
+        auth: Auth::Bearer,
+    }
+}
+
+/// Notion 질의 주소 중간의 UUID 꼴(8-4-4-4-12, 소문자 16진수) 전체 맞음 — ICU `$` 의 줄바꿈 여유는 받지 않는다
+fn uuid_ok(mid: &str) -> bool {
+    let b = mid.as_bytes();
+    if b.len() != 36
+        || !matches!(b.get(8), Some(b'-'))
+        || !matches!(b.get(13), Some(b'-'))
+        || !matches!(b.get(18), Some(b'-'))
+        || !matches!(b.get(23), Some(b'-'))
+    {
+        return false;
+    }
+    b.iter()
+        .enumerate()
+        .filter(|(i, _)| !matches!(i, 8 | 13 | 18 | 23))
+        .all(|(_, c)| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// 읽기 문 예외(⑫-7a 설계 판단): POST 는 Notion 데이터베이스 질의 꼴만 — 경로가 /v1/databases/<id>/query 이고 본문이
+/// page_size·start_cursor 뿐. 원본: `apReadPostAllowed`
+pub fn read_post_allowed(r: &HttpRequest, base: &str) -> bool {
+    let prefix = format!("{base}/v1/databases/");
+    if r.method != "POST" || !r.url.starts_with(&prefix) || !r.url.ends_with("/query") {
+        return false;
+    }
+    let mid = &r.url[prefix.len()..r.url.len() - "/query".len()];
+    let Some(body) = r.body.as_deref() else { return false };
+    body.len() <= 512
+        && uuid_ok(mid)
+        && serde_json::from_slice::<Value>(body)
+            .ok()
+            .and_then(|v| v.as_object().cloned())
+            .is_some_and(|o| o.keys().all(|k| k == "page_size" || k == "start_cursor"))
+}
+
+// ── JSON 꾸러미 보조 — reading.rs 의 비공개 판을 같은 코드로 둔다(R-Reading-c 가 공개 판을 더하면 없앤다) ──
+
+/// JSON 문자열 꾸러미. Swift 에서 `"꾸러미"`(`\(v)`) — 수는 `NSNumber` 설명을 본뜬다. reading.rs 와 같은 판
+fn sv(v: Option<&Value>) -> String {
+    match v {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Number(n)) => number_string(n),
+        Some(value_bool @ Value::Bool(_)) => match value_bool {
+            Value::Bool(true) => "1".to_string(),
+            _ => "0".to_string(),
+        },
+        _ => String::new(),
+    }
+}
+
+/// `NSNumber description` 을 본뜬 숫자 꼴. 정수(i64·u64)는 그대로, 정수 값 실수(2⁵³ 안)는 정수 꼴,
+/// 그 밖의 실수는 Rust `f64` Display — Swift 지수 표기(`e+21`)와 다를 수 있어 헤더 기록에 남겼다. reading.rs 와 같은 판
+fn number_string(n: &serde_json::Number) -> String {
+    if let Some(i) = n.as_i64() {
+        return i.to_string();
+    }
+    if let Some(u) = n.as_u64() {
+        return u.to_string();
+    }
+    let f = n.as_f64().unwrap_or(0.0);
+    if f.is_finite() && f.fract() == 0.0 && f.abs() < 9_007_199_254_740_992.0 {
+        return format!("{f:.0}");
+    }
+    format!("{f}")
+}
+
+static EMPTY_OBJECT: OnceLock<Map<String, Value>> = OnceLock::new();
+
+fn empty_object() -> &'static Map<String, Value> {
+    EMPTY_OBJECT.get_or_init(Map::new)
+}
+
+/// 개체 꾸러미 — Swift `v as? [String: Any] ?? [:]`. 빈 개체를 늘 공유해 대여를 단순히 둔다. reading.rs 와 같은 판
+fn dict(v: Option<&Value>) -> &Map<String, Value> {
+    v.and_then(Value::as_object).unwrap_or_else(|| empty_object())
+}
+
+/// 배열 꾸러미의 개체들만 — Swift `(v as? [[String: Any]])?.compactMap { $0 as? [String: Any] } ?? []`. reading.rs 와 같은 판
+fn arr(v: Option<&Value>) -> Vec<&Map<String, Value>> {
+    match v {
+        Some(Value::Array(items)) => items.iter().filter_map(Value::as_object).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// 숫자 꾸러미. Swift `(v as? NSNumber)?.intValue` — 참·거짓은 1·0, 실수는 잘라서. reading.rs 와 같은 판
+fn num_i64(v: Option<&Value>) -> i64 {
+    match v {
+        Some(Value::Number(n)) => {
+            if let Some(i) = n.as_i64() {
+                i
+            } else if let Some(u) = n.as_u64() {
+                if u <= i64::MAX as u64 {
+                    u as i64
+                } else {
+                    i64::MAX
+                }
+            } else {
+                n.as_f64().map(|f| f.trunc() as i64).unwrap_or(0)
+            }
+        }
+        Some(Value::Bool(b)) => i64::from(*b),
+        _ => 0,
+    }
+}
+
+/// 퍼센트 부호를 푼다(말은 UTF-8 이라 되살아난 바이트만 U+FFFD 로 바뀐다). reading.rs 와 같은 판
+fn pct_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            let h = |x: u8| (x as char).to_digit(16);
+            if let (Some(hi), Some(lo)) = (h(b[i + 1]), h(b[i + 2])) {
+                out.push((hi * 16 + lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// 원본 `URLComponents.queryItems` — 질의 (이름, 값) 목록(퍼센트 풀이, `+` 는 빈칸으로 바꾸지 않는다). 이름만 있고 값이 없는 칸도
+/// 남긴다. reading.rs 와 같은 판
+fn query_items(q: &str) -> Vec<(String, Option<String>)> {
+    q.split('&')
+        .map(|pair| match pair.split_once('=') {
+            Some((n, v)) => (pct_decode(n), Some(pct_decode(v))),
+            None => (pct_decode(pair), None),
+        })
+        .collect()
+}
+
+/// 개체 사람 이름 보조(displayName 이 있으면 그것, 없으면 name). 원본: `nm`
+fn display_name(v: Option<&Value>) -> String {
+    let d = dict(v);
+    if sv(d.get("displayName")).is_empty() {
+        sv(d.get("name"))
+    } else {
+        sv(d.get("displayName"))
+    }
+}
+
+/// 상태 이름 → 끝남·진행 중(바깥 상태 묶음을 모를 때의 글자 꼴). 원본: `apDoneWords`
+pub const DONE_WORDS: [&str; 15] = ["done", "closed", "resolved", "complete", "completed", "finished", "merged", "released", "완료", "끝남", "끝", "닫힘", "해결됨", "통과", "passed"];
+/// 원본: `apProgressWords`
+pub const PROGRESS_WORDS: [&str; 11] = ["in progress", "in_progress", "doing", "wip", "in review", "review", "running", "진행 중", "진행중", "하는 중", "검토 중"];
+
+/// 원본: `apStateWord`
+pub fn state_word(s: &str) -> ItemState {
+    let n = norm(s);
+    if DONE_WORDS.contains(&n.as_str()) {
+        ItemState::Done
+    } else if PROGRESS_WORDS.contains(&n.as_str()) {
+        ItemState::Progress
+    } else {
+        ItemState::Open
+    }
+}
+
+// Jira 이슈 하나(검색 응답의 issues[] 한 칸) → 항목. 상태는 statusCategory.key(done·indeterminate·new)가 먼저, 없으면 이름 꼴.
+// 원본: `apJiraListItem`
+pub fn jira_list_item(o: &Map<String, Value>, base: &str) -> Option<ImportItem> {
+    let key = sv(o.get("key"));
+    if !issue_key_ok(&key) {
+        return None;
+    }
+    let f = dict(o.get("fields"));
+    let mut it = ImportItem {
+        key: format!("jira:{key}"),
+        source: "jira".to_string(),
+        ..ImportItem::default()
+    };
+    let summary = sv(f.get("summary"));
+    it.title = if summary.is_empty() { key.clone() } else { summary };
+    let st_v = f.get("status");
+    let st = dict(st_v);
+    let cat = sv(dict(st.get("statusCategory")).get("key"));
+    it.state = match cat.as_str() {
+        "done" => ItemState::Done,
+        "indeterminate" => ItemState::Progress,
+        "new" => ItemState::Open,
+        _ => state_word(&display_name(st_v)),
+    };
+    it.state_note = display_name(st_v);
+    it.kind = display_name(f.get("issuetype"));
+    it.url = format!("{base}/browse/{key}");
+    it.place = format!("Jira {key}");
+    it.tickets = vec![key.clone()];
+    let issue_type = dict(f.get("issuetype"));
+    let subtask = issue_type.get("subtask").and_then(Value::as_bool) == Some(true) || num_i64(issue_type.get("hierarchyLevel")) == -1;
+    let parent = sv(dict(f.get("parent")).get("key"));
+    if subtask && issue_key_ok(&parent) {
+        it.story = Some(parent.clone());
+    }
+    let chunks = adf_chunks_of(f.get("description")).0;
+    it.body = chunks
+        .iter()
+        .map(|c| {
+            if c.title.is_empty() {
+                c.text.clone()
+            } else {
+                format!("{}\n{}", c.title, c.text)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let labels: String = match f.get("labels").and_then(Value::as_array) {
+        Some(items) if items.iter().all(Value::is_string) => items.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "),
+        _ => String::new(),
+    };
+    let pairs = [
+        ("상태", display_name(st_v)),
+        ("종류", it.kind.clone()),
+        ("우선순위", display_name(f.get("priority"))),
+        ("상위", parent.clone()),
+        ("레이블", labels),
+        ("수정", sv(f.get("updated"))),
+    ];
+    for (n, v) in pairs {
+        if !v.is_empty() {
+            it.fields.push(MetaField::new(n, &v));
+        }
+    }
+    Some(it)
+}
+
+// Notion 데이터베이스 한 쪽(질의 응답 results[])과 꼴(상태 속성의 묶음) → 항목. 상태 속성(status)은 묶음 이름(Complete·In progress·완료·진행 중)으로,
+// select·checkbox 상태는 이름 꼴로 본다. 본문 블록은 읽지 않고 속성만(메타 정보 우선). 원본: `apNotionDBItems`
+pub fn notion_db_items(schema: &Map<String, Value>, pages: &[Map<String, Value>], dev: bool) -> Vec<ImportItem> {
+    let mut group_of: BTreeMap<String, String> = BTreeMap::new(); // 상태 선택지 id·이름 → 묶음 이름
+    for p in dict(schema.get("properties")).values() {
+        let prop = dict(Some(p));
+        if sv(prop.get("type")) != "status" {
+            continue;
+        }
+        let status = dict(prop.get("status"));
+        let options = arr(status.get("options"));
+        for g in arr(status.get("groups")) {
+            let gname = sv(g.get("name"));
+            let oids: Vec<String> = match g.get("option_ids").and_then(Value::as_array) {
+                Some(items) if items.iter().all(Value::is_string) => items.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+                _ => Vec::new(),
+            };
+            for oid in oids {
+                group_of.insert(oid.clone(), gname.clone());
+                if let Some(o) = options.iter().find(|o| sv(o.get("id")) == oid) {
+                    group_of.insert(format!("name:{}", sv(o.get("name"))), gname.clone());
+                }
+            }
+        }
+    }
+    fn plain(v: Option<&Value>) -> String {
+        arr(v).iter().map(|d| sv(d.get("plain_text"))).collect()
+    }
+    let mut out: Vec<ImportItem> = Vec::new();
+    for pg in pages.iter().take(TODO_MAX_ITEMS) {
+        let Some(id) = notion_id(&sv(pg.get("id"))) else { continue };
+        let mut it = ImportItem {
+            key: format!("notion:{id}"),
+            source: "notion".to_string(),
+            kind: "Notion 쪽".to_string(),
+            place: format!("Notion {}", grapheme_prefix(&id, 8)),
+            ..ImportItem::default()
+        };
+        let u = sv(pg.get("url"));
+        it.url = meta_url(&u, dev);
+        let mut body: Vec<String> = Vec::new();
+        let mut props: Vec<(String, Value)> = dict(pg.get("properties")).clone().into_iter().collect();
+        props.sort_by(|a, b| a.0.cmp(&b.0));
+        for (name, p0) in props {
+            let p = dict(Some(&p0));
+            match sv(p.get("type")).as_str() {
+                "title" => it.title = plain(p.get("title")),
+                "status" => {
+                    let status = dict(p.get("status"));
+                    let n = sv(status.get("name"));
+                    let g = group_of.get(&sv(status.get("id"))).or_else(|| group_of.get(&format!("name:{n}"))).cloned().unwrap_or_default();
+                    let gl = norm(&g);
+                    it.state = if ["complete", "completed", "done", "완료"].contains(&gl.as_str()) {
+                        ItemState::Done
+                    } else if ["in progress", "진행 중", "진행중"].contains(&gl.as_str()) {
+                        ItemState::Progress
+                    } else {
+                        state_word(&n)
+                    };
+                    it.state_note = n.clone();
+                    it.fields.push(MetaField::new(&name, &n));
+                }
+                "select" => {
+                    let n = sv(dict(p.get("select")).get("name"));
+                    if ["status", "state", "상태"].contains(&norm(&name).as_str()) && it.state_note.is_empty() {
+                        it.state = state_word(&n);
+                        it.state_note = n.clone();
+                    }
+                    if !n.is_empty() {
+                        it.fields.push(MetaField::new(&name, &n));
+                    }
+                }
+                "checkbox" => {
+                    let b = p.get("checkbox").and_then(Value::as_bool).unwrap_or(false);
+                    if ["done", "완료", "끝남"].contains(&norm(&name).as_str()) && b && it.state_note.is_empty() {
+                        it.state = ItemState::Done;
+                        it.state_note = name.clone();
+                    }
+                    it.fields.push(MetaField::new(&name, if b { "예" } else { "아니오" }));
+                }
+                "rich_text" => {
+                    let t = plain(p.get("rich_text"));
+                    if !t.is_empty() {
+                        body.push(format!("{name}: {t}"));
+                        it.fields.push(MetaField::new(&name, &t));
+                    }
+                }
+                "multi_select" => {
+                    let t = arr(p.get("multi_select")).iter().map(|d| sv(d.get("name"))).collect::<Vec<_>>().join(", ");
+                    if !t.is_empty() {
+                        it.fields.push(MetaField::new(&name, &t));
+                    }
+                }
+                "number" => {
+                    if let Some(n) = p.get("number").filter(|v| v.is_number() || v.is_boolean()) {
+                        it.fields.push(MetaField::new(&name, &sv(Some(n))));
+                    }
+                }
+                "date" => {
+                    let t = sv(dict(p.get("date")).get("start"));
+                    if !t.is_empty() {
+                        it.fields.push(MetaField::new(&name, &t));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if it.title.is_empty() {
+            it.title = "(제목 없음)".to_string();
+        }
+        it.body = body.join("\n");
+        out.push(it);
+    }
+    out
+}
+
+/// 읽은 결과. 원본: `APListRead`
+#[derive(Debug, Clone, Default)]
+pub struct ListRead {
+    pub items: Vec<ImportItem>,
+    pub requests: i64,
+    pub note: String,
+    pub ok: bool,
+    pub truncated: bool,
+}
+
+/// 원본: `apReadList` 안의 `json` — 문이 없고 200 이고 본문 안이 8MiB 이하일 때만 개체로 푼다
+fn json_of(r: &HttpResponse) -> Option<Map<String, Value>> {
+    if r.error.is_some() || r.status != 200 || r.body.len() > 8 << 20 {
+        return None;
+    }
+    serde_json::from_slice::<Value>(&r.body).ok().and_then(|v| v.as_object().cloned())
+}
+
+/// 읽기 요청 하나 — 읽기 문 예외·같은 사이트·429 재시도(budget 안). 원본: `apReadList` 안의 `send`
+#[allow(clippy::too_many_arguments)] // Swift 클로저가 캡처하던 것을 인자로 옮긴 1:1 형태
+fn send_list_request(
+    req: &HttpRequest,
+    base: &str,
+    header: Option<&AuthHeader>,
+    res: &mut ListRead,
+    http: &dyn ConnHttp,
+    clock: &dyn NoticeClock,
+    waiter: &dyn NoticeWaiter,
+    start: f64,
+    budget: f64,
+) -> HttpResponse {
+    if req.method != "GET" && !read_post_allowed(req, base) {
+        return HttpResponse {
+            error: Some("읽기는 GET 만 보냅니다(Notion 데이터베이스 질의만 예외)".to_string()),
+            ..Default::default()
+        };
+    }
+    if !same_site(&req.url, base) {
+        return HttpResponse {
+            error: Some("연결한 사이트 밖 주소라 보내지 않았습니다".to_string()),
+            ..Default::default()
+        };
+    }
+    let mut attempt: i32 = 0;
+    loop {
+        res.requests += 1;
+        let r = http.send(req, header);
+        match retry_wait(r.status, r.headers.get("retry-after").map(String::as_str), attempt, clock.now()) {
+            Some(w) if clock.now() + w <= start + budget => {
+                waiter.wait(w);
+                attempt += 1;
+            }
+            _ => return r,
+        }
+    }
+}
+
+/// 바깥 목록 읽기 — 주소·필터·JQL·Notion 데이터베이스. 요청은 최대 4 쪽(쪽마다 50·100 칸), 재시도와 잠깐은 `budget` 초 안에서만.
+/// 문이 나면 요청 0. 원본: `apReadList`
+#[allow(clippy::too_many_arguments)]
+pub fn read_list(
+    q: &ListQuery,
+    connections: &[Connection],
+    dev: bool,
+    secrets: &dyn ConnSecrets,
+    http: &dyn ConnHttp,
+    clock: &dyn NoticeClock,
+    waiter: &dyn NoticeWaiter,
+    tz: Tz,
+    budget: f64,
+) -> ListRead {
+    let mut res = ListRead::default();
+    if let ListQuery::Bad(why) = q {
+        res.note = why.clone();
+        return res;
+    }
+    let Some(service) = q.service() else {
+        res.note = "읽을 수 없는 목록입니다".to_string();
+        return res;
+    };
+    let Some(c) = connections.iter().find(|c| c.service == service) else {
+        res.note = format!("{} 연결이 없어 요청하지 않았습니다(설정 › 연결)", service.label());
+        return res;
+    };
+    if let Some(why) = read_blocker(service, Some(c), secrets.exists(&c.id), dev, clock.now(), tz) {
+        res.note = format!("{why}. 요청하지 않았습니다");
+        return res;
+    }
+    // 정해진 서비스의 바탕 주소라 항상 있다(Swift 도 강자리).
+    let base = service_base(c, dev).expect("apServiceBase 는 정해진 서비스라 항상 있다");
+    let Some(token) = secrets.read(&c.id).filter(|t| !t.is_empty()) else {
+        res.note = format!("{} 토큰이 키체인에 없어 요청하지 않았습니다", service.label());
+        return res;
+    };
+    let auth = auth_for(c);
+    let header = auth_header(&auth, &token);
+    let start = clock.now();
+    match q {
+        ListQuery::NotionDb(id) => {
+            let rs = send_list_request(&notion_db_request(id, &base), &base, header.as_ref(), &mut res, http, clock, waiter, start, budget);
+            let Some(schema) = json_of(&rs) else {
+                res.note = if rs.status == 404 {
+                    "읽을 수 없음: 데이터베이스를 찾지 못했습니다(404). Notion 은 통합을 그 데이터베이스에 초대해야 읽힙니다".to_string()
+                } else {
+                    read_fail_note(&rs)
+                };
+                return res;
+            };
+            let mut pages: Vec<Map<String, Value>> = Vec::new();
+            let mut cursor: Option<String> = None;
+            for k in 0..JIRA_LIST_PAGES {
+                let r = send_list_request(&notion_query_request(id, &base, cursor.as_deref()), &base, header.as_ref(), &mut res, http, clock, waiter, start, budget);
+                let Some(o) = json_of(&r) else {
+                    res.note = "질의를 읽지 못했습니다: ".to_string() + &read_fail_note(&r);
+                    return res;
+                };
+                pages.extend(arr(o.get("results")).into_iter().cloned());
+                let more = o.get("has_more").and_then(Value::as_bool) == Some(true);
+                let next = o.get("next_cursor").and_then(Value::as_str).filter(|n| !n.is_empty()).map(str::to_string);
+                let (true, Some(n)) = (more, next) else { break };
+                if k == JIRA_LIST_PAGES - 1 {
+                    res.truncated = true;
+                }
+                cursor = Some(n);
+            }
+            res.items = notion_db_items(&schema, &pages, dev);
+        }
+        _ => {
+            let Some(jql) = q.jql() else {
+                res.note = "읽을 수 없는 목록입니다".to_string();
+                return res;
+            };
+            let mut next: Option<String> = None;
+            let mut items: Vec<ImportItem> = Vec::new();
+            for k in 0..JIRA_LIST_PAGES {
+                let r = send_list_request(&jira_search_request(&jql, &base, &auth, next.as_deref()), &base, header.as_ref(), &mut res, http, clock, waiter, start, budget);
+                let Some(o) = json_of(&r) else {
+                    res.note = if r.status == 400 {
+                        "읽을 수 없음: 검색 글(JQL)이나 필터 번호를 Jira 가 받지 않았습니다(400)".to_string()
+                    } else {
+                        read_fail_note(&r)
+                    };
+                    return res;
+                };
+                items.extend(arr(o.get("issues")).into_iter().filter_map(|m| jira_list_item(m, &base)));
+                let not_last = o.get("isLast").and_then(Value::as_bool) != Some(true);
+                let token_page = o.get("nextPageToken").and_then(Value::as_str).filter(|n| !n.is_empty()).map(str::to_string);
+                let (true, Some(n)) = (not_last, token_page) else { break };
+                if k == JIRA_LIST_PAGES - 1 {
+                    res.truncated = true;
+                }
+                next = Some(n);
+            }
+            res.items = items;
+        }
+    }
+    res.ok = true;
+    res.note = format!("항목 {}개를 읽었습니다", res.items.len()) + if res.truncated { "(쪽 상한에서 멈춤)" } else { "" };
+    res
+}
+
+/// 값이 ADF 문서(개체)가 아니면 빈 것. 원본: `apChunks`
+fn adf_chunks_of(v: Option<&Value>) -> (Vec<TextChunk>, Vec<MetaLink>) {
+    match v {
+        Some(Value::Object(o)) => adf_chunks(o),
+        _ => (Vec::new(), Vec::new()),
+    }
+}
+
+// MARK: - 옛 자동화 옮기기(멈춘 자리 기록·원장)
+
+pub const LEGACY_MAX_FILES: usize = 40;
+pub const LEGACY_FILE_BYTES: usize = 256 << 10;
+pub const LEGACY_TOTAL_BYTES: usize = 2 << 20;
+pub const LEGACY_DEPTH: usize = 3;
+pub const LEGACY_EXTENSIONS: [&str; 12] = ["md", "markdown", "txt", "json", "jsonl", "ndjson", "yaml", "yml", "log", "csv", "tsv", "toml"];
+
+/// `NSString.lastPathComponent`: 끝의 `/` 를 떼고 마지막 `/` 뒤. scenarios.rs 와 같은 판
+fn last_path_component(p: &str) -> &str {
+    let t = p.trim_end_matches('/');
+    t.rsplit('/').next().unwrap_or("")
+}
+
+/// 비밀이 흔한 이름은 읽지 않는다(가리기 앞의 한 겹 더) — 까닭은 모으기 줄에. 원본: `apLegacySkipReason`
+pub fn legacy_skip_reason(rel: &str) -> Option<String> {
+    let parts: Vec<&str> = rel.split('/').collect();
+    if parts.len() > LEGACY_DEPTH + 1 {
+        return Some(format!("깊이 {LEGACY_DEPTH} 아래"));
+    }
+    if parts.iter().any(|p| p.starts_with('.')) {
+        return Some("숨은 자리".to_string());
+    }
+    let n = parts.last().copied().unwrap_or("").to_lowercase();
+    let ext = path_extension(&n);
+    for w in ["secret", "credential", "password", "passwd", "token", "private", "id_rsa", "id_ed25519", "keychain", "비밀"] {
+        if n.contains(w) {
+            return Some("비밀이 흔한 이름".to_string());
+        }
+    }
+    if ["pem", "key", "p12", "pfx", "keystore", "jks", "env"].contains(&ext.as_str()) {
+        return Some("비밀이 흔한 꼴".to_string());
+    }
+    if LEGACY_EXTENSIONS.contains(&ext.as_str()) {
+        return None;
+    }
+    Some("글 파일이 아님".to_string())
+}
+
+const LEGACY_ID_KEYS: [&str; 6] = ["source_key", "key", "id", "ticket", "issue", "번호"];
+const LEGACY_TITLE_KEYS: [&str; 7] = ["title", "name", "summary", "subject", "task", "제목", "할 일"];
+const LEGACY_STATE_KEYS: [&str; 3] = ["status", "state", "상태"];
+const LEGACY_BODY_KEYS: [&str; 10] = ["description", "detail", "details", "note", "notes", "body", "why", "reason", "설명", "메모"];
+const LEGACY_LIST_KEYS: [&str; 10] = ["items", "tasks", "queue", "ledger", "todo", "todos", "entries", "rows", "backlog", "목록"];
+
+/// 옛 원장의 객체 한 줄 → 항목. 원본: `rowItem`
+fn legacy_row_item(o: &Map<String, Value>, folder: &str, rel: &str, line: usize, k: usize) -> Option<ImportItem> {
+    // 이름 칸 중 첫 값(빈 값은 건너뛴다) — Swift `keys.lazy.compactMap { o[$0] }.map { s_($0) }.first { !$0.isEmpty }`
+    let first = |keys: &[&str]| -> Option<String> { keys.iter().filter_map(|key| o.get(*key)).map(|v| sv(Some(v))).find(|t| !t.is_empty()) };
+    let title = first(&LEGACY_TITLE_KEYS)?;
+    let mut it = ImportItem {
+        source: "legacy".to_string(),
+        kind: "원장 줄".to_string(),
+        title: grapheme_prefix(&title, 300).to_string(),
+        ..ImportItem::default()
+    };
+    if let Some(st) = first(&LEGACY_STATE_KEYS) {
+        it.state = state_word(&st);
+        it.state_note = st.clone();
+    }
+    if o.get("done").and_then(Value::as_bool) == Some(true) {
+        it.state = ItemState::Done;
+        it.state_note = "done: true".to_string();
+    }
+    match first(&LEGACY_ID_KEYS) {
+        // id 가 Jira 키 꼴(L-2)이어도 티켓으로 보지 않는다: 옛 자동화 자신의 번호일 수 있어 엉뚱한 이슈에 댓글·읽기가 가지 않게.
+        // id 는 폴더 안에서 겹칠 수도 있어 폴더가 나뉜다
+        Some(id) => {
+            let safe: String = id
+                .chars()
+                .map(|c| {
+                    if let Some(b) = c.is_ascii().then_some(c as u8).filter(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-')) {
+                        b as char
+                    } else {
+                        '-'
+                    }
+                })
+                .collect();
+            it.key = format!("legacy:{folder}/{}", grapheme_prefix(&safe, 80));
+        }
+        None => {
+            it.key = format!("legacy:{folder}/{rel}#{}", slug(&title));
+            if k > 1 {
+                it.key.push_str(&format!("~{k}"));
+            }
+        }
+    }
+    it.place = format!("{folder}/{rel}:{line}");
+    let mut body: Vec<String> = Vec::new();
+    for key in LEGACY_BODY_KEYS {
+        if let Some(v) = o.get(key) {
+            let t = sv(Some(v));
+            if !t.is_empty() {
+                body.push(t);
+            }
+        }
+    }
+    let excluded = |key: &str| {
+        LEGACY_ID_KEYS.contains(&key) || LEGACY_TITLE_KEYS.contains(&key) || LEGACY_STATE_KEYS.contains(&key) || LEGACY_BODY_KEYS.contains(&key) || key == "done"
+    };
+    let mut pairs: Vec<(&String, &Value)> = o.iter().filter(|(key, _)| !excluded(key)).collect();
+    pairs.sort_by(|a, b| a.0.cmp(b.0));
+    for (key, v) in pairs {
+        let t = sv(Some(v));
+        if !t.is_empty() && grapheme_len(&t) <= 300 {
+            it.fields.push(MetaField::new(key, &t));
+        }
+    }
+    it.body = body.join("\n");
+    Some(it)
+}
+
+/// 옛 자동화 폴더의 글 파일들 → 항목. 글 문서(md·txt)는 체크박스·목록 항목, JSON 은 배열(또는 items·tasks·queue·ledger 같은 칸의 배열)의
+/// 객체 줄, JSONL 은 줄마다 객체. 줄에 id·key 가 있으면 그것으로 키를, 없으면 경로와 제목 꼴로. 멈춘 자리 기록 같은 다른 꼴은 근거 묶음으로만 간다.
+/// 원본: `apLegacyItems`
+pub fn legacy_items(files: &[(&str, &str)], folder: &str) -> Vec<ImportItem> {
+    let mut out: Vec<ImportItem> = Vec::new();
+    let mut seen_title: HashMap<String, usize> = HashMap::new();
+    // 키가 겹치면 뒤에 ~n 을 붙인다(아직 겹치면 또 붙는다) — Swift `x.key += "~\(out.filter { $0.key.hasPrefix(x.key) }.count + 1)"`
+    fn add(out: &mut Vec<ImportItem>, item: Option<ImportItem>) {
+        let Some(mut x) = item else { return };
+        if out.len() >= TODO_MAX_ITEMS {
+            return;
+        }
+        if out.iter().any(|o| o.key == x.key) {
+            let n = out.iter().filter(|o| o.key.starts_with(&x.key)).count() + 1;
+            x.key = format!("{}~{n}", x.key);
+        }
+        out.push(x);
+    }
+    // 제목 꼴 — 이름 칸 중 처음 있는 칸의 값(빈 것도 있다) — Swift `titleKeys.lazy.compactMap { r[$0] }.map { s_($0) }.first ?? ""`
+    let title_slug = |o: &Map<String, Value>| -> String { slug(&sv(LEGACY_TITLE_KEYS.iter().find_map(|key| o.get(*key)))) };
+    for &(path, text) in files {
+        let ext = path_extension(path);
+        match ext.as_str() {
+            "md" | "markdown" | "txt" => {
+                for it in list_items(text, path, None, &format!("legacy:{folder}/"), "legacy") {
+                    let mut x = it;
+                    x.kind = "원장 항목".to_string();
+                    x.place = format!("{folder}/{}", x.place);
+                    add(&mut out, Some(x));
+                }
+            }
+            "json" => {
+                let Ok(v) = serde_json::from_str::<Value>(text) else { continue };
+                let mut rows: Vec<Map<String, Value>> = Vec::new();
+                match v {
+                    Value::Array(a) => rows.extend(a.into_iter().filter_map(|x| x.as_object().cloned())),
+                    Value::Object(o) => {
+                        for key in LEGACY_LIST_KEYS {
+                            if let Some(Value::Array(items)) = o.get(key) {
+                                rows = items.iter().filter_map(Value::as_object).cloned().collect();
+                                if !rows.is_empty() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                for (i, r) in rows.iter().enumerate() {
+                    let t = title_slug(r);
+                    let k = seen_title.get(&format!("{path}{t}")).copied().unwrap_or(0) + 1;
+                    seen_title.insert(format!("{path}{t}"), k);
+                    add(&mut out, legacy_row_item(r, folder, path, i + 1, k));
+                }
+            }
+            "jsonl" | "ndjson" => {
+                for (i, l) in text.split('\n').enumerate() {
+                    let Ok(r) = serde_json::from_str::<Value>(l) else { continue };
+                    let Some(r) = r.as_object().cloned() else { continue };
+                    let t = title_slug(&r);
+                    let k = seen_title.get(&format!("{path}{t}")).copied().unwrap_or(0) + 1;
+                    seen_title.insert(format!("{path}{t}"), k);
+                    add(&mut out, legacy_row_item(&r, folder, path, i + 1, k));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// 옛 자동화 파일 하나 → 근거 묶음 메타(출처 legacy, id 는 폴더 안 경로). 글은 4,000자 절 셋까지(상한 안), 요약은 첫 세 줄.
+/// 비밀 가리기·믿지 않는 자료 표시·형식 검사는 근거 묶음에 넣는 문(apAddEvidence)이 한다. 원본: `apLegacyMeta`
+pub fn legacy_meta(rel: &str, text: &str, folder: &str, dev: bool) -> Meta {
+    let mut m = Meta {
+        source: "legacy".to_string(),
+        id: format!("{folder}/{rel}"),
+        title: last_path_component(rel).to_string(),
+        kind: format!("옛 자동화 파일({})", path_extension(rel)),
+        ..Meta::default()
+    };
+    let plain = text.replace("\r\n", "\n");
+    m.length = grapheme_len(&plain) as i64;
+    m.summary = plain
+        .split('\n')
+        .map(|l| l.trim_matches(swift_ws))
+        .filter(|l| !l.is_empty())
+        .take(3)
+        .map(|l| grapheme_prefix(l, 200).to_string())
+        .collect();
+    let mut rest: &str = &plain;
+    let mut k = 1usize;
+    while !rest.is_empty() && m.sections.len() < 3 {
+        let part = grapheme_prefix(rest, limit::SECTION_TEXT - 10);
+        let title = if m.sections.is_empty() { "본문".to_string() } else { format!("본문 {k}") };
+        m.sections.push(Section::new(&title, part));
+        rest = &rest[part.len()..];
+        k += 1;
+    }
+    m.fields = vec![
+        MetaField::new("폴더 안 경로", rel),
+        MetaField::new("글자 수", &grapheme_len(&plain).to_string()),
+    ];
+    meta_clamp(&m, dev)
+}
+
+/// 항목 → 근거 묶음 메타(출처는 항목의 원천). 본문은 절 하나, 원천 자리·상태·원천 칸은 핵심 칸. 원본: `apImportItemMeta`
+pub fn import_item_meta(it: &ImportItem, dev: bool) -> Meta {
+    let mut m = Meta {
+        source: if it.source.is_empty() { "import".to_string() } else { it.source.clone() },
+        id: it.key.clone(),
+        url: it.url.clone(),
+        title: it.title.clone(),
+        kind: it.kind.clone(),
+        ..Meta::default()
+    };
+    let state_value = if it.state_note.is_empty() { it.state.raw().to_string() } else { it.state_note.clone() };
+    m.fields = vec![
+        MetaField::new("원천 항목 키", &it.key),
+        MetaField::new("원천 자리", &it.place),
+        MetaField::new("상태", &state_value),
+    ];
+    m.fields.extend(it.fields.clone());
+    m.length = grapheme_len(&it.body) as i64;
+    m.summary = it.body_lines().into_iter().take(3).collect();
+    if !it.body.is_empty() {
+        m.sections = vec![Section::new("본문", &it.body)];
+    }
+    meta_clamp(&m, dev)
+}
+
+// R-Import-c 가 여기서 이어 쓴다
 
 
