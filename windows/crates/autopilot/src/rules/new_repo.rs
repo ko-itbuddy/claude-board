@@ -45,7 +45,7 @@ pub const NEW_REPO_MESSAGE: &str = "빈 첫 커밋(Claude Board 자율주행이 
 pub enum PathState {
     /// 없음
     Missing,
-    /// 빈 폴더(숨은 파일만 있어도 빈 것으로 본다)
+    /// 빈 폴더(`.DS_Store`·`desktop.ini`·`Thumbs.db` 만 든 폴더도 빈 것으로 본다. 판정은 engine/new_repo.rs)
     EmptyDir,
     /// 무엇이 든 폴더
     Dir,
