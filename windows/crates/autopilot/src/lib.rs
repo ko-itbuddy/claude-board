@@ -71,6 +71,7 @@ pub mod engine {
     pub mod prep_git;
     pub mod run;
     pub mod session_runner;
+    pub mod worktree_run;
 }
 
 pub mod adapters {

@@ -1,5 +1,6 @@
-//! git 작업 트리 어댑터 — 따로 작업 트리에서 도는 자율주행 실행이 쓰는 만들기(`add`)·지우기(`remove`)·목록(`list`).
-//! 원본: `Sources/ClaudeAutopilot/main.swift` 의 `startWorktree`(`git worktree add -b <가지> <경로> <출발 가지>`)·`rollbackBranches`(remove·prune)·`checkedOut`(list).
+//! git 작업 트리 어댑터 — 따로 작업 트리에서 도는 자율주행 실행이 쓰는 만들기(`add`)·이어받기(`add_existing`)·지우기(`remove`)·목록(`list`).
+//! 원본: `Sources/ClaudeAutopilot/main.swift` 의 `startWorktree`(`git worktree add -b <가지> <경로> <출발 가지>` 와 이미 만든 가지를 이어받는
+//! `git worktree add <경로> <가지>`)·`rollbackBranches`(remove·prune)·`checkedOut`(list). `add_existing` 의 되돌리기는 원본과 같이 가지를 지우지 않는다.
 //!
 //! 약속:
 //! - git 은 모두 `ports::Git`(보호 환경을 거는 `adapters::git::ProcessGit`)으로 `repo` 를 `-C` 로 줘서만 부른다. 설정 include 를 따로 열지 않는다.
@@ -202,7 +203,8 @@ fn common_git_dir(git: &dyn Git, repo: &Path) -> PortResult<String> {
     Ok(canonical_loose(line))
 }
 
-fn check_branch(git: &dyn Git, repo: &Path, branch: &str) -> PortResult<()> {
+/// 가지 이름 자체의 규칙(빈 이름·대시로 시작·제어·공백 글자·`git check-ref-format --branch`)
+fn check_branch_name(git: &dyn Git, repo: &Path, branch: &str) -> PortResult<()> {
     if branch.is_empty() || branch.starts_with('-') || branch.chars().any(|c| c.is_control() || c.is_whitespace()) {
         return Err(invalid(format!("가지 이름이 맞지 않다: {branch:?}")));
     }
@@ -210,6 +212,11 @@ fn check_branch(git: &dyn Git, repo: &Path, branch: &str) -> PortResult<()> {
     if fmt.code != 0 {
         return Err(invalid(format!("가지 이름이 git 규칙에 맞지 않다: {branch:?}")));
     }
+    Ok(())
+}
+
+fn check_branch(git: &dyn Git, repo: &Path, branch: &str) -> PortResult<()> {
+    check_branch_name(git, repo, branch)?;
     let exists = run(git, repo, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")])?;
     if exists.code == 0 {
         return Err(denied(format!("가지가 이미 있다: {branch}")));
@@ -274,6 +281,38 @@ pub fn add(git: &dyn Git, repo: &Path, path: &str, branch: &str, base: &str) -> 
             let _ = run(git, repo, &["worktree", "remove", "--force", &canon]);
             let _ = run(git, repo, &["worktree", "prune"]);
             let _ = run(git, repo, &["branch", "-D", branch]);
+            Err(why)
+        }
+    }
+}
+
+/// `git worktree add <path> <branch>` — 출발 전에 보드가 이미 만든 가지를 작업 트리로 이어받는다.
+/// 검사는 `add` 와 같은 길을 쓰되 가지가 있어야 하고(없으면 NotFound) 출발 가지를 묻지 않는다.
+/// 확인에 어긋나면 되돌리는데, 만든 가지가 아니라 이어받은 가지라 `branch -D` 는 하지 않는다(가지는 그대로 둔다).
+pub fn add_existing(git: &dyn Git, repo: &Path, path: &str, branch: &str) -> PortResult<Added> {
+    let canon = canonical_path(path)?;
+    let common = common_git_dir(git, repo)?;
+    let repo_git = format!("{}/.git", canonical_loose(&repo.to_string_lossy()).trim_end_matches('/'));
+    if inside(&canon, &common) || inside(&canon, &repo_git) {
+        return Err(denied(format!("작업 트리 자리가 저장소 .git 안이다: {canon}")));
+    }
+    check_branch_name(git, repo, branch)?;
+    let exists = run(git, repo, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")])?;
+    if exists.code != 0 {
+        return Err(PortError::new(PortErrorKind::NotFound, format!("이어받을 가지가 없다: {branch}")));
+    }
+    check_target_folder(&canon)?;
+
+    let out = run(git, repo, &["worktree", "add", &canon, branch])?;
+    if out.code != 0 {
+        return Err(PortError::new(PortErrorKind::Io, format!("git worktree add 실패: {}", first_line(&out.stderr))));
+    }
+    match verify_new(&canon, &common) {
+        Ok(git_dir) => Ok(Added { path: canon, git_dir, common_dir: common }),
+        Err(why) => {
+            // 되돌린다: 방금 만든 것(등록·폴더)만 — 가지는 이어받은 것
+            let _ = run(git, repo, &["worktree", "remove", "--force", &canon]);
+            let _ = run(git, repo, &["worktree", "prune"]);
             Err(why)
         }
     }
