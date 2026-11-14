@@ -1,16 +1,20 @@
-//! 자율주행 MCP 읽기 세션 — 준비 꼴 청크의 시험.
+//! 자율주행 MCP 읽기 세션 — 원본 전체(R-MCPRead a + b)의 시험.
 //! 원본: `Tests/AutopilotRulesTests/ReadingTests.swift` 의 `MCPReadTests`(618줄~, 도구 표 581줄).
-//! 옮긴 시험(같은 이름): `도구`(표 33줄) · `인자` · `서버`.
-//! R-MCPRead-a 청크는 `MCPRead.swift` 1~145줄까지만 싣는다 — `인자` 시험의 apMCPPrompt 단언과
-//! `결과` · `가리기` 시험은 R-MCPRead-b 청크가 더한다.
+//! 옮긴 시험(같은 이름): `도구`(표 33줄) · `인자` · `서버` · `결과`(664줄) · `가리기`(680줄, `add_evidence` 로 수).
+//! R-MCPRead-a 청크는 원본 1~145줄을, R-MCPRead-b 청크는 146~213줄(질문·출력 해석·메타)를 싣는다.
 //! 끝의 `extra_` 시험은 Swift 시험에 없는 것(경계)이다.
 
+use claude_board_autopilot::rules::evidence::{add_evidence, manifest_parse, EvidenceStore, MANIFEST_NAME};
 use claude_board_autopilot::rules::formats::grapheme_len;
 use claude_board_autopilot::rules::mcp_read::{
-    mcp_allow_prefixes, mcp_allow_rules, mcp_allow_summary, mcp_config_json, mcp_deny_rules, mcp_glob, mcp_read_args, mcp_server_name_ok, mcp_servers,
-    mcp_settings_json, mcp_tool_allowed, McpServer, MCP_BUILTIN_DENY, MCP_READ_BUDGET_USD, MCP_READ_MODEL, MCP_READ_MAX_SEC, MCP_READ_VERBS, MCP_WRITE_VERBS,
+    mcp_allow_prefixes, mcp_allow_rules, mcp_allow_summary, mcp_config_json, mcp_deny_rules, mcp_glob, mcp_meta, mcp_output, mcp_prompt, mcp_read_args,
+    mcp_server_name_ok, mcp_servers, mcp_settings_json, mcp_tool_allowed, McpServer, MCP_BUILTIN_DENY, MCP_READ_BUDGET_USD, MCP_READ_MODEL, MCP_READ_MAX_SEC,
+    MCP_READ_VERBS, MCP_WRITE_VERBS,
 };
+use claude_board_autopilot::rules::reading::ReadClock;
 use serde_json::{json, Map, Value};
+use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 
 /// 원본 `body(Any)` 의 옮김 — 값 그대로 직렬화한다(규칙은 이름 순을 스스로 정하므로 입력 순서는 상관 없다)
 fn body(v: Value) -> Vec<u8> {
@@ -87,7 +91,7 @@ fn 인자() {
     assert!(["Bash", "Write", "Edit", "Read", "WebFetch"].iter().all(|t| deny.contains(t)));
     assert!(deny.contains(&"mcp__wiki__create*"));
     assert!(deny.contains(&"mcp__wiki__*Delete*"));
-    // 원본은 여기서 apMCPPrompt 의 `주소:` 단언을 한다 — R-MCPRead-a 는 apMCPPrompt 까지를 싣지 않으므로 R-MCPRead-b 가 더한다
+    assert!(mcp_prompt("https://wiki.example.com/p", "wiki", &[]).contains("주소: https://wiki.example.com/p"));
     let s = mcp_settings_json("wiki");
     assert_eq!(s["disableAllHooks"], json!(true));
     assert_eq!(s["permissions"]["defaultMode"], json!("dontAsk"));
@@ -141,6 +145,109 @@ fn 서버() {
     assert_eq!(one["mcpServers"]["wiki"]["args"], json!(["--local"]));
     let names: Vec<String> = mcp_servers(Some(&claude), None, None).iter().map(|s| s.name.clone()).collect();
     assert_eq!(names, ["remote", "wiki"]);
+}
+
+// ── 원본 `결과`(664줄) · `가리기`(680줄) — R-MCPRead-b ──
+
+#[test]
+fn 결과() {
+    let good = r#"{"format":"claude-board-meta","version":1,"source":"x","url":"https://evil.example/","title":"위키 쪽","summary":["한 줄"]}"#;
+    let a = mcp_meta(good, "wiki", "https://wiki.example.com/p");
+    let am = a.meta.expect("메타");
+    assert_eq!(am.source, "mcp:wiki");
+    assert_eq!(am.url, "https://wiki.example.com/p");
+    assert_eq!(am.title, "위키 쪽");
+    assert!(mcp_meta(&format!("```json\n{good}\n```"), "wiki", "https://wiki.example.com/p").meta.is_some());
+    assert!(mcp_meta(&format!("여기 있습니다:\n{good}"), "wiki", "x").problems.first().is_some_and(|p| p.contains("JSON 객체 하나가 아닙니다")));
+    assert_eq!(
+        mcp_meta(r#"{"format":"claude-board-meta","version":1,"source":"x","title":"<h1>x</h1>"}"#, "w", "x").problems,
+        ["HTML 태그가 있습니다(title)"]
+    );
+    assert_eq!(
+        mcp_meta(r#"{"format":"claude-board-meta","version":1,"source":"x","title":"t","body":"전문"}"#, "w", "x").problems,
+        ["형식 밖 칸입니다(body)"]
+    );
+    let out = mcp_output(br#"{"type":"result","subtype":"success","is_error":false,"result":"{}","total_cost_usd":0.0123}"#);
+    assert_eq!(out.text.as_deref(), Some("{}"));
+    assert_eq!(out.cost, Some(0.0123));
+    assert!(out.error.is_none());
+    let err = mcp_output(br#"{"type":"result","subtype":"error_max_budget_usd","is_error":true}"#);
+    assert!(err.error.as_deref().is_some_and(|e| e.contains("error_max_budget_usd")));
+    assert_eq!(mcp_output(b"not json").error.as_deref(), Some("세션이 결과를 내지 않았습니다"));
+}
+
+/// 가짜 근거 저장소 — 메모리, 해시 대신 `sha-<글자 수>`(`tests/rules_reading.rs` 의 MemEvidence, `tests/rules_import.rs` 가 다시 둔 것과 같다)
+struct MemEvidence {
+    files: RefCell<BTreeMap<String, Vec<u8>>>,
+    removed: RefCell<Vec<String>>,
+}
+
+impl MemEvidence {
+    fn new() -> Self {
+        Self { files: RefCell::new(BTreeMap::new()), removed: RefCell::new(Vec::new()) }
+    }
+    fn files(&self) -> BTreeMap<String, Vec<u8>> {
+        self.files.borrow().clone()
+    }
+}
+
+impl EvidenceStore for MemEvidence {
+    fn read(&self, name: &str) -> Option<Vec<u8>> {
+        self.files.borrow().get(name).cloned()
+    }
+    fn write(&self, name: &str, data: &[u8]) -> Option<String> {
+        self.files.borrow_mut().insert(name.to_string(), data.to_vec());
+        Some(format!("sha-{}", data.len()))
+    }
+    fn remove(&self, name: &str) {
+        self.files.borrow_mut().remove(name);
+        self.removed.borrow_mut().push(name.to_string());
+    }
+}
+
+/// 가짜 시각 — 숫자 하나(`tests/rules_reading.rs` 의 PubClock 와 같다)
+struct PubClock {
+    t: Cell<f64>,
+}
+
+impl PubClock {
+    fn new(t: f64) -> Self {
+        PubClock { t: Cell::new(t) }
+    }
+}
+
+impl ReadClock for PubClock {
+    fn now(&self) -> f64 {
+        self.t.get()
+    }
+}
+
+/// 서일의 기준 시각(`tests/rules_reading.rs` 의 T0 와 같다)
+const T0: f64 = 1_793_340_000.0;
+
+/// 토큰 꼴 견본(가짜) — 글자 그대로 저장소에 남기지 않는다(`tests/rules_meta.rs` 의 FAKE_SECRET_GITHUB 와 같은 부분)
+const FAKE_SECRET_GITHUB: &str = concat!("gh", "p_", "Zz9Zz9Zz9Zz9Zz9Zz9Zz9Zz9Zz9Zz9Zz9Zz9");
+
+/// MCP 길의 비밀도 근거 묶음에 넣는 문에서 가리고 MANIFEST 에 수를 적는다(가린 뒤 다시 검사)
+#[test]
+fn 가리기() {
+    let raw = [
+        r#"{"format":"claude-board-meta","version":1,"source":"mcp","title":"위키","summary":["배포 키 "#,
+        FAKE_SECRET_GITHUB,
+        r#""],"sections":[{"title":"설정","text":"password=hunter2-fake"}]}"#,
+    ]
+    .concat();
+    let m = mcp_meta(&raw, "wiki", "https://wiki.example.com/p").meta.expect("메타");
+    let store = MemEvidence::new();
+    let w = add_evidence(&m, None, "", "https://wiki.example.com/p", "mcp", 0, 0, Some(0.01), &store, &PubClock::new(T0));
+    let w_entry = w.entry.expect(&w.note);
+    assert_eq!(w_entry.redacted, 2);
+    assert_eq!(w_entry.source, "mcp:wiki");
+    assert_eq!(w_entry.cost_usd, Some(0.01));
+    let all = store.files().values().map(|b| String::from_utf8_lossy(b).into_owned()).collect::<String>();
+    assert!(!all.contains(FAKE_SECRET_GITHUB) && !all.contains("hunter2") && all.contains("[가림:GitHub 토큰]"), "근거 파일에 비밀이 남는다: {all}");
+    let man = manifest_parse(store.read(MANIFEST_NAME).as_deref());
+    assert_eq!(man.first().map(|e| e.redacted), Some(2));
 }
 
 fn 한_서버(name: &str, server: Value) -> Vec<McpServer> {
