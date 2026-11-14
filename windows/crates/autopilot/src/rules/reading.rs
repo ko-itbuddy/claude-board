@@ -1,6 +1,4 @@
-//! (청크 Reading b/3 — 원본 1~477줄. PORTED.json 항목은 마지막 청크가 더한다)
-//! 자율주행 읽기(4단계 ⑩-2): 링크 → 읽을 대상, 읽기 요청 꼴(GET 만), 그림 주소 허용, 응답 → 메타. 원본: `Sources/AutopilotRules/Reading.swift` 1~477줄.
-//! 다음 청크(Reading c)는 478줄(MARK 읽기 유스케이스)부터 이어 쓴다.
+//! 자율주행 읽기(4단계 ⑩-2): 링크 → 읽을 대상, 읽기 요청 꼴(GET 만), 그림 주소 허용, 응답 → 메타, 메타 비밀 가림, 읽기 유스케이스와 에픽 칸. 원본: `Sources/AutopilotRules/Reading.swift` 1~650줄.
 //!
 //! Swift ↔ Rust 로 달라진 점:
 //! - `URLComponents(string:)` 는 `connections.rs` 의 `parse_url`(RFC 3986 손으로 옮긴 판)을 확장한 비공개 `parse_link_url` 로 읽는다. 차이:
@@ -13,7 +11,8 @@
 //! - `secrets: Set<String>` 은 `&HashSet<String>`(carry.rs 의 같은 바꿈).
 //! - 빈칸 깎기는 `.whitespacesAndNewlines` 대신 Rust `char::is_whitespace`(유니코드 White_Space — 같은 목록)를 썼다.
 //! - `addingPercentEncoding` 의 16진수는 원본처럼 대문자 두 자리다. `fields` 의 기본 인자는 부르는 쪽이 `JIRA_READ_FIELDS` 를 넣는다.
-//! - 비밀 가림은 이 청크에 비밀이 없어 그대로다(요청의 `auth` 는 꼴만 담는다).
+//! - 요청의 `auth` 는 꼴만 담아 비밀값이 남지 않는다. 비밀 가리기(`apRedact` 18 규칙)는 이 파일 뒤에 비공개 `redact_text`·`meta_redact` 로 옮겼다 —
+//!   `NSRegularExpression` 를 손으로 찾는 판으로 바꿨고(돌려 쓰는 탐욕·되감기는 원본 순서 대로), goldens 가 그 결과를 글자 그대로 묶는다.
 //! - `NSRegularExpression` 여섯(저장 형식 링·CDATA·태그 떼기와 닫는 꼬리 `</script\s*>` 따위)은 손으로 옮긴 찾기로 갔다. ICU 의 `.` 가 막는 줄은
 //!   LF·CR·U+0085(LNL·NEL)·U+2028(LS)·U+2029(PS) 다(Java 와 같이 0085 도 넣었다 — 실제 응답에 드물어 차이가 실리지 않는다). `\b` 는 왼쪽과 오른쪽의
 //!   낱말 글자 여부가 다른 자리로, 낱말 글자는 ASCII 영숫자·_ 에 유니코드 글자·숫자까지(ICU `\w`). `\s` 는 `char::is_whitespace` 로 본다(ICU `\s` 는
@@ -30,11 +29,12 @@ use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use crate::rules::connections::{
-    ap_expiry, auth_for, same_site, service_base, url_host, Auth, Connection, Expiry, HttpRequest, Service, UrlParts, NOTION_VERSION,
+    ap_expiry, auth_for, auth_header, same_site, service_base, url_host, Auth, AuthHeader, Connection, ConnHttp, ConnSecrets, Expiry,
+    HttpRequest, HttpResponse, Service, UrlParts, NOTION_VERSION,
 };
 use crate::rules::formats::grapheme_len;
 use crate::rules::links::{link_info, ApLink};
-use crate::rules::meta::{decode_entities, limit, meta_clamp, Frame, Meta, MetaField, MetaLink, Section, TextChunk, TocItem};
+use crate::rules::meta::{decode_entities, limit, meta_check, meta_clamp, meta_data, meta_text, Frame, Meta, MetaField, MetaLink, Section, TextChunk, TocItem};
 use crate::rules::stopline::Tz;
 use crate::rules::tickets::issue_key_ok;
 
@@ -1046,8 +1046,12 @@ fn strip_markup(raw: &str) -> String {
     s = strip_tag_spans(&s, &TAG_TD_TH, " ", false);
     s = strip_tags(&s);
     s = decode_entities(&s);
+    // 한 줄의 빈칸·탭·묻힘 빈칸(NBSP)은 빈칸 하나로 묶고, 가장자리 빈칸은 잘라서, 빈 줄은 버린다
     s.split('\n')
-        .map(collapse_ws)
+        .map(|line| {
+            let c = collapse_ws(line);
+            c.trim_matches(|c| c == ' ' || c == '\t' || c == '\u{A0}').to_string()
+        })
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
@@ -1296,7 +1300,7 @@ impl AdfChunking {
 }
 
 /// Jira 문서 형식(ADF) → 글 덩어리와 링크. 원본: `apADFChunks`(`Reading.swift` 186-231)
-fn adf_links(doc: &Map<String, Value>) -> (Vec<TextChunk>, Vec<MetaLink>) {
+pub fn adf_chunks(doc: &Map<String, Value>) -> (Vec<TextChunk>, Vec<MetaLink>) {
     let mut a = AdfChunking { chunks: Vec::new(), links: Vec::new(), cur: TextChunk::new(0, "", ""), lines: Vec::new(), budget: 20000 };
     for c in arr(doc.get("content")) {
         a.adf_block(c);
@@ -1364,7 +1368,7 @@ pub fn meta_from_jira(
     m.kind = name_of(dict(f.get("issuetype")));
     m.modified = sv(f.get("updated"));
     m.author = name_of(dict(f.get("reporter")));
-    let (chunks, links) = adf_links(dict(f.get("description")));
+    let (chunks, links) = adf_chunks(dict(f.get("description")));
     let c = chunked(&chunks, want, prompt);
     m.toc = c.toc;
     m.length = c.length;
@@ -1757,4 +1761,1123 @@ pub fn meta_from_figma(
     (meta_clamp(&m, dev), image_node)
 }
 
-// R-Reading-c 가 여기서 이어 쓴다
+// ── 읽기 유스케이스(원본 Reading.swift 478~560줄) ───────────────────
+
+/// 지금 시각 — 유스케이스가 어댑터의 실제 시계를 몰라도 되게 하는 포트. 원본: 포트 `APClock`
+pub trait ReadClock {
+    fn now(&self) -> f64;
+}
+
+/// 기다림(429 뒤에 다시 읽기까지). 원본: 포트 `APWaiter`
+pub trait ReadWaiter {
+    fn wait(&self, seconds: f64);
+}
+
+/// 링크 하나를 읽은 결과. 원본: `APReadResult`
+#[derive(Debug, Clone)]
+pub struct ReadResult {
+    pub target: ReadTarget,
+    pub meta: Option<Meta>,
+    /// 피그마 그림(PNG 본문)
+    pub image: Option<Vec<u8>>,
+    /// 그림을 받은 호스트
+    pub image_host: String,
+    pub image_note: String,
+    pub requests: usize,
+    /// 가린 비밀 수
+    pub redacted: usize,
+    pub note: String,
+    /// 쓴 연결 id(요청 0 이면 빈 글자)
+    pub connection: String,
+}
+
+impl ReadResult {
+    /// 메타를 받았는가
+    pub fn ok(&self) -> bool {
+        self.meta.is_some()
+    }
+}
+
+impl Default for ReadResult {
+    fn default() -> Self {
+        ReadResult {
+            target: ReadTarget::Web,
+            meta: None,
+            image: None,
+            image_host: String::new(),
+            image_note: String::new(),
+            requests: 0,
+            redacted: 0,
+            note: String::new(),
+            connection: String::new(),
+        }
+    }
+}
+
+/// 실패한 답을 사람 말로 — 받은 쪽의 오류가 있으면 그것이 먼저다. 원본: `apReadFailNote`
+pub fn read_fail_note(r: &HttpResponse) -> String {
+    if let Some(e) = &r.error {
+        return e.clone();
+    }
+    match r.status {
+        401 => "읽을 수 없음: 거부됨(401). 토큰이 틀렸거나 만료·취소됐습니다".to_string(),
+        403 => "읽을 수 없음: 권한 없음(403). 연결한 계정이 그 자리를 볼 수 없습니다".to_string(),
+        404 => "읽을 수 없음: 찾지 못했습니다(404). 주소의 번호·키를 확인합니다".to_string(),
+        410 => "읽을 수 없음: 지워진 글입니다(410)".to_string(),
+        429 => "읽을 수 없음: 요청이 많다며 거절했습니다(429). 잠시 뒤 다시 읽습니다".to_string(),
+        300..=399 => format!("읽을 수 없음: 다른 주소로 보내려 해 따라가지 않았습니다({})", r.status),
+        500..=599 => format!("읽을 수 없음: 받는 쪽 오류({})", r.status),
+        _ => format!("읽을 수 없음: 받는 쪽이 {} 로 답했습니다", r.status),
+    }
+}
+
+/// 답을 JSON 객체로 — 오류 없이 200 이고 본문이 4MB 안일 때만. 원본: `json`
+fn read_json(r: &HttpResponse) -> Option<Map<String, Value>> {
+    if r.error.is_some() || r.status != 200 || r.body.len() > (4 << 20) {
+        return None;
+    }
+    serde_json::from_slice::<Value>(&r.body).ok().and_then(|v| v.as_object().cloned())
+}
+
+/// 한 번 보내기에서 429·503 뒤 다시 보내는 횟수. 원본 `apRetryMax`
+const RETRY_MAX: i32 = 3;
+/// 한 번 기다리는 초 상한. 원본 `apRetryWaitMax`
+const RETRY_WAIT_MAX: f64 = 20.0;
+
+/// 429·503 에 응답 주인이 알려 준 기다림(초). 원본 `Outbox.swift` 의 `apRetryWait` — 아직 이식 전이라
+/// `notify_rules.rs` 의 비공개 두 번째 부본과 같은 것(세 번째 부본)을 여기에도 둔다
+fn retry_wait(status: i32, retry_after: Option<&str>, attempt: i32, now: f64) -> Option<f64> {
+    if !(status == 429 || status == 503) || attempt >= RETRY_MAX {
+        return None;
+    }
+    let mut w = 2f64.powi(attempt);
+    if let Some(h) = retry_after.map(str::trim).filter(|h| !h.is_empty()) {
+        if let Some(sec) = h.parse::<f64>().ok().filter(|sec| sec.is_finite()) {
+            w = sec;
+        } else if let Some(at) = http_date(h) {
+            w = at - now;
+        }
+    }
+    Some(w.clamp(1.0, RETRY_WAIT_MAX))
+}
+
+/// HTTP 때 글자(EEE, dd MMM yyyy HH:mm:ss zzz)를 유닉스 때로. 몫은 GMT·UTC 만 — `notify_rules.rs` 의 부본과 같은 것
+fn http_date(s: &str) -> Option<f64> {
+    const WEEKS: [&str; 7] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+    const MONTHS: [&str; 12] = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+    let mut it = s.split_whitespace();
+    let day_name = it.next()?.trim_end_matches(',');
+    let day = it.next()?.parse::<i64>().ok()?;
+    let mon = it.next()?;
+    let year = it.next()?.parse::<i64>().ok()?;
+    let time = it.next()?;
+    let zone = it.next()?;
+    if !WEEKS.iter().any(|w| day_name.eq_ignore_ascii_case(w))
+        || !MONTHS.iter().any(|m| mon.eq_ignore_ascii_case(m))
+        || !(zone.eq_ignore_ascii_case("gmt") || zone.eq_ignore_ascii_case("utc"))
+    {
+        return None;
+    }
+    let mut tm = time.split(':');
+    let hour = tm.next()?.parse::<i64>().ok()?;
+    let minute = tm.next()?.parse::<i64>().ok()?;
+    let second = tm.next()?.parse::<i64>().ok()?;
+    if !(0..=23).contains(&hour) || !(0..=59).contains(&minute) || !(0..=60).contains(&second) {
+        return None;
+    }
+    let month = MONTHS.iter().position(|m| mon.eq_ignore_ascii_case(m))?;
+    let epoch = days_from_civil(year, month as i64 + 1, day) * 86_400 + hour * 3600 + minute * 60 + second;
+    Some(epoch as f64)
+}
+
+/// 1970-01-01 부터 센 날 수(Howard Hinnant 의 days_from_civil) — `connections.rs` 같은 것의 다섯 번째 부본
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// 읽기의 `send` — GET 만, 연결의 바탕 주소 아래로만 보낸다. 429·503 은 retry-after 대로 기다렸다
+/// (예산 안이면) 다시 보낸다. 횟수는 결과의 `requests` 에 세고, 기다림은 `waiter` 로 시계를 옮겨 재며,
+/// 예산이 끝나면 마지막 답(실패)을 돌려준다. 원본: `apReadLink` 안의 `send`
+#[allow(clippy::too_many_arguments)]
+fn read_send(
+    http: &dyn ConnHttp,
+    clock: &dyn ReadClock,
+    waiter: &dyn ReadWaiter,
+    req: &HttpRequest,
+    header: Option<&AuthHeader>,
+    with_auth: bool,
+    base: &str,
+    start: f64,
+    budget: f64,
+    requests: &mut usize,
+) -> HttpResponse {
+    if req.method != "GET" {
+        return HttpResponse { error: Some("읽기는 GET 만 보냅니다".to_string()), ..Default::default() };
+    }
+    if with_auth && !same_site(&req.url, base) {
+        return HttpResponse { error: Some("연결한 사이트 밖 주소라 보내지 않았습니다".to_string()), ..Default::default() };
+    }
+    let mut attempt = 0i32;
+    loop {
+        *requests += 1;
+        let r = http.send(req, if with_auth { header } else { None });
+        let Some(w) = retry_wait(r.status, r.headers.get("retry-after").map(String::as_str), attempt, clock.now()) else {
+            return r;
+        };
+        if clock.now() + w > start + budget {
+            return r;
+        }
+        waiter.wait(w);
+        attempt += 1;
+    }
+}
+
+/// 링크 하나를 내장 REST 로 읽는다. 연결이 없거나 읽기 범위·토큰이 없거나 만료면 요청 0. 요청은 연결의 바탕 주소 아래로만
+/// (apSameSite — GET 만). 메타는 상한 안으로 자르고 비밀을 가린 뒤(redacted) 형식 검사(apMetaCheck)를 지난 것만 돌려준다.
+/// 원본: `apReadLink`
+#[allow(clippy::too_many_arguments)]
+pub fn read_link(
+    link: &str,
+    want: &[String],
+    prompt: &str,
+    connections: &[Connection],
+    dev: bool,
+    secrets: &dyn ConnSecrets,
+    http: &dyn ConnHttp,
+    clock: &dyn ReadClock,
+    waiter: &dyn ReadWaiter,
+    tz: Tz,
+    budget: f64,
+) -> ReadResult {
+    let mut res = ReadResult::default();
+    let site = connections.iter().find(|c| c.service == Service::Atlassian).and_then(|c| service_base(c, dev));
+    let target = read_target(link, site.as_deref());
+    res.target = target.clone();
+    match &target {
+        ReadTarget::Bad(why) => {
+            res.note = why.clone();
+            return res;
+        }
+        ReadTarget::Web => {
+            res.note = "내장하지 않은 주소입니다. MCP 서버를 골라 읽습니다".to_string();
+            return res;
+        }
+        _ => {}
+    }
+    let Some(svc) = target.service() else { return res };
+    let Some(c) = connections.iter().find(|c| c.service == svc) else {
+        res.note = format!("{} 연결이 없어 요청하지 않았습니다(설정 › 연결)", svc.label());
+        return res;
+    };
+    if let Some(why) = read_blocker(svc, Some(c), secrets.exists(&c.id), dev, clock.now(), tz) {
+        res.note = format!("{}. 요청하지 않았습니다", why);
+        return res;
+    }
+    // blocker 가 사이트 주소를 이미 봤으므로 여기엔 항상 온다
+    let Some(base) = service_base(c, dev) else { return res };
+    if svc == Service::Atlassian && !same_site(link, &base) {
+        res.note = "연결한 Atlassian 사이트와 다른 사이트의 주소라 요청하지 않았습니다".to_string();
+        return res;
+    }
+    let Some(token) = secrets.read(&c.id).filter(|t| !t.is_empty()) else {
+        res.note = format!("{} 토큰이 키체인에 없어 요청하지 않았습니다", svc.label());
+        return res;
+    };
+    res.connection = c.id.clone();
+    let auth = auth_for(c);
+    let header = auth_header(&auth, &token);
+    let start = clock.now();
+    let meta;
+    match &target {
+        ReadTarget::Jira { key } => {
+            let r = read_send(http, clock, waiter, &jira_issue_request(key, &base, auth_for(c), JIRA_READ_FIELDS), header.as_ref(), true, &base, start, budget, &mut res.requests);
+            let Some(o) = read_json(&r) else {
+                res.note = if r.status == 200 { "읽을 수 없음: 응답 꼴이 예상과 다릅니다".to_string() } else { read_fail_note(&r) };
+                return res;
+            };
+            meta = meta_from_jira(&o, key, &base, want, prompt, dev);
+        }
+        ReadTarget::Confluence { page } => {
+            let r = read_send(http, clock, waiter, &confluence_read_request(page, &base, auth_for(c)), header.as_ref(), true, &base, start, budget, &mut res.requests);
+            let Some(o) = read_json(&r) else {
+                res.note = if r.status == 200 { "읽을 수 없음: 응답 꼴이 예상과 다릅니다".to_string() } else { read_fail_note(&r) };
+                return res;
+            };
+            meta = meta_from_confluence(&o, page, &base, want, prompt, dev);
+        }
+        ReadTarget::Notion { page } => {
+            let r = read_send(http, clock, waiter, &notion_page_get_request(page, &base), header.as_ref(), true, &base, start, budget, &mut res.requests);
+            let Some(o) = read_json(&r) else {
+                res.note = if r.status == 404 {
+                    "읽을 수 없음: 찾지 못했습니다(404). Notion 은 통합을 그 페이지에 초대해야 읽힙니다(데이터베이스 주소는 아직 읽지 않습니다)".to_string()
+                } else {
+                    read_fail_note(&r)
+                };
+                return res;
+            };
+            let mut blocks: Vec<Map<String, Value>> = Vec::new();
+            let mut cursor: Option<String> = None;
+            for _ in 0..5 {
+                // 한 번에 100블록, 다섯 번(500블록)까지. 안쪽 블록(has_children)은 내려가지 않는다
+                let rb = read_send(http, clock, waiter, &notion_children_request(page, &base, cursor.as_deref()), header.as_ref(), true, &base, start, budget, &mut res.requests);
+                let Some(ob) = read_json(&rb) else {
+                    res.note = format!("본문 블록을 읽지 못했습니다: {}", read_fail_note(&rb));
+                    return res;
+                };
+                blocks.extend(arr(ob.get("results")).into_iter().cloned());
+                let next = ob.get("next_cursor").and_then(Value::as_str).filter(|x| !x.is_empty()).map(str::to_string);
+                if !(ob.get("has_more").and_then(Value::as_bool) == Some(true) && next.is_some()) {
+                    break;
+                }
+                cursor = next;
+            }
+            let refs: Vec<&Map<String, Value>> = blocks.iter().collect();
+            meta = meta_from_notion(&o, &refs, page, link, want, prompt, dev);
+        }
+        ReadTarget::Figma { file, node } => {
+            let r = read_send(http, clock, waiter, &figma_read_request(file, node.as_deref(), &base), header.as_ref(), true, &base, start, budget, &mut res.requests);
+            let Some(o) = read_json(&r) else {
+                res.note = if r.status == 200 { "읽을 수 없음: 응답 꼴이 예상과 다릅니다".to_string() } else { read_fail_note(&r) };
+                return res;
+            };
+            if let Some(nd) = node {
+                let f = dict(o.get("nodes")).get(nd);
+                if f.is_none() || f.is_some_and(Value::is_null) {
+                    res.note = format!("읽을 수 없음: 파일에 그 프레임({})이 없습니다", nd);
+                    return res;
+                }
+            }
+            let (m, frame) = meta_from_figma(&o, file, node.as_deref(), link, dev);
+            meta = m;
+            // 프레임 그림 한 장 — /v1/images 가 내보낸 그림 주소(다른 호스트)를 돌려준다. 허용 목록 안일 때만, 인증 머리 없이 받는다
+            if let Some(frame) = frame {
+                let ri = read_send(http, clock, waiter, &figma_image_request(file, &frame, &base), header.as_ref(), true, &base, start, budget, &mut res.requests);
+                let images = read_json(&ri).and_then(|j| j.get("images").cloned());
+                let url = sv(dict(images.as_ref()).get(&frame));
+                if url.is_empty() {
+                    res.image_note = if ri.status == 200 {
+                        "그림 주소를 받지 못했습니다".to_string()
+                    } else {
+                        format!("그림 주소를 받지 못했습니다({})", read_fail_note(&ri))
+                    };
+                } else if !image_url_ok(&url, dev) {
+                    res.image_note = format!("그림 주소가 허용한 호스트 밖이라 받지 않았습니다({})", url_host(&url));
+                } else {
+                    let mut g = HttpRequest { url: url.clone(), ..Default::default() };
+                    g.headers = BTreeMap::from([("Accept".to_string(), "image/png".to_string())]);
+                    let rg = read_send(http, clock, waiter, &g, None, false, &base, start, budget, &mut res.requests);
+                    if rg.error.is_none() && rg.status == 200 && rg.body.len() <= IMAGE_MAX_BYTES && is_png(&rg.body) {
+                        res.image = Some(rg.body.clone());
+                        res.image_host = url_host(&url);
+                    } else {
+                        res.image_note = if rg.status == 200 {
+                            "그림이 PNG 가 아니거나 너무 큽니다".to_string()
+                        } else {
+                            format!("그림을 받지 못했습니다: {}", read_fail_note(&rg))
+                        };
+                    }
+                }
+            }
+        }
+        _ => return res,
+    }
+    let (red, n) = meta_redact(&meta);
+    let json_value = serde_json::from_slice::<Value>(&meta_data(&red)).ok();
+    let checked = meta_check(json_value.as_ref(), false);
+    match checked.meta {
+        None => {
+            res.note = format!("형식 검사에 걸렸습니다: {}", checked.problems.iter().take(3).cloned().collect::<Vec<_>>().join(" · "));
+            res
+        }
+        Some(ok) => {
+            res.meta = Some(ok);
+            res.redacted = n;
+            res.note = "읽었습니다".to_string();
+            res
+        }
+    }
+}
+
+// ── 에픽 제목·상태(출발 준비의 에픽 칸, 5-2c 의 읽기 몫 — 원본 Reading.swift 606~649줄) ──
+
+/// 에픽 하나의 읽은 값. 원본: `APEpicInfo`(`type` 은 예약어라 `kind` 로 바꿨다)
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct EpicInfo {
+    pub key: String,
+    pub found: bool,
+    pub is_epic: bool,
+    pub title: String,
+    pub status: String,
+    /// Swift 원본의 `type`
+    pub kind: String,
+    pub note: String,
+    pub requests: usize,
+    /// 요청해서 답을 받았는가(연결이 없어 요청하지 않았으면 false)
+    pub read: bool,
+}
+
+/// 에픽 판정 — 이슈 종류의 계층 수준이 1(에픽 자리)이면 에픽, 그 값이 없으면 종류 이름이 Epic·에픽.
+/// 원본: `apIsEpicType`
+pub fn is_epic_type(t: &Map<String, Value>) -> bool {
+    if let Some(lv) = t.get("hierarchyLevel").and_then(Value::as_i64) {
+        return lv == 1;
+    }
+    let n = sv(t.get("name")).to_lowercase();
+    n == "epic" || n == "에픽"
+}
+
+/// 에픽 번호 하나를 읽어 제목·상태를 채운다. 원본: `apReadEpic`
+pub fn read_epic(key: &str, connections: &[Connection], dev: bool, secrets: &dyn ConnSecrets, http: &dyn ConnHttp, clock: &dyn ReadClock, tz: Tz) -> EpicInfo {
+    let mut e = EpicInfo { key: key.to_string(), ..Default::default() };
+    if !issue_key_ok(key) {
+        e.note = "에픽 번호 꼴이 아닙니다(예: SHOP-10)".to_string();
+        return e;
+    }
+    let c = connections.iter().find(|c| c.service == Service::Atlassian);
+    let has_secret = c.is_some_and(|x| secrets.exists(&x.id));
+    if let Some(why) = read_blocker(Service::Atlassian, c, has_secret, dev, clock.now(), tz) {
+        e.note = format!("{}. 번호 꼴만 봤습니다", why);
+        return e;
+    }
+    let Some(c) = c else { return e };
+    let Some(base) = service_base(c, dev) else { return e };
+    let Some(token) = secrets.read(&c.id).filter(|t| !t.is_empty()) else {
+        e.note = "Atlassian 토큰이 키체인에 없습니다. 번호 꼴만 봤습니다".to_string();
+        return e;
+    };
+    let req = jira_issue_request(key, &base, auth_for(c), "summary,status,issuetype");
+    if !same_site(&req.url, &base) {
+        e.note = "사이트 주소가 규칙에 맞지 않습니다".to_string();
+        return e;
+    }
+    e.requests = 1;
+    let r = http.send(&req, auth_header(&auth_for(c), &token).as_ref());
+    if r.status == 404 {
+        e.read = true;
+        e.note = format!("{} 이슈가 없습니다(404). 에픽 번호를 확인합니다", key);
+        return e;
+    }
+    let Some(o) = read_json(&r) else {
+        e.note = read_fail_note(&r);
+        return e;
+    };
+    let f = dict(o.get("fields"));
+    e.read = true;
+    e.found = true;
+    e.title = meta_text(&sv(f.get("summary")), 200);
+    e.status = meta_text(&name_of(dict(f.get("status"))), 80);
+    e.kind = meta_text(&name_of(dict(f.get("issuetype"))), 80);
+    e.is_epic = is_epic_type(dict(f.get("issuetype")));
+    e.note = if e.is_epic {
+        "에픽입니다".to_string()
+    } else {
+        format!("{} 은 {}입니다. 에픽 번호를 넣어 주세요", key, if e.kind.is_empty() { "에픽이 아닌 이슈" } else { &e.kind })
+    };
+    e
+}
+
+// ────────────────────────── 비밀 가림(원본 Meta.swift 475~548줄) ──────────────────────────
+
+/// 가리기 18 규칙은 `NSRegularExpression` 표(redactRules)를 손으로 찾는 판으로 옮겼다. 각 규칙의 찾기는 맞은 자리(바이트 자리, 괄호 묶음 자리 포함)를 돌려주고
+/// 원본 순서 대로 한 규칙씩, 앞 규칙이 바꾼 글자 위에 겹쳐 돌린다. 탐욕·되감기도 원본의 순서(괄호 갈래 → 탐욕 집합 → 뒷부분)를 그대로 따른다.
+/// `(?i)` 는 `ci_starts`·ASCII 집합, `\b` 는 위쪽의 `word_boundary`(ICU `\w`), `\s` 는 위쪽과 같이 `char::is_whitespace` 로 본다.
+/// 규칙 하나의 맞음 — 자리는 바이트(슬라이스는 늘 글자 경계다)
+struct RedactMatch {
+    /// 맞은 꼴 전체
+    span: (usize, usize),
+    /// $1 부터의 괄호 묶음 자리(있다면)
+    groups: Vec<(usize, usize)>,
+}
+
+/// 대체 꼴 — 원본 표의 각 규칙 둘째 칸
+enum RedactRep {
+    /// 글자 그대로
+    Lit(&'static str),
+    /// `$1[가림:주소 암호]@`(규칙 2)
+    Userinfo,
+    /// `$1 [가림:인증 값]`(규칙 16)
+    AuthVal,
+    /// `$1$2[가림:비밀 값]`(규칙 17·18)
+    Assign,
+}
+
+/// 자리 i 부터 집합이 이어지는 만큼(탐욕) — 끝 자리를 돌려준다
+fn redact_run(t: &str, i: usize, class: impl Fn(char) -> bool) -> usize {
+    let mut e = i;
+    for c in t[i..].chars() {
+        if class(c) {
+            e += c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    e
+}
+
+/// 바이트 자리 a..b 의 글자 수
+fn redact_len(t: &str, a: usize, b: usize) -> usize {
+    t[a..b].chars().count()
+}
+
+/// 가장 앞의 겹치지 않는 맞음을 전부 — 원본 stringByReplacingMatches 의 탐색과 같다
+fn redact_all(t: &str, at: impl Fn(usize) -> Option<RedactMatch>) -> Vec<RedactMatch> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < t.len() {
+        if let Some(m) = at(i) {
+            i = m.span.1;
+            out.push(m);
+        } else {
+            i += t[i..].chars().next().map_or(1, char::len_utf8);
+        }
+    }
+    out
+}
+
+/// `https?://` 다음 자리 — `(?i)` 이라 대·소문자 안 가린다
+fn redact_scheme(t: &str, i: usize) -> Option<usize> {
+    if ci_starts(&t[i..], "https://") {
+        Some(i + 8)
+    } else if ci_starts(&t[i..], "http://") {
+        Some(i + 7)
+    } else {
+        None
+    }
+}
+
+/// 규칙 2~5 의 주소 시작 — `\bhttps?://`
+fn redact_url(t: &str, i: usize) -> Option<usize> {
+    if !word_boundary(t, i) {
+        return None;
+    }
+    redact_scheme(t, i)
+}
+
+/// 개인 키의 꼬리(규칙 1) — `PRIVATE KEY-----`
+const PEM_KEY: &str = "PRIVATE KEY-----";
+
+/// 규칙 1의 집합 `[A-Z0-9 ]`
+fn pem_c(c: char) -> bool {
+    c.is_ascii_uppercase() || c.is_ascii_digit() || c == ' '
+}
+
+/// `-----END … PRIVATE KEY-----` 를 (가운데가 모든 글자인) 제일 이른 자리부터
+fn pem_end(t: &str, s0: usize) -> Option<usize> {
+    let mut k = s0;
+    while k <= t.len() {
+        if t[k..].starts_with("-----END ") {
+            let r2 = k + 9;
+            let e2 = redact_run(t, r2, pem_c);
+            for j2 in (r2..=e2).rev() {
+                if t[j2..].starts_with(PEM_KEY) {
+                    return Some(j2 + PEM_KEY.len());
+                }
+            }
+        }
+        if k == t.len() {
+            return None;
+        }
+        k += t[k..].chars().next().map_or(1, char::len_utf8);
+    }
+    None
+}
+
+/// 규칙 1 — `-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----` → `[가림:개인 키]`
+fn redact_pem(t: &str) -> Vec<RedactMatch> {
+    redact_all(t, |i| {
+        if !t[i..].starts_with("-----BEGIN ") {
+            return None;
+        }
+        let r = i + 11;
+        let e = redact_run(t, r, pem_c);
+        // 탐욕 집합의 되감기: `PRIVATE KEY-----` 를 집합의 끝부터
+        for j in (r..=e).rev() {
+            if t[j..].starts_with(PEM_KEY) {
+                if let Some(end) = pem_end(t, j + PEM_KEY.len()) {
+                    return Some(RedactMatch { span: (i, end), groups: Vec::new() });
+                }
+            }
+        }
+        None
+    })
+}
+
+/// 규칙 2 — `\b(https?://)[^/\s:@"'<>]+:[^/\s@"'<>]+@` → `$1[가림:주소 암호]@`
+fn redact_userinfo(t: &str) -> Vec<RedactMatch> {
+    redact_all(t, |i| {
+        let p = redact_url(t, i)?;
+        let c1 = |c: char| !(c.is_whitespace() || c == '/' || c == ':' || c == '"' || c == '\'' || c == '<' || c == '>');
+        let e1 = redact_run(t, p, c1);
+        if e1 == p || !t[e1..].starts_with(':') {
+            return None;
+        }
+        let p2 = e1 + 1;
+        let c2 = |c: char| !(c.is_whitespace() || c == '/' || c == '@' || c == '"' || c == '\'' || c == '<' || c == '>');
+        let e2 = redact_run(t, p2, c2);
+        if e2 == p2 || !t[e2..].starts_with('@') {
+            return None;
+        }
+        Some(RedactMatch { span: (i, e2 + 1), groups: vec![(i, p)] })
+    })
+}
+
+/// `[^\s"'<>)\]]` — webhook 주소의 꼬리 집합
+fn path_c(c: char) -> bool {
+    !(c.is_whitespace() || c == '"' || c == '\'' || c == '<' || c == '>' || c == ')' || c == ']')
+}
+
+/// webhook 다섯 갈래(규칙 3)를 원본 순서 대로 — 맞은 곳의 끝 자리
+fn redact_webhook_host(t: &str, p: usize) -> Option<usize> {
+    // hooks\.slack\.com/(services|workflows|triggers)
+    if ci_starts(&t[p..], "hooks.slack.com/") {
+        let s0 = p + 16;
+        for w in ["services", "workflows", "triggers"] {
+            if ci_starts(&t[s0..], w) {
+                let s = s0 + w.len();
+                if t[s..].starts_with('/') {
+                    let e = redact_run(t, s + 1, path_c);
+                    if e > s + 1 {
+                        return Some(e);
+                    }
+                }
+                break; // 셋은 서로 앞글자가 달라 다른 갈래는 재볼 필요가 없다
+            }
+        }
+    }
+    // discord(app)?\.com/api/webhooks
+    for d in ["discordapp.com/api/webhooks", "discord.com/api/webhooks"] {
+        if ci_starts(&t[p..], d) {
+            let s = p + d.len();
+            if t[s..].starts_with('/') {
+                let e = redact_run(t, s + 1, path_c);
+                if e > s + 1 {
+                    return Some(e);
+                }
+            }
+            break; // "app" 의 유무 두 갈래뿐이다
+        }
+    }
+    // chat\.googleapis\.com/v1/spaces
+    let g = "chat.googleapis.com/v1/spaces";
+    if ci_starts(&t[p..], g) {
+        let s = p + g.len();
+        if t[s..].starts_with('/') {
+            let e = redact_run(t, s + 1, path_c);
+            if e > s + 1 {
+                return Some(e);
+            }
+        }
+    }
+    // [a-z0-9.-]*\.webhook\.office\.com — 탐욕 집합의 되감기
+    let host = |c: char| c.is_ascii_alphanumeric() || c == '.' || c == '-';
+    let e_h = redact_run(t, p, host);
+    for j in (p..=e_h).rev() {
+        if ci_starts(&t[j..], ".webhook.office.com") {
+            let s = j + 19;
+            if t[s..].starts_with('/') {
+                let e = redact_run(t, s + 1, path_c);
+                if e > s + 1 {
+                    return Some(e);
+                }
+            }
+        }
+    }
+    if ci_starts(&t[p..], "outlook.office.com/webhook") {
+        let s = p + 26;
+        if t[s..].starts_with('/') {
+            let e = redact_run(t, s + 1, path_c);
+            if e > s + 1 {
+                return Some(e);
+            }
+        }
+    }
+    None
+}
+
+/// 규칙 3 — `\bhttps?://` + 흔한 webhook 서비스 주소 → `[가림:webhook 주소]`
+fn redact_webhook_known(t: &str) -> Vec<RedactMatch> {
+    redact_all(t, |i| {
+        let p = redact_url(t, i)?;
+        let end = redact_webhook_host(t, p)?;
+        Some(RedactMatch { span: (i, end), groups: Vec::new() })
+    })
+}
+
+/// 규칙 4 — `\bhttps?://(hooks?|webhooks?)\.[a-z0-9.-]+/[^\s"'<>)\]]{8,}` → `[가림:webhook 주소]`
+fn redact_webhook_any(t: &str) -> Vec<RedactMatch> {
+    redact_all(t, |i| {
+        let p = redact_url(t, i)?;
+        for w in ["hooks", "hook", "webhooks", "webhook"] {
+            if ci_starts(&t[p..], w) && t[p + w.len()..].starts_with('.') {
+                let h = p + w.len() + 1;
+                let host = |c: char| c.is_ascii_alphanumeric() || c == '.' || c == '-';
+                let e_h = redact_run(t, h, host);
+                if t[e_h..].starts_with('/') {
+                    let q = e_h + 1;
+                    let e = redact_run(t, q, path_c);
+                    if redact_len(t, q, e) >= 8 {
+                        return Some(RedactMatch { span: (i, e), groups: Vec::new() });
+                    }
+                }
+            }
+        }
+        None
+    })
+}
+
+/// 가운데 오른쪽부터의 `\b(hooks?|webhooks?)/[A-Za-z0-9_./-]{16,}[^\s"'<>)\]]*`
+fn webhook_path_hook(t: &str, q: usize) -> Option<usize> {
+    if !word_boundary(t, q) {
+        return None;
+    }
+    for w in ["hooks", "hook", "webhooks", "webhook"] {
+        if ci_starts(&t[q..], w) && t[q + w.len()..].starts_with('/') {
+            let s = q + w.len() + 1;
+            let token = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '-');
+            let e_t = redact_run(t, s, token);
+            if redact_len(t, s, e_t) >= 16 {
+                return Some(redact_run(t, e_t, path_c));
+            }
+        }
+    }
+    None
+}
+
+/// 규칙 5 — `\bhttps?://[^\s"'<>/]+/[^\s"'<>]*\b(hooks?|webhooks?)/[A-Za-z0-9_./-]{16,}[^\s"'<>)\]]*` → `[가림:webhook 주소]`
+fn redact_webhook_path(t: &str) -> Vec<RedactMatch> {
+    redact_all(t, |i| {
+        let p = redact_url(t, i)?;
+        let host = |c: char| !(c.is_whitespace() || c == '"' || c == '\'' || c == '<' || c == '>' || c == '/');
+        let e_h = redact_run(t, p, host);
+        if e_h == p || !t[e_h..].starts_with('/') {
+            return None;
+        }
+        let mid_s = e_h + 1;
+        let mid = |c: char| !(c.is_whitespace() || c == '"' || c == '\'' || c == '<' || c == '>');
+        let mid_e = redact_run(t, mid_s, mid);
+        // 탐욕 집합의 되감기: `\b(hooks?|webhooks?)/` 를 가운데의 끝부터
+        let mut q = mid_e;
+        loop {
+            if let Some(end) = webhook_path_hook(t, q) {
+                return Some(RedactMatch { span: (i, end), groups: Vec::new() });
+            }
+            if q <= mid_s {
+                break;
+            }
+            q -= t[..q].chars().next_back().map_or(1, char::len_utf8);
+        }
+        None
+    })
+}
+
+/// 규칙 6 — `\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{6,}` → `[가림:JWT]`
+fn redact_jwt(t: &str) -> Vec<RedactMatch> {
+    redact_all(t, |i| {
+        if !word_boundary(t, i) || !t[i..].starts_with("eyJ") {
+            return None;
+        }
+        let c = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+        let e1 = redact_run(t, i + 3, c);
+        if !(redact_len(t, i + 3, e1) >= 8 && t[e1..].starts_with('.')) {
+            return None;
+        }
+        let p2 = e1 + 1;
+        let e2 = redact_run(t, p2, c);
+        if !(redact_len(t, p2, e2) >= 8 && t[e2..].starts_with('.')) {
+            return None;
+        }
+        let p3 = e2 + 1;
+        let e3 = redact_run(t, p3, c);
+        if redact_len(t, p3, e3) >= 6 {
+            return Some(RedactMatch { span: (i, e3), groups: Vec::new() });
+        }
+        None
+    })
+}
+
+/// 규칙 7 — `\bAT(ATT|CTT)[A-Za-z0-9_=-]{20,}` → `[가림:Atlassian 토큰]`
+fn redact_atlassian(t: &str) -> Vec<RedactMatch> {
+    redact_all(t, |i| {
+        if !word_boundary(t, i) || !t[i..].starts_with("AT") {
+            return None;
+        }
+        if !t[i + 2..].starts_with("ATT") && !t[i + 2..].starts_with("CTT") {
+            return None;
+        }
+        let a = i + 5;
+        let c = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '=' | '-');
+        let e = redact_run(t, a, c);
+        if redact_len(t, a, e) >= 20 {
+            return Some(RedactMatch { span: (i, e), groups: Vec::new() });
+        }
+        None
+    })
+}
+
+/// 규칙 8 — `\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})` → `[가림:GitHub 토큰]`
+fn redact_github(t: &str) -> Vec<RedactMatch> {
+    redact_all(t, |i| {
+        if !word_boundary(t, i) {
+            return None;
+        }
+        if t[i..].starts_with("gh") {
+            let b = t[i + 2..].bytes().next();
+            if matches!(b, Some(b'p') | Some(b'o') | Some(b'u') | Some(b's') | Some(b'r')) && t[i + 3..].starts_with('_') {
+                let a = i + 4;
+                let e = redact_run(t, a, |c| c.is_ascii_alphanumeric());
+                if redact_len(t, a, e) >= 20 {
+                    return Some(RedactMatch { span: (i, e), groups: Vec::new() });
+                }
+            }
+        }
+        if t[i..].starts_with("github_pat_") {
+            let a = i + 11;
+            let c = |c: char| c.is_ascii_alphanumeric() || c == '_';
+            let e = redact_run(t, a, c);
+            if redact_len(t, a, e) >= 20 {
+                return Some(RedactMatch { span: (i, e), groups: Vec::new() });
+            }
+        }
+        None
+    })
+}
+
+/// 규칙 9 — `\bglpat-[A-Za-z0-9_-]{20,}` → `[가림:GitLab 토큰]`
+fn redact_gitlab(t: &str) -> Vec<RedactMatch> {
+    redact_all(t, |i| {
+        if !word_boundary(t, i) || !t[i..].starts_with("glpat-") {
+            return None;
+        }
+        let a = i + 6;
+        let c = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+        let e = redact_run(t, a, c);
+        if redact_len(t, a, e) >= 20 {
+            return Some(RedactMatch { span: (i, e), groups: Vec::new() });
+        }
+        None
+    })
+}
+
+/// 규칙 10 — `\bxox[abposr]-[A-Za-z0-9-]{10,}` → `[가림:Slack 토큰]`
+fn redact_slack(t: &str) -> Vec<RedactMatch> {
+    redact_all(t, |i| {
+        if !word_boundary(t, i) || !t[i..].starts_with("xox") {
+            return None;
+        }
+        let b = t[i + 3..].bytes().next();
+        if !matches!(b, Some(b'a') | Some(b'b') | Some(b'p') | Some(b'o') | Some(b's') | Some(b'r')) || t[i + 4..].bytes().next() != Some(b'-') {
+            return None;
+        }
+        let a = i + 5;
+        let c = |c: char| c.is_ascii_alphanumeric() || c == '-';
+        let e = redact_run(t, a, c);
+        if redact_len(t, a, e) >= 10 {
+            return Some(RedactMatch { span: (i, e), groups: Vec::new() });
+        }
+        None
+    })
+}
+
+/// 규칙 11 — `\b(AKIA|ASIA)[0-9A-Z]{16}\b` → `[가림:AWS 키]`
+fn redact_aws(t: &str) -> Vec<RedactMatch> {
+    redact_all(t, |i| {
+        if !word_boundary(t, i) || (!t[i..].starts_with("AKIA") && !t[i..].starts_with("ASIA")) {
+            return None;
+        }
+        let a = i + 4;
+        let c = |c: char| c.is_ascii_digit() || c.is_ascii_uppercase();
+        let e = redact_run(t, a, c);
+        // 정확 16 — 집합이 넘으면 17째 글자도 집합이라 뒤 경계가 무너진다
+        if redact_len(t, a, e) == 16 && word_boundary(t, e) {
+            return Some(RedactMatch { span: (i, e), groups: Vec::new() });
+        }
+        None
+    })
+}
+
+/// 규칙 12 — `\bsk-(ant-)?[A-Za-z0-9_-]{20,}` → `[가림:API 키]`
+fn redact_apikey(t: &str) -> Vec<RedactMatch> {
+    redact_all(t, |i| {
+        if !word_boundary(t, i) || !t[i..].starts_with("sk-") {
+            return None;
+        }
+        // (ant-)? 탐욕 — 있는 먼저, 짧다면 없는 판으로
+        for a in [i + 7, i + 3] {
+            if a == i + 7 && !t[i + 3..].starts_with("ant-") {
+                continue;
+            }
+            let c = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+            let e = redact_run(t, a, c);
+            if redact_len(t, a, e) >= 20 {
+                return Some(RedactMatch { span: (i, e), groups: Vec::new() });
+            }
+        }
+        None
+    })
+}
+
+/// 규칙 13 — `\bAIza[0-9A-Za-z_-]{35}\b` → `[가림:Google API 키]`
+fn redact_google(t: &str) -> Vec<RedactMatch> {
+    redact_all(t, |i| {
+        if !word_boundary(t, i) || !t[i..].starts_with("AIza") {
+            return None;
+        }
+        let a = i + 4;
+        let c = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+        let e = redact_run(t, a, c);
+        if redact_len(t, a, e) == 35 && word_boundary(t, e) {
+            return Some(RedactMatch { span: (i, e), groups: Vec::new() });
+        }
+        None
+    })
+}
+
+/// 규칙 14 — `\b(secret_|ntn_)[A-Za-z0-9]{20,}` → `[가림:Notion 토큰]`
+fn redact_notion(t: &str) -> Vec<RedactMatch> {
+    redact_all(t, |i| {
+        if !word_boundary(t, i) {
+            return None;
+        }
+        for (pre, a) in [("secret_", i + 7), ("ntn_", i + 4)] {
+            if !t[i..].starts_with(pre) {
+                continue;
+            }
+            let e = redact_run(t, a, |c| c.is_ascii_alphanumeric());
+            if redact_len(t, a, e) >= 20 {
+                return Some(RedactMatch { span: (i, e), groups: Vec::new() });
+            }
+            break; // 두 갈래는 서로 앞글자가 달라
+        }
+        None
+    })
+}
+
+/// 규칙 15 — `\bfigd_[A-Za-z0-9_-]{20,}` → `[가림:Figma 토큰]`
+fn redact_figma(t: &str) -> Vec<RedactMatch> {
+    redact_all(t, |i| {
+        if !word_boundary(t, i) || !t[i..].starts_with("figd_") {
+            return None;
+        }
+        let a = i + 5;
+        let c = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+        let e = redact_run(t, a, c);
+        if redact_len(t, a, e) >= 20 {
+            return Some(RedactMatch { span: (i, e), groups: Vec::new() });
+        }
+        None
+    })
+}
+
+/// 규칙 16 — `(?i)\b(bearer|basic)\s+(?!\[가림)[A-Za-z0-9._~+/=-]{16,}` → `$1 [가림:인증 값]`
+fn redact_auth_word(t: &str) -> Vec<RedactMatch> {
+    redact_all(t, |i| {
+        if !word_boundary(t, i) {
+            return None;
+        }
+        let wlen = if ci_starts(&t[i..], "bearer") {
+            6
+        } else if ci_starts(&t[i..], "basic") {
+            5
+        } else {
+            return None;
+        };
+        let p = i + wlen;
+        let w1 = redact_run(t, p, char::is_whitespace);
+        if w1 == p {
+            return None;
+        }
+        if t[w1..].starts_with("[가림") {
+            return None;
+        }
+        let c = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '~' | '+' | '/' | '=' | '-');
+        let e = redact_run(t, w1, c);
+        if redact_len(t, w1, e) >= 16 {
+            return Some(RedactMatch { span: (i, e), groups: vec![(i, p)] });
+        }
+        None
+    })
+}
+
+/// 규칙 17의 낱말(원본 갈래 순서) — `api[_-]?key` 같은 갈래는 가능한 꼴을 순서로 펼쳤다
+fn assign_word_latin(x: &str) -> Option<usize> {
+    const W: [&str; 17] = [
+        "password", "passwd", "pwd", "secret", "token",
+        "api_key", "api-key", "apikey",
+        "access_key", "access-key", "accesskey",
+        "client_secret", "client-secret", "clientsecret",
+        "private_key", "private-key", "privatekey",
+    ];
+    W.iter().find(|w| ci_starts(x, w)).map(|w| w.len())
+}
+
+/// 규칙 18의 낱말 — Korean 은 그대로(원본 갈래에 대·소문자 뒤집기가 없다)
+fn assign_word_korean(x: &str) -> Option<usize> {
+    const W: [&str; 4] = ["비밀번호", "암호", "토큰", "비밀 키"];
+    W.iter().find(|w| x.starts_with(*w)).map(|w| w.len())
+}
+
+/// 할당 비밀(규칙 17·18 공통) — `낱말(\s*[:=：]\s*["']?)(?!\[가림)[^\s"',;]{최소,}`
+fn redact_assign(t: &str, word: fn(&str) -> Option<usize>, is_sep: fn(char) -> bool, bounded: bool, min: usize) -> Vec<RedactMatch> {
+    redact_all(t, |i| {
+        if bounded && !word_boundary(t, i) {
+            return None;
+        }
+        let wlen = word(&t[i..])?;
+        let p = i + wlen;
+        let w1 = redact_run(t, p, char::is_whitespace);
+        let c0 = t[w1..].chars().next()?;
+        if !is_sep(c0) {
+            return None;
+        }
+        let q = w1 + c0.len_utf8();
+        let w2 = redact_run(t, q, char::is_whitespace);
+        // ["']? 탐욕 — 따옴표가 있으면 그 뒤, 없으면 그 자리
+        let q2 = match t[w2..].chars().next() {
+            Some('"') | Some('\'') => w2 + 1,
+            _ => w2,
+        };
+        if t[q2..].starts_with("[가림") {
+            return None;
+        }
+        let c = |c: char| !(c.is_whitespace() || c == '"' || c == '\'' || c == ',' || c == ';');
+        let e = redact_run(t, q2, c);
+        if redact_len(t, q2, e) >= min {
+            return Some(RedactMatch { span: (i, e), groups: vec![(i, p), (p, q2)] });
+        }
+        None
+    })
+}
+
+/// 규칙 17 — `(?i)\b(password|…)(\s*[:=]\s*["']?)(?!\[가림)[^\s"',;]{6,}` → `$1$2[가림:비밀 값]`
+fn redact_assign_latin(t: &str) -> Vec<RedactMatch> {
+    redact_assign(t, assign_word_latin, |c| c == ':' || c == '=', true, 6)
+}
+
+/// 규칙 18 — `(비밀번호|암호|토큰|비밀 키)(\s*[:=：]\s*["']?)(?!\[가림)[^\s"',;]{4,}` → `$1$2[가림:비밀 값]`
+fn redact_assign_korean(t: &str) -> Vec<RedactMatch> {
+    redact_assign(t, assign_word_korean, |c| c == ':' || c == '=' || c == '：', false, 4)
+}
+
+type RedactFinder = fn(&str) -> Vec<RedactMatch>;
+
+/// 규칙 표 — 원본 redactRules 의 순서 그대로(찾기, 대체 꼴)
+fn redact_rules() -> Vec<(RedactFinder, RedactRep)> {
+    vec![
+        (redact_pem, RedactRep::Lit("[가림:개인 키]")),
+        (redact_userinfo, RedactRep::Userinfo),
+        (redact_webhook_known, RedactRep::Lit("[가림:webhook 주소]")),
+        (redact_webhook_any, RedactRep::Lit("[가림:webhook 주소]")),
+        (redact_webhook_path, RedactRep::Lit("[가림:webhook 주소]")),
+        (redact_jwt, RedactRep::Lit("[가림:JWT]")),
+        (redact_atlassian, RedactRep::Lit("[가림:Atlassian 토큰]")),
+        (redact_github, RedactRep::Lit("[가림:GitHub 토큰]")),
+        (redact_gitlab, RedactRep::Lit("[가림:GitLab 토큰]")),
+        (redact_slack, RedactRep::Lit("[가림:Slack 토큰]")),
+        (redact_aws, RedactRep::Lit("[가림:AWS 키]")),
+        (redact_apikey, RedactRep::Lit("[가림:API 키]")),
+        (redact_google, RedactRep::Lit("[가림:Google API 키]")),
+        (redact_notion, RedactRep::Lit("[가림:Notion 토큰]")),
+        (redact_figma, RedactRep::Lit("[가림:Figma 토큰]")),
+        (redact_auth_word, RedactRep::AuthVal),
+        (redact_assign_latin, RedactRep::Assign),
+        (redact_assign_korean, RedactRep::Assign),
+    ]
+}
+
+/// 맞은 자리들을 대체 꼴로 바꾼 글자(자리가 바뀌지 않은 그 기준이라 순서 대로 이어 붙인다)
+fn redact_replace(t: &str, ms: &[RedactMatch], rep: RedactRep) -> String {
+    let mut out = String::with_capacity(t.len() + 16 * ms.len());
+    let mut pos = 0;
+    for m in ms {
+        out.push_str(&t[pos..m.span.0]);
+        match rep {
+            RedactRep::Lit(l) => out.push_str(l),
+            RedactRep::Userinfo => {
+                let g = m.groups[0];
+                out.push_str(&t[g.0..g.1]);
+                out.push_str("[가림:주소 암호]@");
+            }
+            RedactRep::AuthVal => {
+                let g = m.groups[0];
+                out.push_str(&t[g.0..g.1]);
+                out.push_str(" [가림:인증 값]");
+            }
+            RedactRep::Assign => {
+                for g in &m.groups {
+                    out.push_str(&t[g.0..g.1]);
+                }
+                out.push_str("[가림:비밀 값]");
+            }
+        }
+        pos = m.span.1;
+    }
+    out.push_str(&t[pos..]);
+    out
+}
+
+/// 글 하나의 비밀 꼴 18 규칙을 가린다 — (가린 글, 가린 수). 원본: `apRedact`
+fn redact_text(s: &str) -> (String, usize) {
+    let mut t = s.to_string();
+    let mut n = 0;
+    for (find, rep) in redact_rules() {
+        let ms = find(&t);
+        if ms.is_empty() {
+            continue;
+        }
+        n += ms.len();
+        t = redact_replace(&t, &ms, rep);
+    }
+    (t, n)
+}
+
+/// 메타의 글 칸을 비밀 꼴 18 규칙으로 가린다(주소 칸도 — 물음표 뒤 열쇠가 든 주소). 원본: `apMetaRedact`
+fn meta_redact(m0: &Meta) -> (Meta, usize) {
+    let mut m = m0.clone();
+    let mut n = 0;
+    fn r(n: &mut usize, s: &str) -> String {
+        let (x, k) = redact_text(s);
+        *n += k;
+        x
+    }
+    m.id = r(&mut n, &m.id);
+    m.url = r(&mut n, &m.url);
+    m.title = r(&mut n, &m.title);
+    m.kind = r(&mut n, &m.kind);
+    m.author = r(&mut n, &m.author);
+    m.toc = m.toc.iter().map(|x| {
+        let title = r(&mut n, &x.title);
+        TocItem::new(x.level, &title) // 수준은 그대로
+    }).collect();
+    m.fields = m.fields.iter().map(|x| {
+        let value = r(&mut n, &x.value);
+        MetaField::new(&x.name, &value) // 이름은 그대로
+    }).collect();
+    m.links = m.links.iter().map(|l| {
+        let u = r(&mut n, &l.url);
+        let u = if u.contains("[가림:") { String::new() } else { u }; // 가린 주소는 주소로 못 쓰니 비운다(제목은 남긴다)
+        let title = r(&mut n, &l.title);
+        MetaLink::new(&title, &u, &l.kind)
+    }).collect();
+    if m.url.contains("[가림:") {
+        m.url = String::new();
+    }
+    m.summary = m.summary.iter().map(|x| r(&mut n, x)).collect();
+    m.sections = m.sections.iter().map(|x| {
+        let title = r(&mut n, &x.title);
+        let text = r(&mut n, &x.text);
+        Section::new(&title, &text)
+    }).collect();
+    m.frames = m.frames.iter().map(|f| {
+        let mut g = f.clone();
+        g.name = r(&mut n, &f.name);
+        g.texts = f.texts.iter().map(|x| r(&mut n, x)).collect();
+        g.components = f.components.iter().map(|x| r(&mut n, x)).collect();
+        g
+    }).collect();
+    (m, n)
+}
