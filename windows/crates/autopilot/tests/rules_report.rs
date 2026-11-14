@@ -1,8 +1,8 @@
-//! 실행 보고서 틀(`rules::report`, 원본 `Report.swift`) 앞쪽 3/4(원본 1~334줄) 시험. 3/4 구간의 시험은 끝의 `date_`·`writer_`·`chip_`·`css_` 시험이다.
+//! 실행 보고서 틀(`rules::report`, 원본 `Report.swift`) 시험. 3/4 구간의 시험은 끝의 `date_`·`writer_`·`chip_`·`css_` 시험이다.
 //! 원본 시험: `ReportTests.swift` 의 `ResultParseTests` 셋을 같은 이름으로 옮겼다 — `아님`(인자 다섯, nil 포함) · `꼴` · `상한`.
 //! 이어서 `ReportRunTests` 셋 — `견본`(견본 기록 `Tests/AutopilotRulesTests/Report/sample-run.json` 을 그 자리에서 읽는다) · `칸` · `없음`.
 //! 이 구간의 선언(`APResultRecord` 계열·`apCut`·`apReportText`·`apParseResult`·`APReport*` 값 꼴·`apReportRun`)을 겨냥한 Swift 시험은 이 여섯뿐이다.
-//! 이름표 사전·`apReportDur`·`lastPart` 는 Swift 에서 골든(HTML)만 덮는다. 골든·그리기 시험은 뒤 구간이 옮겨질 때 따라간다.
+//! 이름표 사전·`apReportDur`·`lastPart` 는 Swift 에서 골든(HTML)만 덮는다. `ReportHTMLTests` 셋(원본 337~539줄의 `apReportHTML`)도 끝의 `html_` 로 시작하는 일곱 시험 — `html_견본`(골든) · `html_단위`(골든) · `html_악성골든`(골든) · `html_악성`(악성 골든의 거부 내용) · `html_견본안전`(안전 검사) · `html_결정적`(같은 곳 두 번) · `html_바탕`(기록 저장소 바탕, 빈 기록) — 으로 옮겼다. 그림 칸(`APReportDraw`) 시험은 R-Report-e 가 이어서 옮긴다.
 //!
 //! 끝의 `extra_` 시험은 Swift 시험에 없는 것(자르기 경계·덩어리·수 글·칸별 상한·목록 거르기 순서·값 꼴 처음 값·기록 읽기 칸별 규칙·이름표 사전·걸린 시간)이다.
 
@@ -12,7 +12,7 @@ use std::path::Path;
 use claude_board_autopilot::ports::Row;
 use claude_board_autopilot::rules::formats::grapheme_len;
 use claude_board_autopilot::rules::report::{
-    chip, chip_plain, cut, kind_label, kind_text, last_part, merge_label, outcome_label, parse_result, report_dur, report_run, report_text, report_text_n, run_label, test_label,
+    chip, chip_plain, cut, kind_label, kind_text, last_part, merge_label, outcome_label, parse_result, report_dur, report_html, report_run, report_text, report_text_n, run_label, test_label,
     unit_class, unit_label, ReportCheck, ReportOrigin, ReportRun, ReportSource, ReportUnit, ResultCarry, ResultChange, ResultFlow, ResultRecord, ResultState,
     ResultTest, Writer, FixedZone, CSS, REPORT_FLOW_MAX, REPORT_LIST_MAX, REPORT_TAIL_MAX, REPORT_TEXT_MAX,
 };
@@ -67,6 +67,10 @@ struct FixtureSource {
 impl FixtureSource {
     fn new(j: Value) -> Self {
         FixtureSource { j, origin: ReportOrigin::Folder, reads: RefCell::new(Vec::new()) }
+    }
+    // Swift 의 `FixtureSource(j, origin:)` initializer — `html_바탕` 이 기록 저장소 바탕을 시험할 때 쓴다
+    fn with_origin(j: Value, origin: ReportOrigin) -> Self {
+        FixtureSource { j, origin, reads: RefCell::new(Vec::new()) }
     }
     fn read(&self, s: String) {
         self.reads.borrow_mut().push(s);
@@ -1062,4 +1066,208 @@ fn css_원본() {
     let b = a + src[a..].find("\n\"\"\"\n").unwrap();
     let want = src[a..b].replace("\\\n", "");
     assert_eq!(CSS, want);
+}
+
+// ── 보고서 HTML 시험(원본 ReportHTMLTests) — 보조 도구 ──
+
+// 태그·속성 허용 목록 — 틀이 쓰는 것만. 모델 글이 태그·속성을 하나라도 더 만들면 걸린다(Swift `allowedTags`·`allowedAttrs`)
+const ALLOWED_TAGS: [&str; 42] = [
+    "html", "head", "meta", "title", "style", "body", "header", "nav", "section", "footer", "h1", "h2", "h3", "p", "span", "div", "dl", "dt", "dd", "ol", "ul", "li", "a", "table", "thead",
+    "tbody", "tr", "th", "td", "code", "pre", "details", "summary", "figure", "figcaption", "svg", "rect", "line", "polyline", "polygon", "path", "text",
+];
+const ALLOWED_ATTRS: [&str; 24] = [
+    "lang", "charset", "name", "content", "http-equiv", "class", "id", "href", "rel", "aria-label", "role", "viewBox", "width", "height", "x", "y", "x1", "y1", "x2", "y2", "points", "d", "rx",
+    "text-anchor",
+];
+
+/// 태그·속성은 허용 목록의 것만, href 는 https·#unit- 만, 긴 줄표·방향 바꾸기 글자·스크립트 없음, CSP 있음, CSS 는 바깥 참조 없음.
+/// 원본은 NSRegularExpression 두 개(`<([a-zA-Z][a-zA-Z0-9-]*)([^>]*)>` 와 `\s([^\s=/>]+)(="([^"]*)")?`)를 쓰는데 레포에 regex 의존성이 없어(`harness.rs` 같은 관례)
+/// 손으로 같은 꼴을 훑는다. 태그는 `<` 뒤 첫 글자가 영문자일 때 이름(영문자로 시작, 뒤 영숫자·하이픈)을 읽고 `>` 앞까지를 속성 칸으로 삼는다.
+fn safety(html: &str) -> Vec<String> {
+    let mut bad: Vec<String> = vec![];
+    let cs: Vec<char> = html.chars().collect();
+    let mut at = 0;
+    while at < cs.len() {
+        let Some((name_end, tag_end)) = tag_at(&cs, at) else {
+            at += 1;
+            continue;
+        };
+        let name: String = cs[at + 1..name_end].iter().collect::<String>().to_lowercase();
+        if !ALLOWED_TAGS.contains(&name.as_str()) {
+            bad.push(format!("태그 {name}"));
+        }
+        let rest: Vec<char> = cs[name_end..tag_end].to_vec();
+        let mut i = 0;
+        while i < rest.len() {
+            if rest[i].is_whitespace() {
+                let mut j = i + 1;
+                while j < rest.len() && !rest[j].is_whitespace() && rest[j] != '=' && rest[j] != '/' && rest[j] != '>' {
+                    j += 1;
+                }
+                if j > i + 1 {
+                    let an: String = rest[i + 1..j].iter().collect();
+                    if !ALLOWED_ATTRS.contains(&an.as_str()) {
+                        bad.push(format!("속성 {an}"));
+                    }
+                    // 값은 ="..." 꼴일 때만(원본의 옵션 그룹). href 값은 #unit- 또는 https:// 로만 열린다
+                    if j + 1 < rest.len() && rest[j] == '=' && rest[j + 1] == '"' {
+                        let Some(e) = rest[j + 2..].iter().position(|c| *c == '"').map(|k| j + 2 + k) else {
+                            i = j;
+                            continue;
+                        };
+                        let v: String = rest[j + 2..e].iter().collect();
+                        if an == "href" && !(v.starts_with("#unit-") || v.starts_with("https://")) {
+                            bad.push(format!("href {v}"));
+                        }
+                        i = e + 1;
+                    } else {
+                        i = j;
+                    }
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        at = tag_end + 1; // 원본 정규식은 겹치지 않게 맞힌 다음 자리부터 본다
+        continue;
+    }
+    if html.contains('—') {
+        bad.push("긴 줄표".into());
+    }
+    if cs.iter().any(|c| {
+        let v = *c as u32;
+        (0x202A..=0x202E).contains(&v) || (0x2066..=0x2069).contains(&v)
+    }) {
+        bad.push("방향 바꾸기 글자".into());
+    }
+    if html.split("<style>").count() != 2 {
+        bad.push("style 태그 수".into());
+    }
+    if html.to_lowercase().split("<script").count() > 1 {
+        bad.push("script".into());
+    }
+    const CSP: &str = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'\">";
+    if !html.contains(CSP) {
+        bad.push("CSP 없음".into());
+    }
+    let style = html.split("<style>").nth(1).and_then(|p| p.split("</style>").next()).unwrap_or("");
+    if style.contains("url(") || style.contains("@import") {
+        bad.push("CSS 바깥 참조".into());
+    }
+    bad
+}
+
+/// `at` 가 `<영문자…>` 태그의 시작이면 곱씹은 (이름 끝, '>' 자리) 를 돌려주고(원본 `<([a-zA-Z][a-zA-Z0-9-]*)([^>]*)>`), 아니면 None.
+fn tag_at(cs: &[char], at: usize) -> Option<(usize, usize)> {
+    if cs[at] != '<' || at + 1 >= cs.len() || !cs[at + 1].is_ascii_alphabetic() {
+        return None;
+    }
+    let mut k = at + 2;
+    while k < cs.len() && (cs[k].is_ascii_alphanumeric() || cs[k] == '-') {
+        k += 1;
+    }
+    let mut e = k;
+    while e < cs.len() && cs[e] != '>' {
+        e += 1;
+    }
+    if e < cs.len() {
+        Some((k, e))
+    } else {
+        None
+    }
+}
+
+/// 견본 기록을 읽어 보고서 HTML 글자를 만든다. 원본 `render(name:only:origin:)`: 기록의 `id`·`at`·`home` 칸을 쓰고, 시간대는 서울.
+fn render(name: &str, only: Option<i64>, origin: ReportOrigin) -> String {
+    let j = fixture(name);
+    let Some(r) = report_run(j.get("id").and_then(Value::as_str).unwrap_or("?"), &FixtureSource::with_origin(j.clone(), origin)) else {
+        return String::new();
+    };
+    report_html(&r, only, j.get("at").and_then(Value::as_f64).unwrap_or(0.0), &FixedZone::SEOUL, j.get("home").and_then(Value::as_str))
+}
+
+/// 골든과 견준다. 다르면 첫 달라지는 줄(300글자까지)로 멈춘다. Swift 의 `AP_REPORT_GOLDEN=write` 다시 쓰기는 옮기지 않았다
+/// (사람이 보고 고른 출력이라 시험이 저절로 고치지 않는다는 원본 규칙을 그대로 둔 것이다).
+fn golden_cmp(name: &str, html: &str) {
+    let want = golden(name);
+    if html == want {
+        return;
+    }
+    let a: Vec<&str> = html.split('\n').collect();
+    let b: Vec<&str> = want.split('\n').collect();
+    let k = a.iter().zip(b.iter()).position(|(x, y)| x != y).unwrap_or(a.len().min(b.len()));
+    let first = |ss: &[&str]| -> String { ss.get(k).map(|s| s.chars().take(300).collect::<String>()).unwrap_or_else(|| "(없음)".to_string()) };
+    panic!("골든 {name} 와 다름: {}번째 줄\n  지금: {}\n  골든: {}", k + 1, first(&a), first(&b));
+}
+
+// MARK: 보고서 HTML 시험 — Swift ReportHTMLTests 를 같은 이름으로(이 파일의 `견본` 과 겹치지 않게 `html_` 을 앞에 붙였다)
+
+#[test]
+fn html_견본() {
+    // @Test("견본 기록 실행 보고서 = 골든")
+    golden_cmp("sample-report.html", &render("sample-run.json", None, ReportOrigin::Folder));
+}
+
+#[test]
+fn html_단위() {
+    // @Test("견본 기록 단위 보고서 = 골든")
+    golden_cmp("sample-unit-2.html", &render("sample-run.json", Some(2), ReportOrigin::Folder));
+}
+
+#[test]
+fn html_악성골든() {
+    // @Test("악성 견본 = 골든")
+    golden_cmp("evil-report.html", &render("evil-run.json", None, ReportOrigin::Folder));
+}
+
+#[test]
+fn html_악성() {
+    // @Test("악성 견본: 태그·속성은 틀의 것만, 링크는 https 만, 긴 줄표 없음, CSP")
+    let h = render("evil-run.json", None, ReportOrigin::Folder);
+    let bad = safety(&h);
+    assert!(bad.is_empty(), "{bad:?}");
+    assert!(h.contains("&lt;script&gt;alert(1)&lt;/script&gt; 실행, 줄표"));
+    assert!(h.contains("<a href=\"https://example.com/ok?q=1&amp;r=2\" rel=\"noopener noreferrer\">"));
+    assert!(!h.contains("href=\"https://evil.example") && !h.contains("href=\"http://"));
+    assert!(!h.contains("user:pw@example.com/\""));
+    assert!(h.contains("그리지 못해 원문을 보입니다(1번째 줄: sequenceDiagram 으로 시작하지 않습니다)"));
+    assert!(!h.contains("/Users/toy/")); // 홈 폴더는 ~ 로
+}
+
+#[test]
+fn html_견본안전() {
+    // @Test("견본 기록도 같은 안전 검사를 지난다")
+    for (html, note) in [
+        (render("sample-run.json", None, ReportOrigin::Folder), "실행 보고서"),
+        (render("sample-run.json", Some(1), ReportOrigin::Folder), "단위 보고서"),
+        (render("sample-run.json", None, ReportOrigin::Records), "기록 저장소 바탕"),
+    ] {
+        let bad = safety(&html);
+        assert!(bad.is_empty(), "{note}: {bad:?}");
+    }
+}
+
+#[test]
+fn html_결정적() {
+    // @Test("같은 기록이면 같은 글자, 시간대만 바꾸면 시각만 다름")
+    let a = render("sample-run.json", None, ReportOrigin::Folder);
+    let b = render("sample-run.json", None, ReportOrigin::Folder);
+    assert_eq!(a, b);
+    let j = fixture("sample-run.json");
+    let r = report_run("x", &FixtureSource::new(j)).unwrap();
+    let utc = report_html(&r, None, 1_793_330_000.0, &FixedZone::UTC, None);
+    assert!(utc.contains("2026년 10월 30일 00:00") && !utc.contains("2026년 10월 30일 09:00"));
+}
+
+#[test]
+fn html_바탕() {
+    // @Test("기록 저장소 바탕이면 바닥 글이 알려 준다, 단위가 없으면 그 말")
+    assert!(render("sample-run.json", None, ReportOrigin::Records).contains("바탕 기록 저장소(실행 폴더를 지워 판정 출력은 없습니다)"));
+    // Swift `var r = APReportRun(); r.id = "빈"`
+    let r = ReportRun { id: "빈".into(), ..ReportRun::default() };
+    let h = report_html(&r, None, 0.0, &FixedZone::SEOUL, None);
+    assert!(h.contains("단위 기록이 없습니다"));
+    assert!(!h.contains("<nav"));
+    let bad = safety(&h);
+    assert!(bad.is_empty(), "{bad:?}");
 }

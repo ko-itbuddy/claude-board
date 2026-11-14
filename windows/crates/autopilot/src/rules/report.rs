@@ -1,4 +1,4 @@
-//! (청크 Report 3/4 — 원본 1~334줄만 이식됨. 이 첫 줄은 `tests/ported.rs` 가 「구현됐는데 PORTED.json 에 없는 규칙」으로 잡지 않게 하는 표시다. R-Report-d 가 나머지(`apReportHTML` 부터)를 옮긴다.
+//! (청크 Report d — 원본 1~539줄. PORTED.json 항목은 R-Report-e 가 더한다)
 //! 실행 보고서 틀 앞부분. 원본: `Sources/AutopilotRules/Report.swift`(568줄). 이 구간은 결과 기록(`result.json`, 모델이 쓴 글)을 값으로 읽는 일과
 //! 보고서가 쓰는 값 꼴이다. 모델이 쓴 글은 믿지 않는다: 칸의 꼴이 틀리면 그 칸만 비우고, 글·목록 길이는 상한에서 자른다(`rules::formats`·`rules::prose` 와 같은 태도).
 //! 긴 줄표 바꾸기(`rules::prose::plain`)와 HTML 이스케이프(`rules::prose::escape_html`)는 그릴 때(뒤 구간) 한다. 여기서는 글자를 그대로 둔다.
@@ -10,10 +10,13 @@
 //! `ReportUnit`(APReportUnit) · `ReportRun`(APReportRun) · `ReportOrigin`(APReportOrigin, 원본은 `Ports.swift` 에 있다).
 //! 이식됨(2/4, 원본 143~251줄): `ReportSource`(APReportSource, 원본은 `Ports.swift`) · `num`·`int`·`str`(`str_of`)·`lastPart`(`last_part`) · `report_run`(apReportRun, 기록 → 보고서 값) · 이름표 사전 일곱(`unit_label`·`unit_class`·`run_label`·`kind_label`·`outcome_label`·`test_label`·`merge_label`) · `report_dur`(apReportDur) · `kind_text`(비공개 `kind`).
 //! 이식됨(3/4, 원본 253~334줄): `Writer`(`Writer`·`t`·`c`·`short`·`date`·`add`, 시간대는 `FixedZone`·`CivilTime`) · `chip`(`chip`·`chip_plain`) · `css`(`CSS`).
-//! 남음(원본 337~568줄, 뒤 구간이 이 파일 끝에 이어 붙인다): `apReportHTML`(337) · `unitSection`(414) · `list`(497) · `flow`(503) · `timeline`(517) · `APReportDraw`·`apDrawReports`(542~) · `apReportEndedStatuses`·`apMissingUnitReports`. 쓸 곳 포트(`APReportSink`·`APReportFile`)는 그릴 때 정한다.
+//! 이식됨(d, 원본 337~539줄): `report_html`(apReportHTML, `only` 의 기본값 `nil` 은 `Option<i64>` 로) · `unit_section`(unitSection) · `section_list`(비공개 `list`,
+//! 이 파일의 목록 읽기 도우미 `list` 와 이름이 겹쳐 다르게 둠) · `flow`(비공개, Swift 의 `unit:` 인자는 원본 본문에서 안 쓰므로 `_unit` 으로 받기만 한다) ·
+//! `timeline`(비공개). Swift 시험 `ReportHTMLTests`(견본·단위·악성골든·악성·견본안전·결정적·바탕)도 `tests/rules_report.rs` 의 `html_` 로 시작하는 이름으로 옮겼다.
+//! 남음(원본 540~568줄, R-Report-e 가 이 파일 끝에 이어 붙인다): `APReportDraw`·`apDrawReports`(542~) · `apReportEndedStatuses`·`apMissingUnitReports`. 쓸 곳 포트(`APReportSink`·`APReportFile`)는 그릴 때 정한다.
 //! 원본 시험 중 앞 구간의 것: `ReportTests.swift` 의 `ResultParseTests` 셋(`아님`·`꼴`·`상한`)과 `ReportRunTests` 셋(`견본`·`칸`·`없음`) → `tests/rules_report.rs`.
 //! 3/4 구간(`Writer`·`chip`·`css` 는 Swift 에서 비공개)을 겨냥한 Swift 시험은 없고 골든 HTML(`Report/*.html`)과 `ReportTests.swift` 의 `결정적`(시간대만 바꾸면 시각만 다름)이 덮는다.
-//! 이 구간은 골든의 `<style>` 안(`CSS`)·때 글자(`Writer::date`)를 직접 맞춰 보고, `결정적` 의 시각 부분을 옮겼다. HTML 전체 골든은 `apReportHTML` 이 옮겨질 때 따라간다.
+//! 이 구간은 골든의 `<style>` 안(`CSS`)·때 글자(`Writer::date`)를 직접 맞춰 보고, `결정적` 의 시각 부분을 옮겼다. HTML 전체 골든(`견본`·`단위`·`악성골든`)은 d 구간에서 `html_견본` 등으로 옮겼다.
 //!
 //! Swift ↔ Rust 로 달라진 점:
 //! - 기본 인자(`apReportText(v, n = 4000)`)가 없다: `report_text`(상한 4000)와 `report_text_n`(상한을 준다)으로 나눈다.
@@ -31,6 +34,10 @@
 //! - 시간대: Foundation `TimeZone` 대신 `FixedZone`(UTC 에서 앞선 초). `Asia/Seoul`(`FixedZone::SEOUL`)·UTC 뿐이고 서머타임 시간대는 못 쓴다. 날짜 계산은 `rules::stopline::utc_time` 과 같은 civil_from_days 이고 stopline.rs 는 건드리지 않았다.
 //! - `Writer`·`chip`·`css` 는 Swift 에서 비공개이고 Rust 에서는 뒤 구간(같은 파일)이 쓰므로 공개다. `chip` 의 기본 인자는 `chip_plain` 으로 나눴다. `Writer` 는 값 복사 대신 `&Writer`(`timeline` 은 읽기만 한다)로 건넨다.
 //! - `Writer::date` 의 무늬는 보고서가 쓰는 글자(`y M d H m s` 와 따옴표 글)만 푼다. Foundation 의 나머지 무늬 글자는 지원하지 않는다.
+//! - 비용 글자 `String(format: "%.2f USD")` 는 `format!("{:.2} USD")` 로: 둘 다 가장 가까운 자리로 반올림해 같은 글자를 낸다(JSON 수에는 NaN·∞ 이 없고, 기록의 합이
+//!   넘칠 만큼 큰 때는 기록이 틀린 때뿐이다).
+//! - 판정 끝부분의 `last.exit != 0` 은 Optional 비교라 종료 코드가 없을 때도 참이다: `last.exit != Some(0)` 으로 그대로 옮겼다.
+//! - `timeline` 의 `String(Int(v.rounded()))` 는 `v.round() as i64` 로: 반올림 규칙(절반은 멀어진다)은 같고, 그림의 수는 다 작아 범위 밖이 없다.
 //!
 //! Windows 판단: 글 칸에 CRLF 가 들어와도(`\r\n` 은 한 글자) 자르는 자리·글자 수는 Swift 와 같다. 경로 가운데 `ResultChange::place` 는 받은 글자 그대로 두고,
 //! 저장소 이름만 `last_part` 가 `/` 와 `\` 로 끊는다(`C:\work\todo-api` → `todo-api`). 이 변환은 홈 폴더 줄이기(`~/`)와 달리 그리는 쪽이 아니라 값을 만들 때 한다.
@@ -38,7 +45,8 @@
 
 use crate::ports::Row;
 use crate::rules::formats::grapheme_len;
-use crate::rules::prose::{escape_html, plain};
+use crate::rules::prose::{escape_html, plain, safe_link};
+use crate::rules::sequence::{parse_sequence, sequence_svg, SeqParse};
 use serde_json::{Map, Number, Value};
 
 // ── 결과 기록 (result.json, 설계 5장 3절) ─────────────
@@ -906,3 +914,481 @@ svg text{font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Mal
 .empty{color:var(--muted)}
 footer{color:var(--muted);font-size:12px;margin:16px 4px 0}
 @media (max-width:560px){header,nav,section{padding:14px}dl{grid-template-columns:1fr}dt{margin-top:6px}}"##;
+
+// ── 보고서 HTML 그리기 (원본 337~539줄) ─────────────
+
+/// 실행 보고서(`only` 가 `None`) 또는 단위 하나의 보고서. `at` 은 그린 때(유닉스 초), `tz` 는 보일 시간대, `home` 은 ~ 로 줄일 홈 폴더.
+/// 원본: `apReportHTML`(`only` 의 기본값 `nil` 은 `Option<i64>` 로 건넨다). 그리는 유스케이스(`APReportSink` 에 쓰는 쪽)는 R-Report-e 가 옮긴다.
+pub fn report_html(r: &ReportRun, only: Option<i64>, at: f64, tz: &FixedZone, home: Option<&str>) -> String {
+    let mut w = Writer::new(*tz, home);
+    let units: Vec<&ReportUnit> = match only {
+        Some(k) => r.units.iter().filter(|u| u.n == k).collect(),
+        None => r.units.iter().collect(),
+    };
+    let name: &str = if r.title.is_empty() { if r.project.is_empty() { &r.id } else { &r.project } } else { &r.title };
+    let doc_title = match only {
+        Some(k) => format!("자율주행 단위 보고서: {name} 단위 {k}"),
+        None => format!("자율주행 보고서: {name}"),
+    };
+    w.add("<!doctype html>\n<html lang=\"ko\">\n<head>\n<meta charset=\"utf-8\">\n");
+    w.add("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
+    // 바깥 요청을 모두 막는다(스크립트·글꼴·그림·연결·폼·base). 이 파일만 받아 다른 브라우저로 열어도 같다
+    w.add("<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'\">\n");
+    w.add("<meta name=\"referrer\" content=\"no-referrer\">\n");
+    w.add("<meta name=\"generator\" content=\"Claude Board 자율주행 보고서 틀 1\">\n");
+    w.add(&format!("<title>{}</title>\n<style>\n{CSS}\n</style>\n</head>\n<body>\n", w.t(&doc_title)));
+
+    // 머리 — 실행 이름, 프로젝트·때·모델, 결과 칩, 사실 목록
+    let all = &r.units;
+    let count = |s: &str| all.iter().filter(|u| u.status == s).count();
+    // 사실 한 줄. 원본은 지역 함수 `fact`
+    fn fact(w: &mut Writer, k: &str, v: &str) {
+        w.add(&format!("<dt>{k}</dt><dd>{v}</dd>\n"));
+    }
+    w.add(&format!(
+        "<header>\n<p class=\"mark\">{}</p>\n<h1>{}</h1>\n",
+        if only.is_none() { "자율주행 보고서" } else { "자율주행 단위 보고서" },
+        w.t(name)
+    ));
+    let mut meta: Vec<String> = Vec::new();
+    if !r.project.is_empty() && !r.title.is_empty() {
+        meta.push(w.t(&r.project));
+    }
+    let end_part = match r.ended {
+        Some(e) => format!(" ~ {}", w.date(Some(e), "M월 d일 HH:mm")),
+        None => String::new(),
+    };
+    meta.push(format!("{}{end_part}", w.date(r.started, "yyyy년 M월 d일 HH:mm")));
+    if !r.model.is_empty() {
+        meta.push(format!("모델 {}", w.t(&r.model)));
+    }
+    meta.push(format!("실행 <code>{}</code>", w.c(&r.id)));
+    w.add(&format!("<p class=\"meta\">{}</p>\n<div class=\"chips\">", meta.join(" · ")));
+    let st = r.state.as_str();
+    let run_txt: String = match run_label(st) {
+        Some(l) => l.to_string(),
+        None => {
+            if st.is_empty() {
+                "상태 모름".to_string()
+            } else {
+                st.to_string()
+            }
+        }
+    };
+    let run_cls = if st == "done" {
+        "ok"
+    } else if st == "error" {
+        "fail"
+    } else if st == "stopped" || st.is_empty() {
+        ""
+    } else {
+        "run"
+    };
+    w.add(&chip(&w.t(&run_txt), run_cls));
+    let done = count("done");
+    w.add(&chip(&format!("{}개 중 {done}개 통과", all.len()), if done == all.len() && !all.is_empty() { "ok" } else { "" }));
+    for (s, label, cls) in [
+        ("failed", "미통과", "fail"),
+        ("capped", "상한에서 멈춤", "cap"),
+        ("skipped", "건너뜀", ""),
+        ("stopped", "중단", ""),
+        ("pending", "대기", ""),
+        ("running", "진행 중", "run"),
+    ] {
+        // Swift `where count(s) > 0` — 세는 것만 칩을 넣는다
+        let n = count(s);
+        if n > 0 {
+            w.add(&chip(&format!("{label} {n}"), cls));
+        }
+    }
+    w.add("</div>\n");
+    if !r.reason.is_empty() {
+        w.add(&format!("<p>{}</p>\n", w.t(&r.reason)));
+    }
+    w.add("<dl>\n");
+    let active: f64 = all.iter().map(|u| u.active_sec).sum();
+    let cost: f64 = all.iter().map(|u| u.cost).sum();
+    if let Some(s) = r.started {
+        let dur = report_dur(r.ended.unwrap_or(at) - s);
+        let suffix = if r.ended.is_none() { " (아직 도는 중)" } else { "" };
+        fact(&mut w, "걸린 시간", &format!("{dur}{suffix}"));
+    }
+    fact(&mut w, "일한 시간", &format!("{} (단위 시계 합, 대기·일시정지 뺌)", report_dur(active)));
+    fact(&mut w, "비용", &format!("{cost:.2} USD"));
+    if !r.mode.is_empty() {
+        let place = if r.mode == "worktree" {
+            "따로 작업 트리"
+        } else if r.mode == "in_place" {
+            "원래 작업 트리"
+        } else {
+            r.mode.as_str()
+        };
+        let repos_part = if r.repos.is_empty() {
+            String::new()
+        } else {
+            format!(" · 저장소 {}", r.repos.iter().map(|rp| format!("<code>{}</code>", w.c(rp))).collect::<Vec<_>>().join(" "))
+        };
+        // fact 가 w 를 고쳐 쓰는 동시에 읽지 않게, 인자 글자를 먼저 만든다
+        let place_txt = w.t(place);
+        fact(&mut w, "어디서", &format!("{}{repos_part}", place_txt));
+    }
+    if !r.work.is_empty() {
+        let bases_part = if r.bases.is_empty() {
+            String::new()
+        } else {
+            format!(" (출발 {})", r.bases.iter().map(|b| w.c(b)).collect::<Vec<_>>().join(", "))
+        };
+        let work = format!("<code>{}</code>", w.c(&r.work));
+        fact(&mut w, "자율주행 가지", &format!("{work}{bases_part}"));
+    }
+    if !r.epic.is_empty() {
+        let epic_txt = w.t(&r.epic);
+        fact(&mut w, "에픽", &epic_txt);
+    }
+    let harness_part = match r.harness_same {
+        Some(true) => format!("출발 때와 같음 (파일 {}개)", r.harness_files),
+        Some(false) => format!("출발 때와 다름 {}곳", r.harness_changed.len()),
+        None => "<span class=\"empty\">끝 검사 기록 없음</span>".to_string(),
+    };
+    fact(&mut w, "하네스", &harness_part);
+    if !r.moved.is_empty() {
+        let moved_txt = r.moved.iter().map(|m| format!("<code>{}</code>", w.c(m))).collect::<Vec<_>>().join(" ");
+        fact(&mut w, "움직인 기존 가지", &moved_txt);
+    }
+    if r.stashed > 0 {
+        fact(&mut w, "따로 보관한 변경", &format!("{}번 (읽기 전용 자리에 남은 변경, git stash list 로 봅니다)", r.stashed));
+    }
+    w.add("</dl>\n");
+    if r.harness_same == Some(false) && !r.harness_changed.is_empty() {
+        w.add(&format!(
+            "<details><summary>바뀐 하네스 파일</summary><ul>{}</ul></details>\n",
+            r.harness_changed.iter().map(|f| format!("<li><code>{}</code></li>", w.c(f))).collect::<String>()
+        ));
+    }
+    w.add("</header>\n");
+
+    if only.is_none() {
+        // 차례와 단위가 돈 때(그림)
+        if !units.is_empty() {
+            w.add("<nav aria-label=\"단위 차례\">\n<h3 class=\"top\">단위</h3>\n<ol>\n");
+            for u in units.iter().copied() {
+                let link_title = if u.title.is_empty() { format!("단위 {}", u.n) } else { u.title.clone() };
+                let ul: String = match unit_label(&u.status) {
+                    Some(l) => l.to_string(),
+                    None => u.status.clone(),
+                };
+                let uc = unit_class(&u.status).unwrap_or("");
+                w.add(&format!("<li><a href=\"#unit-{}\">{}</a> {}</li>\n", u.n, w.t(&link_title), chip(&w.t(&ul), uc)));
+            }
+            w.add("</ol>\n");
+            let tl = timeline(r, at, &w);
+            if let Some(tl) = tl {
+                w.add(&format!("<figure><figcaption>단위가 돈 때</figcaption><div class=\"pic\">{tl}</div></figure>\n"));
+            }
+            w.add("</nav>\n");
+        }
+    }
+    for u in units.iter().copied() {
+        unit_section(u, &mut w);
+    }
+    if units.is_empty() {
+        w.add("<section><p class=\"empty\">단위 기록이 없습니다.</p></section>\n");
+    }
+
+    w.add("<footer>Claude Board 가 결과 기록(모델이 씀)과 엔진 기록으로 그렸습니다. 모델을 부르지 않았고, 바깥 글꼴·스크립트·그림 없이 이 파일 하나로 보입니다. ");
+    w.add("단위의 통과·미통과는 엔진의 판정입니다. 모델 글의 긴 줄표는 쉼표로 바꿔 옮겼습니다. ");
+    let base = if r.origin == ReportOrigin::Folder { "실행 폴더" } else { "기록 저장소(실행 폴더를 지워 판정 출력은 없습니다)" };
+    w.add(&format!("그린 때 {} · 바탕 {base}.</footer>\n", w.date(Some(at), "yyyy년 M월 d일 HH:mm")));
+    w.add("</body>\n</html>\n");
+    w.into_output()
+}
+
+fn unit_section(u: &ReportUnit, w: &mut Writer) {
+    w.add(&format!("<section id=\"unit-{}\">\n", u.n));
+    let title: &str = if u.title.is_empty() { "제목 없음" } else { &u.title };
+    let ul: String = match unit_label(&u.status) {
+        Some(l) => l.to_string(),
+        None => u.status.clone(),
+    };
+    let uc = unit_class(&u.status).unwrap_or("");
+    w.add(&format!("<h2>단위 {}. {} {}</h2>\n", u.n, w.t(title), chip(&w.t(&ul), uc)));
+    let mut meta: Vec<String> = Vec::new();
+    if !u.kind.is_empty() {
+        meta.push(w.t(&kind_text(&u.kind)));
+    }
+    if !u.task.is_empty() {
+        let story = if u.story.is_empty() { String::new() } else { format!(" · 스토리 {}", w.t(&u.story)) };
+        meta.push(format!("작업 {}{story}", w.t(&u.task)));
+    }
+    if !u.branch.is_empty() {
+        meta.push(format!("가지 <code>{}</code>", w.c(&u.branch)));
+    }
+    if u.started.is_some() || u.active_sec > 0.0 {
+        meta.push(format!("일한 시간 {}", report_dur(u.active_sec)));
+    }
+    meta.push(format!("{:.2} USD", u.cost));
+    if u.turns > 0 {
+        meta.push(format!("턴 {}", u.turns));
+    }
+    if let Some(s) = u.started {
+        let end_part = match u.ended {
+            Some(e) => format!(" ~ {}", w.date(Some(e), "HH:mm")),
+            None => String::new(),
+        };
+        meta.push(format!("{}{end_part}", w.date(Some(s), "HH:mm")));
+    }
+    w.add(&format!("<p class=\"meta\">{}</p>\n", meta.join(" · ")));
+    if !u.reason.is_empty() && u.status != "done" {
+        w.add(&format!("<p class=\"meta\">엔진: {}</p>\n", w.t(&u.reason)));
+    }
+    if let Some(m) = merge_label(&u.merge) {
+        w.add(&format!("<p class=\"meta\">{m}</p>\n"));
+    }
+
+    match u.result_state {
+        ResultState::Missing => {
+            let why = if u.status == "skipped" || u.status == "pending" { "(단위를 시작하지 않았습니다)" } else { "(모델이 남기지 않았습니다)" };
+            w.add(&format!("<p class=\"empty\">결과 기록이 없습니다{why}.</p>\n"));
+        }
+        ResultState::Broken => w.add("<p class=\"empty\">결과 기록을 읽지 못했습니다(JSON 객체가 아닙니다).</p>\n"),
+        ResultState::Ok => {}
+    }
+    if let Some(rec) = &u.result {
+        // 원본은 `r` 로 둔다(이 함수 안에서만 쓰는 이름)
+        if !rec.headline.is_empty() {
+            w.add(&format!("<p class=\"headline\">{}</p>\n", w.t(&rec.headline)));
+        }
+        if let Some(o) = outcome_label(&rec.outcome) {
+            w.add(&format!("<p class=\"meta\">모델이 적은 결론: {o}</p>\n"));
+        }
+        let summary: Vec<String> = rec.summary.iter().map(|s| w.t(s)).collect();
+        section_list("한 일", &summary, w);
+        if !rec.tests.is_empty() {
+            w.add("<h3>시험</h3>\n<table><thead><tr><th>시험</th><th>결과</th><th>메모</th></tr></thead><tbody>\n");
+            for x in &rec.tests {
+                // Swift `testLabel[x.result] ?? (x.result, "")`
+                let (l, cls) = test_label(&x.result).unwrap_or((x.result.as_str(), ""));
+                w.add(&format!("<tr><td>{}</td><td>{}</td><td>{}</td></tr>\n", w.t(&x.name), chip(&w.t(l), cls), w.t(&x.note)));
+            }
+            w.add("</tbody></table>\n");
+        }
+        let changes: Vec<String> = rec
+            .changes
+            .iter()
+            .map(|c| {
+                let place = if c.place.is_empty() { String::new() } else { format!(" <code>{}</code>", w.c(&plain(&c.place))) };
+                format!("{}{place}", w.t(&c.what))
+            })
+            .collect();
+        section_list("바꾼 것", &changes, w);
+        let decisions: Vec<String> = rec
+            .decisions
+            .iter()
+            .map(|d| {
+                let basis = if d.basis.is_empty() { String::new() } else { format!(" <span class=\"meta\">(근거: {})</span>", w.t(&d.basis)) };
+                format!("{}{basis}", w.t(&d.what))
+            })
+            .collect();
+        section_list("따른 결정", &decisions, w);
+        if !rec.flows.is_empty() {
+            w.add("<h3>흐름 그림</h3>\n");
+            for (k, f) in rec.flows.iter().enumerate() {
+                flow(f, u.n, k + 1, w);
+            }
+        }
+        if !rec.risks.is_empty() {
+            w.add(&format!(
+                "<h3>알아 둘 위험</h3>\n<ul class=\"risk\">{}</ul>\n",
+                rec.risks.iter().map(|ri| format!("<li>{}</li>", w.t(ri))).collect::<String>()
+            ));
+        }
+        let next_start: Vec<String> = rec
+            .next_start
+            .iter()
+            .map(|c| {
+                let why = if c.why.is_empty() { String::new() } else { format!(": {}", w.t(&c.why)) };
+                format!("{}{why}", w.t(&c.title))
+            })
+            .collect();
+        section_list("사람 몫이라 미룬 것(다음 출발 카드)", &next_start, w);
+        let new_work: Vec<String> = rec
+            .new_work
+            .iter()
+            .map(|c| {
+                let why = if c.why.is_empty() { String::new() } else { format!(": {}", w.t(&c.why)) };
+                format!("{}{why}", w.t(&c.title))
+            })
+            .collect();
+        section_list("새로 찾은 일(다음 출발 대기열 후보)", &new_work, w);
+        if !rec.next.is_empty() {
+            w.add(&format!("<h3>다음에 할 일</h3>\n<p>{}</p>\n", w.t(&rec.next)));
+        }
+        if !rec.refs.is_empty() {
+            w.add("<h3>참고</h3>\n<ul>");
+            for rf in &rec.refs {
+                let v = plain(&rf.value);
+                match safe_link(&rf.value) {
+                    // 링크는 safe_link 이 통과시킨 글만 낸다. 화면 글자는 홈 줄이기 + 이스케이프
+                    Some(link) => w.add(&format!(
+                        "<li>{}: <a href=\"{}\" rel=\"noopener noreferrer\">{}</a></li>",
+                        w.t(&rf.key),
+                        escape_html(&link),
+                        w.c(&link)
+                    )),
+                    None => w.add(&format!("<li>{}: {}</li>", w.t(&rf.key), w.t(&v))),
+                }
+            }
+            w.add("</ul>\n");
+        }
+    }
+
+    // 판정(엔진) — 차례마다 종료 코드·시간, 통과하지 못한 마지막 판정의 출력 끝부분
+    if !u.checks.is_empty() || u.last_exit.is_some() {
+        w.add("<h3>판정</h3>\n");
+        match (u.checks.is_empty(), u.last_exit) {
+            // Swift `if checks.isEmpty, let e = lastExit`
+            (true, Some(e)) => {
+                let retries = if u.retries > 0 { format!(" · 다시 한 횟수 {}", u.retries) } else { String::new() };
+                w.add(&format!("<p>마지막 판정 종료 코드 {e}{retries}</p>\n"));
+            }
+            // 목록이 있거나(빈 데 없음), 빈 데 종료 코드도 없을 때 — 둘 다 목록 쪽을 그린다
+            _ => {
+                w.add("<ul>");
+                for c in &u.checks {
+                    let exit = match c.exit {
+                        // Swift `c.exit.map { $0 == 0 ? "통과(종료 코드 0)" : "종료 코드 \($0)" } ?? "끝나지 않음"`
+                        Some(0) => "통과(종료 코드 0)".to_string(),
+                        Some(e) => format!("종료 코드 {e}"),
+                        None => "끝나지 않음".to_string(),
+                    };
+                    let dur = if c.sec < 1.0 { "1초 안".to_string() } else { report_dur(c.sec) };
+                    let mut s = format!("{}번째: {exit} · {dur}", c.n);
+                    if c.timed_out {
+                        s += " · 시간 상한에서 멈춤";
+                    }
+                    if c.interrupted {
+                        s += " · 도중에 끊김";
+                    }
+                    w.add(&format!("<li>{s}</li>"));
+                }
+                w.add("</ul>\n");
+                if let Some(last) = u.checks.last() {
+                    // Swift `last.exit != 0` 은 Optional 비교라 종료 코드가 없을 때도 참이다
+                    if last.exit != Some(0) && !last.tail.is_empty() {
+                        w.add(&format!(
+                            "<details><summary>마지막 판정 출력 끝부분</summary><pre>{}</pre></details>\n",
+                            w.c(&plain(&last.tail))
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    if !u.denials.is_empty() {
+        w.add(&format!(
+            "<h3>허용 범위 밖이라 거부한 일</h3>\n<ul>{}</ul>\n",
+            u.denials.iter().map(|d| format!("<li>{}</li>", w.t(d))).collect::<String>()
+        ));
+    }
+    w.add("</section>\n");
+}
+
+/// 결과 기록의 목록 칸 하나 — 빈 목록은 아무것도 넣지 않는다. 원본: `list`(비공개 함수, 원본 497줄).
+/// Swift 로는 `list` 인데 이 파일의 목록 읽기 도우미 `list` 와 이름이 겹쳐 Rust 에서는 `section_list` 로 둔다.
+fn section_list(title: &str, items: &[String], w: &mut Writer) {
+    if items.is_empty() {
+        return;
+    }
+    let lis: String = items.iter().map(|it| format!("<li>{it}</li>")).collect();
+    w.add(&format!("<h3>{title}</h3>\n<ul>{lis}</ul>\n"));
+}
+
+/// 흐름 그림 하나 — 읽히면 SVG 와 접힌 원문, 아니면 원문과 까닭. 원본: `flow`(비공개 함수, 원본 503줄).
+/// Swift 의 `unit:` 인자는 원본 본문에서 쓰지 않는다(그대로 받기만 하는 `_unit`).
+fn flow(f: &ResultFlow, _unit: i64, k: usize, w: &mut Writer) {
+    let title = if f.title.is_empty() { format!("흐름 그림 {k}") } else { f.title.clone() };
+    w.add(&format!("<figure>\n<figcaption>{}</figcaption>\n", w.t(&title)));
+    match parse_sequence(&f.source) {
+        SeqParse::Ok(d) => {
+            w.add(&format!("<div class=\"pic\">{}</div>\n", sequence_svg(&d, &format!("흐름 그림: {title}"))));
+            w.add(&format!("<details><summary>원문 보기</summary><pre>{}</pre></details>\n", w.t(&f.source)));
+        }
+        SeqParse::Unsupported { line, why } => {
+            w.add(&format!(
+                "<p class=\"empty\">그리지 못해 원문을 보입니다({line}번째 줄: {}).</p>\n<pre>{}</pre>\n",
+                w.t(&why),
+                w.t(&f.source)
+            ));
+        }
+    }
+    w.add("</figure>\n");
+}
+
+/// 단위가 돈 때 — 출발부터 끝(도는 중이면 그린 때)까지 가로 막대. 시작 시각이 있는 단위만. 원본: `timeline`(비공개 함수, 원본 517줄).
+/// 지역 이름은 원본의 W·L·R·row·h 를 긴 이름으로 옮겼다: 너비·왼쪽 여백·오른쪽 여백·한 줄 높이·그림 높이.
+fn timeline(r: &ReportRun, at: f64, w: &Writer) -> Option<String> {
+    let us: Vec<&ReportUnit> = r.units.iter().filter(|u| u.started.is_some()).collect();
+    // Iterator 의 min·max 는 f64(NaN 때문에 Ord 가 없다)에 못 쓰므로 inherent f64::min 로 같은 뜻을 낸다
+    let t0 = r.started.or_else(|| us.iter().filter_map(|u| u.started).reduce(f64::min))?;
+    let unit_end_max: Option<f64> = us.iter().filter_map(|u| u.ended).fold(None, |a: Option<f64>, v| Some(a.map_or(v, |m| m.max(v))));
+    let t1 = r.ended.or(unit_end_max).unwrap_or(at).max(t0 + 1.0);
+    if us.is_empty() || t1 <= t0 {
+        return None;
+    }
+    let picture_width = 640.0;
+    let left_margin = 70.0;
+    let right_margin = 12.0;
+    let row = 20.0;
+    let picture_height = us.len() as f64 * row + 34.0;
+    // 때 → 가로 자리(원본 지역 함수 `x`). 시작~끝 밖의 때는 가장자리에 붙인다
+    let x_of = |t: f64| left_margin + ((t.clamp(t0, t1) - t0) / (t1 - t0) * (picture_width - left_margin - right_margin));
+    // 수 → 글(원본 지역 함수 `n`. Swift `rounded()` 는 절반을 멀리로, Rust `round()` 도 같다)
+    let num = |v: f64| -> String { format!("{}", v.round() as i64) };
+    let mut s = format!(
+        "<svg class=\"tl\" viewBox=\"0 0 {} {}\" width=\"{}\" height=\"{}\" role=\"img\" aria-label=\"단위가 돈 때\">",
+        num(picture_width),
+        num(picture_height),
+        num(picture_width),
+        num(picture_height)
+    );
+    for (k, u) in us.iter().enumerate() {
+        let y = 6.0 + k as f64 * row;
+        // `us` 는 시작 시각이 있는 단위만 골랐다(원본의 `?? t0` 가 있어도 여기서는 쓰지 않는다)
+        let a = x_of(u.started.unwrap_or(t0));
+        let b_end = match u.ended {
+            Some(e) => e,
+            None => {
+                if u.status == "running" {
+                    at
+                } else {
+                    u.started.unwrap_or(t0)
+                }
+            }
+        };
+        let b = x_of(b_end).max(a + 3.0);
+        s += &format!("<text class=\"lb\" x=\"0\" y=\"{}\">단위 {}</text>", num(y + 11.0), u.n);
+        s += &format!(
+            "<rect class=\"bar {}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"12\" rx=\"3\"/>",
+            unit_class(&u.status).unwrap_or(""),
+            num(a),
+            num(y + 2.0),
+            num(b - a)
+        );
+    }
+    let axis_y = us.len() as f64 * row + 10.0;
+    s += &format!(
+        "<line class=\"ax\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"/>",
+        num(left_margin),
+        num(axis_y),
+        num(picture_width - right_margin),
+        num(axis_y)
+    );
+    s += &format!("<text class=\"lb\" x=\"{}\" y=\"{}\">{}</text>", num(left_margin), num(axis_y + 16.0), w.date(Some(t0), "HH:mm"));
+    s += &format!(
+        "<text class=\"lb\" x=\"{}\" y=\"{}\" text-anchor=\"end\">{}</text>",
+        num(picture_width - right_margin),
+        num(axis_y + 16.0),
+        w.date(Some(t1), "HH:mm")
+    );
+    Some(s + "</svg>")
+}
