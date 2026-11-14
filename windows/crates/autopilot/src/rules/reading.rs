@@ -2821,7 +2821,7 @@ fn redact_replace(t: &str, ms: &[RedactMatch], rep: RedactRep) -> String {
 }
 
 /// 글 하나의 비밀 꼴 18 규칙을 가린다 — (가린 글, 가린 수). 원본: `apRedact`
-fn redact_text(s: &str) -> (String, usize) {
+pub fn redact_text(s: &str) -> (String, usize) {
     let mut t = s.to_string();
     let mut n = 0;
     for (find, rep) in redact_rules() {

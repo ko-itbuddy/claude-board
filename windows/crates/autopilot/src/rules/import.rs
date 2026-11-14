@@ -1,12 +1,13 @@
-//! (청크 Import a~c/5 — 원본 1~759줄. PORTED.json 항목은 마지막 청크가 더한다)
+//! (청크 Import a~d/5 — 원본 1~875줄. PORTED.json 항목은 마지막 청크가 더한다)
 //! 자율주행 가져오기(7단계 ⑫-7a, 2026-10-30, 설계 2장 "목록으로 이어 가기: 원천과 차례"). 원본: `Sources/AutopilotRules/Import.swift`.
 //! 원천 셋(저장소 할 일 문서·바깥 목록·옛 자동화 옮기기)을 같은 꼴의 항목(원천 항목 키·제목·본문·상태·원천 자리)으로 모으고,
 //! 원천 항목 키로 이미 끝난 것·진행 중인 것을 기록 저장소와 바깥 상태로 가린 뒤(apImportDecide), 남은 항목을 가져오기 세션(⑪-2 초안 세션 꼴)이
 //! 단위 초안으로 쓰고, 그 결과를 기계로 본다(apImportCheck). 같은 항목이 다시 오면 새 단위를 만들지 않고 대기열의 그 줄(정의)을 잇는다.
 //! 바깥(파일 읽기·HTTP·기록 저장소·시각)은 어댑터 몫이고, 여기는 값만 받는다. 청크(b)는 바깥 목록(MARK `바깥 목록` — 질의 꼴·요청 꼴·Jira·Notion
 //! 항목·읽기 유스케이스)과 옛 자동화 옮기기(MARK 세 절), 청크(c)는 가리기와 이어 가기(MARK `이미 끝난 것·진행 중인 것 가리기와 이어 가기` — 기록
-//! 저장소 대기열·단위 줄로 가리고 본문이 바뀌면 줄 차이를 보이며 이어 감)와 가져오기 세션(MARK `가져오기 세션`)을 더했다.
-//! 이어 쓰기: 단위 칸(허용 목록)은 760줄부터 R-Import-d 가 이어 쓴다.
+//! 저장소 대기열·단위 줄로 가리고 본문이 바뀌면 줄 차이를 보이며 이어 감)과 가져오기 세션(MARK `가져오기 세션`)을 더했다. 청크(d)는 단위 칸 허용
+//! 목록(apImportUnitKeys)과 가져오기 세션 검사(APImportedUnit·APImportCheck·apImportCheck)를 더했다.
+//! 이어 쓰기: 결과 → 대기열 단위는 876줄부터 R-Import-e 가 이어 쓴다.
 //!
 //! Swift ↔ Rust 로 달라진 점:
 //! - `[String: Any]` 는 `serde_json::Map<String, Value>`, 값은 `Value`. `s_`·`d_`·`a_`(숫자·개체·배열 꾸러미)와 NSNumber 꼴은
@@ -32,14 +33,17 @@ use crate::rules::connections::{
     HttpResponse, Service, NOTION_VERSION,
 };
 use crate::rules::control::run_ended;
-use crate::rules::draft::instruction_guide;
+use crate::rules::draft::{
+    draft_card_parse, draft_unit_parse_n, instruction_check, instruction_guide, DraftCard, DraftFiles, DraftedUnit, DRAFT_UNIT_KEYS,
+};
 use crate::rules::formats::grapheme_len;
-use crate::rules::harness::{fnv64_data, HarnessPoint, HARNESS_POINT_MAX};
+use crate::rules::harness::{cut_chars, fnv64_data, harness_missing, HarnessPoint, HARNESS_POINT_MAX};
 use crate::rules::meta::{
-    defang_markers, limit, meta_clamp, meta_url, Meta, MetaField, MetaLink, Section, TextChunk, UNTRUSTED_CLOSE, UNTRUSTED_OPEN,
+    defang_markers, has_tag, limit, meta_clamp, meta_url, Meta, MetaField, MetaLink, Section, TextChunk, UNTRUSTED_CLOSE,
+    UNTRUSTED_OPEN,
 };
 use crate::rules::notify_rules::{NoticeClock, NoticeWaiter};
-use crate::rules::reading::{adf_chunks, notion_id, read_blocker, read_fail_note};
+use crate::rules::reading::{adf_chunks, notion_id, read_blocker, read_fail_note, redact_text};
 use crate::rules::scenarios::scenario_path_ok;
 use crate::rules::stopline::Tz;
 use crate::rules::tickets::{issue_key_ok, retry_wait};
@@ -1928,5 +1932,228 @@ pub fn import_prompt(x: &ImportInput) -> String {
     text
 }
 
-// R-Import-d 가 여기서 이어 쓴다
+// MARK: - 결과 → 기계 검사(원본 760~875줄)
+
+/// 가져오기 세션이 쓰는 단위 칸(허용 목록) — 초안 단위 칸([`DRAFT_UNIT_KEYS`])에서 수용 기준을 빼고 항목(item)·근거(why)를 더한다.
+/// 판정 시나리오는 7단계 ⑫-7b 에서 받는다(⑫-7a 는 판정 명령만: 시나리오는 출발 전 자율주행 가지가 있어야 해서.
+/// ⑫-7b 에서 엔진 seed 를 가져오기에도 열었다). 원본: `apImportUnitKeys`
+pub fn import_unit_keys() -> Vec<&'static str> {
+    DRAFT_UNIT_KEYS
+        .iter()
+        .copied()
+        .filter(|k| *k != "criteria")
+        .chain(["item", "why"])
+        .collect()
+}
+
+/// 가져오기 세션이 쓴 단위 하나(단위 초안 + 어느 항목에서 나왔는지·근거·조각 번호). 원본: `APImportedUnit`
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportedUnit {
+    pub unit: DraftedUnit,
+    /// 이 단위가 어느 항목에서 나왔는지(항목 id)
+    pub item: String,
+    /// 근거 한 줄
+    pub why: String,
+    /// 항목을 쪼갰으면 몇 번째 조각(1부터)
+    pub piece: Option<usize>,
+}
+
+/// 결과 폴더의 가져오기 세션 검사 결과. 원본: `APImportCheck`
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ImportCheck {
+    pub units: Vec<ImportedUnit>,
+    pub cards: Vec<DraftCard>,
+    /// 카드 id → 항목 id(단위 없는 사람 몫 항목)
+    pub card_items: BTreeMap<String, String>,
+    /// (항목 id, 까닭). 원본은 (item, why) 쌍의 배열
+    pub skipped: Vec<(String, String)>,
+    /// 검과 통과한 자율주행 지시(지운 줄은 빼고 낸다)
+    pub instruction: String,
+    /// 준비 줄 실패와 까닭 — 비면 지나간다
+    pub problems: Vec<String>,
+    /// 막지는 않는 것
+    pub warnings: Vec<String>,
+    /// 지시가 다루지 않은 하네스 확인 지점(출발 카드로 묻는다)
+    pub harness_missing: Vec<HarnessPoint>,
+}
+
+impl ImportCheck {
+    /// 문제가 없는가. 원본 `ok`
+    pub fn ok(&self) -> bool {
+        self.problems.is_empty()
+    }
+}
+
+/// 결과 파일 바이트 → JSON 배열(없거나 배열이 아니면 None). 원본: `jarr`
+fn jarr(d: Option<&[u8]>) -> Option<Vec<Value>> {
+    match d.and_then(|d| serde_json::from_slice::<Value>(d).ok()) {
+        Some(Value::Array(arr)) => Some(arr),
+        _ => None,
+    }
+}
+
+/// 결과 폴더의 기계 검사(⑫-7a): 단위 칸은 초안 단위와 같은 문(draft_unit_parse_n, 허용 목록만 다름), 항목마다 단위·카드·건너뜀 가운데 한 곳,
+/// 항목 id 는 넘긴 것만, Jira 하위 작업(스토리가 있는 항목)은 쪼개지 않음(작업 가지가 겹침). 지시는 need_instruction 일 때만 받고(없으면 실패),
+/// 아니면 set_instruction(지금 세트의 지시)으로 하네스 확인 지점을 본다. 원본: `apImportCheck`
+pub fn import_check(
+    files: &dyn DraftFiles,
+    items: &[ImportPromptItem],
+    story_items: &HashSet<String>,
+    harness: &[HarnessPoint],
+    need_instruction: bool,
+    set_instruction: Option<&str>,
+) -> ImportCheck {
+    let mut r = ImportCheck::default();
+    let ids: HashSet<&str> = items.iter().map(|it| it.id.as_str()).collect();
+    let unit_keys = import_unit_keys();
+    let mut unit_ids: Vec<String> = vec![];
+    // 1) 단위
+    if let Some(arr) = jarr(files.read("units.json").as_deref()) {
+        if arr.len() > IMPORT_UNIT_MAX {
+            r.problems.push(format!("단위가 {IMPORT_UNIT_MAX}개보다 많습니다({}개)", arr.len()));
+        }
+        for (i, v) in arr.iter().take(IMPORT_UNIT_MAX).enumerate() {
+            let n = i + 1;
+            let p = draft_unit_parse_n(v, n, files, &unit_ids, &unit_keys, "가져오기 세션");
+            r.problems.extend(p.1);
+            r.warnings.extend(p.2);
+            let Some(u) = p.0 else { continue };
+            let item = v.get("item").and_then(Value::as_str).unwrap_or("");
+            if !ids.contains(item) {
+                r.problems.push(format!("단위 {n} 의 item({})은 넘긴 항목 id 가 아닙니다", cut_chars(item, 20)));
+            }
+            let why = v.get("why").and_then(Value::as_str).unwrap_or("");
+            if grapheme_len(why) > 300 {
+                r.problems.push(format!("단위 {n} 의 근거(why)가 300자보다 깁니다"));
+            }
+            if has_tag(why) {
+                r.problems.push(format!("단위 {n} 근거 에 HTML 태그가 있습니다"));
+            }
+            if redact_text(why).1 > 0 {
+                r.problems.push(format!("단위 {n} 근거 에 비밀 꼴(토큰·키 등)이 있습니다"));
+            }
+            if trim_ws(&u.check).is_empty() && u.scenarios.is_empty() {
+                r.problems.push(format!("단위 {n} 에 판정 명령(check)도 판정 시나리오도 없습니다"));
+            }
+            unit_ids.push(u.id.clone());
+            r.units.push(ImportedUnit { unit: u, item: item.to_string(), why: why.to_string(), piece: None });
+        }
+        if arr.is_empty() && !items.is_empty() {
+            r.warnings.push("단위가 없습니다(모든 항목이 카드·건너뜀)".to_string());
+        }
+    } else {
+        r.problems.push("단위 목록(units.json)이 없거나 JSON 배열이 아닙니다".to_string());
+    }
+    // 2) 쪼갠 조각 번호 — 같은 항목 단위가 둘 이상이면 차례대로 1·2…
+    let mut count: BTreeMap<String, usize> = BTreeMap::new();
+    for u in &r.units {
+        *count.entry(u.item.clone()).or_default() += 1;
+    }
+    let mut seq: BTreeMap<String, usize> = BTreeMap::new();
+    for u in r.units.iter_mut() {
+        if count.get(&u.item).copied().unwrap_or(0) > 1 {
+            let piece = seq.entry(u.item.clone()).or_default();
+            *piece += 1;
+            u.piece = Some(*piece);
+        }
+    }
+    for (it, k) in &count {
+        if *k > 1 && story_items.contains(it) {
+            r.problems.push(format!("항목 {it} 은 Jira 하위 작업이라 쪼개지 않습니다(작업 가지가 겹칩니다). 단위 하나로 씁니다"));
+        }
+    }
+    // 3) 카드
+    if let Some(d) = files.read("cards.json") {
+        if let Some(arr) = jarr(Some(&d)) {
+            if arr.len() > IMPORT_CARD_MAX {
+                r.problems.push(format!("출발 카드가 {IMPORT_CARD_MAX}개보다 많습니다"));
+            }
+            let units_all: Vec<DraftedUnit> = r.units.iter().map(|u| u.unit.clone()).collect();
+            for (i, v) in arr.iter().take(IMPORT_CARD_MAX).enumerate() {
+                let p = draft_card_parse(v, i + 1, &unit_ids, &units_all, &r.cards);
+                r.problems.extend(p.1);
+                let Some(c) = p.0 else { continue };
+                if c.criterion.is_some() {
+                    r.problems.push(format!("카드 {} 의 criterion 은 이 원천에서 쓰지 않습니다(수용 기준 카드는 주제로 시작만)", i + 1));
+                }
+                if let Some(it) = v.get("item").and_then(Value::as_str) {
+                    if ids.contains(it) {
+                        r.card_items.insert(c.id.clone(), it.to_string());
+                    } else {
+                        r.problems.push(format!("카드 {} 의 item({})은 넘긴 항목 id 가 아닙니다", i + 1, cut_chars(it, 20)));
+                    }
+                }
+                r.cards.push(c);
+            }
+        } else {
+            r.problems.push("출발 카드(cards.json)가 JSON 배열이 아닙니다".to_string());
+        }
+    }
+    // 4) 건너뜀
+    if let Some(d) = files.read("skipped.json") {
+        if let Some(arr) = jarr(Some(&d)) {
+            for (i, v) in arr.iter().take(TODO_MAX_ITEMS).enumerate() {
+                let it = v.as_object().and_then(|o| o.get("item")).and_then(Value::as_str);
+                let Some(it) = it else {
+                    r.problems.push(format!("건너뜀 {} 이 {{\"item\":…,\"why\":…}} 꼴이 아닙니다", i + 1));
+                    continue;
+                };
+                let why = v.get("why").and_then(Value::as_str).unwrap_or("");
+                if !ids.contains(it) {
+                    r.problems.push(format!("건너뜀 {} 의 item({})은 넘긴 항목 id 가 아닙니다", i + 1, cut_chars(it, 20)));
+                    continue;
+                }
+                if why.is_empty() || grapheme_len(why) > 300 || has_tag(why) || redact_text(why).1 > 0 {
+                    r.problems.push(format!("건너뜀 {} 의 까닭(why)은 300자 안의 쉬운 글입니다", i + 1));
+                    continue;
+                }
+                r.skipped.push((it.to_string(), why.to_string()));
+            }
+        } else {
+            r.problems.push("건너뜀(skipped.json)이 JSON 배열이 아닙니다".to_string());
+        }
+    }
+    // 5) 항목마다 한 곳 이상
+    let covered: HashSet<&str> = r
+        .units
+        .iter()
+        .map(|u| u.item.as_str())
+        .chain(r.card_items.values().map(String::as_str))
+        .chain(r.skipped.iter().map(|(it, _)| it.as_str()))
+        .collect();
+    for i in items {
+        if !covered.contains(i.id.as_str()) {
+            r.problems.push(format!("항목 {}({})을 단위·카드·건너뜀 어디에도 두지 않았습니다", i.id, cut_chars(&i.title, 40)));
+        }
+    }
+    for s in &r.skipped {
+        if r.units.iter().any(|u| u.item == s.0) {
+            r.warnings.push(format!("항목 {} 은 단위가 있는데 건너뜀에도 있습니다(단위로 봅니다)", s.0));
+        }
+    }
+    // 6) 지시
+    if need_instruction {
+        if let Some(d) = files.read("autopilot.md") {
+            let (instruction, problems, missing, warnings) = instruction_check(&String::from_utf8_lossy(&d), harness);
+            r.instruction = instruction;
+            r.problems.extend(problems);
+            r.harness_missing = missing;
+            r.warnings.extend(warnings);
+        } else {
+            r.problems.push("자율주행 지시 초안(autopilot.md)이 없습니다(이 프로젝트 세트에 지시가 없어 써야 합니다)".to_string());
+            r.harness_missing = harness.to_vec();
+        }
+    } else {
+        if files.read("autopilot.md").is_some() {
+            r.warnings.push("이 프로젝트 세트에 지시가 있어 초안 지시(autopilot.md)는 쓰지 않습니다".to_string());
+        }
+        r.harness_missing = harness_missing(harness, set_instruction.unwrap_or(""));
+        if !r.harness_missing.is_empty() {
+            r.warnings.push(format!("하네스 확인 지점 {}곳을 세트의 지시가 다루지 않아 출발 카드로 묻습니다", r.harness_missing.len()));
+        }
+    }
+    r
+}
+
+// R-Import-e 가 여기서 이어 쓴다
 

@@ -1,8 +1,8 @@
 //! 가져오기 시험 — 원본 `Tests/AutopilotRulesTests/ImportTests.swift`.
-//! 이 파일은 20검사 중 16검사를 옮긴다: 절·전체·키·경로(suite `ImportTodoTests`, R-Import-a),
+//! 이 파일은 20검사 중 18검사를 옮긴다: 절·전체·키·경로(suite `ImportTodoTests`, R-Import-a),
 //! 질의·지라항목·노션항목·요청·읽기(suite `ImportListTests`)와 고르기·항목·묶음(suite `ImportLegacyTests`)은 R-Import-b,
-//! 가리기 3(가리기·바뀐본문·상태합치기)와 세션 글(`ImportCheckTests` 의 글)은 R-Import-c.
-//! 나머지 원본 순서대로: 기계 검사 4(검사·값·대기열·줄파일)는 R-Import-d 가 각자의 파일에서 더한다.
+//! 가리기 3(가리기·바뀐본문·상태합치기)와 세션 글(`ImportCheckTests` 의 글)은 R-Import-c, 기계 검사 표(검사·값)는 R-Import-d.
+//! 나머지 원본 순서대로: 대기열·줄파일(unit: `apImportQueueUnit`·`apCarryQueueUnit`, 원본 876줄부터)는 R-Import-e 가 각자의 파일에서 더한다.
 //! 묶음 시험은 근거 묶음 저장(apAddEvidence·MemEvidence·MANIFEST)이 근거 묶음 엔진 자리(Evidence.swift — evidence.rs 머리의 "옮기지 않은 것")에 있어 원본의 앞 세 단언(source·id·절 하나)만 둔다.
 //! 실제 Atlassian·Notion 으로는 요청하지 않는다: HTTP·키체인·시각은 가짜 어댑터(PubHTTP·PubSecrets·PubClock·PubWaiter)다.
 //! 시각은 원본의 서일(impT0 = 1793340000)을 그대로 쓰지만 시간대는 `Tz::Utc` 로 둔다(reading.rs 연결 시험과 같은 이유).
@@ -10,18 +10,20 @@
 use claude_board_autopilot::rules::connections::{
     Auth, AuthHeader, ConnHttp, ConnSecrets, Connection, HttpRequest, HttpResponse, Service,
 };
+use claude_board_autopilot::rules::draft::DraftFiles;
+use claude_board_autopilot::rules::harness::HarnessPoint;
 use claude_board_autopilot::rules::import::{
-    fnv, import_decide, import_prompt, imported_state, jira_list_item, jira_search_request, legacy_items, legacy_meta, legacy_skip_reason,
-    line_diff, list_query, notion_db_items, notion_query_request, read_list, read_post_allowed, slug, todo_headings, todo_items, todo_likely,
-    todo_path_ok, HideKind, IMPORT_HEAD_LINE, ImportInput, ImportItem, ImportPromptItem, ImportSource, ItemState, LINE_DIFF_MAX, ListQuery,
-    QueueRow, UnitRow,
+    fnv, import_check, import_decide, import_prompt, imported_state, jira_list_item, jira_search_request, legacy_items,
+    legacy_meta, legacy_skip_reason, line_diff, list_query, notion_db_items, notion_query_request, read_list, read_post_allowed,
+    slug, todo_headings, todo_items, todo_likely, todo_path_ok, HideKind, IMPORT_HEAD_LINE, ImportInput, ImportItem,
+    ImportPromptItem, ImportSource, ItemState, LINE_DIFF_MAX, ListQuery, QueueRow, UnitRow,
 };
 use claude_board_autopilot::rules::meta::{UNTRUSTED_CLOSE, UNTRUSTED_OPEN};
 use claude_board_autopilot::rules::notify_rules::{NoticeClock, NoticeWaiter};
 use claude_board_autopilot::rules::stopline::Tz;
 use serde_json::{json, Map, Value};
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 const TODO_DOC: &str = "# 할 일\n\n## 이번 주\n- [ ] 로그인 실패 문구를 바꾼다\n  - 비밀번호 틀림과 계정 없음을 나눠 보인다\n- [x] README 첫 줄 고침\n- [~] 목록 쪽 나누기\n* 장바구니 합계가 0 일 때 숨긴다\n1. ~~옛 배너 지우기~~\n- 로그인 실패 문구를 바꾼다\n\n```\n- [ ] 울타리 안은 항목이 아님\n```\n\n## 다음 주\n- [ ] 결제 내역 내보내기 (완료)\n- [ ] 알림 설정 쪽";
 
@@ -605,5 +607,210 @@ fn 글() {
     let y = ImportInput { need_instruction: true, ..x };
     let t2 = import_prompt(&y);
     assert!(t2.contains("자율주행 지시(autopilot.md) 쓰는 법"), "{t2}");
+}
+
+// MARK: - 기계 검사(suite `ImportCheckTests`) — R-Import-d
+
+/// 결과 폴더 가짜 어댑터(원본 `ImpFiles`; rules_draft.rs 의 FakeDraftFiles 와 같은 패)
+struct ImpFiles {
+    files: HashMap<String, String>,
+}
+
+impl DraftFiles for ImpFiles {
+    fn read(&self, name: &str) -> Option<Vec<u8>> {
+        self.files.get(name).map(|s| s.as_bytes().to_vec())
+    }
+    fn list(&self, relative: &str) -> Vec<String> {
+        self.files
+            .keys()
+            .filter(|k| k.starts_with(&(relative.to_string() + "/")))
+            .map(|k| k[relative.len() + 1..].to_string())
+            .filter(|n| !n.contains('/'))
+            .collect()
+    }
+}
+
+/// 원본 `pitems` — 기계 검사 표가 쓰는 항목 셋(i1 가·i2 나·i3 다)
+fn pitems() -> Vec<ImportPromptItem> {
+    vec![
+        ImportPromptItem::new("i1", "todo:docs/TODO.md#a", "가", "open"),
+        ImportPromptItem::new("i2", "todo:docs/TODO.md#b", "나", "open"),
+        ImportPromptItem::new("i3", "todo:docs/TODO.md#c", "다", "open"),
+    ]
+}
+
+/// 원본 `goodImportUnits` — u1(i1)·u2(i2)·u3(i2, u1 에 이음)
+const GOOD_IMPORT_UNITS: &str = r#"[
+ {"id":"u1","item":"i1","title":"가 하기","kind":"dev","prompt":"가를 한다","check":"grep -q 가 app.txt","est_min":20,"why":"근거 1-todo 의 본문"},
+ {"id":"u2","item":"i2","title":"나 앞 조각","kind":"dev","prompt":"나의 앞","check":"test -s b1.txt","est_min":30},
+ {"id":"u3","item":"i2","title":"나 뒤 조각","kind":"test","prompt":"나의 뒤","check":"test -s b2.txt","est_min":30,"depends":["u2"]}]
+"#;
+
+/// 원본 `goodImportCards` — c1(i3): 선택지 2 를 묻고(운영 값이라 사람이 정함), u2 를 뒤에 묶어 u3 앞으로
+const GOOD_IMPORT_CARDS: &str =
+    r#"[{"id":"c1","item":"i3","title":"다는 운영 값이라 사람이 정합니다","why":"운영 값","options":[{"key":"a","label":"이번엔 빼기"},{"key":"b","label":"다음 출발로"}],"recommended":"a"}]"#;
+
+/// 원본 `goodInstr` — 첫 줄이 하네스 확인 줄이고 CLAUDE.md:3 을 다룬 지시
+const GOOD_INSTR: &str = "이 지시는 저장소 하네스의 확인·승인·묻기 지점보다 앞섭니다.\n대답할 사람이 없어 멈추므로 보류합니다.\n- CLAUDE.md:3 확인받기: 보류해 next_start(카드 없음).\n끝내기 전에 다시 본다.\n";
+
+/// 원본 표가 쓰는 하네스 확인 지점(CLAUDE.md:3 확인받기)
+fn check_point() -> HarnessPoint {
+    HarnessPoint { file: "CLAUDE.md".into(), line: 3, kind: "confirm".into(), text: "확인받는다".into() }
+}
+
+/// 원본 `ImportCheckRow` — 기계 검사 표의 한 행(기본 칸은 비움: 바꿈 없음·지시 필요 없음·하위 작업 없음).
+/// change 는 (파일, 바꾼 내용(None 이면 파일 지움)) 의 목록(원본은 [String: String?] 사전)
+struct ImportCheckRow {
+    note: &'static str,
+    change: Vec<(&'static str, Option<String>)>,
+    need: bool,
+    story: Vec<&'static str>,
+    problem: Option<&'static str>,
+}
+
+fn row(note: &'static str, problem: Option<&'static str>) -> ImportCheckRow {
+    ImportCheckRow { note, change: vec![], need: false, story: vec![], problem }
+}
+
+/// 기계 검사 표 — ⑫-7a. 행마다 좋은 결과 사본을 바꿔 기계 검사를 돌린다. 원본: `검사`(`importRows` 표)
+#[test]
+fn 검사() {
+    // 원본 `Secretish` — 이어 붙여 만든 가짜 비밀(진짜 토큰 꼴이 저장소에 남지 않게)
+    let github_like = format!("ghp_{}", "Qq7".repeat(12));
+    let rows = vec![
+        row("잘 쓴 결과는 지난다", None),
+        ImportCheckRow {
+            change: vec![("cards.json", Some("[]".to_string()))],
+            ..row("어디에도 두지 않은 항목", Some("항목 i3(다)을 단위·카드·건너뜀 어디에도 두지 않았습니다"))
+        },
+        ImportCheckRow {
+            change: vec![
+                ("cards.json", Some("[]".to_string())),
+                ("skipped.json", Some(r#"[{"item":"i3","why":"이미 저장소에 있음"}]"#.to_string())),
+            ],
+            ..row("건너뜀으로 둔 항목은 된다", None)
+        },
+        ImportCheckRow {
+            change: vec![
+                ("cards.json", Some("[]".to_string())),
+                ("skipped.json", Some(r#"[{"item":"i3","why":""}]"#.to_string())),
+            ],
+            ..row("건너뜀 까닭 없음", Some("건너뜀 1 의 까닭(why)은"))
+        },
+        ImportCheckRow {
+            change: vec![("units.json", Some(GOOD_IMPORT_UNITS.replace("\"item\":\"i1\"", "\"item\":\"i9\"")))],
+            ..row("넘기지 않은 항목 id", Some("단위 1 의 item(i9)은 넘긴 항목 id 가 아닙니다"))
+        },
+        ImportCheckRow {
+            change: vec![("units.json", Some(GOOD_IMPORT_UNITS.replace("\"check\":\"grep -q 가 app.txt\",", "")))],
+            ..row("판정 명령 없음", Some("단위 1 에 판정이 없습니다"))
+        },
+        ImportCheckRow {
+            change: vec![("units.json", Some(GOOD_IMPORT_UNITS.replace("\"why\":\"근거 1-todo 의 본문\"", "\"criteria\":[{\"id\":\"AC-1\",\"text\":\"x\"}]")))],
+            ..row("수용 기준 칸은 받지 않습니다", Some("단위 1 에 형식 밖 칸 criteria 가 있습니다"))
+        },
+        ImportCheckRow {
+            change: vec![("units.json", Some(GOOD_IMPORT_UNITS.replace("\"why\":\"근거 1-todo 의 본문\"", "\"scenarios\":[{\"file\":\"a.sh\",\"kind\":\"shell\"}]")))],
+            ..row("시나리오 칸은 받지만 파일이 없으면 걸립니다", Some("단위 1 의 시나리오 파일 scenarios/u1/a.sh 가 없습니다"))
+        },
+        ImportCheckRow {
+            change: vec![("units.json", Some(GOOD_IMPORT_UNITS.replace("\"why\":\"근거 1-todo 의 본문\"", "\"precheck\":\"touch /tmp/x\"")))],
+            ..row("샌드박스 밖 칸은 사람만", Some("단위 1 의 precheck 는 가져오기 세션이 쓸 수 없는 칸입니다"))
+        },
+        ImportCheckRow {
+            change: vec![("units.json", Some(GOOD_IMPORT_UNITS.replace("\"why\":\"근거 1-todo 의 본문\"", "\"tickets\":[\"TOY-1\"]")))],
+            ..row("티켓 칸은 모델이 쓰지 않습니다", Some("단위 1 의 tickets 는 가져오기 세션이 쓸 수 없는 칸입니다"))
+        },
+        ImportCheckRow {
+            change: vec![("units.json", Some(GOOD_IMPORT_UNITS.replace("가를 한다", "가를 하고 git push origin live 한다")))],
+            ..row("push 를 시키는 할 일", Some("단위 1 할 일에 다른 가지 맞추기·push·바깥 쓰기를 시키는 줄이 있습니다"))
+        },
+        ImportCheckRow {
+            change: vec![("units.json", Some(GOOD_IMPORT_UNITS.replace("근거 1-todo 의 본문", &format!("토큰은 {github_like}이다"))))],
+            ..row("근거 글에 비밀 꼴", Some("단위 1 근거 에 비밀 꼴(토큰·키 등)이 있습니다"))
+        },
+        ImportCheckRow {
+            story: vec!["i2"],
+            ..row("지라 하위 작업은 쪼개지 않습니다", Some("항목 i2 은 Jira 하위 작업이라 쪼개지 않습니다"))
+        },
+        ImportCheckRow {
+            change: vec![("cards.json", Some(GOOD_IMPORT_CARDS.replace("\"item\":\"i3\"", "\"item\":\"i3\",\"criterion\":\"u1/AC-1\"")))],
+            ..row("카드의 수용 기준 칸", Some("카드 1 의 criterion"))
+        },
+        ImportCheckRow {
+            need: true,
+            ..row("세트에 지시가 없는데 초안 지시가 없음", Some("자율주행 지시 초안(autopilot.md)이 없습니다"))
+        },
+        ImportCheckRow {
+            change: vec![("autopilot.md", Some(GOOD_INSTR.to_string()))],
+            need: true,
+            ..row("세트에 지시가 없으면 초안 지시를 같은 문으로", None)
+        },
+        ImportCheckRow {
+            change: vec![("autopilot.md", Some(format!("지시\n{GOOD_INSTR}")))],
+            need: true,
+            ..row("초안 지시 첫 줄", Some("자율주행 지시의 첫 줄이"))
+        },
+        ImportCheckRow {
+            change: vec![("units.json", None)],
+            ..row("단위 목록 없음", Some("단위 목록(units.json)이 없거나"))
+        },
+    ];
+    for rw in rows {
+        let mut files = HashMap::new();
+        files.insert("units.json".to_string(), GOOD_IMPORT_UNITS.to_string());
+        files.insert("cards.json".to_string(), GOOD_IMPORT_CARDS.to_string());
+        for (name, v) in rw.change {
+            match v {
+                Some(new) => {
+                    files.insert(name.to_string(), new);
+                }
+                None => {
+                    files.remove(name);
+                }
+            }
+        }
+        let story: HashSet<String> = rw.story.iter().map(|s| s.to_string()).collect();
+        let c = import_check(&ImpFiles { files }, &pitems(), &story, &[check_point()], rw.need, Some("CLAUDE.md:3 보류"));
+        match rw.problem {
+            Some(want) => {
+                assert!(
+                    c.problems.iter().any(|m| m.starts_with(want)),
+                    "{} — 원하는 문 {}: 실제 문들 {:?}, 경고들 {:?}",
+                    rw.note,
+                    want,
+                    c.problems,
+                    c.warnings
+                );
+            }
+            None => {
+                assert!(c.problems.is_empty(), "{} — 문을 원치 않지만: {:?}", rw.note, c.problems);
+            }
+        }
+    }
+}
+
+/// 값 — 단위 조각(piece)이 차례대로 붙고, 카드의 item 을 보고, 세트 지시가 다룬 하네스 지점은 뺀다. 원본: `값`(test값)
+#[test]
+fn 값() {
+    let c = import_check(
+        &ImpFiles {
+            files: HashMap::from([
+                ("units.json".to_string(), GOOD_IMPORT_UNITS.to_string()),
+                ("cards.json".to_string(), GOOD_IMPORT_CARDS.to_string()),
+            ]),
+        },
+        &pitems(),
+        &HashSet::new(),
+        &[check_point(), HarnessPoint { file: "AGENTS.md".into(), line: 1, kind: "ask".into(), text: "물어본다".into() }],
+        false,
+        Some("CLAUDE.md:3 보류"),
+    );
+    let pieces: Vec<Option<usize>> = c.units.iter().map(|u| u.piece).collect();
+    assert_eq!(pieces, vec![None, Some(1), Some(2)], "{:?}", c);
+    assert_eq!(c.card_items, BTreeMap::from([("c1".to_string(), "i3".to_string())]), "{:?}", c);
+    let missing: Vec<String> = c.harness_missing.iter().map(|p| p.place()).collect();
+    assert_eq!(missing, vec!["AGENTS.md:1"], "{:?}", c);
+    assert!(c.ok(), "{:?}", c);
 }
 
