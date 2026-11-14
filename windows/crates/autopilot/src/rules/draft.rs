@@ -420,7 +420,8 @@ fn unit_id_ok(id: &str) -> bool {
 }
 
 // 시나리오 파일 이름 꼴(원본 apDraftFileNamePattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$`)
-fn file_name_ok(f: &str) -> bool {
+/// 이어 쓰기 검사에서도 시나리오 이름 꼴을 본다.
+pub fn file_name_ok(f: &str) -> bool {
     if f.chars().count() > 60 {
         return false;
     }

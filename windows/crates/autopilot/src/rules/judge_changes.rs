@@ -1,4 +1,3 @@
-//! (청크 Misses 3/5 — 원본 375~422줄. PORTED.json 항목은 R-Misses-5 가 더한다)
 //! 판정 차이(출발 확인). 원본: `Sources/AutopilotRules/Misses.swift` 375~422줄
 //! (`APJudgeChange`·`apJudgeChanges`·`apLineChange`·`apScenarioTextChanges`).
 //!

@@ -1,4 +1,3 @@
-//! (청크 Critique 0/5 — 원본 `Critique.swift` 77~79줄의 `apPathKey` 한 함수만 먼저 공개한 것이다. Critique 전체가 이식되기 전에는 지문(PORTED.json)을 걸지 않는다. 이 첫 줄은 `tests/ported.rs` 가 「구현됐는데 PORTED.json 에 없는 규칙」으로 잡지 않게 하는 표시다. R-Critique-a 가 critique.rs 를 만들 때 이 함수를 critique.rs 로 옮기거나, 이 파일을 두고 critique.rs 에 `pub use crate::rules::path_key::path_key;` 로 다시 내보낸다(어느 쪽이든 이 파일의 첫 줄 표시와 `pub mod path_key;` 줄은 그때 정리한다))
 //! 경로를 「같은 자리인가」 견줄 꼴로 접는다. 원본: `Sources/AutopilotRules/Critique.swift` 의 `apPathKey`(⑪-3 자동 보안 검토 MEDIUM).
 //! 쓰는 곳: Multirun(`apPathOverlap`·`apClaimKeys`: 같은 경로 자리), Takeover, Harness(보호 자리·정렬·지문), Critique(보호 판정 자리).
 //!

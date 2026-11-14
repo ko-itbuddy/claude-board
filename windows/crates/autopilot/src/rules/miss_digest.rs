@@ -1,4 +1,3 @@
-//! (청크 Misses 2/5 — 원본 136~209줄. PORTED.json 항목은 R-Misses-5 가 더한다)
 //! 출발 준비 때 확인된 지적(①②)을 출발한 실행의 기록으로 옮기고(prep_misses), 세션에 넘길 요약(miss_digest)과
 //! 세트 이어 쓰기를 다시 돌릴 조건(set_rewrite)을 둔다.
 //!

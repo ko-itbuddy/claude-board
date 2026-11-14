@@ -795,10 +795,11 @@ fn fold_lax(s: &str) -> Vec<char> {
 
 // 바늘 처음 맞음 자리
 fn find_sub(s: &[char], needle: &[char], from: usize) -> Option<usize> {
-    if needle.is_empty() {
+    // 바늘이 풀보다 길면 원본 검색(range(of:))은 못 찾은 것으로 끝난다 — 범위를 풀보다 바늘을 자르고 뽑지 않는다
+    if needle.is_empty() || needle.len() > s.len() {
         return None;
     }
-    (from..=s.len().saturating_sub(needle.len())).find(|&i| s[i..i + needle.len()] == *needle)
+    (from..=s.len() - needle.len()).find(|&i| s[i..i + needle.len()] == *needle)
 }
 
 // 이어진 숫자 뭉치 하나(자릿수 오버프은 원본 `Int(...)` 처럼 -1 로 두기)

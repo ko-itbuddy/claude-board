@@ -47,6 +47,7 @@ pub mod rules {
     pub mod records;
     pub mod report;
     pub mod report_gate;
+    pub mod revise;
     pub mod scenarios;
     pub mod sequence;
     pub mod skeleton;
