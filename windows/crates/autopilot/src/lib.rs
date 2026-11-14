@@ -80,6 +80,7 @@ pub mod adapters {
     pub mod secrets;
     pub mod supervisor;
     pub mod usage;
+    pub mod versions;
     pub mod winproc;
     pub mod worktree;
     pub mod wsl_env;
