@@ -1,5 +1,5 @@
-//! (청크 Report d — 원본 1~539줄. PORTED.json 항목은 R-Report-e 가 더한다)
-//! 실행 보고서 틀 앞부분. 원본: `Sources/AutopilotRules/Report.swift`(568줄). 이 구간은 결과 기록(`result.json`, 모델이 쓴 글)을 값으로 읽는 일과
+//! 실행 보고서 틀. 원본: `Sources/AutopilotRules/Report.swift`(568줄).
+//! 이 구간은 결과 기록(`result.json`, 모델이 쓴 글)을 값으로 읽는 일과
 //! 보고서가 쓰는 값 꼴이다. 모델이 쓴 글은 믿지 않는다: 칸의 꼴이 틀리면 그 칸만 비우고, 글·목록 길이는 상한에서 자른다(`rules::formats`·`rules::prose` 와 같은 태도).
 //! 긴 줄표 바꾸기(`rules::prose::plain`)와 HTML 이스케이프(`rules::prose::escape_html`)는 그릴 때(뒤 구간) 한다. 여기서는 글자를 그대로 둔다.
 //!
@@ -13,7 +13,9 @@
 //! 이식됨(d, 원본 337~539줄): `report_html`(apReportHTML, `only` 의 기본값 `nil` 은 `Option<i64>` 로) · `unit_section`(unitSection) · `section_list`(비공개 `list`,
 //! 이 파일의 목록 읽기 도우미 `list` 와 이름이 겹쳐 다르게 둠) · `flow`(비공개, Swift 의 `unit:` 인자는 원본 본문에서 안 쓰므로 `_unit` 으로 받기만 한다) ·
 //! `timeline`(비공개). Swift 시험 `ReportHTMLTests`(견본·단위·악성골든·악성·견본안전·결정적·바탕)도 `tests/rules_report.rs` 의 `html_` 로 시작하는 이름으로 옮겼다.
-//! 남음(원본 540~568줄, R-Report-e 가 이 파일 끝에 이어 붙인다): `APReportDraw`·`apDrawReports`(542~) · `apReportEndedStatuses`·`apMissingUnitReports`. 쓸 곳 포트(`APReportSink`·`APReportFile`)는 그릴 때 정한다.
+//! 이식됨(e, 원본 540~565줄): `ReportDraw`(APReportDraw) · `draw_reports`(apDrawReports, 그리는 유스케이스). 쓸 곳 포트(`ReportSink`·`ReportFile`, 원본
+//! `APReportSink`·`APReportFile` 은 `Ports.swift` 에 있다)를 함께 정한다. 빠진 단위 보고서(`apReportEndedStatuses`·`apMissingUnitReports`, 원본 565~568줄)는
+//! 이미 `unit_commits.rs`(임시 조각 3)에 있어 옮기지 않고 `pub use` 로 다시 내놓는다. Swift 시험 `ReportDrawTests`(쓰기·실패·없음)도 `tests/rules_report.rs` 의 `draw_` 로 시작하는 이름으로 옮겼다.
 //! 원본 시험 중 앞 구간의 것: `ReportTests.swift` 의 `ResultParseTests` 셋(`아님`·`꼴`·`상한`)과 `ReportRunTests` 셋(`견본`·`칸`·`없음`) → `tests/rules_report.rs`.
 //! 3/4 구간(`Writer`·`chip`·`css` 는 Swift 에서 비공개)을 겨냥한 Swift 시험은 없고 골든 HTML(`Report/*.html`)과 `ReportTests.swift` 의 `결정적`(시간대만 바꾸면 시각만 다름)이 덮는다.
 //! 이 구간은 골든의 `<style>` 안(`CSS`)·때 글자(`Writer::date`)를 직접 맞춰 보고, `결정적` 의 시각 부분을 옮겼다. HTML 전체 골든(`견본`·`단위`·`악성골든`)은 d 구간에서 `html_견본` 등으로 옮겼다.
@@ -46,6 +48,7 @@
 use crate::ports::Row;
 use crate::rules::formats::grapheme_len;
 use crate::rules::prose::{escape_html, plain, safe_link};
+use crate::rules::reading::ReadClock;
 use crate::rules::sequence::{parse_sequence, sequence_svg, SeqParse};
 use serde_json::{Map, Number, Value};
 
@@ -383,7 +386,7 @@ pub struct ReportRun {
     pub origin: ReportOrigin,
 }
 
-// 쓸 곳 포트(APReportSink)와 APReportFile 은 원본 Ports.swift 에 있다(뒤 구간이 그리는 쪽을 옮길 때 같이 정한다)
+// 쓸 곳 포트(`ReportSink`·`ReportFile`)는 파일 끝의 그리는 유스케이스 자리에 있다(원본 `APReportSink`·`APReportFile`, `Ports.swift`)
 
 // ── 기록 → 보고서 값 ──────────────────────────────────
 
@@ -918,7 +921,7 @@ footer{color:var(--muted);font-size:12px;margin:16px 4px 0}
 // ── 보고서 HTML 그리기 (원본 337~539줄) ─────────────
 
 /// 실행 보고서(`only` 가 `None`) 또는 단위 하나의 보고서. `at` 은 그린 때(유닉스 초), `tz` 는 보일 시간대, `home` 은 ~ 로 줄일 홈 폴더.
-/// 원본: `apReportHTML`(`only` 의 기본값 `nil` 은 `Option<i64>` 로 건넨다). 그리는 유스케이스(`APReportSink` 에 쓰는 쪽)는 R-Report-e 가 옮긴다.
+/// 원본: `apReportHTML`(`only` 의 기본값 `nil` 은 `Option<i64>` 로 건넨다). 그리는 유스케이스(`draw_reports`)는 파일 끝에 있다.
 pub fn report_html(r: &ReportRun, only: Option<i64>, at: f64, tz: &FixedZone, home: Option<&str>) -> String {
     let mut w = Writer::new(*tz, home);
     let units: Vec<&ReportUnit> = match only {
@@ -1392,3 +1395,57 @@ fn timeline(r: &ReportRun, at: f64, w: &Writer) -> Option<String> {
     );
     Some(s + "</svg>")
 }
+
+// ── 유스케이스: 보고서 그리기 (원본 540~565줄, 쓸 곳 포트는 Ports.swift) ──
+
+/// 그린 결과. 원본: `APReportDraw`(`Equatable, Sendable` — 파생이 같은 뜻이다)
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ReportDraw {
+    pub written: Vec<ReportFile>,
+    pub errors: Vec<String>,
+}
+
+/// 보고서 파일 — 실행 보고서(`runs/<실행 id>/report.html`)와 단위 보고서(`runs/<실행 id>/units/<n>/report.html`). 원본: `APReportFile`(`Ports.swift`)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ReportFile {
+    Run,
+    Unit(i64),
+}
+
+/// 보고서 쓸 곳 — 되면 `None`, 아니면 까닭. 링크를 따라가지 않게 쓰는 것은 어댑터 몫(엔진: 엔진 전용 폴더에 쓰고 rename).
+/// 원본: `APReportSink`(`Ports.swift`, `func write(_ file: APReportFile, _ html: String) -> String?`)
+pub trait ReportSink {
+    fn write(&self, file: ReportFile, html: &str) -> Option<String>;
+}
+
+/// 기록을 읽어 실행 보고서와 고른 단위의 보고서를 쓴다. run.json 이 없으면 아무것도 쓰지 않는다.
+/// 엔진이 단위 판정 뒤(그 단위와 실행)·건너뛴 뒤·끝 정리 때 부르고, 엔진 report 하위 명령이 끝난 실행을 다시 그릴 때 부른다.
+///
+/// 원본: `apDrawReports`. Swift `clock: APClock` 의 `clock.now.timeIntervalSince1970` 은 오늘의 시각(`ReadClock`)을 `clock.now()` 로 건넨다.
+pub fn draw_reports(id: &str, source: &dyn ReportSource, sink: &dyn ReportSink, units: &[i64], clock: &dyn ReadClock, tz: &FixedZone, home: Option<&str>) -> ReportDraw {
+    let mut d = ReportDraw::default();
+    let Some(r) = report_run(id, source) else {
+        d.errors.push("실행 기록(run.json)을 읽지 못해 보고서를 그리지 않았습니다".to_string());
+        return d;
+    };
+    let at = clock.now();
+    for n in units {
+        // `r.units.contains(where: { $0.n == n })`
+        if !r.units.iter().any(|u| u.n == *n) {
+            d.errors.push(format!("대기열에 없는 단위({n})라 그 단위 보고서를 그리지 않았습니다"));
+            continue;
+        }
+        match sink.write(ReportFile::Unit(*n), &report_html(&r, Some(*n), at, tz, home)) {
+            Some(e) => d.errors.push(format!("단위 {n} 보고서: {e}")),
+            None => d.written.push(ReportFile::Unit(*n)),
+        }
+    }
+    match sink.write(ReportFile::Run, &report_html(&r, None, at, tz, home)) {
+        Some(e) => d.errors.push(format!("실행 보고서: {e}")),
+        None => d.written.push(ReportFile::Run),
+    }
+    d
+}
+
+// 빠진 단위 보고서(`apReportEndedStatuses`·`apMissingUnitReports`, 원본 565~568줄)는 이미 `unit_commits.rs`(임시 조각 3)에 있어 이 파일에서 다시 내놓는다.
+pub use crate::rules::unit_commits::{missing_unit_reports, REPORT_ENDED_STATUSES};

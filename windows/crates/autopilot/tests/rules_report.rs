@@ -2,18 +2,20 @@
 //! 원본 시험: `ReportTests.swift` 의 `ResultParseTests` 셋을 같은 이름으로 옮겼다 — `아님`(인자 다섯, nil 포함) · `꼴` · `상한`.
 //! 이어서 `ReportRunTests` 셋 — `견본`(견본 기록 `Tests/AutopilotRulesTests/Report/sample-run.json` 을 그 자리에서 읽는다) · `칸` · `없음`.
 //! 이 구간의 선언(`APResultRecord` 계열·`apCut`·`apReportText`·`apParseResult`·`APReport*` 값 꼴·`apReportRun`)을 겨냥한 Swift 시험은 이 여섯뿐이다.
-//! 이름표 사전·`apReportDur`·`lastPart` 는 Swift 에서 골든(HTML)만 덮는다. `ReportHTMLTests` 셋(원본 337~539줄의 `apReportHTML`)도 끝의 `html_` 로 시작하는 일곱 시험 — `html_견본`(골든) · `html_단위`(골든) · `html_악성골든`(골든) · `html_악성`(악성 골든의 거부 내용) · `html_견본안전`(안전 검사) · `html_결정적`(같은 곳 두 번) · `html_바탕`(기록 저장소 바탕, 빈 기록) — 으로 옮겼다. 그림 칸(`APReportDraw`) 시험은 R-Report-e 가 이어서 옮긴다.
+//! 이름표 사전·`apReportDur`·`lastPart` 는 Swift 에서 골든(HTML)만 덮는다. `ReportHTMLTests` 셋(원본 337~539줄의 `apReportHTML`)도 끝의 `html_` 로 시작하는 일곱 시험 — `html_견본`(골든) · `html_단위`(골든) · `html_악성골든`(골든) · `html_악성`(악성 골든의 거부 내용) · `html_견본안전`(안전 검사) · `html_결정적`(같은 곳 두 번) · `html_바탕`(기록 저장소 바탕, 빈 기록) — 으로 옮겼다. 그림 칸(`APReportDraw`) 시험도 `draw_` 로 시작하는 세 시험(쓰기·실패·없음)으로 옮겼다.
 //!
 //! 끝의 `extra_` 시험은 Swift 시험에 없는 것(자르기 경계·덩어리·수 글·칸별 상한·목록 거르기 순서·값 꼴 처음 값·기록 읽기 칸별 규칙·이름표 사전·걸린 시간)이다.
 
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use claude_board_autopilot::ports::Row;
 use claude_board_autopilot::rules::formats::grapheme_len;
+use claude_board_autopilot::rules::reading::ReadClock;
 use claude_board_autopilot::rules::report::{
-    chip, chip_plain, cut, kind_label, kind_text, last_part, merge_label, outcome_label, parse_result, report_dur, report_html, report_run, report_text, report_text_n, run_label, test_label,
-    unit_class, unit_label, ReportCheck, ReportOrigin, ReportRun, ReportSource, ReportUnit, ResultCarry, ResultChange, ResultFlow, ResultRecord, ResultState,
+    chip, chip_plain, cut, draw_reports, kind_label, kind_text, last_part, merge_label, outcome_label, parse_result, report_dur, report_html, report_run, report_text, report_text_n, run_label,
+    test_label, unit_class, unit_label, ReportCheck, ReportFile, ReportOrigin, ReportRun, ReportSink, ReportSource, ReportUnit, ResultCarry, ResultChange, ResultFlow, ResultRecord, ResultState,
     ResultTest, Writer, FixedZone, CSS, REPORT_FLOW_MAX, REPORT_LIST_MAX, REPORT_TAIL_MAX, REPORT_TEXT_MAX,
 };
 use serde_json::{json, Value};
@@ -1270,4 +1272,79 @@ fn html_바탕() {
     assert!(!h.contains("<nav"));
     let bad = safety(&h);
     assert!(bad.is_empty(), "{bad:?}");
+}
+
+// ── 유스케이스: 보고서 그리기(가짜 어댑터) — Swift `ReportDrawTests` ──
+
+/// 그리기 시계 — 받은 때를 그대로 돌려준다. 원본: `ReportClock`(`now: Date(timeIntervalSince1970: 1_793_330_000)`)
+struct ReportClock {
+    now: f64,
+}
+
+impl ReadClock for ReportClock {
+    fn now(&self) -> f64 {
+        self.now
+    }
+}
+
+/// 원본 시계의 고정 때 — 2026-10-30 03:13:20 UTC(서울 12:13)
+const DRAW_NOW: f64 = 1_793_330_000.0;
+
+/// 가짜 쓸 곳 — `fail` 에 담긴 파일은 까닭("쓰지 못했습니다(가짜)")을 돌려주고, 나머지는 그린 글을 기록한다. 원본: `FakeSink`
+#[derive(Default)]
+struct FakeSink {
+    fail: HashSet<ReportFile>,
+    wrote: RefCell<HashMap<ReportFile, String>>,
+}
+
+impl ReportSink for FakeSink {
+    fn write(&self, file: ReportFile, html: &str) -> Option<String> {
+        if self.fail.contains(&file) {
+            return Some("쓰지 못했습니다(가짜)".to_string());
+        }
+        self.wrote.borrow_mut().insert(file, html.to_string());
+        None
+    }
+}
+
+#[test]
+fn draw_쓰기() {
+    // @Test("고른 단위와 실행 보고서를 쓴다") — 단위를 먼저, 실행을 마지막에 쓴다
+    let sink = FakeSink::default();
+    let d = draw_reports(
+        "20261030-0900-todo-api",
+        &FixtureSource::new(fixture("sample-run.json")),
+        &sink,
+        &[2],
+        &ReportClock { now: DRAW_NOW },
+        &FixedZone::SEOUL,
+        Some("/Users/toy"),
+    );
+    assert_eq!(d.written, vec![ReportFile::Unit(2), ReportFile::Run]);
+    assert!(d.errors.is_empty(), "{d:?}");
+    let unit = sink.wrote.borrow()[&ReportFile::Unit(2)].clone();
+    assert!(unit.contains("<section id=\"unit-2\">"), "단위 보고서");
+    assert!(!unit.contains("id=\"unit-1\""), "고른 단위만 그린다");
+    let run = sink.wrote.borrow()[&ReportFile::Run].clone();
+    assert!(run.contains("<section id=\"unit-4\">"), "실행 보고서");
+    assert!(run.contains("그린 때 2026년 10월 30일 12:13"), "그린 때");
+}
+
+#[test]
+fn draw_실패() {
+    // @Test("쓸 곳이 실패하면 까닭을 남기고 나머지는 쓴다")
+    let sink = FakeSink { fail: HashSet::from([ReportFile::Unit(1)]), ..Default::default() };
+    let d = draw_reports("x", &FixtureSource::new(fixture("sample-run.json")), &sink, &[1, 9], &ReportClock { now: DRAW_NOW }, &FixedZone::SEOUL, None);
+    assert_eq!(d.written, vec![ReportFile::Run]);
+    assert_eq!(d.errors, ["단위 1 보고서: 쓰지 못했습니다(가짜)".to_string(), "대기열에 없는 단위(9)라 그 단위 보고서를 그리지 않았습니다".to_string()]);
+}
+
+#[test]
+fn draw_없음() {
+    // @Test("run.json 이 없으면 아무것도 쓰지 않는다")
+    let sink = FakeSink::default();
+    let d = draw_reports("x", &FixtureSource::new(json!({})), &sink, &[1], &ReportClock { now: DRAW_NOW }, &FixedZone::SEOUL, None);
+    assert!(d.written.is_empty());
+    assert!(sink.wrote.borrow().is_empty());
+    assert_eq!(d.errors, ["실행 기록(run.json)을 읽지 못해 보고서를 그리지 않았습니다".to_string()]);
 }
