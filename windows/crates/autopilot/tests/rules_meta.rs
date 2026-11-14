@@ -19,14 +19,15 @@
 //!
 //!   셋째 구간(원본 276~391줄)에서 옮긴 것: `MetaCheckTests.자르기` 통째로 → `자르기`. `ReadingTests` 383·402줄의 `apHasTag(...apMetaData(r.meta!))` 단언은 읽기 파이프라인(`read`)이 만든 메타 대신 같은 메타인 골든 파일로 → `읽기_메타에_태그_없음_part2`.
 //!   `EvidenceTests.묶음` 의 `apMetaCheck(…, wrapped: true).meta?.image` 단언은 `apAddEvidence` 를 뺀 쓰기→되읽기 → `묶음_part2`.
-//!   남은 것: 읽기 파이프라인·`apAddEvidence`·`apStripMarkup`(`마크업` 시험, 뒤 구간)을 거치는 나머지 단언.
-//!   `decode_entities`·`TextChunk`·`meta_text`·`meta_block_text`·`meta_url` 을 겨냥한 Swift 시험은 없다(`마크업` 시험은 `apStripMarkup`) → `extra_` 시험이 맡는다.
+//!   넷째 구간(원본 Meta.swift 393~471줄)에서 옮긴 것: `ReadingTests.마크업` 통째로 → `마크업`, `ReadingTests.절` 통째로 → `절`.
+//!   남은 것: 읽기 파이프라인·`apAddEvidence` 를 거치는 나머지 단언.
+//!   `decode_entities`·`TextChunk`·`meta_text`·`meta_block_text`·`meta_url` 을 겨냥한 Swift 시험은 없다(넷째 구간 시험은 `ReadingTests` 에서 통째로 왔다) → `extra_` 시험이 맡는다.
 //!
 //! 끝의 `extra_` 시험은 Swift 시험에 없는 것(상한 값·칸 빠짐·이스케이프·비유한 크기·주소 꼴 표·`NSNumber` 흉내·줄 끝·상한 바이트·글 다듬기 표·`meta_url` 표·`meta_clamp` 칸별·글자 참조 표·`*_windows`)이다.
 
 use claude_board_autopilot::rules::meta::{
-    decode_entities, defang_markers, has_tag, limit, meta_block_text, meta_check, meta_clamp, meta_data, meta_json, meta_link_shape, meta_redact, meta_text, meta_url,
-    meta_wrap_untrusted, redact, Frame, Meta, MetaField, MetaLink, Section, TextChunk, TocItem, EVIDENCE_NOTICE, META_FORMAT, UNTRUSTED_CLOSE, UNTRUSTED_OPEN,
+    chunked, decode_entities, defang_markers, has_tag, limit, markup_chunks, meta_block_text, meta_check, meta_clamp, meta_data, meta_json, meta_link_shape, meta_redact, meta_text, meta_url,
+    meta_wrap_untrusted, redact, strip_markup, Frame, Meta, MetaField, MetaLink, Section, TextChunk, TocItem, EVIDENCE_NOTICE, META_FORMAT, UNTRUSTED_CLOSE, UNTRUSTED_OPEN,
 };
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -1091,4 +1092,29 @@ fn 메타() {
 fn extra_google_키가_35를_넘으면_앞_35글자까지_가린다() {
     let (text, n) = redact(&format!("AIza{}", "F".repeat(40)));
     assert_eq!((text, n), (format!("[가림:Google API 키]{}", "F".repeat(5)), 1));
+}
+
+// ── 넷째 구간(원본 Meta.swift 393~471줄: apStripMarkup·apMarkupChunks·APChunked·apChunked·apSectionWanted)의 시험 — ReadingTests.swift 에서 통째로 옮긴 것 ──
+
+/// 원본 `ReadingTests.마크업` — 마크업 빼기: script·매크로 매개변수는 버리고 CDATA 글은 남기고 글자 참조를 푼다
+#[test]
+fn 마크업() {
+    let s = "<p>가 &amp; 나 &lt;b&gt; &#44397;&#x2F;</p><script>alert(1)</script><style>p{}</style><!-- 주석 -->".to_string()
+        + "<ac:structured-macro><ac:parameter ac:name=\"x\">버림</ac:parameter><ac:plain-text-body><![CDATA[코드 줄]]></ac:plain-text-body></ac:structured-macro><br/>끝";
+    assert_eq!(strip_markup(&s), "가 & 나 <b> 국/\n코드 줄\n끝");
+    let ch = markup_chunks("<p>머리 앞</p><h1>하나</h1><p>가</p><h2>둘</h2><p>나</p><h1>셋</h1>");
+    assert_eq!(ch, vec![TextChunk::new(0, "", "머리 앞"), TextChunk::new(1, "하나", "가"), TextChunk::new(2, "둘", "나"), TextChunk::new(1, "셋", "")]);
+}
+
+/// 원본 `ReadingTests.절` — 가리킨 절: 넘긴 이름이나 단위 글에 든 머리 제목, 아래 수준 머리까지 한 절
+#[test]
+fn 절() {
+    let ch = vec![TextChunk::new(0, "", "앞"), TextChunk::new(1, "예약 규칙", "가"), TextChunk::new(2, "예외", "나"), TextChunk::new(1, "승인", "다"), TextChunk::new(1, "A", "라")];
+    assert_eq!(chunked(&ch, &["예약 규칙".to_string()], "").sections, vec![Section::new("예약 규칙", "가\n예외\n나")]);
+    assert_eq!(chunked(&ch, &[], "「승인」 절대로 고칩니다").sections.iter().map(|s| s.title.clone()).collect::<Vec<String>>(), vec!["승인".to_string()]);
+    assert!(chunked(&ch, &[], "아무것").sections.is_empty());
+    assert!(chunked(&ch, &["a".to_string()], "").sections.is_empty(), "한 글자 머리는 대조하지 않음");
+    let c = chunked(&ch, &[], "");
+    assert_eq!(c.toc, vec![TocItem::new(1, "예약 규칙"), TocItem::new(2, "예외"), TocItem::new(1, "승인"), TocItem::new(1, "A")]);
+    assert!(c.summary == vec!["앞".to_string()] || c.summary.is_empty());
 }
