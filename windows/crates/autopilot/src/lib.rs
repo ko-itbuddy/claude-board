@@ -24,6 +24,7 @@ pub mod rules {
     pub mod harness;
     pub mod leftovers;
     pub mod links;
+    pub mod mcp_read;
     pub mod meta;
     pub mod miss_digest;
     pub mod misses;
